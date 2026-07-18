@@ -73,7 +73,17 @@ One of the three BTMM pillars. Refers to "how fast price moves into the POI afte
 
 One of the three BTMM pillars. Refers to "how precisely that candle reaches or targets the Point of Interest" — i.e., whether the reaction candle actually hits/respects the drawn POI zone rather than reacting from an unrelated price level. *(Section: "The Pillars of BTMM Strategy.")*
 
-No numeric thresholds are given for any of the three pillars (e.g., no candles-per-minute speed threshold, no minimum volume multiple beyond what's already specified per-POI-type, no maximum distance for "accurate" targeting). See ambiguity register.
+**Evidence sourcing (POI Zone Interaction, Penetration, and Overshoot Standard Version 1 — Provisional, resolves Ambiguity 8):** For any POI with defined zone boundaries, "accuracy" is now measured as geometric zone-interaction classification — EDGE_TOUCH, PARTIAL_ENTRY, DEEP_ENTRY, FAR_BOUNDARY_TOUCH, CONTROLLED_OVERSHOOT, or EXCESSIVE_OVERSHOOT, plus NEAR_MISS/NO_CONTACT/NONCANONICAL_SIDE_INTERACTION for non-touches. Full formulas in `knowledge/MEASUREMENT_STANDARDS.md`, "POI Zone Interaction, Penetration, and Overshoot Standard."
+
+**This interaction geometry is evaluated strictly separately from BTMM reaction strength** — how accurately price *reached* the POI (this standard) is a different question from whether the *reaction away* from the POI was strong (still unresolved, see "Strong reaction," Ambiguity 9). Neither one determines the other.
+
+**NEAR_MISS is not an actual POI touch.** A candle that comes close to but does not intersect the zone (within Contact Tolerance) does not count as a confirmed interaction and must not increment the interaction count used elsewhere in BTMM analysis.
+
+**CONTROLLED_OVERSHOOT may remain eligible for later BTMM/reaction analysis** — a candle that penetrates fully through the zone but overshoots the far boundary only by a small, tolerance-bounded amount is not automatically disqualified. **EXCESSIVE_OVERSHOOT and CLOSE_BREACH_CANDIDATE (a close beyond the far boundary) are invalidation *candidates* only** — neither one automatically invalidates the POI or the BTMM setup; general POI invalidation remains unresolved.
+
+**Final BTMM validity remains unresolved.** This standard supplies only the geometric "did price accurately reach the zone, and how" measurement. It does not, by itself, confirm a BTMM formation, approve an entry, or validate a trade — that depends on the still-unresolved BTMM state machine (Ambiguity 14) and reaction-strength standards, neither of which is created or modified by this decision.
+
+No numeric thresholds are given for any of the three pillars beyond what is now defined for Speed (Ambiguity 7) and Accuracy (Ambiguity 8) above; the Volume pillar's own minimum thresholds also remain unset (see "Volume" above). See ambiguity register.
 
 ## M15 Role
 

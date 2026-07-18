@@ -28,6 +28,10 @@
 8. **The author signs off the coverage matrix.**
    Status: NOT MET. `knowledge/POI_COVERAGE_MATRIX.md` and `knowledge/market_structure/MARKET_ANALYSIS_COVERAGE_MATRIX.md` have been produced by this audit but have not yet been reviewed or signed off by the author.
 
+## Shared Standards Status (informational — does not by itself satisfy any condition above)
+
+A shared **POI Zone Interaction, Penetration, and Overshoot Standard Version 1 — Provisional** has been approved (resolves Ambiguity 8) and is documented in `knowledge/MEASUREMENT_STANDARDS.md`. It defines, for any POI with valid zone boundaries, how a candle's touch/penetration/overshoot of that zone is classified (EDGE_TOUCH, PARTIAL_ENTRY, DEEP_ENTRY, FAR_BOUNDARY_TOUCH, CONTROLLED_OVERSHOOT, EXCESSIVE_OVERSHOOT, NEAR_MISS, NO_CONTACT, NONCANONICAL_SIDE_INTERACTION). This is interaction **geometry only** — it does not determine reaction strength, BTMM validity, entry validity, freshness, mitigation, or final invalidation, all of which remain unresolved. **No individual POI rule file was modified when this standard was added**, and **no individual POI is marked APPROVED solely because this shared standard now exists** — per-POI application happens later during the full individual POI specification phase, and conditions 2-8 below remain unmet regardless.
+
 ## Current Gate Status: **CLOSED**
 
 Of the 8 conditions, only condition 1 (rule-file existence) is fully met. Conditions 2-8 are open. Scanner coding, Pine Script, AI/ML models, databases, websites, APIs, backtests, TradingView/Telegram integration, and MT4/MT5 execution remain out of scope until the author closes these gaps.

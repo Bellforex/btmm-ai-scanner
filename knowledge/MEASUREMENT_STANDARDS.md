@@ -774,7 +774,137 @@ Automatic detection of the following remains unresolved: manipulation endpoint, 
 This standard fixes single-candle speed, FVG displacement, BTMM movement-leg, and POI dwell **measurement** math only. It explicitly does **not** resolve:
 - Ambiguity 14 (BTMM state machine) or the automatic anchors that depend on it.
 - Any composite/weighted final speed or activity score.
-- BTMM Accuracy (Ambiguity 8, separate and unchanged).
+- BTMM Accuracy (Ambiguity 8, resolved separately below).
 - Freshness, mitigation, invalidation, or expiration for any POI.
+
+These remain separate, pending decisions.
+
+---
+
+## POI Zone Interaction, Penetration, and Overshoot Standard
+
+**Status:** Approved, **Provisional** — POI Zone Interaction, Penetration, and Overshoot Standard Version 1 — Provisional (resolves Ambiguity 8 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Does not modify any prior standard above.
+
+### 1. Scope
+
+Applies only to POIs with clearly defined upper and lower zone boundaries.
+
+```
+Zone Height = Zone Top − Zone Bottom
+```
+
+A zone with Zone Height ≤ 0 is invalid for interaction measurement. Support, Resistance, and Trendline tolerance remain separate decisions and must not automatically inherit this standard.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, H3/H4/D1/W1 POIs, H1/M15 market structure, M15/M5/M1 BTMM execution, different sessions, and different volatility regimes. The thresholds are not to be changed casually outside that calibration process.
+
+### 2. Directional Entry and Far Boundaries
+
+| POI direction | Entry Boundary | Far Boundary | Interaction Price |
+|---|---|---|---|
+| Bullish (approached from above) | Zone Top | Zone Bottom | Candle Low |
+| Bearish (approached from below) | Zone Bottom | Zone Top | Candle High |
+
+An approach from the opposite side is recorded as **NONCANONICAL_SIDE_INTERACTION** and must not be silently treated as a normal first touch.
+
+### 3. Contact Tolerance
+
+ATR(14) is calculated using the POI symbol and the interaction timeframe.
+
+```
+Contact Tolerance = MAX(2 × Minimum Price Tick, MIN(0.05 × ATR(14), 0.10 × Zone Height))
+```
+
+Contact Tolerance is used only to identify a close near miss. It must not enlarge or redefine the actual POI boundaries. The Minimum Price Tick is sourced from instrument metadata once the software layer exists. No fixed pip or point tolerances are used.
+
+### 4. Overshoot Tolerance
+
+```
+Overshoot Tolerance = MAX(2 × Minimum Price Tick, MIN(0.10 × ATR(14), 0.25 × Zone Height))
+```
+
+Overshoot Tolerance does not redefine the zone boundaries.
+
+### 5. Near-Miss and No-Contact Treatment
+
+When price does not intersect the zone:
+- **NEAR_MISS** applies only when Distance to Entry Boundary ≤ Contact Tolerance. NEAR_MISS is not an actual touch and must not increment the confirmed interaction count.
+- **NO_CONTACT** applies when Distance to Entry Boundary > Contact Tolerance.
+
+### 6. Bullish POI Penetration Measurements
+
+```
+Wick Penetration Distance = CLAMP(Zone Top − Candle Low, 0, Zone Height)
+Wick Penetration Ratio = Wick Penetration Distance ÷ Zone Height
+Wick Overshoot Distance = MAX(0, Zone Bottom − Candle Low)
+
+Close Penetration Distance = CLAMP(Zone Top − Candle Close, 0, Zone Height)
+Close Penetration Ratio = Close Penetration Distance ÷ Zone Height
+Close Overshoot Distance = MAX(0, Zone Bottom − Candle Close)
+```
+
+### 7. Bearish POI Penetration Measurements
+
+```
+Wick Penetration Distance = CLAMP(Candle High − Zone Bottom, 0, Zone Height)
+Wick Penetration Ratio = Wick Penetration Distance ÷ Zone Height
+Wick Overshoot Distance = MAX(0, Candle High − Zone Top)
+
+Close Penetration Distance = CLAMP(Candle Close − Zone Bottom, 0, Zone Height)
+Close Penetration Ratio = Close Penetration Distance ÷ Zone Height
+Close Overshoot Distance = MAX(0, Candle Close − Zone Top)
+```
+
+Invalid or zero Zone Height must be protected against before dividing (see SS1).
+
+### 8. Geometric Interaction Classification
+
+Uses Wick Penetration Ratio and Wick Overshoot Distance for the primary geometric classification.
+
+| Classification | Requirements |
+|---|---|
+| **EDGE_TOUCH** | Actual zone intersection; Wick Penetration Ratio ≤ 0.25; no excessive overshoot |
+| **PARTIAL_ENTRY** | Wick Penetration Ratio > 0.25 and ≤ 0.50; no excessive overshoot |
+| **DEEP_ENTRY** | Wick Penetration Ratio > 0.50 and < 1.00; no excessive overshoot |
+| **FAR_BOUNDARY_TOUCH** | Wick Penetration Ratio = 1.00; Wick Overshoot Distance = 0 |
+| **CONTROLLED_OVERSHOOT** | Wick Overshoot Distance > 0 and ≤ Overshoot Tolerance |
+| **EXCESSIVE_OVERSHOOT** | Wick Overshoot Distance > Overshoot Tolerance |
+
+No additional depth or overshoot classes are defined.
+
+### 9. Wick and Close Separation
+
+Preserved independently: `wick_penetration_ratio`, `close_penetration_ratio`, `wick_overshoot_distance`, `close_overshoot_distance`. A wick beyond the far boundary is **not** equivalent to a candle close beyond the far boundary.
+
+When a candle closes beyond the far boundary, record **CLOSE_BREACH_CANDIDATE** — this must not automatically mean final invalidation. **EXCESSIVE_OVERSHOOT** likewise remains only an invalidation *candidate*, not an automatic invalidation. General POI invalidation remains unresolved.
+
+### 10. Geometric Eligibility for Later Reaction Analysis
+
+Eligible for later reaction analysis: EDGE_TOUCH, PARTIAL_ENTRY, DEEP_ENTRY, FAR_BOUNDARY_TOUCH, CONTROLLED_OVERSHOOT.
+
+Never counted as confirmed valid touches: NO_CONTACT, NEAR_MISS, NONCANONICAL_SIDE_INTERACTION, EXCESSIVE_OVERSHOOT. EXCESSIVE_OVERSHOOT is an invalidation candidate, not an automatically invalidated POI.
+
+### 11. Interaction Numbering and Preserved Fields
+
+Every interaction event preserves: `interaction_index`, `first_interaction_time`, `interaction_time`, `interaction_class`, `approach_side`, `wick_penetration_ratio`, `close_penetration_ratio`, `wick_overshoot_distance`, `close_overshoot_distance`.
+
+The first confirmed zone intersection receives `interaction_index = 1`; each later confirmed intersection increments the index. NEAR_MISS and NO_CONTACT never increment the interaction index. This standard does not yet reduce quality because of repeated interactions.
+
+### 12. Required Conceptual Separation
+
+POI interaction geometry must remain separate from: reaction strength, departure speed, BTMM validity, entry validity, POI freshness, mitigation, final invalidation, and trade outcome. No single composite interaction-quality score is created.
+
+### 13. What Remains Unresolved
+
+This standard fixes zone-interaction geometry only. It explicitly does **not** define:
+- Whether the reaction is strong.
+- Minimum bounce distance.
+- Required departure speed after contact.
+- Entry confirmation.
+- Freshness, partial mitigation, full mitigation.
+- Repeated-touch degradation.
+- Sweep rules.
+- Final invalidation.
+- Expiration.
+- BTMM confirmation (Ambiguity 14, unchanged).
 
 These remain separate, pending decisions.

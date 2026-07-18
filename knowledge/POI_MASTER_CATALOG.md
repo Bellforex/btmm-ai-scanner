@@ -6,6 +6,13 @@ Source: `references/private/BTMM_AND_POI_TRADING_BIBLE.docx` (English/French bil
 
 The book defines three official POI categories (Chapter 1, "The Three Main Types of POI in This Book"): **Volume-Based POI**, **Price Action POI**, **Structural POI**.
 
+**Project-wide note — POI Zone Interaction Standard (resolves Ambiguity 8, provisional):** Any POI with clearly defined upper and lower zone boundaries (Zone Top and Zone Bottom, giving `Zone Height = Zone Top − Zone Bottom > 0`) must use the approved **POI Zone Interaction, Penetration, and Overshoot Standard Version 1 — Provisional** — see `knowledge/MEASUREMENT_STANDARDS.md`, "POI Zone Interaction, Penetration, and Overshoot Standard" — for measuring how price touches, penetrates, and overshoots that zone (EDGE_TOUCH / PARTIAL_ENTRY / DEEP_ENTRY / FAR_BOUNDARY_TOUCH / CONTROLLED_OVERSHOOT / EXCESSIVE_OVERSHOOT, plus NEAR_MISS / NO_CONTACT / NONCANONICAL_SIDE_INTERACTION). A few important limits on what this standard does:
+
+- It measures **interaction geometry only** — how the candle's wick and close relate to the zone boundaries. It does **not** independently determine reaction strength, BTMM validity, entry validity, freshness, mitigation, or final invalidation; those remain separate, unresolved decisions.
+- **Support, Resistance, and Trendlines retain their own, separate tolerance rules** (still open under Ambiguities 11 and 12) and do not automatically inherit this standard.
+- POIs without a valid, clearly defined zone (Zone Height ≤ 0, or no upper/lower boundary at all — e.g. the twelve Previous/Current Period High-Low levels, which are single price points rather than zones) cannot use these penetration formulas.
+- This note does **not** redefine any individual POI's own boundary formula recorded in its catalog entry below or in its `knowledge/poi_rules/` file — it only adds a shared, common way to measure interactions with whatever boundary each POI already has. No individual POI rule file was modified when this note was added; that per-POI application happens later during the full individual POI specification phase.
+
 ---
 
 ## Category 1 — Volume-Based POI
