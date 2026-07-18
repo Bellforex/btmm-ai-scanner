@@ -2,17 +2,24 @@
 
 Every entry below follows the same structure: (1) what the book says, (2) why it cannot yet be coded precisely, (3) possible numerical measurements to consider, (4) **no threshold is chosen here**, (5) status = requires author approval.
 
-None of these are invented rules — each is a direct reflection of language the book itself uses without a supplied number. Once the author picks values, they should be moved into the relevant `knowledge/` file as a confirmed rule and removed from this register.
+None of these are invented rules — each is a direct reflection of language the book itself uses without a supplied number. Once the author picks values, they should be moved into the relevant `knowledge/` file as a confirmed rule and removed from this register. Items marked **✅ RESOLVED** below have been decided by the author and are kept in this register (rather than deleted) as a record of the decision; the authoritative, implementation-ready version of each resolved rule lives in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) or the relevant POI/BTMM file.
 
 ---
 
-### 1. "Strong candle" / "Large candle" (general displacement/momentum candles)
+### 1. "Strong candle" / "Large candle" (general displacement/momentum candles) — ✅ RESOLVED
 
 - **Book says:** Across Order Blocks, Fair Value Gaps, Buy-to-Sell/Sell-to-Buy candles, Base Rally/Drop, and Engulfing patterns, the displacement candle must be "significantly bigger," "strong and aggressive," or "much bigger" than the reference candle(s) — quantified only as a ratio (≥2×, ideally ≥3×) with no definition of *how size is measured*.
-- **Why it can't be coded precisely yet:** "Size" could mean full candle range (high−low), body-only (open−close), or body-only excluding wicks. These give different results on wicky candles. The book never states which.
-- **Possible numerical measurements to consider:** (a) full high-low range ratio; (b) body-only (open-close) ratio; (c) body ratio with a minimum wick-exclusion filter; (d) ATR-normalized size instead of raw candle-to-candle ratio.
-- **Threshold chosen:** None.
-- **Status:** Requires author approval.
+- **Why it couldn't be coded precisely before:** "Size" could mean full candle range (high−low), body-only (open−close), or body-only excluding wicks. These give different results on wicky candles. The book never states which.
+- **Possible numerical measurements that were considered:** (a) full high-low range ratio; (b) body-only (open-close) ratio; (c) body ratio with a minimum wick-exclusion filter; (d) ATR-normalized size instead of raw candle-to-candle ratio.
+- **Decision (Candle Measurement Standard Version 1, approved by the author):**
+  - Candle size is measured as the **complete high-to-low total range** (option (a) above), not body-only and not ATR-normalized: `Candle Total Range = High − Low`.
+  - Size comparisons use `Size Ratio = Key Candle Total Range ÷ Reference Candle Total Range`.
+  - Classification: Size Ratio < 2.0 → does not satisfy the size requirement; 2.0 ≤ Size Ratio < 3.0 → valid/standard pattern; Size Ratio ≥ 3.0 → strong pattern.
+  - Candle body (`|Close − Open|`) and Body Efficiency (`Body ÷ Total Range`) are tracked as a **separate** quality measurement and must not replace the total-range ratio rule.
+  - Wicks are never excluded from the total-range measurement; wick quality is evaluated separately per POI type (e.g., Pressure Wick, resolved separately under Ambiguity 6).
+  - ATR is not used to normalize or replace the 2×/3× rule; ATR is reserved for later use only as a secondary cross-symbol/cross-timeframe/cross-volatility-regime normalization measurement.
+  - Full formulas, classification table, and POI-by-POI application are documented in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md).
+- **Status:** Resolved — Candle Measurement Standard Version 1 approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule.
 
 ### 2. "Small candle" (base candles, engulfed candles, pre-FVG candles)
 

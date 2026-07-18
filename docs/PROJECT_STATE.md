@@ -15,7 +15,8 @@ Files:
 - `knowledge/POI_MASTER_CATALOG.md` — every POI taught in the book, under Volume-Based / Price Action / Structural, with all required fields.
 - `knowledge/btmm/BTMM_MASTER_SUMMARY.md` — full BTMM concept extraction against the required outline, explicitly marking what the book does and does not define.
 - `knowledge/SOURCE_INDEX.md` — section-by-section index of every rule/POI/BTMM concept, with image-presence notes and destination-file mapping.
-- `knowledge/AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md` — 15 registered ambiguities, each with the book quote, why it can't be coded yet, and candidate numeric measurements (no thresholds chosen).
+- `knowledge/AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md` — 15 registered ambiguities, each with the book quote, why it can't be coded yet, and candidate numeric measurements. Ambiguity 1 is now marked ✅ RESOLVED (see below); the remaining 14 are still open.
+- `knowledge/MEASUREMENT_STANDARDS.md` — **new.** Holds implementation-ready measurement definitions once an ambiguity is resolved. Currently contains one approved standard: "Candle Size, Body, Wick, and Range Measurements" (Candle Measurement Standard Version 1).
 - `docs/PROJECT_STATE.md` — this file.
 
 The private source book (`references/private/BTMM_AND_POI_TRADING_BIBLE.docx`) was read-only for this task: it was not modified, moved, or deleted, and remains excluded from git via the pre-existing `.gitignore` entry `references/private/*`.
@@ -44,8 +45,10 @@ Full detail in `knowledge/POI_MASTER_CATALOG.md`.
 
 ## 4. Rules Requiring Author Clarification (see `knowledge/AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md` for full detail)
 
-15 registered ambiguities, most importantly:
-1. Candle-size measurement method (body vs. range vs. ATR-normalized) — affects nearly every POI.
+**Candle Measurement Standard Version 1 — Approved.** The author has resolved Ambiguity 1 (candle-size measurement method). The approved standard: candle size = total high-to-low range; Size Ratio = key candle range ÷ reference candle range; classification is <2.0 = fails size requirement, 2.0–<3.0 = valid/standard, ≥3.0 = strong. Candle body and body efficiency are tracked separately and do not replace this rule; wicks stay inside the range measurement; ATR is reserved for later cross-symbol/timeframe normalization only, not for replacing the 2×/3× rule. Full formulas and POI-by-POI application are in `knowledge/MEASUREMENT_STANDARDS.md`. This does not resolve the separate "small candle" volatility-baseline question (Ambiguity 2) or Pressure Wick proportions (Ambiguity 6), which remain open.
+
+14 registered ambiguities remain open, most importantly:
+1. ~~Candle-size measurement method~~ — **Resolved**, see above.
 2. "Small candle" baseline (relative-only today; no volatility-normalized floor).
 3. Volume/momentum proxy choice, since retail Forex has no true exchange volume.
 4. Base-candle compactness thresholds (Rally/Drop).
