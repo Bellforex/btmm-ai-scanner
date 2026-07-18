@@ -275,3 +275,116 @@ These remain subject to future author decisions, annotation evidence, and valida
 Apply this standard's fields in: Buy Order Block, Sell Order Block, Buy Fair Value Gap, Sell Fair Value Gap, Base Rally, Base Drop, Buy-to-Sell Candle, Sell-to-Buy Candle, Bullish Engulfing, Bearish Engulfing.
 
 **Do not apply this standard to Pressure Wick yet** — Pressure Wick proportions remain under Ambiguity 6, unresolved.
+
+---
+
+## Base Formation, Compactness, and Departure Standard
+
+**Status:** Approved, **Provisional** — Base Formation Standard Version 1 — Provisional (resolves Ambiguity 4 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on Candle Measurement Standard V1, Small Candle Standard V1, and the Volume/Momentum/Price-Activity Proxy Standard above; does not modify any of them.
+
+**Scope:** Applies only to Base Rally (Rally-Base-Rally) and Base Drop (Drop-Base-Drop). Not automatically extended to unrelated consolidation, accumulation, distribution, support, resistance, or any other POI.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, the H3/H4/D1/W1 timeframes, and different volatility regimes. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Base Candle Count
+
+- Minimum: 2 consecutive confirmed closed candles.
+- Maximum: 6 consecutive confirmed closed candles.
+- One candle alone is not a complete base.
+- More than 6 candles is initially classified as **consolidation**, not a precise Base Rally/Drop POI.
+
+### 2. Base-Candle Size
+
+Uses Candle Total Range (`High − Low`) from Candle Measurement Standard V1 without modification. Every candle inside the base must satisfy:
+
+```
+Base Candle Total Range ≤ 0.50 × Departure Candle Total Range      (standard)
+Base Candle Total Range ≤ 0.3333 × Departure Candle Total Range    (Strong Base)
+```
+
+The comparison uses the **largest** Total Range among all candles inside the base (not an average), consistent with Small Candle Standard V1.
+
+### 3. Complete Base Height
+
+```
+Base Height = Highest High of all base candles − Lowest Low of all base candles
+```
+
+A valid base must satisfy **both**:
+
+```
+Base Height ≤ 0.75 × ATR(14)
+Base Height ≤ 0.60 × Departure Candle Total Range
+```
+
+ATR(14) must be computed on the same symbol and timeframe as the candidate base.
+
+### 4. Horizontal Compactness (Midpoint Drift)
+
+For every base candle:
+
+```
+Candle Midpoint = (High + Low) ÷ 2
+```
+
+```
+Base Midpoint Drift = |Last Base Candle Midpoint − First Base Candle Midpoint|
+```
+
+A valid base must satisfy:
+
+```
+Base Midpoint Drift ≤ 0.25 × Base Height
+```
+
+This is what prevents a small directional staircase from being misclassified as a horizontal base.
+
+### 5. Base-Candle Overlap
+
+For each pair of consecutive base candles:
+
+```
+Overlap High = MIN(candle A high, candle B high)
+Overlap Low  = MAX(candle A low, candle B low)
+Overlap Range = MAX(0, Overlap High − Overlap Low)
+Previous Candle Range = Previous Candle High − Previous Candle Low
+Overlap Ratio = Overlap Range ÷ Previous Candle Range
+```
+
+Each new base candle must satisfy:
+
+```
+Overlap Ratio ≥ 0.50
+```
+
+### 6. Departure Candle Requirements
+
+The departure candle must:
+- Be at least 2× the largest base candle's Total Range (≥ 3× for stronger classification).
+- Close outside the complete base range.
+- Move in the expected direction.
+- Be evaluated using the approved Volume, Momentum, and Price-Activity Proxy Standard (SS above) — no separate momentum rule is invented here.
+
+Direction-specific close condition:
+
+```
+Base Rally: Departure Close > Highest High of all base candles
+Base Drop:  Departure Close < Lowest Low of all base candles
+```
+
+### 7. Classification
+
+| Classification | Conditions |
+|---|---|
+| **COMPACT BASE** | Passes all standard base conditions (SS1–SS6 at the standard/non-strong thresholds). |
+| **STRONG BASE** | Every base candle ≤ 0.3333× the departure candle's Total Range, **and** the departure candle is ≥ 3× the largest base candle, **and** all other compactness/height/overlap/close-outside conditions pass. |
+| **INVALID BASE** | Any mandatory condition fails — including: fewer than 2 or more than 6 base candles; excessive Base Height; excessive midpoint drift; insufficient candle overlap; a base candle larger than permitted; departure candle below the required ratio; departure candle fails to close outside the complete base range; direction does not match Base Rally or Base Drop. |
+
+### 8. What Remains Unresolved
+
+This standard fixes base geometry, compactness, and departure-confirmation math only. It does **not** resolve:
+- Freshness, partial mitigation, full mitigation, or expiration for Base Rally/Drop (still not defined in the book at all).
+- The final `price_activity_score` formula/weights or any hard pass/fail threshold for the departure candle's momentum evidence (Volume/Momentum Proxy Standard SS5, unchanged).
+- Any threshold for POIs outside Base Rally/Drop.
+
+These remain separate, pending decisions.

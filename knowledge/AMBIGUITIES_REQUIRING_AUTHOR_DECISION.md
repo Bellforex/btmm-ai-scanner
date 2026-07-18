@@ -52,13 +52,23 @@ None of these are invented rules — each is a direct reflection of language the
 - **Still open (explicitly not resolved by this decision):** minimum Body Efficiency; minimum Bullish/Bearish Close Position; minimum Relative Tick Volume; minimum displacement distance; the final momentum-quality/`price_activity_score` formula and feature weights; and any hard pass/fail threshold. These remain subject to future author decisions, annotation evidence, and validation testing.
 - **Status:** Resolved — Volume and Momentum Proxy Standard Version 1 approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule.
 
-### 4. "Close together" / "Horizontal base" (Base Rally / Base Drop)
+### 4. "Close together" / "Horizontal base" (Base Rally / Base Drop) — ✅ RESOLVED (PROVISIONAL)
 
 - **Book says:** Base candles must be "positioned close to one another," "relatively uniform in size," "overlapping or closely connected," within "a compact horizontal price range."
-- **Why it can't be coded precisely yet:** No maximum spread between base-candle highs/lows is given, and no minimum/maximum candle count for a "compact" base is specified (only "two or more candles").
-- **Possible numerical measurements to consider:** (a) max range of (Base High − Base Low) as a fraction of the departure candle's size; (b) max range as a multiple of ATR; (c) a maximum candle count (e.g., 2–6 candles) before a base is considered too extended to qualify.
-- **Threshold chosen:** None.
-- **Status:** Requires author approval.
+- **Why it couldn't be coded precisely before:** No maximum spread between base-candle highs/lows was given, and no minimum/maximum candle count for a "compact" base was specified (only "two or more candles").
+- **Possible numerical measurements that were considered:** (a) max range of (Base High − Base Low) as a fraction of the departure candle's size; (b) max range as a multiple of ATR; (c) a maximum candle count (e.g., 2–6 candles) before a base is considered too extended to qualify.
+- **Decision (Base Formation Standard Version 1 — Provisional, approved by the author):**
+  - Candle count: minimum 2, maximum 6 consecutive confirmed closed candles. More than 6 is initially classified as consolidation, not a precise Base Rally/Drop POI.
+  - Base-candle size: every base candle's Total Range ≤ 0.50× the departure candle's Total Range (standard) / ≤ 0.3333× (Strong Base), compared against the largest Total Range among all base candles — consistent with Candle Measurement Standard V1 and Small Candle Standard V1.
+  - Base Height (`Highest High − Lowest Low` of all base candles) must satisfy both ≤ 0.75× ATR(14) (same symbol/timeframe as the candidate base) **and** ≤ 0.60× the departure candle's Total Range.
+  - Horizontal compactness: Base Midpoint Drift (`|Last Base Candle Midpoint − First Base Candle Midpoint|`, where Midpoint = (High+Low)/2) ≤ 0.25× Base Height — this is what rejects a small directional staircase.
+  - Overlap: for each consecutive base-candle pair, Overlap Ratio (`Overlap Range ÷ Previous Candle Range`) ≥ 0.50.
+  - Departure candle: ≥ 2× the largest base candle (≥ 3× for stronger classification), must close outside the complete base range, must move in the expected direction, and is evaluated using the approved Volume, Momentum, and Price-Activity Proxy Standard. Base Rally requires Departure Close > base's Highest High; Base Drop requires Departure Close < base's Lowest Low.
+  - Classification: COMPACT BASE (passes all standard conditions), STRONG BASE (all base candles ≤ 0.3333× departure range, departure ≥ 3× largest base candle, all other conditions pass), INVALID BASE (any mandatory condition fails).
+  - **This standard is explicitly labeled "Base Formation Standard Version 1 — Provisional"** — it still requires future calibration against expert-approved/expert-rejected examples across XAUUSD/EURUSD/GBPUSD, H3/H4/D1/W1, and different volatility regimes. The thresholds above are not to be changed casually; they await that calibration pass.
+  - **Scope limitation:** applies only to Base Rally/Rally-Base-Rally and Base Drop/Drop-Base-Drop. It is not automatically extended to unrelated consolidation, accumulation, distribution, support, resistance, or other POIs.
+  - Full formulas and classification rules are documented in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md), "Base Formation, Compactness, and Departure Standard."
+- **Status:** Resolved (provisional) — Base Formation Standard Version 1 — Provisional approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule. Remains subject to future calibration; not yet a final, locked standard.
 
 ### 5. "Equal highs" / "Equal lows" (equality tolerance)
 

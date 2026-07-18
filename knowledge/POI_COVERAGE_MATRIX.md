@@ -24,8 +24,8 @@ none of which the book defines for any POI).
 | Sell Fair Value Gap | Volume-Based | Bearish | Ch.1 "Fair Value Gap" P238-287; appendix P705-720 | Yes | Yes | Yes | Partial | Yes | Partial | Partial | Partial | No | No | No | Yes | No | No | No | Partial | No | Yes | No | Partial | Yes | PARTIAL |
 | Buy-to-Sell Candle | Volume-Based | Bearish | P288-341; appendix P1057-1090, 1125-1159 | Yes | Yes | Yes | Partial | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | NEEDS AUTHOR DECISION |
 | Sell-to-Buy Candle | Volume-Based | Bullish | P288-341; appendix P1091-1159 | Yes | Yes | Yes | Partial | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | NEEDS AUTHOR DECISION |
-| Base Rally (Rally-Base-Rally) | Volume-Based | Bullish | P342-358; appendix P942-1049 | Yes | Yes | Partial | Partial | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | NEEDS AUTHOR DECISION |
-| Base Drop (Drop-Base-Drop) | Volume-Based | Bearish | P342-358; appendix P942-1049 | Yes | Yes | Partial | Partial | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | NEEDS AUTHOR DECISION |
+| Base Rally (Rally-Base-Rally) | Volume-Based | Bullish | P342-358; appendix P942-1049 | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
+| Base Drop (Drop-Base-Drop) | Volume-Based | Bearish | P342-358; appendix P942-1049 | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Bullish Pressure Wick (Liquidity Wick) | Volume-Based | Bullish | P359-373 | Yes | Partial | Partial | Yes | No | N/A | No | No | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Bearish Pressure Wick (Liquidity Wick) | Volume-Based | Bearish | P359-373 | Yes | Partial | Partial | Yes | No | N/A | No | No | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Bullish Engulfing Candle | Price Action | Bullish | P413-474; appendix P731-764, 799-828 | Yes | Yes | Yes | Yes | No | Yes | Yes | Partial | Partial | Partial | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
@@ -58,7 +58,9 @@ none of which the book defines for any POI).
 ## Summary Counts
 
 - Total POIs verified: **36**
-- PARTIAL: **20**
-- NEEDS AUTHOR DECISION: **16**
+- PARTIAL: **22** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4)
+- NEEDS AUTHOR DECISION: **14**
 
 Machine-testable-now breakdown: Partial=24, No=12
+
+Note: Base Rally and Base Drop's "Formation rule defined" and "Confirmation rule defined" columns were updated to Yes following the Phase 0D approval of Base Formation Standard V1 — Provisional (base candle count, compactness, and departure confirmation are now defined, subject to future calibration). Neither POI is marked APPROVED — freshness, mitigation, invalidation, and expiration remain undefined for both, and the standard itself is explicitly provisional.
