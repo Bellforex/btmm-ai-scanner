@@ -1,4 +1,4 @@
-# Project State — Phase 0A Completion Report
+# Project State — Phase 0A / Phase 0B Completion Report
 
 ## 1. Files Created
 
@@ -77,6 +77,49 @@ Full detail in `knowledge/POI_MASTER_CATALOG.md`.
 - No definitions for "reclaim," "displacement after reclaim," "repeated taps," "false invalidation," or "genuine invalidation" anywhere in the book (see ambiguity #15).
 - No economic-news/fundamental-analysis ruleset (explicitly deferred to a later phase per the project vision — not a gap in the book, just out of current scope).
 
-## 7. Confirmation: No Scanner or Bot Code Was Created
+## 7. Confirmation: No Scanner or Bot Code Was Created (Phase 0A)
 
-This task (Phase 0A) produced only Markdown knowledge/documentation files under `docs/` and `knowledge/`, plus the folder structure. No scanner, indicator, Pine Script, AI/ML model, database, website, API, backtest engine, TradingView connection, Telegram integration, or MT4/MT5 execution code was written, and none of the private book's content was modified, copied into a public location, or committed to version control. Phase 0A ends here; no further phases were started.
+Phase 0A produced only Markdown knowledge/documentation files under `docs/` and `knowledge/`, plus the folder structure. No scanner, indicator, Pine Script, AI/ML model, database, website, API, backtest engine, TradingView connection, Telegram integration, or MT4/MT5 execution code was written, and none of the private book's content was modified, copied into a public location, or committed to version control. Phase 0A ended there; no further phases were started at that time.
+
+---
+
+## 8. Phase 0B — Coverage Audit (Completed)
+
+Phase 0B re-read the complete private source book to verify the Phase 0A POI inventory against an explicit, expanded checklist, and produced a formal coverage matrix, per-POI rule files, a market-analysis coverage matrix, and a knowledge-completion gate. The Candle Measurement Standard approved in Ambiguity 1 was **not** modified during this audit.
+
+### 8.1 Files Created in Phase 0B
+
+- `knowledge/POI_COVERAGE_MATRIX.md` — one row per verified POI (36 rows) across 25 audit columns (definition, location, formation, confirmation, boundary, candle-size, wick/body, trend, market-structure, liquidity, timeframe, strength, freshness, partial/full mitigation, invalidation, expiration, positive/negative example, machine-testable-now, author-clarification-required, status).
+- `knowledge/poi_rules/volume_based/` — 10 rule files (Buy/Sell Order Block, Buy/Sell Fair Value Gap, Buy-to-Sell/Sell-to-Buy Candle, Base Rally, Base Drop, Bullish/Bearish Pressure Wick).
+- `knowledge/poi_rules/price_action/` — 6 rule files (Bullish/Bearish Engulfing, Hammer, Shooting Star, Morning Star, Evening Star).
+- `knowledge/poi_rules/structural/` — 20 rule files (Bullish/Bearish Trendline, Support, Resistance, Equal Highs, Equal Lows, Swing High, Swing Low, and the 12 Previous/Current Day-Week-Month High-Low variants).
+- `knowledge/market_structure/MARKET_ANALYSIS_COVERAGE_MATRIX.md` — 22 trend/structure/liquidity concepts checked against the book, none fully defined, Break of Structure and Change of Character explicitly **not** adopted as project rules.
+- `knowledge/KNOWLEDGE_COMPLETION_GATE.md` — the 8-condition gate; current status: **CLOSED** (only condition 1, rule-file existence, is met).
+- `docs/PROJECT_STATE.md` — this section.
+
+### 8.2 Total POIs Verified
+
+**36 POIs** verified against the book (10 Volume-Based + 6 Price Action + 20 Structural, where the 20 Structural rows include the 12 Previous/Current Day-Week-Month High-Low variants as one family). This is a finer-grained count than Phase 0A's "13 catalog entries" because Phase 0B counts each bullish/bearish or buy/sell direction as its own row/file, per the audit brief's own checklist structure. No POI outside the Phase 0A inventory was found; no concept was added that isn't explicitly in the book.
+
+**Naming differences / duplicates recorded during re-verification:**
+- "Hammer" and "Pin Bar" are the same POI — the book states "the Hammer or Pin Bar" directly. Filed as one rule file (`hammer.md`), not two.
+- The task brief's "Current Day/Week/Month High/Low" corresponds to the book's own "High/Low of the Day/Week/Month" — same concept, different word order. Recorded in each of the six affected rule files' "Alternative book name" field.
+- "Rally-Base-Rally"/"Drop-Base-Drop" (used in the book's intro chapter) vs. "Base Rally"/"Base Drop" (used in the book's own formal validation appendix) — same POI, two labels within the same book.
+- A likely typo in the book's own intro summary list: "drop base trop" instead of "drop base drop" (paragraph 174).
+- "Buy Order Block"/"Sell Order Block" (formal appendix term) vs. informal "bullish/bearish order block" (used once in narrative prose) — same concept.
+- The FVG naming inconsistency already logged in section 5 above ("Bear Value Gap = BFVG") continues to apply to both Buy and Sell Fair Value Gap.
+
+### 8.3 Status Breakdown (from `knowledge/POI_COVERAGE_MATRIX.md`)
+
+- **PARTIAL: 20 of 36 POIs** — core detection/boundary geometry is book-defined and precise (helped by the now-approved Candle Measurement Standard), but lifecycle rules (freshness, partial/full mitigation, invalidation, expiration) are undefined for all of them.
+- **NEEDS AUTHOR DECISION: 16 of 36 POIs** — blocked by an open core-detection ambiguity (e.g., Pressure Wick/Hammer/Shooting Star wick:body ratio, Trendline steepness/swing detection, Support/Resistance/Equal-Highs-Lows/Swing-High-Low tolerance and detection rules, Buy-to-Sell/Sell-to-Buy reversal-distance, Base Rally/Drop compactness).
+- **APPROVED: 0 of 36** — no POI has all mandatory rules complete and author-approved; every single POI is missing at least a freshness, mitigation, or expiration rule, none of which the book defines for any POI.
+- **Machine-testable now:** 24 of 36 Partial (detection formula testable, lifecycle not), 12 of 36 No (core detection rule itself still open).
+
+### 8.4 Missing Market-Analysis Rules (from `knowledge/market_structure/MARKET_ANALYSIS_COVERAGE_MATRIX.md`)
+
+Of the 22 audited trend/market-structure/liquidity concepts (bullish/bearish trend, consolidation, higher high/low, lower high/low, swing detection, pullback, continuation, trend reversal, Break of Structure, Change of Character, trendline construction/touches/invalidation, support, resistance, break and retest, liquidity sweep, higher-timeframe alignment, lower-timeframe confirmation): **zero have a full numeric definition in the book.** "Higher high," "higher low," "lower high," "lower low," and "Change of Character" do not appear anywhere in the book at all; "Break of Structure" appears exactly once, in a single unexplained list, and per explicit instruction is **not** being adopted as an official project rule absent author approval. All 22 concepts require author-supplied methodology before they can be coded.
+
+### 8.5 Confirmation: No Scanner or Bot Code Was Created (Phase 0B)
+
+Phase 0B produced only Markdown documentation (a coverage matrix, 36 per-POI rule files, a market-analysis matrix, and a knowledge-completion gate document) plus the three `knowledge/poi_rules/` subfolders. No scanner, indicator, Pine Script, AI/ML model, database, website, API, backtest engine, TradingView connection, Telegram integration, or MT4/MT5 execution code was written. The previously approved Candle Measurement Standard Version 1 was not modified. No other ambiguity was resolved during this audit — all resolution work remains pending author decision. Per `knowledge/KNOWLEDGE_COMPLETION_GATE.md`, scanner coding remains blocked until all 8 gate conditions are met.

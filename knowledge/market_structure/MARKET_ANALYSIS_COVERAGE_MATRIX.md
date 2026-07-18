@@ -1,0 +1,47 @@
+# Market Analysis Coverage Matrix
+
+Phase 0B audit of every trend/market-structure/liquidity concept named in the audit brief, checked directly against the full text of `references/private/BTMM_AND_POI_TRADING_BIBLE.docx`.
+
+**Governing rule for this file:** *Break of Structure* and *Change of Character* are **not** adopted as official project rules by this document. They are recorded below purely so the audit is complete. Per explicit instruction, neither becomes part of this project's vocabulary or ruleset unless the book is found to define it (it does not, see rows below) or the author explicitly approves adding it.
+
+Status columns use: **Present in the book** (Yes/No), **Fully defined** (Yes/No), **Partially defined** (Yes/No), **Not defined** (Yes/No), **Author methodology required** (Yes/No), **Ready for coding** (Yes/No/Partial).
+
+---
+
+| Concept | Present in the book | Fully defined | Partially defined | Not defined | Author methodology required | Ready for coding |
+|---|---|---|---|---|---|---|
+| Bullish trend | Yes (used constantly as a market state, e.g. "whether the market is bullish, bearish, or consolidating") | No | Yes (used contextually throughout; never given a formal detection rule) | Yes (no formula) | Yes | No |
+| Bearish trend | Yes (same usage pattern as Bullish trend) | No | Yes | Yes (no formula) | Yes | No |
+| Consolidation | Yes ("choppy," "sideways," "consolidated market structure" used repeatedly, e.g. in Fair Value Gap validation) | No | Yes (used as the opposite of clear directional movement, never quantified) | Yes (no range-bound formula, no volatility threshold) | Yes | No |
+| Higher high | No — this exact term never appears anywhere in the full-text extraction | No | No | Yes | Yes (if the author wants this vocabulary added at all) | No |
+| Higher low | No — never appears | No | No | Yes | Yes | No |
+| Lower high | No — never appears | No | No | Yes | Yes | No |
+| Lower low | No — never appears | No | No | Yes | Yes | No |
+| Swing detection | Yes — Swing High / Swing Low are named POIs (`knowledge/poi_rules/structural/swing_high.md`, `swing_low.md`) | No | Yes (the POIs are named and their liquidity role is described; no fractal window or retracement % detection rule is given — this is Ambiguity 10 in the ambiguity register) | Yes (the detection formula specifically) | Yes | No |
+| Pullback | Yes (used repeatedly as context, e.g. "stronger... after a pullback in an uptrend") | No | Yes (used narratively; no minimum retracement % or candle-count rule given) | Yes (the formula) | Yes | No |
+| Continuation | Yes (used repeatedly as an outcome word, e.g. "during the continuation... of a directional move") | No | Yes (never formally defined as a market-structure state distinct from the word's plain meaning) | Yes (the formula) | Yes | No |
+| Trend reversal | Yes (used narratively throughout, e.g. Buy-to-Sell/Sell-to-Buy candle reversals) | No | Yes (specific candle-level reversal rules exist for individual POIs — see `knowledge/poi_rules/volume_based/buy_to_sell_candle.md` — but no general market-structure-level "trend reversal" rule exists) | Yes (the general market-structure-level formula) | Yes | No |
+| Break of Structure | Yes — but mentioned exactly **once**, in a single list with no elaboration: "your POI must align with swing highs, swing lows, pullbacks, breaks of structure, or continuation movement" (paragraph 1166) | No | No (a single unexplained mention does not rise to a partial definition — no rule, no example, no elaboration anywhere else in the book) | Yes | Yes — **and only if the author explicitly approves adopting it**, per the governing rule above | No |
+| Change of Character | No — zero occurrences anywhere in the full-text extraction (search terms "Change of Character" and "CHoCH" both returned 0 hits) | No | No | Yes | Yes — **and only if the author explicitly approves adopting it**, per the governing rule above | No |
+| Trendline construction | Yes (`knowledge/poi_rules/structural/bullish_trendline.md`, `bearish_trendline.md`) | No | Yes (must connect "meaningful swing points"; swing-point selection is undefined, and steepness has no numeric threshold — Ambiguities 10 and 11) | Yes (swing-point selection formula, steepness threshold) | Yes | No |
+| Trendline touches | Yes — explicit rule: "at least two touches... the third or fourth touch can often create a buy or sell opportunity" | Yes (touch **count**) | Yes (touch **tolerance** — how close price must come to "touch" the line — is not quantified) | No (only the tolerance portion is undefined) | Yes (tolerance value only) | No |
+| Trendline invalidation | No — the book never states what break/close distance through a trendline invalidates it | No | No | Yes | Yes | No |
+| Support | Yes (`knowledge/poi_rules/structural/support.md`) | No | Yes (concept and use-cases — reversal, break-and-retest — are clear; touch count and price tolerance are not, contrast with the explicit trendline touch-count rule) | Yes (touch count/tolerance formula) | Yes | No |
+| Resistance | Yes (`knowledge/poi_rules/structural/resistance.md`) | No | Yes (same gap as Support) | Yes (touch count/tolerance formula) | Yes | No |
+| Break and retest | Yes — described narratively under Support/Resistance: "price breaks a level, comes back to retest it, and then continues in the direction of the breakout" | No | Yes (the concept and sequence are named; no confirmation-candle rule or retest-depth tolerance is given) | Yes (the formula) | Yes | No |
+| Liquidity sweep | Yes — used constantly throughout the book (Equal Highs/Lows, Swing Highs/Lows, Previous/Current Period High-Low family, BTMM liquidity-creation sections) | No | Yes (the concept is central and repeatedly invoked, but no formula defines minimum sweep distance, wick-only vs. close-through, or confirmation timing) | Yes (the formula) | Yes | No |
+| Higher-timeframe alignment | Yes — a recurring principle: e.g. Pressure Wick section explicitly says to "respect the higher-timeframe Point of Interest while using the lower timeframe for better timing"; lower-timeframe Order Blocks/Engulfing patterns explicitly "may require confirmation from a higher-timeframe POI" | No | Yes (the qualitative principle — identify on a higher timeframe, confirm/execute on a lower one — is well and repeatedly stated; there is no numeric alignment rule, e.g. no rule for how many timeframes apart, or what "alignment" quantitatively means) | Yes (the numeric rule, if one is wanted) | Yes | Partial (the qualitative workflow — HTF for POI identification, LTF for entry — can be encoded as a project-wide rule per `docs/PROJECT_SCOPE.md` SS3's timeframe-role table; a precise numeric alignment test cannot) |
+| Lower-timeframe confirmation | Yes — explicit throughout: BTMM formation/confirmation is observed on M15/M5, execution on M1 (see `knowledge/btmm/BTMM_MASTER_SUMMARY.md`); Pressure Wick section: "we move to a smaller timeframe to look for confirmation and a precise entry" | No | Yes (the M1/M5/M15 role split is explicit and precise as a *timeframe assignment*; what specific candle pattern or condition constitutes "confirmation" on the lower timeframe is not itself formally defined beyond the individual POI/price-action rules already catalogued) | Yes (a standalone, general-purpose "confirmation" rule beyond the individual POI definitions) | Yes | Partial (the timeframe assignment itself is codable; the confirmation criterion still routes through the same open POI-level ambiguities, e.g. Ambiguity 13) |
+
+---
+
+## Why This Matrix Looks the Way It Does
+
+The book explicitly states, in its Introduction, that it does **not** teach market structure/trend analysis as a standalone topic: "This book does not teach market analysis in detail because market analysis is a complete topic on its own... we assume that everyone using this book already understands how to analyze the market technically and fundamentally" (see `knowledge/SOURCE_INDEX.md`, "Before You Use POIs, Know This"). That is why almost every row above is "Partially defined" at best — the book uses trend/structure vocabulary constantly as *context* for its POI and BTMM rules, but deliberately does not supply a standalone trend-confirmation or market-structure-mapping methodology. This matches the gap already recorded in `docs/PROJECT_STATE.md` Phase 0A section 6 ("Missing Definitions").
+
+## Summary Counts
+
+- Concepts present in the book (at least by name): 18 of 22 (all except Higher High, Higher Low, Lower High, Lower Low, and — separately noted — Change of Character, which is also absent).
+- Concepts with a full, numeric definition: **0** of 22.
+- Concepts requiring author methodology before coding: **22 of 22** (even the two "Partial" readiness rows — Higher-timeframe alignment and Lower-timeframe confirmation — still require author decisions on their remaining numeric gaps before they are code-complete).
+- Break of Structure and Change of Character: recorded for completeness only; **not adopted** as project rules.
