@@ -58,7 +58,7 @@ Departure candle Size Ratio >= 2.0 (standard) / >= 3.0 (strong) vs. the LARGEST 
 
 ## Volume or momentum proxy
 
-Same open question as Ambiguity 3.
+Resolved under Volume and Momentum Proxy Standard V1 (Ambiguity 3): primary evidence is price/candle behaviour (Relative Size Ratio, Range Context Ratio, Body Efficiency, Bearish Close Position of the departure candle), with tick volume as secondary-only evidence (SUPPORTS/NEUTRAL/CONTRADICTS/MISSING; never mandatory). External indicators (RSI, MACD, etc.) are excluded as mandatory rules. See knowledge/MEASUREMENT_STANDARDS.md, "Volume, Momentum, and Price-Activity Proxy Standard." No minimum thresholds for these fields have been set yet.
 
 ## Trend requirement
 
@@ -118,7 +118,7 @@ Partial - Base High/Low and departure-candle ratio testable now; base compactnes
 
 ## Unresolved questions
 
-Base compactness/candle-count threshold (Ambiguity 4); number of candles forming a valid base and min/max base duration (not resolved by Small Candle Standard V1); volume/momentum proxy (Ambiguity 3); no invalidation/freshness/expiration rule.
+Base compactness/candle-count threshold (Ambiguity 4); number of candles forming a valid base and min/max base duration (not resolved by Small Candle Standard V1); which proxy fields to use is resolved (Ambiguity 3), but their minimum thresholds are not yet set; no invalidation/freshness/expiration rule.
 
 ## Author decision
 

@@ -170,3 +170,108 @@ This standard fixes the ratio/classification math only. It explicitly does **not
 - Reversal confirmation after a Buy-to-Sell or Sell-to-Buy candle (Ambiguity 13, unchanged).
 
 These remain separate unresolved decisions and must not be inferred from this standard.
+
+---
+
+## Volume, Momentum, and Price-Activity Proxy Standard
+
+**Status:** Approved — Volume and Momentum Proxy Standard Version 1 (resolves Ambiguity 3 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on, and does not modify, Candle Measurement Standard V1 and Small Candle Standard V1 above.
+
+### 1. Primary Evidence — Price and Candle Behaviour
+
+The primary interpretation of volume, momentum, buying pressure, selling pressure, and activity switch comes from price and candle behaviour, not from an external indicator. Five measurements are calculated and preserved as **separate fields** — they are not combined into a single score at this stage:
+
+**A. Relative Size Ratio** (reuses Candle Measurement Standard V1 / Small Candle Standard V1 directly — no new formula):
+
+```
+Relative Size Ratio = Key Candle Total Range ÷ Reference Candle Total Range
+```
+
+**B. Range Context Ratio:**
+
+```
+Range Context Ratio = Key Candle Total Range ÷
+                       Median Total Range of the previous 20 confirmed candles
+```
+
+The current candidate candle is excluded from the 20-candle baseline.
+
+**C. Body Efficiency:**
+
+```
+Body Efficiency = |Close − Open| ÷ (High − Low)
+```
+
+**D. Bullish Close Position:**
+
+```
+Bullish Close Position = (Close − Low) ÷ (High − Low)
+```
+
+**E. Bearish Close Position:**
+
+```
+Bearish Close Position = (High − Close) ÷ (High − Low)
+```
+
+These five fields must remain separate. **They are not combined into a final weighted score during this decision.**
+
+### 2. Secondary Evidence — Tick Volume (When Available)
+
+Tick volume, where the data source provides it, is a **secondary, contextual** measurement only:
+
+```
+Relative Tick Volume = Current Candle Tick Volume ÷
+                        Median Tick Volume of the previous 20 confirmed candles
+```
+
+The current candidate candle is excluded from the baseline.
+
+Tick-volume status is reported as one of:
+
+- **SUPPORTS**
+- **NEUTRAL**
+- **CONTRADICTS**
+- **MISSING**
+
+Rules governing tick volume:
+- Tick volume must **not** initially be a mandatory POI-validity requirement.
+- Missing tick volume must **not** automatically invalidate a POI.
+- Tick-volume data must remain associated with its provider/source. Values from unrelated providers must never be silently compared or merged.
+
+### 3. Excluded External Indicators
+
+The core project must **not** use RSI, MACD, Stochastic, ADX, Rate of Change, or any other external momentum indicator as a mandatory POI rule. Such indicators may only be evaluated later as optional research features, and may be adopted only if they demonstrate measurable improvement on locked unseen data and receive author approval.
+
+### 4. Field Separation — Price Activity vs. Tick Volume
+
+Price-activity evidence and tick-volume evidence must remain separate fields, never merged. Future data fields are named here for forward reference only — none of them are computed, weighted, or thresholded by this decision:
+
+- `relative_size_ratio`
+- `range_context_ratio`
+- `body_efficiency`
+- `directional_close_position`
+- `relative_tick_volume`
+- `tick_volume_status`
+- `price_activity_score`
+
+The final `price_activity_score` formula and its feature weights remain unresolved and are **not** invented here.
+
+### 5. What Remains Unresolved
+
+This standard fixes *which measurements to calculate and how to calculate them*. It explicitly does **not** yet set:
+- Minimum Body Efficiency
+- Minimum Bullish or Bearish Close Position
+- Minimum Relative Tick Volume
+- Minimum displacement distance
+- The final momentum-quality score (`price_activity_score`)
+- Final feature weights
+- Any hard pass/fail threshold
+
+These remain subject to future author decisions, annotation evidence, and validation testing.
+
+### 6. POI-Specific Application
+
+Apply this standard's fields in: Buy Order Block, Sell Order Block, Buy Fair Value Gap, Sell Fair Value Gap, Base Rally, Base Drop, Buy-to-Sell Candle, Sell-to-Buy Candle, Bullish Engulfing, Bearish Engulfing.
+
+**Do not apply this standard to Pressure Wick yet** — Pressure Wick proportions remain under Ambiguity 6, unresolved.

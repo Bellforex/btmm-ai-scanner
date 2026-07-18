@@ -58,7 +58,7 @@ Size Ratio (Total Range basis) >= 2.0 vs. the smaller candle for a standard patt
 
 ## Volume or momentum proxy
 
-Not defined beyond the candle-size ratio itself (Ambiguity 3, open).
+Resolved under Volume and Momentum Proxy Standard V1 (Ambiguity 3): primary evidence is price/candle behaviour (Relative Size Ratio, Range Context Ratio, Body Efficiency, Bullish Close Position), with tick volume as secondary-only evidence (SUPPORTS/NEUTRAL/CONTRADICTS/MISSING; never mandatory). External indicators (RSI, MACD, etc.) are excluded as mandatory rules. See knowledge/MEASUREMENT_STANDARDS.md, "Volume, Momentum, and Price-Activity Proxy Standard." No minimum thresholds for these fields have been set yet.
 
 ## Trend requirement
 
@@ -118,7 +118,7 @@ Partial - the two-candle size/location/geometry rule is fully testable now using
 
 ## Unresolved questions
 
-How to define a separate volume/momentum proxy (Ambiguity 3); no freshness/mitigation/invalidation/expiration rule exists at all for this POI.
+Which proxy fields to use is resolved (Ambiguity 3), but their minimum thresholds (Body Efficiency, Close Position, Relative Tick Volume, displacement distance, final price_activity_score/weights) are not yet set; no freshness/mitigation/invalidation/expiration rule exists at all for this POI.
 
 ## Author decision
 

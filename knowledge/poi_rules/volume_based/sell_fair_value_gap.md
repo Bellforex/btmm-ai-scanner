@@ -58,7 +58,7 @@ Preceding candles 'noticeably smaller' than the displacement candle. Ambiguity 2
 
 ## Volume or momentum proxy
 
-Same open question as Ambiguity 3.
+Resolved under Volume and Momentum Proxy Standard V1 (Ambiguity 3): primary evidence is price/candle behaviour (Relative Size Ratio, Range Context Ratio, Body Efficiency, Bearish Close Position of the displacement candle), with tick volume as secondary-only evidence (SUPPORTS/NEUTRAL/CONTRADICTS/MISSING; never mandatory). External indicators (RSI, MACD, etc.) are excluded as mandatory rules. See knowledge/MEASUREMENT_STANDARDS.md, "Volume, Momentum, and Price-Activity Proxy Standard." No minimum thresholds for these fields have been set yet.
 
 ## Trend requirement
 
@@ -118,7 +118,7 @@ Partial - gap geometry precisely testable; preceding-candle reference and moment
 
 ## Unresolved questions
 
-How many preceding candle(s) make up the comparison group (not resolved by Small Candle Standard V1); volume/momentum proxy (Ambiguity 3); no general invalidation/freshness/expiration rule.
+How many preceding candle(s) make up the comparison group (not resolved by Small Candle Standard V1); which proxy fields to use is resolved (Ambiguity 3), but their minimum thresholds are not yet set; no general invalidation/freshness/expiration rule.
 
 ## Author decision
 
