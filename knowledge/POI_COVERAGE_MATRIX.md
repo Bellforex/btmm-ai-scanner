@@ -38,8 +38,8 @@ none of which the book defines for any POI).
 | Bearish Trendline | Structural | Bearish | P576-589 | Yes | Partial | Partial | Partial | No | N/A | No | Yes | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Support | Structural | Bullish | P590-602 | Yes | Yes | No | Partial | No | N/A | No | No | No | Partial | No | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Resistance | Structural | Bearish | P590-602 | Yes | Yes | No | Partial | No | N/A | No | No | No | Partial | No | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
-| Equal Highs | Structural | Bearish | P603-617 | Yes | Yes | Partial | Yes | No | N/A | No | No | No | Yes | Partial | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
-| Equal Lows | Structural | Bullish | P603-617 | Yes | Yes | Partial | Yes | No | N/A | No | No | No | Yes | Partial | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
+| Equal Highs | Structural | Bearish | P603-617 | Yes | Yes | Yes | Partial | Yes | N/A | Yes | No | No | Yes | Partial | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
+| Equal Lows | Structural | Bullish | P603-617 | Yes | Yes | Yes | Partial | Yes | N/A | Yes | No | No | Yes | Partial | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Swing High | Structural | Bearish | P618-626 | Yes | No | No | No | No | N/A | No | No | No | Yes | No | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Swing Low | Structural | Bullish | P618-626 | Yes | No | No | No | No | N/A | No | No | No | Yes | No | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Previous Day High | Structural | Bearish | Ch.1 "High and low of the following..." P627-687 | Yes | N/A | Yes | No | Yes | N/A | Yes | No | No | Yes | Yes | Partial | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
@@ -58,9 +58,11 @@ none of which the book defines for any POI).
 ## Summary Counts
 
 - Total POIs verified: **36**
-- PARTIAL: **22** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4)
-- NEEDS AUTHOR DECISION: **14**
+- PARTIAL: **24** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4; Equal Highs and Equal Lows moved from NEEDS AUTHOR DECISION to PARTIAL after Equal Highs and Equal Lows Standard V1 — Provisional resolved Ambiguity 5)
+- NEEDS AUTHOR DECISION: **12**
 
-Machine-testable-now breakdown: Partial=24, No=12
+Machine-testable-now breakdown: Partial=26, No=10
 
 Note: Base Rally and Base Drop's "Formation rule defined" and "Confirmation rule defined" columns were updated to Yes following the Phase 0D approval of Base Formation Standard V1 — Provisional (base candle count, compactness, and departure confirmation are now defined, subject to future calibration). Neither POI is marked APPROVED — freshness, mitigation, invalidation, and expiration remain undefined for both, and the standard itself is explicitly provisional.
+
+Note: Equal Highs and Equal Lows' "Formation rule defined," "Exact drawing boundary defined," "Wick/body rule defined," and "Strength classification defined" columns were updated to Yes, and "Confirmation rule defined" and "Machine-testable now" to Partial, following approval of Equal Highs and Equal Lows Standard V1 — Provisional (minimum qualifying-point count, same-timeframe rule, equality tolerance, drawing boundaries, and strength classification are now defined, all provisional pending calibration). Neither POI is marked APPROVED — the automatic swing-detection method (Ambiguity 10), SWEPT/BROKEN states, and freshness/mitigation/invalidation/expiration all remain unresolved for both.

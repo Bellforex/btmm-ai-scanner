@@ -387,4 +387,122 @@ This standard fixes base geometry, compactness, and departure-confirmation math 
 - The final `price_activity_score` formula/weights or any hard pass/fail threshold for the departure candle's momentum evidence (Volume/Momentum Proxy Standard SS5, unchanged).
 - Any threshold for POIs outside Base Rally/Drop.
 
+---
+
+## Equal Highs and Equal Lows Tolerance and Drawing Standard
+
+**Status:** Approved, **Provisional** — Equal Highs and Equal Lows Standard Version 1 — Provisional (resolves Ambiguity 5 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Does not modify any prior standard above.
+
+**Scope:** Applies only to Equal Highs and Equal Lows. Not automatically extended to Support, Resistance, Trendlines, Swing Highs/Lows, Previous-period highs/lows, Order Blocks, Fair Value Gaps, or any other POI.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, relevant project timeframes, different volatility regimes, and different market sessions. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Minimum Qualifying Points
+
+A valid Equal Highs or Equal Lows pattern requires at least **2 confirmed swing points**:
+- Equal Highs must use confirmed swing-high wick prices.
+- Equal Lows must use confirmed swing-low wick prices.
+
+The automatic swing-detection method remains **unresolved under Ambiguity 10**. Until Ambiguity 10 is resolved, this standard relies on expert-labelled swing points, manually confirmed swing points, or another explicitly approved confirmed-swing source. No swing-detection algorithm is invented by this standard.
+
+### 2. Same-Timeframe Rule
+
+All qualifying swing points in one Equal Highs or Equal Lows cluster must come from the **same timeframe**. Swing prices from different timeframes must never be combined into one equality cluster.
+
+### 3. Reference ATR
+
+For every qualifying swing-touch candle, ATR(14) is calculated on the same symbol and timeframe:
+
+```
+Reference ATR = Median ATR(14) value across all qualifying swing-touch candles
+```
+
+Only confirmed candles are used.
+
+### 4. Equality Tolerance
+
+```
+Equality Tolerance = MAX(2 × minimum price ticks for the instrument, 0.10 × Reference ATR)
+```
+
+The minimum price tick is sourced from instrument metadata once the software layer is built. No fixed pip or point tolerance by symbol is used.
+
+### 5. Equal Highs Validation
+
+```
+Equal Highs Cluster Spread = Highest qualifying swing-high wick price − Lowest qualifying swing-high wick price
+```
+
+Qualifies when:
+
+```
+Equal Highs Cluster Spread ≤ Equality Tolerance
+```
+
+### 6. Equal Lows Validation
+
+```
+Equal Lows Cluster Spread = Highest qualifying swing-low wick price − Lowest qualifying swing-low wick price
+```
+
+Qualifies when:
+
+```
+Equal Lows Cluster Spread ≤ Equality Tolerance
+```
+
+### 7. Strength Classification
+
+| Classification | Condition |
+|---|---|
+| **STRONG** | Cluster Spread ≤ 0.05 × Reference ATR (minimum-tick floor from SS4 still applies to the overall equality tolerance) |
+| **STANDARD** | Cluster Spread > 0.05 × Reference ATR **and** ≤ 0.10 × Reference ATR (minimum-tick floor still applies) |
+| **NOT EQUAL** | Cluster Spread > Equality Tolerance |
+
+No additional strength tiers are defined.
+
+### 8. Drawing Boundaries
+
+**Equal Highs:**
+```
+Zone Bottom = Lowest qualifying swing-high wick price
+Zone Top = Highest qualifying swing-high wick price
+Liquidity expectation: above Zone Top
+Optional Reference Level = Median of all qualifying swing-high wick prices
+```
+
+**Equal Lows:**
+```
+Zone Bottom = Lowest qualifying swing-low wick price
+Zone Top = Highest qualifying swing-low wick price
+Liquidity expectation: below Zone Bottom
+Optional Reference Level = Median of all qualifying swing-low wick prices
+```
+
+The Reference Level is optional and must not replace the zone boundaries (Zone Bottom/Zone Top).
+
+### 9. Confirmation
+
+A pattern becomes **CONFIRMED** only when:
+- At least 2 qualifying swing points exist.
+- All qualifying points are from the same timeframe.
+- The latest swing point has itself been confirmed.
+- The cluster spread remains within Equality Tolerance.
+
+Before the latest swing is confirmed, the pattern may only be described as **FORMING**.
+
+### 10. State Limitations
+
+Four states are reserved for the future: FORMING, CONFIRMED, SWEPT, BROKEN. **Only FORMING and CONFIRMED are defined by this decision.** SWEPT, BROKEN, reclaim, invalidation, expiration, freshness, and mitigation remain unresolved and are not invented here.
+
+### 11. What Remains Unresolved
+
+This standard fixes equality-tolerance, drawing-boundary, strength-classification, and FORMING/CONFIRMED-state math only. It explicitly does **not** resolve:
+- The automatic swing-detection algorithm (Ambiguity 10, unchanged).
+- SWEPT and BROKEN state definitions.
+- Reclaim, invalidation, expiration, freshness, or mitigation rules for Equal Highs/Lows.
+- Any threshold for POIs outside Equal Highs/Equal Lows.
+
+These remain separate, pending decisions.
+
 These remain separate, pending decisions.

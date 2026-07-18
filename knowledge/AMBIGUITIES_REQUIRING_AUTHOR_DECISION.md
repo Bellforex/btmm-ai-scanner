@@ -70,13 +70,25 @@ None of these are invented rules — each is a direct reflection of language the
   - Full formulas and classification rules are documented in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md), "Base Formation, Compactness, and Departure Standard."
 - **Status:** Resolved (provisional) — Base Formation Standard Version 1 — Provisional approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule. Remains subject to future calibration; not yet a final, locked standard.
 
-### 5. "Equal highs" / "Equal lows" (equality tolerance)
+### 5. "Equal highs" / "Equal lows" (equality tolerance) — ✅ RESOLVED (PROVISIONAL)
 
 - **Book says:** "Equal highs are price levels where the market has reached the same high area more than once" (similarly for equal lows) — "same area," not "identical price."
-- **Why it can't be coded precisely yet:** Real price data almost never touches the exact same price twice; some tolerance band is implied ("area") but never quantified.
-- **Possible numerical measurements to consider:** (a) fixed pip/point tolerance per symbol (e.g., 3–5 pips on EURUSD/GBPUSD, a larger $ tolerance on XAUUSD); (b) tolerance as a percentage of ATR; (c) tolerance as a percentage of the swing range being compared.
-- **Threshold chosen:** None.
-- **Status:** Requires author approval.
+- **Why it couldn't be coded precisely before:** Real price data almost never touches the exact same price twice; some tolerance band was implied ("area") but never quantified.
+- **Possible numerical measurements that were considered:** (a) fixed pip/point tolerance per symbol (e.g., 3–5 pips on EURUSD/GBPUSD, a larger $ tolerance on XAUUSD); (b) tolerance as a percentage of ATR; (c) tolerance as a percentage of the swing range being compared.
+- **Decision (Equal Highs and Equal Lows Standard Version 1 — Provisional, approved by the author):**
+  - Requires at least 2 confirmed swing points (confirmed swing-high wick prices for Equal Highs, confirmed swing-low wick prices for Equal Lows). Swing points must come from an expert-labelled, manually confirmed, or otherwise explicitly approved confirmed-swing source — **not** an invented swing-detection algorithm (the automatic swing-detection method itself remains Ambiguity 10, unresolved).
+  - All qualifying swing points in one cluster must come from the same timeframe; swing prices must never be combined across timeframes.
+  - Reference ATR = median ATR(14) across all qualifying swing-touch candles (same symbol/timeframe, confirmed candles only).
+  - Equality Tolerance = `MAX(2 × minimum price tick for the instrument, 0.10 × Reference ATR)` — no fixed pip/point tolerance by symbol; the minimum-tick floor is sourced from instrument metadata once the software layer exists.
+  - Equal Highs Cluster Spread = highest qualifying swing-high wick price − lowest qualifying swing-high wick price; qualifies when ≤ Equality Tolerance. Equal Lows Cluster Spread mirrors this for swing-low wick prices.
+  - Strength classification: STRONG (Cluster Spread ≤ 0.05× Reference ATR), STANDARD (> 0.05× and ≤ 0.10× Reference ATR), NOT EQUAL (> Equality Tolerance) — no additional tiers.
+  - Drawing boundaries: Equal Highs Zone Bottom/Top = lowest/highest qualifying swing-high wick price, liquidity expected above Zone Top, optional Reference Level = median of qualifying swing-high wick prices (does not replace the zone boundaries). Equal Lows mirrors this below Zone Bottom.
+  - Confirmation: CONFIRMED only when ≥2 qualifying swing points exist, all from the same timeframe, the latest swing point is itself confirmed, and the cluster spread is within tolerance; before the latest swing confirms, the pattern is only FORMING. SWEPT and BROKEN states are reserved for later but not defined now.
+  - Full formulas, drawing rules, and state limitations are documented in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md), "Equal Highs and Equal Lows Tolerance and Drawing Standard."
+  - **This standard is explicitly labeled "Equal Highs and Equal Lows Standard Version 1 — Provisional"** — it requires future calibration against expert-approved/rejected examples across XAUUSD/EURUSD/GBPUSD, relevant project timeframes, different volatility regimes, and different market sessions. Thresholds are not to be changed casually outside that calibration process.
+  - **Scope limitation:** applies only to Equal Highs and Equal Lows. Not automatically extended to Support, Resistance, Trendlines, Swing Highs/Lows, Previous-period highs/lows, Order Blocks, Fair Value Gaps, or other POIs.
+- **Still open (explicitly not resolved by this decision):** the automatic swing-detection algorithm (Ambiguity 10, unchanged); SWEPT and BROKEN state rules; reclaim; invalidation; expiration; freshness; mitigation — none of these are defined for Equal Highs/Lows by this decision.
+- **Status:** Resolved (provisional) — Equal Highs and Equal Lows Standard Version 1 — Provisional approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule. Remains subject to future calibration; not yet a final, locked standard.
 
 ### 6. "Good candle proportion" (Pressure Wick / Liquidity Wick)
 
