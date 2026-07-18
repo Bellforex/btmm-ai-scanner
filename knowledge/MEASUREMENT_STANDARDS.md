@@ -71,9 +71,102 @@ ATR (Average True Range) does **not** replace or adjust the 2.0/3.0 Size Ratio t
 ### 8. What Remains Unresolved
 
 This standard fixes *how to measure and classify candle size and body*. It does **not** resolve:
-- Ambiguity 2 ("small candle" volatility baseline)
 - Ambiguity 6 (Pressure Wick wick:body proportion)
 - Ambiguity 13 ("clear reversal" distance for Buy-to-Sell/Sell-to-Buy)
 - Any other still-open item in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`
 
+(Ambiguity 2, the "small candle" volatility baseline, is resolved — see "Small Candle and Recent Market Context Standard" below.)
+
 Those remain pending separate author decisions.
+
+---
+
+## Small Candle and Recent Market Context Standard
+
+**Status:** Approved — Small Candle Standard Version 1 (resolves Ambiguity 2 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Does not modify Candle Measurement Standard Version 1 above — it builds directly on the same `Candle Total Range = High − Low` primitive.
+
+### 1. Total Range (unchanged)
+
+```
+Candle Total Range = High − Low
+```
+
+Continues to use the Candle Measurement Standard V1 definition exactly as-is.
+
+### 2. Relative Smallness — the main POI validation requirement
+
+A candle qualifies as **small relative to a key candle** when:
+
+```
+Small Candle Total Range ≤ 0.50 × Key Candle Total Range
+```
+
+Equivalently:
+
+```
+Key Candle Total Range ≥ 2 × Small Candle Total Range
+```
+
+### 3. Strong Volume-Switch Relationship
+
+A **strong** volume-switch relationship exists when:
+
+```
+Small Candle Total Range ≤ 0.3333 × Key Candle Total Range
+```
+
+Equivalently:
+
+```
+Key Candle Total Range ≥ 3 × Small Candle Total Range
+```
+
+These two thresholds (0.50 and 0.3333) are the same 2×/3× relationship already used by Candle Measurement Standard V1's Size Ratio classification, expressed from the small candle's side of the comparison rather than the key candle's side.
+
+### 4. Recent Market Context — a separate, secondary measurement
+
+Recent market context is calculated independently of the relative-smallness rule:
+
+```
+Recent Median Range = median Total Range of the previous 20 confirmed candles,
+                       excluding the current candidate candle
+```
+
+Context classifications:
+
+| Candle Range vs. Recent Median Range | Classification |
+|---|---|
+| ≤ 0.75 × Recent Median Range | Contextually Small |
+| > 0.75× and ≤ 1.25 × Recent Median Range | Contextually Normal |
+| > 1.25 × Recent Median Range | Contextually Large |
+
+### 5. Relative vs. Contextual — Two Separate Fields, Never Merged
+
+- **Relative smallness** (SS2–SS3 above) is the **main POI validation requirement** — this is what determines whether a candle satisfies a POI's formation rule.
+- **Contextual classification** (SS4 above) is a **secondary market-context and quality measurement only**. It must **never** automatically reject a pattern that already satisfies the book's relative-size rule. The two fields are tracked and reported separately; contextual classification is informational/quality-scoring, not a gating condition.
+
+### 6. No Fixed Pip/Point Measurements
+
+This standard uses only ratios (of Total Range to Total Range, and of Total Range to a rolling median Total Range) — never a fixed pip, point, or dollar floor. This is deliberate so the same rule applies unmodified across XAUUSD, EURUSD, GBPUSD, and every timeframe in scope (per `docs/PROJECT_SCOPE.md`), without needing a separate calibration per symbol.
+
+### 7. POI-Specific Application
+
+| POI | Key candle | Small/reference candle for comparison |
+|---|---|---|
+| Order Block | Displacement candle | The immediately preceding (smaller) candle |
+| Bullish or Bearish Engulfing | Engulfing candle | The immediately preceding candle |
+| Fair Value Gap | Displacement candle | The largest Total Range among the relevant preceding-candle group |
+| Base Rally or Base Drop | Departure candle | The largest Total Range among all candles forming the base |
+| Buy-to-Sell or Sell-to-Buy | Failed directional candle | The largest Total Range among the relevant preceding-candle group |
+
+Pressure Wick / Liquidity Wick, Hammer, Shooting Star, Morning Star, and Evening Star are **not** included in this table — none of them appear in the approved POI-specific application list, so this standard is not referenced in those rule files. Their wick/body and doji-size questions remain separately unresolved (Ambiguity 6 and related open items).
+
+### 8. Important Limitation — What This Decision Does *Not* Yet Define
+
+This standard fixes the ratio/classification math only. It explicitly does **not** yet define:
+- The number of preceding candles in a comparison group (relevant to Fair Value Gap and Buy-to-Sell/Sell-to-Buy).
+- The number of candles forming a valid base (relevant to Base Rally/Base Drop).
+- The minimum or maximum base duration (relevant to Base Rally/Base Drop).
+- Reversal confirmation after a Buy-to-Sell or Sell-to-Buy candle (Ambiguity 13, unchanged).
+
+These remain separate unresolved decisions and must not be inferred from this standard.

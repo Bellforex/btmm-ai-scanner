@@ -54,7 +54,7 @@ Not defined as a separate requirement beyond the displacement candle needing 'st
 
 ## Candle-size requirement
 
-Preceding candles must be 'noticeably smaller' than the displacement candle, but no fixed ratio is given the way Order Block's 2x/3x is. Which specific preceding candle serves as the Size-Ratio reference (per Measurement Standard V1) is not stated by the book - this narrow question remains open even after Ambiguity 1's resolution.
+Preceding candles must be 'noticeably smaller' than the displacement candle. Ambiguity 2 is now resolved via Small Candle Standard V1: the displacement candle qualifies against the reference group when the reference's Total Range <= 0.50x the displacement candle's Total Range (standard) / <= 0.3333x (strong volume-switch), with a separate secondary Recent Market Context classification that does not override this. Comparison target per the approved standard: the largest Total Range among the relevant preceding-candle group. **Still open:** exactly how many preceding candles make up "the relevant preceding-candle group" is not defined by the book or by this decision - see knowledge/MEASUREMENT_STANDARDS.md, "Small Candle and Recent Market Context Standard," Important Limitation.
 
 ## Volume or momentum proxy
 
@@ -118,7 +118,7 @@ Partial - the 3-candle gap geometry is precisely testable; the 'noticeably small
 
 ## Unresolved questions
 
-Which preceding candle(s) serve as the Size-Ratio reference; general momentum/volume proxy (Ambiguity 3); no invalidation/freshness/expiration rule beyond the one narrow note above.
+How many preceding candle(s) make up the comparison group (not resolved by Small Candle Standard V1); general momentum/volume proxy (Ambiguity 3); no invalidation/freshness/expiration rule beyond the one narrow note above.
 
 ## Author decision
 

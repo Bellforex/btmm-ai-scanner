@@ -54,7 +54,7 @@ Not required for zone-drawing (the whole candle range is the zone). Body Efficie
 
 ## Candle-size requirement
 
-Size Ratio (Total Range basis) >= 2.0 vs. the smaller candle for a standard pattern, >= 3.0 for a strong pattern. Formula: Bullish Displacement Candle Size >= 2 x Previous Candle Size. Resolved under Candle Measurement Standard V1 (Ambiguity 1).
+Size Ratio (Total Range basis) >= 2.0 vs. the smaller candle for a standard pattern, >= 3.0 for a strong pattern. Formula: Bullish Displacement Candle Size >= 2 x Previous Candle Size. Resolved under Candle Measurement Standard V1 (Ambiguity 1). The "smaller candle" itself is now also governed by Small Candle Standard V1 (Ambiguity 2, resolved): Small Candle Total Range <= 0.50x the displacement candle's Total Range (standard) / <= 0.3333x (strong volume-switch); a separate, secondary Recent Market Context classification (vs. the 20-candle median range) does not override this. Comparison target: the immediately preceding (smaller) candle. See knowledge/MEASUREMENT_STANDARDS.md, "Small Candle and Recent Market Context Standard."
 
 ## Volume or momentum proxy
 

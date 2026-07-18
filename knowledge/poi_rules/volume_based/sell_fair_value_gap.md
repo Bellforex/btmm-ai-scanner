@@ -54,7 +54,7 @@ Not defined as a separate requirement beyond the displacement candle's momentum 
 
 ## Candle-size requirement
 
-Preceding candles 'noticeably smaller' than the displacement candle - no fixed ratio given; which preceding candle is the Size-Ratio reference is unspecified.
+Preceding candles 'noticeably smaller' than the displacement candle. Ambiguity 2 is now resolved via Small Candle Standard V1: the displacement candle qualifies against the reference group when the reference's Total Range <= 0.50x the displacement candle's Total Range (standard) / <= 0.3333x (strong volume-switch), with a separate secondary Recent Market Context classification that does not override this. Comparison target per the approved standard: the largest Total Range among the relevant preceding-candle group. **Still open:** exactly how many preceding candles make up "the relevant preceding-candle group" is not defined by the book or by this decision - see knowledge/MEASUREMENT_STANDARDS.md, "Small Candle and Recent Market Context Standard," Important Limitation.
 
 ## Volume or momentum proxy
 
@@ -118,7 +118,7 @@ Partial - gap geometry precisely testable; preceding-candle reference and moment
 
 ## Unresolved questions
 
-Size-Ratio reference candle for FVG; volume/momentum proxy (Ambiguity 3); no general invalidation/freshness/expiration rule.
+How many preceding candle(s) make up the comparison group (not resolved by Small Candle Standard V1); volume/momentum proxy (Ambiguity 3); no general invalidation/freshness/expiration rule.
 
 ## Author decision
 

@@ -54,7 +54,7 @@ Not separately specified; body relevant only to establishing the candle 'closed 
 
 ## Candle-size requirement
 
-Size Ratio (Total Range) >= 2.0 (standard) / >= 3.0 (stronger) vs. average size of preceding candles, per Measurement Standard V1.
+Size Ratio (Total Range) >= 2.0 (standard) / >= 3.0 (stronger), per Measurement Standard V1. Ambiguity 2 is now resolved via Small Candle Standard V1: the failed directional candle qualifies against the preceding group when the group's reference Total Range <= 0.50x (standard) / <= 0.3333x (strong) the failed candle's Total Range, with a separate secondary Recent Market Context classification that does not override this. Comparison target per the approved standard: the largest Total Range among the relevant preceding-candle group (this supersedes the earlier informal "average size of preceding candles" description). **Still open:** exactly how many preceding candles make up "the relevant preceding-candle group" is not defined. See knowledge/MEASUREMENT_STANDARDS.md, "Small Candle and Recent Market Context Standard."
 
 ## Volume or momentum proxy
 
@@ -118,7 +118,7 @@ Partial - ratio and fail-then-reverse logic testable in principle; minimum rever
 
 ## Unresolved questions
 
-Minimum reversal distance/candle count (Ambiguity 13); volume/momentum proxy (Ambiguity 3); no invalidation/freshness/expiration rule.
+Minimum reversal distance/candle count (Ambiguity 13, still open); how many preceding candles make up the comparison group (not resolved by Small Candle Standard V1); volume/momentum proxy (Ambiguity 3); no invalidation/freshness/expiration rule.
 
 ## Author decision
 

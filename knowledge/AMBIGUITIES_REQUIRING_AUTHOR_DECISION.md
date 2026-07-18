@@ -21,13 +21,21 @@ None of these are invented rules — each is a direct reflection of language the
   - Full formulas, classification table, and POI-by-POI application are documented in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md).
 - **Status:** Resolved — Candle Measurement Standard Version 1 approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule.
 
-### 2. "Small candle" (base candles, engulfed candles, pre-FVG candles)
+### 2. "Small candle" (base candles, engulfed candles, pre-FVG candles) — ✅ RESOLVED
 
 - **Book says:** Base candles must be "short in height," "small in total range"; engulfed candles must be "relatively small"; pre-FVG candles must be "noticeably smaller" than the displacement candle — again, no ratio or absolute size given for what counts as "small" on its own (only the *relative* 2–3× multiple to the following candle is numeric).
-- **Why it can't be coded precisely yet:** "Small" is defined only in relation to the next candle, never against a market-volatility baseline (e.g., average true range), so on a low-volatility day "small" and "large" both shrink together and the ratio rule alone may misfire.
-- **Possible numerical measurements to consider:** (a) size relative to a rolling ATR (e.g., below 0.5× ATR); (b) size relative to the symbol's recent N-candle average range; (c) a fixed pip/point floor per symbol (XAUUSD vs. EURUSD would need different floors).
-- **Threshold chosen:** None.
-- **Status:** Requires author approval.
+- **Why it couldn't be coded precisely before:** "Small" was defined only in relation to the next candle, never against a market-volatility baseline (e.g., average true range), so on a low-volatility day "small" and "large" would both shrink together and the ratio rule alone might misfire.
+- **Possible numerical measurements that were considered:** (a) size relative to a rolling ATR; (b) size relative to the symbol's recent N-candle average range; (c) a fixed pip/point floor per symbol.
+- **Decision (Small Candle Standard Version 1, approved by the author):**
+  - Continues using Candle Total Range = High − Low from Candle Measurement Standard V1 (not modified).
+  - A candle qualifies as small relative to a key candle when Small Candle Total Range ≤ 0.50 × Key Candle Total Range (equivalent to Key Candle Total Range ≥ 2 × Small Candle Total Range).
+  - A strong volume-switch relationship exists when Small Candle Total Range ≤ 0.3333 × Key Candle Total Range (equivalent to Key Candle Total Range ≥ 3 × Small Candle Total Range).
+  - This relative rule is supplemented — never replaced — by a separate, secondary **Recent Market Context** classification: Recent Median Range = the median Total Range of the previous 20 confirmed candles (excluding the candidate candle); a candle is Contextually Small (≤0.75× median), Contextually Normal (>0.75× to ≤1.25× median), or Contextually Large (>1.25× median). The contextual classification must not automatically reject a pattern that already satisfies the relative 2×/3× rule.
+  - No fixed pip/point measurements are used, so the rule works unmodified across XAUUSD, EURUSD, GBPUSD, and all timeframes.
+  - POI-specific comparison targets: Order Block compares the displacement candle to the immediately preceding smaller candle; Engulfing compares the engulfing candle to the immediately preceding candle; Fair Value Gap compares the displacement candle to the largest Total Range among the relevant preceding-candle group; Base Rally/Base Drop compares the departure candle to the largest Total Range among all base candles; Buy-to-Sell/Sell-to-Buy compares the failed directional candle to the largest Total Range among the relevant preceding-candle group.
+  - Full formulas, classification tables, and POI-by-POI application are documented in [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md).
+- **Still open (explicitly not resolved by this decision):** the number of preceding candles in a comparison group; the number of candles forming a valid base; minimum/maximum base duration; and reversal confirmation distance after a Buy-to-Sell/Sell-to-Buy candle (Ambiguity 13). These remain separate unresolved decisions.
+- **Status:** Resolved — Small Candle Standard Version 1 approved. See [MEASUREMENT_STANDARDS.md](MEASUREMENT_STANDARDS.md) for the implementation-ready rule.
 
 ### 3. "High volume" / "Strong momentum" / "Clear displacement"
 

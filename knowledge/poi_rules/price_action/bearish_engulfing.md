@@ -54,7 +54,7 @@ Core rule: the engulfing candle's body must cover/engulf the previous candle's b
 
 ## Candle-size requirement
 
-Size Ratio (Total Range) >= 2.0 (standard) / >= 3.0 (strong) vs. the previous candle, per Measurement Standard V1.
+Size Ratio (Total Range) >= 2.0 (standard) / >= 3.0 (strong) vs. the previous candle, per Measurement Standard V1. The previous (engulfed) candle's "smallness" is now also governed by Small Candle Standard V1 (Ambiguity 2, resolved): its Total Range <= 0.50x the engulfing candle's Total Range (standard) / <= 0.3333x (strong), with a separate secondary Recent Market Context classification that does not override this. Comparison target per the approved standard: the immediately preceding candle. See knowledge/MEASUREMENT_STANDARDS.md, "Small Candle and Recent Market Context Standard."
 
 ## Volume or momentum proxy
 
