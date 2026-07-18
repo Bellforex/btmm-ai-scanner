@@ -26,8 +26,8 @@ none of which the book defines for any POI).
 | Sell-to-Buy Candle | Volume-Based | Bullish | P288-341; appendix P1091-1159 | Yes | Yes | Yes | Partial | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | NEEDS AUTHOR DECISION |
 | Base Rally (Rally-Base-Rally) | Volume-Based | Bullish | P342-358; appendix P942-1049 | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Base Drop (Drop-Base-Drop) | Volume-Based | Bearish | P342-358; appendix P942-1049 | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | No | No | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
-| Bullish Pressure Wick (Liquidity Wick) | Volume-Based | Bullish | P359-373 | Yes | Partial | Partial | Yes | No | N/A | No | No | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
-| Bearish Pressure Wick (Liquidity Wick) | Volume-Based | Bearish | P359-373 | Yes | Partial | Partial | Yes | No | N/A | No | No | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
+| Bullish Pressure Wick (Liquidity Wick) | Volume-Based | Bullish | P359-373 | Yes | Partial | Yes | Partial | Yes | N/A | Yes | No | No | Partial | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
+| Bearish Pressure Wick (Liquidity Wick) | Volume-Based | Bearish | P359-373 | Yes | Partial | Yes | Partial | Yes | N/A | Yes | No | No | Partial | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Bullish Engulfing Candle | Price Action | Bullish | P413-474; appendix P731-764, 799-828 | Yes | Yes | Yes | Yes | No | Yes | Yes | Partial | Partial | Partial | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Bearish Engulfing Candle | Price Action | Bearish | P413-474; appendix P765-828 | Yes | Yes | Yes | Yes | No | Yes | Yes | Partial | Partial | Partial | Yes | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Hammer (a.k.a. Pin Bar) | Price Action | Bullish | P475-496 | Yes | Yes | Partial | Yes | No | N/A | No | No | No | No | No | Partial | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
@@ -58,11 +58,13 @@ none of which the book defines for any POI).
 ## Summary Counts
 
 - Total POIs verified: **36**
-- PARTIAL: **24** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4; Equal Highs and Equal Lows moved from NEEDS AUTHOR DECISION to PARTIAL after Equal Highs and Equal Lows Standard V1 — Provisional resolved Ambiguity 5)
-- NEEDS AUTHOR DECISION: **12**
+- PARTIAL: **26** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4; Equal Highs and Equal Lows moved from NEEDS AUTHOR DECISION to PARTIAL after Equal Highs and Equal Lows Standard V1 — Provisional resolved Ambiguity 5; Bullish Pressure Wick and Bearish Pressure Wick moved from NEEDS AUTHOR DECISION to PARTIAL after Pressure Wick Standard V1 — Provisional resolved Ambiguity 6)
+- NEEDS AUTHOR DECISION: **10**
 
-Machine-testable-now breakdown: Partial=26, No=10
+Machine-testable-now breakdown: Partial=28, No=8
 
 Note: Base Rally and Base Drop's "Formation rule defined" and "Confirmation rule defined" columns were updated to Yes following the Phase 0D approval of Base Formation Standard V1 — Provisional (base candle count, compactness, and departure confirmation are now defined, subject to future calibration). Neither POI is marked APPROVED — freshness, mitigation, invalidation, and expiration remain undefined for both, and the standard itself is explicitly provisional.
 
 Note: Equal Highs and Equal Lows' "Formation rule defined," "Exact drawing boundary defined," "Wick/body rule defined," and "Strength classification defined" columns were updated to Yes, and "Confirmation rule defined" and "Machine-testable now" to Partial, following approval of Equal Highs and Equal Lows Standard V1 — Provisional (minimum qualifying-point count, same-timeframe rule, equality tolerance, drawing boundaries, and strength classification are now defined, all provisional pending calibration). Neither POI is marked APPROVED — the automatic swing-detection method (Ambiguity 10), SWEPT/BROKEN states, and freshness/mitigation/invalidation/expiration all remain unresolved for both.
+
+Note: Bullish Pressure Wick and Bearish Pressure Wick's "Formation rule defined," "Exact drawing boundary defined," "Wick/body rule defined," and "Strength classification defined" columns were updated to Yes, and "Confirmation rule defined" and "Machine-testable now" to Partial, following approval of Pressure Wick Standard V1 — Provisional (wick/body proportions, directional close position, drawing boundaries, STANDARD/STRONG classification, and CANDIDATE/CONFIRMED states are now defined, all provisional pending calibration). Neither POI is marked APPROVED — liquidity-collection proof, approach speed, structural-zone requirement, retest, and all lifecycle rules (freshness, mitigation, invalidation, expiration) remain unresolved for both. Hammer and Shooting Star rows/files were not touched.

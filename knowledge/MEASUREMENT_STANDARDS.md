@@ -506,3 +506,139 @@ This standard fixes equality-tolerance, drawing-boundary, strength-classificatio
 These remain separate, pending decisions.
 
 These remain separate, pending decisions.
+
+---
+
+## Pressure Wick Measurement, Drawing, and Classification Standard
+
+**Status:** Approved, **Provisional** — Pressure Wick Standard Version 1 — Provisional (resolves Ambiguity 6 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on Candle Measurement Standard V1 and the Volume/Momentum/Price-Activity Proxy Standard above; does not modify either.
+
+**Scope:** Applies only to Bullish Pressure Wick and Bearish Pressure Wick. Not automatically extended to Hammer, Shooting Star, pin bars generally, Order Blocks, Fair Value Gaps, Engulfing candles, Base Rally, Base Drop, or other POIs.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, relevant project timeframes, different sessions, and different volatility regimes. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Candle Measurements
+
+Uses only confirmed closed candles for final validation.
+
+```
+Total Range = High − Low
+Body = |Close − Open|
+Upper Wick = High − MAX(Open, Close)
+Lower Wick = MIN(Open, Close) − Low
+```
+
+A candle with Total Range ≤ 0 is invalid and must not be classified as a Pressure Wick.
+
+```
+Body Efficiency = Body ÷ Total Range
+Upper Wick Share = Upper Wick ÷ Total Range
+Lower Wick Share = Lower Wick ÷ Total Range
+```
+
+### 2. Bullish Pressure Wick (Lower-Price Rejection)
+
+A confirmed candidate must satisfy **all** of:
+
+- Lower Wick Share ≥ 0.40
+- Body Efficiency ≥ 0.25
+- Lower Wick ≥ 2 × Upper Wick
+- Bullish Close Position ≥ 0.60, where `Bullish Close Position = (Close − Low) ÷ Total Range`
+
+The candle may close bullish or bearish — candle colour alone must not determine Pressure Wick direction.
+
+### 3. Bearish Pressure Wick (Higher-Price Rejection)
+
+A confirmed candidate must satisfy **all** of:
+
+- Upper Wick Share ≥ 0.40
+- Body Efficiency ≥ 0.25
+- Upper Wick ≥ 2 × Lower Wick
+- Bearish Close Position ≥ 0.60, where `Bearish Close Position = (High − Close) ÷ Total Range`
+
+The candle may close bullish or bearish — candle colour alone must not determine Pressure Wick direction.
+
+### 4. Strong and Standard Classification
+
+**STRONG** requires **all** of:
+
+- Rejection Wick Share ≥ 0.50
+- Body Efficiency ≥ 0.30
+- Rejection Wick ≥ 3 × Opposite Wick
+- Directional Close Position ≥ 0.70
+- Range Context Ratio ≥ 1.25, where `Range Context Ratio = Candidate Total Range ÷ Median Total Range of the previous 20 confirmed candles` (current candidate excluded from the baseline)
+
+Direction mapping:
+
+| Direction | Rejection Wick | Opposite Wick | Directional Close Position |
+|---|---|---|---|
+| Bullish Pressure Wick | Lower Wick | Upper Wick | Bullish Close Position |
+| Bearish Pressure Wick | Upper Wick | Lower Wick | Bearish Close Position |
+
+A candidate that passes the standard conditions (SS2 or SS3) but not every STRONG condition is classified **STANDARD**. No additional strength tiers are defined.
+
+### 5. Numerical Protection (Zero-Range / Zero-Wick Safety)
+
+```
+Wick Dominance Ratio = Rejection Wick ÷ MAX(Opposite Wick, Minimum Price Tick)
+```
+
+This prevents division by zero when the opposite wick is exactly zero. The Minimum Price Tick must eventually come from instrument metadata once the software layer is built — no fixed pip or point value is invented by this documentation task.
+
+### 6. Drawing Boundaries
+
+**Bullish Pressure Wick:**
+```
+Zone Bottom = Candle Low
+Zone Top = MIN(Open, Close)
+```
+This zone contains only the lower rejection wick.
+
+**Bearish Pressure Wick:**
+```
+Zone Bottom = MAX(Open, Close)
+Zone Top = Candle High
+```
+This zone contains only the upper rejection wick.
+
+The candle body must never be automatically included in the Pressure Wick POI zone.
+
+### 7. Candidate and Confirmed States
+
+- **CANDIDATE** — before the candidate candle closes.
+- **CONFIRMED** — after the candle closes and all mandatory conditions (SS2 or SS3) pass.
+
+RETESTED, MITIGATED, SWEPT, BROKEN, and EXPIRED are **not** defined by this decision — they depend on later freshness, mitigation, liquidity, sweep, invalidation, and expiration standards.
+
+### 8. Volume and Momentum Treatment
+
+Pressure Wicks reference the approved Volume, Momentum, and Price-Activity Proxy Standard (above):
+- Price and candle behaviour are the primary evidence.
+- Tick volume is secondary, contextual evidence only.
+- Missing tick volume must **not** automatically invalidate a Pressure Wick.
+- RSI, MACD, Stochastic, ADX, Rate of Change, or other external indicators must **not** be mandatory.
+
+No final `price_activity_score` formula or new indicator threshold is invented by this standard.
+
+### 9. Timeframe Treatment
+
+H3, H4, D1, and W1 receive higher-timeframe **contextual priority only** — not a numerical score. A candle that fails the mandatory Pressure Wick measurements (SS2/SS3) remains invalid regardless of timeframe.
+
+### 10. Relationship with Hammer and Shooting Star
+
+Pressure Wicks remain Volume-Based POIs; Hammer and Shooting Star remain Price-Action POIs. One candle may independently qualify for both a Pressure Wick label and a Hammer/Shooting Star label — the system must preserve these labels separately and must never silently merge them into one POI type. The Hammer and Shooting Star rule files are **not** modified by this standard.
+
+### 11. What Remains Unresolved
+
+This standard fixes wick/body proportions, drawing boundaries, strength classification, and CANDIDATE/CONFIRMED-state math only. It explicitly does **not** resolve:
+- Proof of liquidity collection.
+- Required preceding market approach speed.
+- Required nearby support, resistance, trendline, or structural zone.
+- Retest confirmation.
+- Freshness, partial mitigation, full mitigation.
+- Sweep rules.
+- General invalidation.
+- Expiration.
+- Trade-entry confirmation.
+
+These remain separate, pending decisions.
