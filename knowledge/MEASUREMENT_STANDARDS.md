@@ -642,3 +642,139 @@ This standard fixes wick/body proportions, drawing boundaries, strength classifi
 - Trade-entry confirmation.
 
 These remain separate, pending decisions.
+
+---
+
+## Market Speed, FVG Displacement, BTMM Movement, and POI Dwell Standard
+
+**Status:** Approved, **Provisional** — Market Speed and Displacement Standard Version 1 — Provisional (resolves Ambiguity 7 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on Candle Measurement Standard V1, Small Candle Standard V1, and the Volume/Momentum/Price-Activity Proxy Standard above; does not modify any of them.
+
+**Scope:** FVG displacement thresholds apply only to Buy Fair Value Gap and Sell Fair Value Gap. BTMM movement-leg formulas apply only to explicitly labelled BTMM Approach Legs and BTMM Reaction Legs. Not automatically extended to Order Blocks, Base Rally, Base Drop, Engulfing candles, Pressure Wicks, Trendlines, Support/Resistance, or other POIs.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, M1/M5/M15 BTMM formations, H1/M15 market structure, H3/H4/D1/W1 POIs, different sessions, and different volatility regimes. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Required Concept Separation
+
+Four concepts must be preserved separately and never combined into one unexplained score:
+
+- **FVG Displacement Speed** — how fast the displacement candle expanded relative to recent candles.
+- **BTMM Approach Speed** — how fast price moved toward a POI during an approach leg.
+- **BTMM Reaction Speed** — how fast price moved away from a POI during a reaction leg.
+- **POI Dwell Time** — how long price remained inside a POI zone.
+
+### 2. Single-Candle Speed Measurement
+
+For a confirmed candidate candle:
+
+```
+Range Speed Ratio = Candidate Total Range ÷ Median Total Range of the previous 20 confirmed candles
+```
+
+The current candidate candle is excluded from the 20-candle baseline.
+
+| Classification | Condition |
+|---|---|
+| **NORMAL** | Range Speed Ratio < 1.50 |
+| **FAST** | Range Speed Ratio ≥ 1.50 and < 2.00 |
+| **VERY FAST** | Range Speed Ratio ≥ 2.00 |
+
+### 3. FVG Comparison Window
+
+For Buy and Sell Fair Value Gaps, use the three confirmed candles immediately before the displacement candle:
+
+```
+Pre-Displacement Maximum Range = Largest Total Range among the previous 3 confirmed candles
+Displacement Expansion Ratio = Displacement Candle Total Range ÷ Pre-Displacement Maximum Range
+```
+
+This speed rule does **not** replace the strict three-candle FVG gap geometry (Buy: 3rd-candle-low > 1st-candle-high; Sell: 3rd-candle-high < 1st-candle-low), which remains an independent mandatory requirement.
+
+### 4. Standard Fast FVG
+
+A displacement candle qualifies as **STANDARD FAST** only when **all** pass:
+
+- Range Speed Ratio ≥ 1.50
+- Displacement Expansion Ratio ≥ 2.00
+- Body Efficiency ≥ 0.60
+- Directional Close Position ≥ 0.70
+- A valid strict three-candle FVG gap independently exists
+
+```
+Buy FVG:  Directional Close Position = (Close − Low) ÷ Total Range
+Sell FVG: Directional Close Position = (High − Close) ÷ Total Range
+```
+
+### 5. Strong Fast FVG
+
+A displacement candle qualifies as **STRONG FAST** only when **all** pass:
+
+- Range Speed Ratio ≥ 2.00
+- Displacement Expansion Ratio ≥ 3.00
+- Body Efficiency ≥ 0.70
+- Directional Close Position ≥ 0.80
+- A valid strict three-candle FVG gap independently exists
+
+A fast candle without valid FVG geometry is **not** an FVG. A valid geometric FVG that fails the speed thresholds may remain a weaker FVG candidate — it must **not** be silently deleted solely for failing speed classification. No additional speed tiers are defined.
+
+### 6. BTMM Movement-Leg Measurements
+
+Until automatic anchors are approved (dependent on Ambiguity 14), use **expert-labelled movement-leg anchors only**. For each labelled BTMM approach or reaction leg:
+
+```
+Leg Bar Count = Number of confirmed candles in the movement leg
+Net Directional Distance = |End Price − Start Price|
+Reference ATR = Median ATR(14) across the confirmed candles in the leg
+Normalized Speed Per Bar = Net Directional Distance ÷ (Leg Bar Count × Reference ATR)
+Leg Path Distance = Sum of Total Ranges of every candle in the leg
+Directional Efficiency = Net Directional Distance ÷ Leg Path Distance
+Directional Candle Share = Number of candles closing in the movement direction ÷ Total candles in the leg
+```
+
+**Zero-denominator protection:** a movement leg with zero candles, zero Reference ATR, or zero Leg Path Distance cannot receive a valid speed classification.
+
+### 7. BTMM Speed Classification
+
+| Classification | Conditions (all required) |
+|---|---|
+| **FAST** | Normalized Speed Per Bar ≥ 0.50, Directional Efficiency ≥ 0.60, Directional Candle Share ≥ 0.67 |
+| **STRONG FAST** | Normalized Speed Per Bar ≥ 0.75, Directional Efficiency ≥ 0.75, Directional Candle Share ≥ 0.80 |
+| **SLOW_OR_UNCLEAR** | Otherwise |
+
+Speed classification alone must **never** approve or reject a POI, a BTMM formation, an entry, or a trade.
+
+### 8. POI Dwell Measurement
+
+```
+POI Dwell Bars = Number of consecutive confirmed candles intersecting the POI,
+                 from first touch until price exits the zone
+```
+
+Preserved as separate fields: First Touch Time, Exit Time, Dwell Duration, Exit Direction, POI Dwell Bars. No maximum permitted dwell time is set by this standard. A delayed reaction inside a POI must **not** automatically invalidate BTMM. Dwell may later be interpreted using liquidity-generation and BTMM-state rules (not defined here).
+
+### 9. Independent Future Data Fields
+
+Named for forward reference only — none are computed, weighted, or combined into a composite score by this decision:
+
+- `range_speed_ratio`
+- `displacement_expansion_ratio`
+- `normalized_speed_per_bar`
+- `directional_efficiency`
+- `directional_candle_share`
+- `poi_dwell_bars`
+- `speed_classification`
+
+No composite market-speed score or weighting formula is defined.
+
+### 10. Anchor Limitation
+
+Automatic detection of the following remains unresolved: manipulation endpoint, approach starting price, POI first-touch price, reaction starting point, reaction endpoint. Their automatic detection depends on Ambiguity 14 (the BTMM state machine), which is **not** resolved or modified by this decision. Until Ambiguity 14 is resolved, BTMM movement-leg speed testing uses expert-labelled or otherwise explicitly approved anchors only.
+
+### 11. What Remains Unresolved
+
+This standard fixes single-candle speed, FVG displacement, BTMM movement-leg, and POI dwell **measurement** math only. It explicitly does **not** resolve:
+- Ambiguity 14 (BTMM state machine) or the automatic anchors that depend on it.
+- Any composite/weighted final speed or activity score.
+- BTMM Accuracy (Ambiguity 8, separate and unchanged).
+- Freshness, mitigation, invalidation, or expiration for any POI.
+
+These remain separate, pending decisions.
