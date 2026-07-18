@@ -75,7 +75,7 @@ One of the three BTMM pillars. Refers to "how precisely that candle reaches or t
 
 **Evidence sourcing (POI Zone Interaction, Penetration, and Overshoot Standard Version 1 — Provisional, resolves Ambiguity 8):** For any POI with defined zone boundaries, "accuracy" is now measured as geometric zone-interaction classification — EDGE_TOUCH, PARTIAL_ENTRY, DEEP_ENTRY, FAR_BOUNDARY_TOUCH, CONTROLLED_OVERSHOOT, or EXCESSIVE_OVERSHOOT, plus NEAR_MISS/NO_CONTACT/NONCANONICAL_SIDE_INTERACTION for non-touches. Full formulas in `knowledge/MEASUREMENT_STANDARDS.md`, "POI Zone Interaction, Penetration, and Overshoot Standard."
 
-**This interaction geometry is evaluated strictly separately from BTMM reaction strength** — how accurately price *reached* the POI (this standard) is a different question from whether the *reaction away* from the POI was strong (still unresolved, see "Strong reaction," Ambiguity 9). Neither one determines the other.
+**This interaction geometry is evaluated strictly separately from BTMM reaction strength** — how accurately price *reached* the POI (this standard) is a different question from whether the *reaction away* from the POI was strong (now resolved provisionally, see "Reaction Strength (Post-Interaction)" below, Ambiguity 9). Neither one determines the other.
 
 **NEAR_MISS is not an actual POI touch.** A candle that comes close to but does not intersect the zone (within Contact Tolerance) does not count as a confirmed interaction and must not increment the interaction count used elsewhere in BTMM analysis.
 
@@ -84,6 +84,22 @@ One of the three BTMM pillars. Refers to "how precisely that candle reaches or t
 **Final BTMM validity remains unresolved.** This standard supplies only the geometric "did price accurately reach the zone, and how" measurement. It does not, by itself, confirm a BTMM formation, approve an entry, or validate a trade — that depends on the still-unresolved BTMM state machine (Ambiguity 14) and reaction-strength standards, neither of which is created or modified by this decision.
 
 No numeric thresholds are given for any of the three pillars beyond what is now defined for Speed (Ambiguity 7) and Accuracy (Ambiguity 8) above; the Volume pillar's own minimum thresholds also remain unset (see "Volume" above). See ambiguity register.
+
+## Reaction Strength (Post-Interaction)
+
+**Evidence sourcing (POI Reaction Strength Standard Version 1 — Provisional, resolves Ambiguity 9):** Once an eligible POI Zone Interaction has occurred (EDGE_TOUCH, PARTIAL_ENTRY, DEEP_ENTRY, FAR_BOUNDARY_TOUCH, or CONTROLLED_OVERSHOOT), the move away from the POI is classified over a five-bar evaluation window as AWAITING_REACTION, REACTION_IN_PROGRESS, WEAK_REACTION, STANDARD_REACTION, or STRONG_REACTION. Full formulas in `knowledge/MEASUREMENT_STANDARDS.md`, "POI Reaction Strength, Distance, Efficiency, and Classification Standard."
+
+**POI Reaction Strength is separate from BTMM validity.** This standard measures only the geometric strength/distance/efficiency of the post-touch move — it does not, by itself, confirm or deny a BTMM formation, an entry, or a trade.
+
+**AWAITING_REACTION and REACTION_IN_PROGRESS are not failed BTMM states.** They simply mean the five-bar reaction window has not yet started or not yet completed — neither implies the setup has failed.
+
+**Delayed reaction is not automatically invalid.** Consistent with "Liquidity Inside a POI — Delay" above, POI dwell time before Reaction Start may itself be supporting liquidity creation rather than a sign of failure — the reaction window only begins once Reaction Start is confirmed, precisely so dwell is not mistaken for weakness.
+
+**STRONG_REACTION is supporting evidence only** — it does not independently prove POI validity, BTMM validity, entry validity, or trade outcome.
+
+**WEAK_REACTION does not automatically cancel a BTMM setup** — it is one input signal, not a cancellation rule.
+
+**Final BTMM transitions remain unresolved** until Ambiguity 14 (the BTMM forming/confirmed/cancelled state machine) is approved; this decision does not create or modify that state machine.
 
 ## M15 Role
 

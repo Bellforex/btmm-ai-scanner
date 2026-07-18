@@ -908,3 +908,129 @@ This standard fixes zone-interaction geometry only. It explicitly does **not** d
 - BTMM confirmation (Ambiguity 14, unchanged).
 
 These remain separate, pending decisions.
+
+---
+
+## POI Reaction Strength, Distance, Efficiency, and Classification Standard
+
+**Status:** Approved, **Provisional** — POI Reaction Strength Standard Version 1 — Provisional (resolves Ambiguity 9 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on the POI Zone Interaction, Penetration, and Overshoot Standard and the Market Speed, FVG Displacement, BTMM Movement, and POI Dwell Standard above; does not modify either.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, H3/H4/D1/W1 POIs, H1/M15 market structure, M15/M5/M1 BTMM execution, different sessions, and different volatility regimes. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Eligible Interaction Requirement
+
+Reaction measurement may begin only after one of these eligible POI interaction classes (from the POI Zone Interaction Standard): EDGE_TOUCH, PARTIAL_ENTRY, DEEP_ENTRY, FAR_BOUNDARY_TOUCH, CONTROLLED_OVERSHOOT.
+
+Not eligible: NO_CONTACT, NEAR_MISS, NONCANONICAL_SIDE_INTERACTION, EXCESSIVE_OVERSHOOT.
+
+Eligibility for reaction measurement must not independently determine final POI validity or invalidity.
+
+### 2. Reaction Start
+
+```
+Bullish POI: Reaction Start = the first confirmed candle after an eligible interaction that closes above Zone Top
+Bearish POI: Reaction Start = the first confirmed candle after an eligible interaction that closes below Zone Bottom
+```
+
+Until Reaction Start exists, classify the interaction as **AWAITING_REACTION**. No maximum waiting time is defined. POI dwell time remains separate from reaction strength.
+
+### 3. Reaction Anchor
+
+```
+Bullish POI: Reaction Anchor = Lowest Low from the first eligible interaction through the Reaction Start candle
+Bearish POI: Reaction Anchor = Highest High from the first eligible interaction through the Reaction Start candle
+```
+
+A CONTROLLED_OVERSHOOT may contribute to the Reaction Anchor.
+
+### 4. Five-Bar Evaluation Window
+
+The Reaction Start candle is bar 1 of a five-bar window (Reaction Start + the next 4 confirmed candles). The window begins after Reaction Start is confirmed, not at the original POI interaction — this prevents delayed liquidity creation or POI dwell from being automatically treated as a weak reaction.
+
+During an incomplete window, use **REACTION_IN_PROGRESS**. Record the earliest bar within the window on which Standard Reaction conditions are first achieved, and separately the earliest bar on which Strong Reaction conditions are first achieved. At completion of the fifth confirmed candle, assign the highest reaction tier achieved during the window: 1) STRONG_REACTION, 2) STANDARD_REACTION, 3) WEAK_REACTION.
+
+### 5. Reaction Maximum Favorable Excursion (MFE)
+
+```
+Bullish POI: Reaction MFE = Highest High during the five-bar window − Reaction Anchor
+Bearish POI: Reaction MFE = Reaction Anchor − Lowest Low during the five-bar window
+```
+
+Reaction MFE must not be negative. The candle time at which MFE first occurred is preserved.
+
+### 6. ATR-Normalized Reaction Distance
+
+```
+Reference ATR = ATR(14) value on the Reaction Start candle (same instrument, symbol feed, and timeframe as the POI interaction)
+ATR Reaction Ratio = Reaction MFE ÷ Reference ATR
+```
+
+Reference ATR ≤ 0 blocks a valid ATR Reaction Ratio or final reaction classification. Fixed pip or point thresholds must not replace this.
+
+### 7. Zone Clearance
+
+```
+Bullish POI: Zone Clearance Distance = MAX(0, Highest High during the five-bar window − Zone Top)
+Bearish POI: Zone Clearance Distance = MAX(0, Zone Bottom − Lowest Low during the five-bar window)
+Zone Clearance Ratio = Zone Clearance Distance ÷ Zone Height
+```
+
+Zone Height ≤ 0 blocks a valid Zone Clearance Ratio or final reaction classification.
+
+### 8. Reaction-Leg Efficiency and Speed
+
+The reaction leg begins at the Reaction Start candle and ends at the first candle inside the five-bar window that produces the final MFE. Uses the approved Market Speed and Displacement Standard fields, calculated and preserved separately: Leg Bar Count, Net Directional Distance, Reference ATR, Normalized Speed Per Bar, Leg Path Distance, Directional Efficiency, Directional Candle Share, Reaction Speed Classification. All formulas are protected against zero denominators. No composite reaction-speed or reaction-quality score is created.
+
+### 9. Standard Reaction
+
+**STANDARD_REACTION** requires **all**, achieved within the five-bar window:
+- ATR Reaction Ratio ≥ 0.75
+- Zone Clearance Ratio ≥ 1.00
+- Directional Efficiency ≥ 0.50
+- Directional Candle Share ≥ 0.60
+
+Does not require FAST or STRONG FAST speed classification.
+
+### 10. Strong Reaction
+
+**STRONG_REACTION** requires **all**, achieved within the five-bar window:
+- ATR Reaction Ratio ≥ 1.25
+- Zone Clearance Ratio ≥ 1.50
+- Directional Efficiency ≥ 0.60
+- Directional Candle Share ≥ 0.67
+- Reaction Speed Classification is FAST or STRONG FAST
+
+Tick volume remains secondary contextual evidence; missing tick volume must not automatically prevent Strong Reaction classification. RSI, MACD, Stochastic, ADX, Rate of Change, or other external indicators must not be made mandatory.
+
+### 11. Weak Reaction
+
+**WEAK_REACTION** applies when Reaction Start has been confirmed, the complete five-bar window has closed, and Standard Reaction conditions were not achieved. WEAK_REACTION must not automatically invalidate the POI.
+
+### 12. Approved Reaction States
+
+Only these five states are used: AWAITING_REACTION, REACTION_IN_PROGRESS, WEAK_REACTION, STANDARD_REACTION, STRONG_REACTION. FAILED_POI, INVALIDATED, EXPIRED, MITIGATED, SWEPT, and BROKEN are not defined or used as reaction-strength outcomes by this standard.
+
+### 13. Required Independent Fields
+
+Preserved separately: `reaction_start_time`, `reaction_anchor_price`, `reaction_window_bars`, `reaction_mfe`, `reaction_mfe_time`, `reference_atr`, `atr_reaction_ratio`, `zone_clearance_distance`, `zone_clearance_ratio`, `bars_to_standard_reaction`, `bars_to_strong_reaction`, `directional_efficiency`, `directional_candle_share`, `normalized_speed_per_bar`, `reaction_speed_classification`, `reaction_classification`.
+
+When Standard or Strong conditions are not achieved, the corresponding bars-to field must remain unset or null rather than being assigned an invented number. No composite reaction score or weighting formula is created.
+
+### 14. Required Conceptual Separation
+
+Reaction strength must remain separate from: POI validity, BTMM validity, entry validity, trade outcome, trade profitability, final market reversal, POI freshness, partial mitigation, full mitigation, final invalidation, and expiration. A STRONG_REACTION does not independently prove any of these; a WEAK_REACTION does not independently disprove any of them.
+
+### 15. What Remains Unresolved
+
+This standard fixes reaction-strength measurement math only. It explicitly does **not** define:
+- Maximum waiting time before Reaction Start.
+- Maximum POI dwell time.
+- Freshness, repeated-touch degradation.
+- Partial mitigation, full mitigation.
+- Sweep rules.
+- Final POI invalidation.
+- Expiration.
+- Trade-entry confirmation.
+- BTMM state-machine transitions (Ambiguity 14, unchanged).
+
+These remain separate, pending decisions.

@@ -13,6 +13,13 @@ The book defines three official POI categories (Chapter 1, "The Three Main Types
 - POIs without a valid, clearly defined zone (Zone Height ≤ 0, or no upper/lower boundary at all — e.g. the twelve Previous/Current Period High-Low levels, which are single price points rather than zones) cannot use these penetration formulas.
 - This note does **not** redefine any individual POI's own boundary formula recorded in its catalog entry below or in its `knowledge/poi_rules/` file — it only adds a shared, common way to measure interactions with whatever boundary each POI already has. No individual POI rule file was modified when this note was added; that per-POI application happens later during the full individual POI specification phase.
 
+**Project-wide note — POI Reaction Strength Standard (resolves Ambiguity 9, provisional):** For any bounded POI, once an eligible interaction (per the POI Zone Interaction Standard above) has occurred, the approved **POI Reaction Strength Standard Version 1 — Provisional** — see `knowledge/MEASUREMENT_STANDARDS.md`, "POI Reaction Strength, Distance, Efficiency, and Classification Standard" — measures how price reacted afterward (AWAITING_REACTION / REACTION_IN_PROGRESS / WEAK_REACTION / STANDARD_REACTION / STRONG_REACTION over a five-bar evaluation window). A few important limits on what this standard does:
+
+- **Reaction strength is measured separately from interaction geometry.** Whether price touched/penetrated the zone accurately (POI Zone Interaction Standard) is a different question from whether the move away from the zone afterward was strong (this standard). Neither one determines the other.
+- **STRONG_REACTION does not automatically approve a POI**, and **WEAK_REACTION does not automatically invalidate one** — reaction strength stays separate from POI validity, BTMM validity, entry validity, freshness, mitigation, final invalidation, and trade outcome, all of which remain unresolved.
+- **Support, Resistance, and Trendlines retain their own future interaction and reaction rules** where applicable (still open under Ambiguities 11 and 12) and do not automatically inherit this standard.
+- This note does **not** redefine any individual POI's own boundary or formation formula. No individual POI rule file was modified when this note was added — individual POI application happens later during the full POI specification phase.
+
 ---
 
 ## Category 1 — Volume-Based POI
