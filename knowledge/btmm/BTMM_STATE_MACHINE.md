@@ -124,13 +124,17 @@ This cancels the current BTMM setup only — it must not invalidate the underlyi
 
 Preserved liquidity locations: `LIQUIDITY_BEFORE_POI`, `LIQUIDITY_WITHIN_POI`, `LIQUIDITY_AFTER_POI`, `MULTIPLE_LOCATIONS`, `NONE_OBSERVED`, `NOT_YET_EVALUATED`.
 
-Preserved evidence source: `EXPERT_LABELLED`, `RULE_BASED`, `MODEL_PROPOSED`, `HYBRID_REVIEWED`.
+Preserved evidence source: `EXPERT_LABELLED`, `RULE_BASED`, `MODEL_PROPOSED`, `HYBRID_REVIEWED`, `RULE_BASED_REVIEWED`.
 
 At least one **reviewed** liquidity-evidence event is mandatory for final BTMM confirmation. Only reviewed evidence may satisfy the final liquidity gate — a `MODEL_PROPOSED` event that has not been reviewed must not independently pass the gate.
 
+**Compatibility note (Ambiguity 15 integration):** `RULE_BASED_REVIEWED` is the reviewed form of the pre-existing `RULE_BASED` source, introduced by the POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional (Ambiguity 15). The pre-existing `RULE_BASED` and `MODEL_PROPOSED` values are unchanged and not deleted or replaced — an unreviewed event under either value still cannot satisfy the gate on its own.
+
+**Liquidity-after-POI integration (Ambiguity 15):** a confirmed `FALSE_INVALIDATION_CONFIRMED` event (see [POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md](../poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md)) may be recorded as `liquidity_location = LIQUIDITY_AFTER_POI` with `liquidity_event_type = FALSE_INVALIDATION_CONFIRMED`. It may satisfy this Liquidity Gate only when its evidence source is reviewed — `EXPERT_LABELLED`, `RULE_BASED_REVIEWED`, or `HYBRID_REVIEWED`; an unreviewed `MODEL_PROPOSED` event still cannot satisfy the gate alone. A False Invalidation event does not automatically satisfy the Volume Pillar Gate, Reaction Gate, Reaction Speed Gate, or Formation Timeframe Gate, and does not itself establish entry validity or risk approval.
+
 Liquidity evidence may appear before POI interaction, during POI dwell, during controlled movement around or beyond the POI, or before completion of the five-bar reaction window. At `FINAL_GATE_EVALUATION`, the gate requires `liquidity_evidence_status = PRESENT`. If the full reaction window closes with no reviewed evidence present, use `BTMM_CANCELLED`, `cancellation_reason = NO_LIQUIDITY_EVIDENCE`. A later market event creates a new `btmm_setup_id`; the cancelled setup is never rewritten.
 
-Exact automatic detection of liquidity terminology and events remains dependent on Ambiguity 15 (unresolved, untouched by this decision). This standard does **not** define reclaim, displacement after reclaim, repeated taps, false invalidation, or genuine invalidation.
+Exact automatic detection of general liquidity terminology and events beyond the reviewed False Invalidation pathway above remains dependent on further author decisions outside this standard. This standard's own gates, states, and transitions are unchanged by the POI Boundary Breach, Reclaim and Invalidation Standard.
 
 ## Delay Inside the POI
 
@@ -234,6 +238,8 @@ One primary terminal state, `BTMM_CANCELLED`, is used; the reason is preserved s
 - `NO_LIQUIDITY_EVIDENCE`
 - `MANUAL_REVIEW_REJECTED`
 
+**POI-invalidation trigger (Ambiguity 15 integration):** the pre-existing `POI_REJECTED` cancellation reason above is also used when a `GENUINE_INVALIDATION_CONFIRMED` event (see [POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md](../poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md)) sets `poi_lifecycle_status = INVALIDATED` on the linked POI. Any active BTMM setup connected to that POI becomes `BTMM_CANCELLED`, `cancellation_reason = POI_REJECTED`. This does not add a new cancellation reason, does not rewrite historical BTMM records or earlier valid interactions, does not change an existing trade outcome, and does not invalidate a different POI. A later reaction from the same general price area requires a new POI record and, where applicable, a new BTMM setup record — an invalidated POI is never reactivated.
+
 ## Allowed and Forbidden Transitions
 
 **Allowed:**
@@ -287,7 +293,7 @@ A complete append-only state-transition history is preserved for every setup. No
 
 ## Ambiguity 15 Dependency
 
-This standard may reference `liquidity_evidence_status`, `liquidity_location`, and `liquidity_evidence_source` as evidence fields, but it does **not** define or operationalize the unapproved Ambiguity 15 terms: reclaim, displacement after reclaim, repeated taps, false invalidation, genuine invalidation, or any other terminology absent from the book that still requires author approval. Ambiguity 15 remains unresolved and untouched by this decision.
+This standard references `liquidity_evidence_status`, `liquidity_location`, and `liquidity_evidence_source` as evidence fields. Reclaim, displacement after reclaim, repeated taps, false invalidation, and genuine invalidation are now defined provisionally by the **POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional** (resolves Ambiguity 15; see [POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md](../poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md)) — a separate shared standard for bounded directional POIs. This BTMM state machine does not itself define or duplicate those terms; it only integrates two of their outcomes (a reviewed False Invalidation event as `LIQUIDITY_AFTER_POI` evidence, and a Genuine Invalidation event triggering `BTMM_CANCELLED`/`POI_REJECTED` on the linked setup), as documented in "Liquidity Gate" and "Cancellation Reasons" above. No BTMM primary state, formation stage, mandatory gate, transition, or cancellation-reason taxonomy was changed by that integration.
 
 ## Calibration Requirements
 
@@ -297,7 +303,7 @@ All states, gates, transitions, and thresholds above must later be tested agains
 
 This standard fixes lifecycle states, formation stages, mandatory gates, blocked/cancellation behavior, confirmation timing, and allowed/forbidden transitions only. It explicitly does **not** define:
 
-- Ambiguity 15 terminology (reclaim, displacement after reclaim, repeated taps, false invalidation, genuine invalidation).
+- Reclaim, displacement after reclaim, repeated taps, false invalidation, or genuine invalidation (now resolved separately under Ambiguity 15 — see [POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md](../poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md) — this standard only integrates two of their outcomes as described above).
 - Automatic market-direction logic (HH, HL, LH, LL, BOS, CHoCH, moving averages, or any other invented structure rule).
 - Automatic analytical-framework context detection.
 - Automatic session schedules.

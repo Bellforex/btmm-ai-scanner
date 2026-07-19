@@ -901,12 +901,10 @@ This standard fixes zone-interaction geometry only. It explicitly does **not** d
 - Required departure speed after contact.
 - Entry confirmation.
 - Freshness, partial mitigation, full mitigation.
-- Repeated-touch degradation.
 - Sweep rules.
-- Final invalidation.
 - Expiration.
 
-These remain separate, pending decisions. (BTMM confirmation is now resolved separately — its Accuracy Gate uses this standard's classifications directly, see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
+These remain separate, pending decisions. (BTMM confirmation is now resolved separately — its Accuracy Gate uses this standard's classifications directly, see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard. Final invalidation and repeated-touch/tap counting are also now resolved separately for applicable bounded directional POIs — see "POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard" below — but remain unresolved for excluded structures such as Equal Highs/Lows and Trendlines, and no automatic tap-based degradation scoring is defined even for applicable POIs; this did not change any formula in this standard.)
 
 ---
 
@@ -1024,14 +1022,13 @@ Reaction strength must remain separate from: POI validity, BTMM validity, entry 
 This standard fixes reaction-strength measurement math only. It explicitly does **not** define:
 - Maximum waiting time before Reaction Start.
 - Maximum POI dwell time.
-- Freshness, repeated-touch degradation.
+- Freshness.
 - Partial mitigation, full mitigation.
 - Sweep rules.
-- Final POI invalidation.
 - Expiration.
 - Trade-entry confirmation.
 
-These remain separate, pending decisions. (BTMM state-machine transitions are now resolved separately — its Reaction Gate uses this standard's classifications directly, see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
+These remain separate, pending decisions. (BTMM state-machine transitions are now resolved separately — its Reaction Gate uses this standard's classifications directly, see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard. Final POI invalidation and repeated-touch/tap counting are also now resolved separately for applicable bounded directional POIs — see "POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard" below — but remain unresolved for excluded structures, and no automatic degradation scoring is defined; this did not change any formula in this standard.)
 
 ---
 
@@ -1440,7 +1437,7 @@ Support:    record SUPPORT_BREAK_CANDIDATE when Zone Bottom − Candle Close > H
 Resistance: record RESISTANCE_BREAK_CANDIDATE when Candle Close − Zone Top > Horizontal Pierce Tolerance
 ```
 
-These are break candidates only — they must not automatically mean final invalidation. Confirmed break, reclaim, retest, false break, sweep, and role reversal are not defined by this standard.
+These are break candidates only — they must not automatically mean final invalidation. Retest, false break, sweep, and role reversal are not defined by this standard. (Reclaim and final invalidation — as `RECLAIM_CONFIRMED`/`RECLAIM_FAILED` and `GENUINE_INVALIDATION_CONFIRMED` — are now resolved separately; see "POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard" below. This did not change any Support/Resistance formula, threshold, or state above.)
 
 ### 14. Non-Repainting Behavior
 
@@ -1473,14 +1470,11 @@ Support and Resistance detection must remain separate from: Equal Highs, Equal L
 ### 21. What Remains Unresolved
 
 This standard fixes origin eligibility, creator-based fixed boundaries, origin-reaction gating, touch/pierce tolerances, distinct-touch confirmation, DRAFT/CONFIRMED/STRONG progression, break-candidate detection, and non-repainting availability only. It explicitly does **not** define:
-- Final Support or Resistance invalidation.
-- Confirmed break.
-- Reclaim.
+- Confirmed break (as a distinct formal term from the break candidate above).
 - Retest.
 - False break.
 - Role reversal (Support becoming Resistance, or Resistance becoming Support).
 - Freshness.
-- Repeated-touch degradation.
 - Partial mitigation.
 - Full mitigation.
 - Expiration.
@@ -1488,7 +1482,7 @@ This standard fixes origin eligibility, creator-based fixed boundaries, origin-r
 - Zone ranking.
 - Entry confirmation.
 
-These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
+These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard. Final Support/Resistance invalidation, reclaim, and repeated-tap counting are also now resolved separately — as `GENUINE_INVALIDATION_CONFIRMED`, `RECLAIM_CONFIRMED`/`RECLAIM_FAILED`, and `tap_count`/`tap_classification` — see "POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard" below; no automatic tap-based degradation is defined, and this did not change any formula, threshold, or state in this standard.)
 
 ---
 
@@ -1648,13 +1642,11 @@ This standard fixes candidate-candle qualification, the three-candle preceding c
 - Freshness.
 - Partial mitigation.
 - Full mitigation.
-- Repeated-touch degradation.
-- Final POI invalidation.
 - Expiration.
 - Retest entry confirmation.
 - Trade outcome.
 
-These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
+These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard. Final POI invalidation, reclaim, and repeated-tap counting are also now resolved separately — as `GENUINE_INVALIDATION_CONFIRMED`, `RECLAIM_CONFIRMED`/`RECLAIM_FAILED`, and `tap_count`/`tap_classification` — see "POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard" below; no automatic tap-based degradation is defined, and this did not change any formula, threshold, or state in this standard.)
 
 ---
 
@@ -1718,15 +1710,163 @@ Preserved independently (no composite score): `btmm_setup_id`, `poi_id`, `poi_in
 ### 11. What Remains Unresolved
 
 This standard fixes lifecycle states, formation stages, mandatory gates, blocked/cancellation behavior, confirmation timing, and allowed/forbidden transitions only. It explicitly does **not** define:
-- Ambiguity 15 terminology (reclaim, displacement after reclaim, repeated taps, false invalidation, genuine invalidation).
+- Reclaim, displacement after reclaim, repeated taps, false invalidation, or genuine invalidation (now resolved separately for bounded directional POIs — see "POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard" below; this standard only integrates two of their outcomes without changing any state, gate, or transition here).
 - Automatic market-direction logic (HH, HL, LH, LL, BOS, CHoCH, moving averages, or any other invented structure rule).
 - Automatic analytical-framework context detection.
 - Automatic session schedules.
 - Maximum POI dwell time.
 - Entry confirmation, stop loss, take profit, risk-to-reward, lot sizing, or news restrictions.
-- Final POI invalidation, freshness, mitigation, or expiration.
-- Repeated-touch degradation.
+- Freshness, partial mitigation, full mitigation, or expiration (final invalidation for bounded directional POIs is now resolved separately, below; excluded structures and lifecycle scoring remain unresolved).
+- Repeated-touch degradation (counted as evidence only, below; no automatic strength/freshness/degradation scoring is defined).
 - Empirical calibration or out-of-sample validation.
 - Production approval.
 
 These remain separate, pending decisions.
+
+---
+
+## POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard
+
+**Status:** Approved, **Provisional** — POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional (resolves Ambiguity 15 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). The authoritative specification is [poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md](poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md); this section summarizes and cross-references it rather than duplicating it. Reuses the approved POI Zone Interaction Standard and Market Speed and Displacement Standard formulas unmodified; integrates with (without changing) the approved BTMM Lifecycle and Confirmation State Machine.
+
+**Provenance labels (must accompany every citation of this standard):** every term below carries three labels — **Book-Supported Underlying Concept** (fake mitigation, stop hunting, delayed reactions, false breakouts, and liquidity creation before/within/after a POI are supported by the private source material), **Author-Added Project Terminology** (the exact names, windows, thresholds, states, and formulas are engineering additions approved by the author, not direct book quotations), and **Engineering-Provisional Operational Definition** (require empirical calibration and out-of-sample validation).
+
+**Evidence status:** this standard is **AUTHOR-APPROVED**, **AUTHOR-ADDED PROJECT TERMINOLOGY**, **ENGINEERING-PROVISIONAL**, **NOT YET EMPIRICALLY CALIBRATED**, **NOT YET OUT-OF-SAMPLE VALIDATED**, and **NOT PRODUCTION-APPROVED**. Do not present it as universal trading law.
+
+**Calibration requirements:** all windows, thresholds, and states below must later be tested against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, relevant timeframes, different sessions, different volatility regimes, and different POI families. Not to be changed casually outside that calibration process.
+
+### 1. Scope
+
+Applies only to bounded directional POIs with `zone_top`/`zone_bottom`/`expected_direction` (e.g. Order Blocks, Fair Value Gaps, Buy-to-Sell/Sell-to-Buy Candle zones, directional Base formations, Support, Resistance). Does **not** automatically apply to Equal Highs, Equal Lows, Bullish Trendline, Bearish Trendline, or other unbounded structural references — those retain their own (unresolved) lifecycle rules, and the bounded-zone formulas below are never silently applied to them.
+
+### 2. Boundary Orientation
+
+| POI direction | Entry Boundary | Far Boundary |
+|---|---|---|
+| Bullish | Zone Top | Zone Bottom |
+| Bearish | Zone Bottom | Zone Top |
+
+Requires `Zone Top > Zone Bottom`; invalid/zero-height/missing-boundary/directionless geometry is rejected.
+
+### 3. Reused Tolerances
+
+```
+Zone Height = Zone Top − Zone Bottom
+Contact Tolerance = MAX(2 × Minimum Price Tick, MIN(0.05 × ATR(14), 0.10 × Zone Height))
+Overshoot Tolerance = MAX(2 × Minimum Price Tick, MIN(0.10 × ATR(14), 0.25 × Zone Height))
+```
+
+From the approved POI Zone Interaction Standard (Ambiguity 8), unmodified. Guarded against missing/zero ATR, missing/invalid tick metadata, and mismatched symbol/provider/timeframe. Candle-specific evaluations (Sustained Breach) use that candle's own ATR(14), never one stale value reused across candles.
+
+### 4. Close Breach Candidate
+
+| POI direction | Condition |
+|---|---|
+| Bullish | `Zone Bottom − Candle Close > Overshoot Tolerance` |
+| Bearish | `Candle Close − Zone Top > Overshoot Tolerance` |
+
+Starts one `boundary_breach_event_id`. Not Genuine Invalidation. A wick beyond the Far Boundary alone (`CONTROLLED_OVERSHOOT`/`EXCESSIVE_OVERSHOOT`) cannot confirm it — only a confirmed close.
+
+### 5. Reclaim Window and Thresholds
+
+Exactly the next 3 confirmed candles after the breach candle (breach candle excluded).
+
+| POI direction | Reclaim condition |
+|---|---|
+| Bullish | `Reclaim Close ≥ Zone Bottom + Contact Tolerance` |
+| Bearish | `Reclaim Close ≤ Zone Top − Contact Tolerance` |
+
+Earliest qualifying candle → `RECLAIM_CONFIRMED`; transitions to `DISPLACEMENT_PENDING`. Proves only a close back inside the zone — not exit direction, displacement, speed, reaction strength, BTMM confirmation, or entry confirmation.
+
+### 6. Displacement Window and Confirmation
+
+Exactly the next 3 confirmed candles after the reclaim candle (the anchor).
+
+| POI direction | Requirement 1 | Requirement 2 |
+|---|---|---|
+| Bullish | Close above `Zone Top + Contact Tolerance` | Leg speed `FAST`/`STRONG_FAST` |
+| Bearish | Close below `Zone Bottom − Contact Tolerance` | Leg speed `FAST`/`STRONG_FAST` |
+
+Both required → `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED`. Uses the approved Market Speed and Displacement Standard (Leg Bar Count, Net Directional Distance, Leg Path Distance, Normalized Speed Per Bar, Directional Efficiency, Directional Candle Share, Speed Classification) unmodified. No displacement score is created. Window closes without confirmed displacement → `RECLAIM_WITHOUT_DISPLACEMENT` (incomplete recovery; not False Invalidation; does not independently satisfy the BTMM Liquidity Gate).
+
+### 7. False Invalidation Sequence
+
+`FALSE_INVALIDATION_CONFIRMED` requires, in order: Close Breach Candidate → Reclaim Confirmed (within 3 bars) → Displacement After Reclaim Confirmed (within 3 bars after reclaim). Confirmation time = displacement confirmation time (never backdated). Any one or two steps alone are not False Invalidation. May be recorded as `liquidity_location = LIQUIDITY_AFTER_POI`, `liquidity_event_type = FALSE_INVALIDATION_CONFIRMED`; satisfies the BTMM Liquidity Gate only when its evidence source is reviewed (`EXPERT_LABELLED`/`RULE_BASED_REVIEWED`/`HYBRID_REVIEWED`) — `RULE_BASED_REVIEWED` is the reviewed form of the pre-existing `RULE_BASED` source; `RULE_BASED` and `MODEL_PROPOSED` are unchanged, and an unreviewed `MODEL_PROPOSED` event still cannot satisfy the gate. Does not automatically satisfy the Volume Pillar, Reaction, Reaction Speed, or Formation Timeframe Gates, and does not establish entry validity or risk approval.
+
+### 8. Sustained Breach
+
+Within the reclaim window, all of: ≥2 of 3 confirmed closes remain beyond the Far Boundary by more than that candle's own Overshoot Tolerance; reclaim-window bar 3 also breaches by more than its own tolerance; no reclaim occurred. Each candle's tolerance uses its own ATR(14).
+
+### 9. Genuine Invalidation
+
+Close Breach Candidate occurred + no qualifying reclaim within the 3-bar window + Sustained Breach passed → `GENUINE_INVALIDATION_CONFIRMED`, confirmation time = reclaim-window bar 3's close time. Generic Version 1 rule for applicable bounded directional POIs only; subject to future POI-family-specific override research; never applied to excluded structures.
+
+### 10. Failed Reclaim
+
+A new qualifying breach before displacement confirms → `RECLAIM_FAILED`; creates a new `boundary_breach_event_id` and a new 3-bar reclaim window, preserves prior event history, evaluated independently, and must independently satisfy Sustained Breach — no immediate Genuine Invalidation from the first new breach candle.
+
+### 11. Repeated Tap Separation
+
+One tap = one distinct interaction event. A new tap requires: prior exit in the expected reaction direction, then a confirmed close beyond the Entry Boundary by more than Contact Tolerance (Bullish: above `Zone Top + Contact Tolerance`; Bearish: below `Zone Bottom − Contact Tolerance`), then a later touch/re-entry. Without confirmed separation, continued candles remain part of the same tap.
+
+### 12. Tap Classifications
+
+| tap_count | tap_classification |
+|---|---|
+| 1 | `INITIAL_TAP` |
+| 2 | `REPEATED_TAP` |
+| ≥3 | `MULTIPLE_REPEATED_TAPS` |
+
+Every tap preserved as a separate record; earlier taps never overwritten. `tap_count` is evidence only — no automatic weakening, invalidation, strengthening, freshness determination, or entry-validity determination is assumed; no Repeated Tap Strength Score, Freshness Score, or automatic degradation/upgrade score is created. Repeated-touch degradation remains an empirical-calibration question.
+
+### 13. Event States
+
+`NO_BREACH`, `CLOSE_BREACH_CANDIDATE`, `RECLAIM_PENDING`, `RECLAIM_CONFIRMED`, `DISPLACEMENT_PENDING`, `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED`, `RECLAIM_WITHOUT_DISPLACEMENT`, `RECLAIM_FAILED`, `FALSE_INVALIDATION_CONFIRMED`, `GENUINE_INVALIDATION_CONFIRMED` — event-level POI lifecycle states, never replacing the approved BTMM primary states.
+
+### 14. Allowed and Forbidden Transitions
+
+```
+Allowed:   NO_BREACH → CLOSE_BREACH_CANDIDATE → RECLAIM_PENDING → RECLAIM_CONFIRMED
+             → DISPLACEMENT_PENDING → DISPLACEMENT_AFTER_RECLAIM_CONFIRMED
+             → FALSE_INVALIDATION_CONFIRMED
+           RECLAIM_PENDING → GENUINE_INVALIDATION_CONFIRMED
+           DISPLACEMENT_PENDING → RECLAIM_WITHOUT_DISPLACEMENT
+           DISPLACEMENT_PENDING → RECLAIM_FAILED → new CLOSE_BREACH_CANDIDATE event
+Forbidden: GENUINE_INVALIDATION_CONFIRMED → FALSE_INVALIDATION_CONFIRMED
+           FALSE_INVALIDATION_CONFIRMED → GENUINE_INVALIDATION_CONFIRMED
+```
+
+A later qualifying breach always requires a new `boundary_breach_event_id`.
+
+### 15. Timing and Non-Repainting
+
+Preserved: `close_breach_time`, `reclaim_window_end_time`, `reclaim_confirmation_time`, `displacement_window_end_time`, `displacement_confirmation_time`, `false_invalidation_confirmation_time`, `genuine_invalidation_confirmation_time`. Events available only after complete confirmation; never backdated. Once recorded, event ID/POI ID/confirmation time never change; evidence remains auditable; later outcomes never rewrite classification.
+
+### 16. Effect on POI and Linked BTMM Setup
+
+`GENUINE_INVALIDATION_CONFIRMED` sets `poi_lifecycle_status = INVALIDATED`; `INVALIDATED → ACTIVE` is forbidden — a later reaction requires a new POI record/ID. Any active linked BTMM setup becomes `BTMM_CANCELLED`/`cancellation_reason = POI_REJECTED` (pre-existing reason; no new reason created). Never rewrites historical BTMM records, earlier valid interactions, or trade outcomes; never invalidates a different POI; never auto-creates a reverse-direction POI.
+
+### 17. Required Separation
+
+POI interaction, boundary breach candidate, reclaim, displacement after reclaim, false invalidation, genuine invalidation, repeated taps, liquidity evidence, BTMM confirmation, entry validity, and trade outcome remain independent. A reclaim never automatically proves continued POI validity, BTMM confirmation, entry validity, a guaranteed reversal, or a profitable trade.
+
+### 18. Required Fields
+
+Preserved independently (no composite score): `boundary_breach_event_id`, `poi_id`, `poi_type`, `poi_direction`, `zone_top`, `zone_bottom`, `zone_height`, `entry_boundary`, `far_boundary`, `breach_candle_id`, `breach_close`, `breach_distance`, `breach_overshoot_tolerance`, `close_breach_time`, `reclaim_status`, `reclaim_close`, `reclaim_contact_tolerance`, `reclaim_confirmation_time`, `reclaim_window_bar_count`, `reclaim_window_end_time`, `displacement_status`, `displacement_direction`, `displacement_window_bar_count`, `displacement_window_end_time`, `displacement_speed_classification`, `displacement_confirmation_time`, `false_invalidation_status`, `false_invalidation_confirmation_time`, `genuine_invalidation_status`, `genuine_invalidation_confirmation_time`, `sustained_breach_close_count`, `tap_id`, `tap_count`, `tap_classification`, `interaction_id`, `liquidity_event_type`, `liquidity_evidence_source`, `event_status`, `evidence_version`, `timeframe`, `symbol`, `data_provider`, `created_at`, `updated_at`.
+
+### 19. What Remains Unresolved
+
+This standard fixes boundary-breach detection, the 3-bar reclaim window, the 3-bar displacement window, False/Genuine Invalidation classification, Sustained Breach, Failed Reclaim, and repeated-tap counting/classification for applicable bounded directional POIs only. It explicitly does **not** define:
+- Statistical repeated-tap degradation by POI family.
+- POI freshness scoring.
+- POI expiration by age.
+- POI-family-specific invalidation overrides.
+- Trendline reclaim and final line invalidation.
+- Equal High / Equal Low sweep lifecycle.
+- Automatic market direction, automatic analytical-framework context, or automatic session schedules.
+- Entry confirmation, stop loss, take profit, risk-to-reward, lot sizing, news restrictions.
+- Spread and slippage rules.
+- Empirical calibration or out-of-sample validation.
+- Production approval.
+
+The original ambiguity register closes with this decision, but the final knowledge gate remains **CLOSED** — these remain separate, pending decisions.
