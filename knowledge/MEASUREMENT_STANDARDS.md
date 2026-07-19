@@ -1340,3 +1340,157 @@ This standard fixes anchor eligibility, slope/steepness classification, touch/pi
 - BTMM state transitions.
 
 These remain separate, pending decisions.
+
+---
+
+## Support and Resistance Detection and Validation Standard
+
+**Status:** Approved, **Provisional** — Support and Resistance Detection and Validation Standard Version 1 — Provisional (resolves Ambiguity 12 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on the Meaningful Swing High and Swing Low Detection Standard, the POI Reaction Strength Standard, and (for the horizontal-candidate relationship only) the Trendline standard above; modifies none of them.
+
+**Evidence / provisional status (must accompany every citation of this standard):** this standard is **AUTHOR-APPROVED**, **ENGINEERING-PROVISIONAL**, **NOT YET EMPIRICALLY CALIBRATED**, **NOT YET OUT-OF-SAMPLE VALIDATED**, and **NOT PRODUCTION-APPROVED**. Its thresholds must never be presented as universal trading laws.
+
+**Calibration requirements:** all thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, M1/M5/M15/H1/H3/H4/D1/W1, different sessions, different volatility regimes, trending markets, and consolidating markets. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Origin Eligibility
+
+A Support origin must be a `CONFIRMED_MEANINGFUL_SWING_LOW`; a Resistance origin must be a `CONFIRMED_MEANINGFUL_SWING_HIGH` (per the Meaningful Swing Standard). `FORMING`, `LOCAL_SWING_CANDIDATE`, and `SUPERSEDED` records must not create a zone. All origin and validation events for one zone must share the same symbol, data provider, and timeframe.
+
+### 2. Initial Creator Principle
+
+The earliest eligible swing that creates the zone becomes `ORIGIN_CREATOR` (`origin_creator_swing_id`, `origin_creator_price`, `origin_creator_time` preserved). Later touches must not move the origin price, replace the origin swing, average the zone with later prices, recalculate the original boundaries, resize the original zone, or recenter the original zone. A separate eligible origin creates a separate candidate zone.
+
+### 3. Creator Reference ATR
+
+```
+Single-candle origin: Creator Reference ATR = ATR(14) at the origin swing candle
+Origin plateau:       Creator Reference ATR = Median ATR(14) across all plateau candles
+```
+
+Uses the same symbol, provider, and timeframe. Guarded against missing ATR, zero ATR, invalid price metadata, or invalid minimum-tick metadata.
+
+### 4. Horizontal Zone Depth
+
+```
+Horizontal Zone Depth = MAX(2 × Minimum Price Tick, 0.10 × Creator Reference ATR)
+```
+
+The Minimum Price Tick is sourced from instrument metadata once the software layer exists; no fixed pip/point values are used. Horizontal Zone Depth becomes fixed after zone creation.
+
+### 5. Support Boundaries
+
+```
+Zone Bottom = Origin Swing Low Pivot Price
+Zone Top = Zone Bottom + Horizontal Zone Depth
+```
+
+The Support zone extends upward from the original Swing Low extreme.
+
+### 6. Resistance Boundaries
+
+```
+Zone Top = Origin Swing High Pivot Price
+Zone Bottom = Zone Top − Horizontal Zone Depth
+```
+
+The Resistance zone extends downward from the original Swing High extreme. A zone with Zone Top ≤ Zone Bottom must be rejected as invalid geometry.
+
+### 7. Origin Reaction Requirement
+
+The candidate origin is evaluated using the approved POI Reaction Strength Standard. A meaningful origin swing producing only `WEAK_REACTION` becomes `REJECTED_ORIGIN_CANDIDATE`. A meaningful origin swing producing `STANDARD_REACTION` or `STRONG_REACTION` becomes `DRAFT_SUPPORT` or `DRAFT_RESISTANCE` depending on direction. The draft zone becomes available only after the origin reaction has been fully classified — it must not be exposed historically at the original pivot time.
+
+### 8. Horizontal Interaction Tolerances
+
+For each later interaction, using ATR(14) from the confirmed interaction candle:
+
+```
+Horizontal Touch Tolerance = MAX(2 × Minimum Price Tick, 0.05 × ATR(14))
+Horizontal Pierce Tolerance = MAX(2 × Minimum Price Tick, 0.15 × ATR(14))
+```
+
+These tolerances apply only to Support and Resistance — they must not replace Trendline, Equal Highs/Lows, POI zone interaction, or other POI-specific tolerances.
+
+### 9. Qualifying Support Touch
+
+A later Support touch must use a distinct `CONFIRMED_MEANINGFUL_SWING_LOW`:
+
+```
+Support Touch Difference = Swing Low Pivot Price − Zone Bottom
+```
+
+Geometrically acceptable when both: `Swing Low Pivot Price ≤ Zone Top + Horizontal Touch Tolerance` AND `Swing Low Pivot Price ≥ Zone Bottom − Horizontal Pierce Tolerance`. A geometrically acceptable touch counts only when it produces at least `STANDARD_REACTION`. A `STRONG_REACTION` is supporting evidence but does not replace the distinct-touch requirement.
+
+### 10. Qualifying Resistance Touch
+
+A later Resistance touch must use a distinct `CONFIRMED_MEANINGFUL_SWING_HIGH`. Geometrically acceptable when both: `Swing High Pivot Price ≥ Zone Bottom − Horizontal Touch Tolerance` AND `Swing High Pivot Price ≤ Zone Top + Horizontal Pierce Tolerance`. Counts only when it produces at least `STANDARD_REACTION`. A `STRONG_REACTION` is supporting evidence but does not replace the distinct-touch requirement.
+
+### 11. Distinct-Touch Requirement
+
+A pivot plateau counts as one touch. `LOCAL_SWING_CANDIDATE`, `SUPERSEDED`, `FORMING`, and `NEAR_MISS` do not count. Multiple candles belonging to one interaction event count as one touch. At least one opposite confirmed meaningful swing must exist between two same-type qualifying touches. Not every candle inside the zone is counted as a separate touch.
+
+### 12. Confirmation and Strength
+
+| Qualifying reactions (including origin) | Classification |
+|---|---|
+| 1 | `DRAFT_SUPPORT` / `DRAFT_RESISTANCE` |
+| 2 distinct | `CONFIRMED_SUPPORT` / `CONFIRMED_RESISTANCE` |
+| 3 or more distinct | `STRONG_SUPPORT` / `STRONG_RESISTANCE` |
+
+Every counted interaction must produce at least `STANDARD_REACTION`. No additional strength tiers. Touch count is structural evidence only — it does not define freshness, remaining zone quality, repeated-touch degradation, entry validity, or expiration.
+
+### 13. Break Candidate
+
+```
+Support:    record SUPPORT_BREAK_CANDIDATE when Zone Bottom − Candle Close > Horizontal Pierce Tolerance
+Resistance: record RESISTANCE_BREAK_CANDIDATE when Candle Close − Zone Top > Horizontal Pierce Tolerance
+```
+
+These are break candidates only — they must not automatically mean final invalidation. Confirmed break, reclaim, retest, false break, sweep, and role reversal are not defined by this standard.
+
+### 14. Non-Repainting Behavior
+
+After a horizontal zone is created: origin swing ID, origin price, origin time, Creator Reference ATR, Zone Top, Zone Bottom, and zone depth must not move or be recalculated; later touches must not recenter or resize the zone; a later origin creates a new zone candidate. Backtests access DRAFT status only after `candidate_available_time`, CONFIRMED status only after `confirmation_time`, and STRONG status only after `strong_confirmation_time` — later-confirmed statuses are never exposed on earlier candles.
+
+### 15. Multiple Horizontal Zones
+
+Multiple Support and Resistance candidates are preserved on the same timeframe, each keeping its own origin creator, fixed boundaries, touch history, reaction history, status history, and break-candidate history. Nearby zones are never silently merged. No `BEST_SUPPORT`, `BEST_RESISTANCE`, `PRIMARY_ZONE`, zone-ranking score, or composite-strength score is created.
+
+### 16. Relationship with Equal Highs and Equal Lows
+
+Equal Lows ≠ Support; Equal Highs ≠ Resistance. The same confirmed meaningful swings may independently satisfy both standards — when that occurs, both labels are preserved. Equal Highs/Equal Lows primarily describe horizontal liquidity clustering; Support/Resistance require an initial creator, fixed creator-based boundaries, a qualifying origin reaction, and later distinct qualifying reactions. These POI types are never silently merged, and the approved Equal Highs/Equal Lows formulas are unchanged.
+
+### 17. Relationship with Trendline Horizontal Candidates
+
+A `HORIZONTAL_CANDIDATE` from Trendline evaluation may be evaluated under this Support or Resistance standard, but it must not automatically become Support or Resistance — it must independently pass origin eligibility, creator boundary, origin reaction, touch tolerance, distinct-touch, and confirmation requirements. The approved Trendline formulas and thresholds are unchanged.
+
+### 18. Required States
+
+Status: `REJECTED_ORIGIN_CANDIDATE`, `DRAFT_SUPPORT`, `DRAFT_RESISTANCE`, `CONFIRMED_SUPPORT`, `CONFIRMED_RESISTANCE`, `STRONG_SUPPORT`, `STRONG_RESISTANCE`, `SUPPORT_BREAK_CANDIDATE`, `RESISTANCE_BREAK_CANDIDATE`. Zone type (kept separate): `SUPPORT`, `RESISTANCE`. Never combined into one opaque field.
+
+### 19. Required Fields
+
+Preserved independently (no composite score): `horizontal_zone_id`, `zone_type`, `origin_creator_swing_id`, `origin_creator_price`, `origin_creator_time`, `creator_reference_atr`, `zone_top`, `zone_bottom`, `zone_depth`, `zone_status`, `candidate_available_time`, `confirmation_time`, `strong_confirmation_time`, `qualifying_touch_count`, `last_touch_swing_id`, `last_touch_time`, `last_touch_price`, `last_touch_reaction_class`, `break_candidate_time`, `timeframe`, `symbol`, `data_provider`.
+
+### 20. Required Conceptual Separation
+
+Support and Resistance detection must remain separate from: Equal Highs, Equal Lows, Trendlines, HH, HL, LH, LL, BOS, CHoCH, Sweep, Liquidity grab, final invalidation, entry confirmation, BTMM state transitions, and trade outcome. None of these are defined by this standard.
+
+### 21. What Remains Unresolved
+
+This standard fixes origin eligibility, creator-based fixed boundaries, origin-reaction gating, touch/pierce tolerances, distinct-touch confirmation, DRAFT/CONFIRMED/STRONG progression, break-candidate detection, and non-repainting availability only. It explicitly does **not** define:
+- Final Support or Resistance invalidation.
+- Confirmed break.
+- Reclaim.
+- Retest.
+- False break.
+- Role reversal (Support becoming Resistance, or Resistance becoming Support).
+- Freshness.
+- Repeated-touch degradation.
+- Partial mitigation.
+- Full mitigation.
+- Expiration.
+- Zone merging.
+- Zone ranking.
+- Entry confirmation.
+- BTMM state transitions.
+
+These remain separate, pending decisions.
