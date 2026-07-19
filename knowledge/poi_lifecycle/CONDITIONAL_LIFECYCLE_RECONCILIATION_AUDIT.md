@@ -367,3 +367,44 @@ This audit recommends, but does not authorize, the following sequence once the a
 - **Phase 0G remains unapproved.**
 - No POI becomes APPROVED or production-ready as a result of this audit.
 - See `knowledge/KNOWLEDGE_COMPLETION_GATE.md` for the complete, authoritative gate status.
+
+## 22. Author Decision and Propagation (2026-07-19)
+
+**This section records what has happened since Section 21 above. Sections 1-21 (the original reconciliation findings, matrix, and decision options) remain intact and unaltered by this update.**
+
+RECON-D1 through RECON-D5 have been reviewed and **approved by the author**, exactly as follows:
+
+| Decision | Approved option | Affected POIs |
+|---|---|---|
+| RECON-D1 | Order Block availability = `qualifying_displacement_candle_close_time` (the engineering-recommended Option A) | Buy Order Block, Sell Order Block |
+| RECON-D2 | Base availability = `qualifying_departure_candle_close_time` (the engineering-recommended Option A) | Base Rally, Base Drop |
+| RECON-D3 | No family-specific override; generic Contact and Overshoot Tolerances inherited unmodified; no minimum FVG width invented (the engineering-recommended Option A) | Buy Fair Value Gap, Sell Fair Value Gap |
+| RECON-D4 | `SUPPORT_BREAK_CANDIDATE`/`RESISTANCE_BREAK_CANDIDATE` preserved as separate, non-aliased, family-specific deeper breach observations; only `CLOSE_BREACH_CANDIDATE` starts the shared Reclaim/Invalidation lifecycle (the engineering-recommended Option B) | Support, Resistance |
+| RECON-D5 | FVG lifecycle availability = `fvg_available_time = third_candle_close_time`; a FVG is not valid while the third candle is still forming; strict three-candle geometry must remain valid at that close; the candidate is rejected if the required gap no longer exists at that close | Buy Fair Value Gap, Sell Fair Value Gap |
+
+**RECON-D5 resolves the availability-time gap identified during final verification of the Group 2 propagation.** That verification found that the propagated Buy/Sell FVG files described third-candle lifecycle availability as "geometrically self-evident" and requiring "no separate availability-timing decision," reasoning this project's own final-verification standard explicitly disallows as sufficient authorization — the pre-existing FVG formation specification directly establishes that `Zone Top`/`Zone Bottom` are undefined before the third candle closes (a mathematical consequence of the boundary formula), but it never explicitly stated that this same moment also governs *lifecycle* availability for the separate Boundary Breach, Reclaim and Invalidation Standard. RECON-D5 makes that specific mapping an explicit, Author-Approved decision, using the same dedicated-decision process already applied to RECON-D1/RECON-D2, rather than leaving it as an unstated inference.
+
+**All 8 Group 2 POIs have been propagated.** Exact file paths updated:
+
+| poi_name | file_path |
+|---|---|
+| Buy Order Block | `knowledge/poi_rules/volume_based/buy_order_block.md` |
+| Sell Order Block | `knowledge/poi_rules/volume_based/sell_order_block.md` |
+| Buy Fair Value Gap | `knowledge/poi_rules/volume_based/buy_fair_value_gap.md` |
+| Sell Fair Value Gap | `knowledge/poi_rules/volume_based/sell_fair_value_gap.md` |
+| Base Rally | `knowledge/poi_rules/volume_based/base_rally.md` |
+| Base Drop | `knowledge/poi_rules/volume_based/base_drop.md` |
+| Support | `knowledge/poi_rules/structural/support.md` |
+| Resistance | `knowledge/poi_rules/structural/resistance.md` |
+
+Each file received a new "Shared POI Boundary Lifecycle Inheritance" section (applicability classification, authoritative shared standard path, bounded-zone status, expected direction, Zone Top/Bottom mapping, Entry/Far Boundary mapping, lifecycle availability time or dual-event distinction as applicable, inherited event states, inherited Close Breach/Reclaim/Displacement directions, False/Genuine Invalidation meaning and effect, Repeated Tap handling, non-repainting timing, linked BTMM effect, evidence/provenance status, and remaining limitations), plus updates to each file's pre-existing "Invalidation," "Machine-testable criteria," "Unresolved questions," and "Author decision" sections to cross-reference the new section.
+
+**No formation, boundary, confirmation, strength, or shared lifecycle formula was changed.** The already-approved zone mappings (Order Block: origin-candle High/Low; FVG: first/third-candle High/Low; Base: Base High/Low; Support/Resistance: origin-swing-derived Zone Top/Bottom via Horizontal Zone Depth) were reused exactly as previously approved. The authoritative shared standard (`knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md`) was not modified. `SUPPORT_BREAK_CANDIDATE`, `RESISTANCE_BREAK_CANDIDATE`, and their `Horizontal Pierce Tolerance` formula (Ambiguity 12) were preserved unmodified, not merged or aliased into `CLOSE_BREACH_CANDIDATE`.
+
+**No unapproved family-specific override was added.** RECON-D3's approved option is explicitly the absence of an override (no minimum width, no FVG-specific tolerance). RECON-D4's approved option preserves both pre-existing and generic events as independent, non-aliased signals rather than introducing a new merge/alias/precedence rule. RECON-D5 introduces no new geometry rule, no BOS/CHoCH, no HH/HL/LH/LL, and no minimum width — it only fixes the moment the already-defined boundaries become lifecycle-eligible.
+
+**All five recommendations are now Author-Approved and Engineering-Provisional** — none has been empirically calibrated, out-of-sample validated, or made production-approved by this propagation. The inherited lifecycle for all 8 POIs carries the same evidence status as the authoritative shared standard: AUTHOR-APPROVED, AUTHOR-ADDED PROJECT TERMINOLOGY, ENGINEERING-PROVISIONAL, NOT YET EMPIRICALLY CALIBRATED, NOT YET OUT-OF-SAMPLE VALIDATED, NOT PRODUCTION-APPROVED.
+
+**Remaining unresolved limitations** (unchanged by this propagation): freshness, expiration, repeated-tap/repeated-touch degradation, empirical calibration, out-of-sample validation, production approval, entry confirmation, and risk rules (stop loss, take profit, risk-to-reward, lot sizing, news restrictions, spread, slippage) for all 8 POIs; confirmed break/retest/false break/role reversal for Support/Resistance; general proxy thresholds and BTMM-anchor-dependent measurements (Ambiguity 14) for Order Block/FVG/Base; the 6 `BLOCKED_INCOMPLETE_SPECIFICATION` candlestick POIs remain incomplete and untouched; Equal Highs/Equal Lows/Trendline lifecycle remain excluded and unresolved.
+
+**The final knowledge gate remains CLOSED. Phase 0G remains unapproved.**

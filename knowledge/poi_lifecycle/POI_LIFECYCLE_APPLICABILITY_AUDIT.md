@@ -306,3 +306,31 @@ Classification counts: B = 2, C = 4, D = 2, A (`READY_FOR_AUTHOR_APPROVAL`) = 0,
 **Four author decisions were identified as required** (RECON-D1 Order Block timing, RECON-D2 Base timing, RECON-D3 FVG narrow-zone tolerance treatment, RECON-D4 Support/Resistance break-candidate terminology) — each with engineering recommendations presented but explicitly marked **NOT YET AUTHOR-APPROVED**. Full detail, formula comparisons, and decision options are in `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md`.
 
 **No conditional POI was propagated.** No individual POI rule file under `knowledge/poi_rules/` was modified by this reconciliation audit. **No original classification count from Sections 6–14 above was changed.** **No family-specific override was implemented** — RECON-D1 through RECON-D4 remain open questions with recommendations only, not decisions. The 6 `BLOCKED_INCOMPLETE_SPECIFICATION` POIs, the 4 excluded structures (Equal Highs, Equal Lows, Bullish/Bearish Trendline), and the 14 `NOT_APPLICABLE_OTHER` POIs remain untouched and unaffected by this reconciliation. The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.
+
+## 23. Group 2 Propagation Status (2026-07-19)
+
+**This section records what has happened since Section 22 above. The original 36-POI classification matrix (Sections 1–20) remains historically unchanged and unaltered by this update.**
+
+Following author approval of RECON-D1 through RECON-D5 (see `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md`, Section 22), all 8 POIs classified `CONDITIONAL_GENERIC_INHERITANCE` have been propagated. RECON-D5 (added after Section 22 was first recorded) establishes Fair Value Gap lifecycle availability explicitly at the confirmed third candle's close (`fvg_available_time = third_candle_close_time`), replacing an earlier, insufficiently authorized "geometrically self-evident" framing with an explicit Author-Approved decision, for Buy Fair Value Gap and Sell Fair Value Gap only:
+
+| poi_name | file_path |
+|---|---|
+| Buy Order Block | `knowledge/poi_rules/volume_based/buy_order_block.md` |
+| Sell Order Block | `knowledge/poi_rules/volume_based/sell_order_block.md` |
+| Buy Fair Value Gap | `knowledge/poi_rules/volume_based/buy_fair_value_gap.md` |
+| Sell Fair Value Gap | `knowledge/poi_rules/volume_based/sell_fair_value_gap.md` |
+| Base Rally | `knowledge/poi_rules/volume_based/base_rally.md` |
+| Base Drop | `knowledge/poi_rules/volume_based/base_drop.md` |
+| Support | `knowledge/poi_rules/structural/support.md` |
+| Resistance | `knowledge/poi_rules/structural/resistance.md` |
+
+**Group 1 propagated count remains 4** (Bullish Pressure Wick, Bearish Pressure Wick, Buy-to-Sell Candle, Sell-to-Buy Candle — unchanged by this task). **Group 2 propagated count is 8.** **Total propagated bounded directional POIs is 12.**
+
+**No original audit count was rewritten** — the Section 8 classification counts (A=4, B=8, C=6, D=2, E=2, F=14, total=36) remain exactly as originally recorded. **No blocked or excluded structure was propagated:**
+
+- **6 `BLOCKED_INCOMPLETE_SPECIFICATION` candidates remain**: Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star — missing zone-boundary formulas independent of this standard.
+- **Equal Highs and Equal Lows remain excluded** pending a separate sweep lifecycle.
+- **Bullish and Bearish Trendlines remain excluded** pending line-specific lifecycle rules.
+- **14 `NOT_APPLICABLE_OTHER` structures remain non-applicable**: Swing High, Swing Low, and the 12 Previous/Current Period High/Low variants.
+
+The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.

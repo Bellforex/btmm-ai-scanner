@@ -147,7 +147,23 @@ Each decision has an engineering recommendation presented for author considerati
 
 **Six `BLOCKED_INCOMPLETE_SPECIFICATION` candidates remain incomplete**: Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star — unaffected by this task.
 
-**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **obtain author decisions for the conditional lifecycle reconciliation questions before propagating Group 2 inheritance.**
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.**
+
+## 12. Propagate Conditional Generic POI Lifecycle Inheritance — Group 2 (Completed)
+
+**RECON-D1 through RECON-D5 have been reviewed and Author-Approved.** Approved options: RECON-D1 (Order Block) and RECON-D2 (Base) set lifecycle availability to the qualifying displacement/departure candle's close time (`order_block_available_time` / `base_available_time`) — not the origin/base candle, not BOS, not a first return; RECON-D3 (Fair Value Gap tolerances) inherits the generic Contact and Overshoot Tolerances unmodified, with no minimum FVG width invented; RECON-D4 (Support/Resistance) preserves `SUPPORT_BREAK_CANDIDATE`/`RESISTANCE_BREAK_CANDIDATE` as separate, non-aliased, family-specific deeper breach observations, with only `CLOSE_BREACH_CANDIDATE` starting the shared Reclaim/Invalidation lifecycle; RECON-D5 (Fair Value Gap lifecycle availability) records `fvg_available_time = third_candle_close_time` — **a Fair Value Gap is not valid while the third candle is still forming**, the strict three-candle geometry must remain valid at that confirmed close, and the candidate is rejected if the required gap no longer exists at that point. RECON-D5 was added to replace an earlier, insufficiently authorized "geometrically self-evident" framing of FVG availability timing with an explicit Author-Approved decision, following the same dedicated-decision process already used for RECON-D1/RECON-D2.
+
+**Group 2 lifecycle propagation is complete for all 8 conditional POIs**: Buy Order Block, Sell Order Block, Buy Fair Value Gap, Sell Fair Value Gap, Base Rally, Base Drop, Support, Resistance. **8 individual POI files were updated** (`knowledge/poi_rules/volume_based/buy_order_block.md`, `sell_order_block.md`, `buy_fair_value_gap.md`, `sell_fair_value_gap.md`, `base_rally.md`, `base_drop.md`, `knowledge/poi_rules/structural/support.md`, `resistance.md`), each receiving a new "Shared POI Boundary Lifecycle Inheritance" section cross-referencing `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` without duplicating or altering its formulas.
+
+**Twelve total bounded directional POIs are now propagated**: the 4 Group 1 POIs (Bullish/Bearish Pressure Wick, Buy-to-Sell/Sell-to-Buy Candle) plus these 8 Group 2 POIs.
+
+- **Six `BLOCKED_INCOMPLETE_SPECIFICATION` candidates remain**: Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star — no specification was completed for any of them; unaffected by this task.
+- **Four explicitly excluded structures remain excluded**: Equal Highs, Equal Lows, Bullish Trendline, Bearish Trendline — no Trendline or Equal High/Low lifecycle was defined.
+- **Fourteen non-applicable structures remain non-applicable**: Swing High, Swing Low, and the 12 Previous/Current Period High/Low variants.
+
+**No formation, boundary, confirmation, or strength rule was changed for any of the 8 POIs.** No empirical calibration or production approval exists for any propagated POI — all 12 remain **Author-Approved, Engineering-Provisional, NOT YET empirically calibrated, NOT YET out-of-sample validated, and NOT production-approved**. `knowledge/POI_COVERAGE_MATRIX.md` was updated for the 4 Order Block/Base rows only (Invalidation defined: No → Partial); Buy/Sell Fair Value Gap and Support/Resistance were already Partial and required no cell change. `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md` and `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md` each received an appended, dated propagation section; no original finding, classification, or count was rewritten.
+
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **complete the six blocked candlestick POI specifications sufficiently to determine lifecycle eligibility, without inventing entry or risk rules.**
 
 ## 5. Contradictions Found
 
