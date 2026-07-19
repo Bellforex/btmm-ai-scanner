@@ -258,3 +258,28 @@ This audit **does not** change the final knowledge gate status. It is a classifi
 - No individual POI rule file, formula, threshold, or lifecycle rule was changed.
 - Individual POI inheritance propagation, all 5 family-specific override questions, Trendline lifecycle, Equal High/Low sweep lifecycle, freshness, expiration, repeated-tap degradation calibration, automatic context detection, and entry/risk rules all remain open and unresolved.
 - See `knowledge/KNOWLEDGE_COMPLETION_GATE.md` for the complete, authoritative gate status.
+
+## 21. Propagation Status (2026-07-19)
+
+**This section records what has happened since the original audit above. The original audit's classifications, counts, and POI-by-POI matrix (Sections 1–20) remain intact and unaltered by this update.**
+
+Direct generic lifecycle inheritance has been propagated to the 4 POIs classified `DIRECT_GENERIC_INHERITANCE` in Section 10 above. Exact POIs and file paths:
+
+| poi_name | file_path |
+|---|---|
+| Bullish Pressure Wick | `knowledge/poi_rules/volume_based/bullish_pressure_wick.md` |
+| Bearish Pressure Wick | `knowledge/poi_rules/volume_based/bearish_pressure_wick.md` |
+| Buy-to-Sell Candle | `knowledge/poi_rules/volume_based/buy_to_sell_candle.md` |
+| Sell-to-Buy Candle | `knowledge/poi_rules/volume_based/sell_to_buy_candle.md` |
+
+Each file received a new "Shared POI Boundary Lifecycle Inheritance" section documenting: applicability classification, the authoritative shared standard path, bounded-zone status, expected direction, Zone Top/Zone Bottom mapping, Entry/Far Boundary mapping, inherited event states, inherited Close Breach/Reclaim/Displacement directions, False/Genuine Invalidation meaning and effect, Repeated Tap handling, non-repainting timing, linked BTMM effect, evidence/provenance status, and remaining limitations. Each file's pre-existing "Invalidation," "Machine-testable criteria," "Unresolved questions," and "Author decision" sections were updated to cross-reference this inheritance and to correct stale wording that called reclaim, false invalidation, and genuine invalidation entirely undefined.
+
+**No POI formation, boundary, confirmation, or strength rule was changed.** The already-approved zone mappings (`MIN(Open,Close)`/Candle Low for Bullish Pressure Wick; Candle High/`MAX(Open,Close)` for Bearish Pressure Wick; Candidate Candle High/Low for Buy-to-Sell and Sell-to-Buy Candle) were reused exactly as previously approved, not redefined. The authoritative shared lifecycle standard (`knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md`) **remains Author-Approved, Author-Added Project Terminology, Engineering-Provisional, NOT YET Empirically Calibrated, NOT YET Out-of-Sample Validated, and NOT Production-Approved** — this propagation does not change that evidence status, and does not make any of the 4 POIs production-ready or proven profitable.
+
+**Conditional candidates (8) remain unpropagated:** Buy Order Block, Sell Order Block, Buy Fair Value Gap, Sell Fair Value Gap, Base Rally, Base Drop, Support, Resistance — each still has its documented family-specific override question (Section 16) unresolved.
+
+**Blocked candidates (6) remain unpropagated:** Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star — each still has missing zone-boundary formulas (and, for Hammer/Shooting Star, missing formation-rule thresholds) independent of this standard.
+
+**Excluded structures remain excluded:** Equal Highs, Equal Lows, Bullish Trendline, Bearish Trendline. **No family-specific override was introduced** for any POI in this task — the 5 override questions in Section 16 remain open and unanswered.
+
+`knowledge/POI_COVERAGE_MATRIX.md` was updated for these 4 rows only (Invalidation defined: No → Partial); no formation, boundary, confirmation, or strength readiness value was changed, and no POI was marked APPROVED. See `knowledge/KNOWLEDGE_COMPLETION_GATE.md` and `docs/PROJECT_STATE.md` for the corresponding gate and project-state updates. The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.

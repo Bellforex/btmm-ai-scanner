@@ -134,11 +134,51 @@ NOT DEFINED IN BOOK.
 
 ## Invalidation
 
-Not defined as a standing post-formation rule; the 'weak pattern' description is a formation-time disqualifier, not an invalidation rule for an already-valid POI.
+Not defined as a standing post-formation rule; the 'weak pattern' description is a formation-time disqualifier, not an invalidation rule for an already-valid POI. **Formalized (POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional, resolves Ambiguity 15):** this POI directly inherits the shared bounded-directional-POI lifecycle — Close Breach Candidate, Reclaim, Displacement After Reclaim, False Invalidation, and Genuine Invalidation are now defined at the shared-standard level, as a standing post-formation rule. See "Shared POI Boundary Lifecycle Inheritance" below and `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` for the complete, authoritative formulas and event transitions. This does not change any Ambiguity 13 formation, confirmation, boundary, or pattern-strength formula.
 
 ## Expiration
 
 NOT DEFINED IN BOOK.
+
+## Shared POI Boundary Lifecycle Inheritance
+
+**Applicability classification:** `DIRECT_GENERIC_INHERITANCE` (see `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md`).
+
+**Authoritative shared standard:** `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` (POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional, resolves Ambiguity 15). This section cross-references that standard's formulas and event transitions rather than duplicating or altering them.
+
+**Bounded-zone status:** Bounded (two-sided zone; the complete candidate candle range). `Zone Top > Zone Bottom` is required for valid bounded-zone geometry, per the shared standard — structurally guaranteed here since a confirmed candle's High is always greater than its Low.
+
+**Expected direction:** BEARISH.
+
+**Zone Top mapping:** Candidate Candle High, fixed after successful reversal confirmation (the already-approved Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard V1 boundary — unchanged by this inheritance).
+
+**Zone Bottom mapping:** Candidate Candle Low, fixed after successful reversal confirmation (the already-approved Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard V1 boundary — unchanged by this inheritance). The complete candidate-candle range remains the fixed POI zone.
+
+**Entry Boundary mapping:** Zone Bottom.
+
+**Far Boundary mapping:** Zone Top.
+
+**Inherited event states:** `NO_BREACH`, `CLOSE_BREACH_CANDIDATE`, `RECLAIM_PENDING`, `RECLAIM_CONFIRMED`, `DISPLACEMENT_PENDING`, `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED`, `RECLAIM_WITHOUT_DISPLACEMENT`, `RECLAIM_FAILED`, `FALSE_INVALIDATION_CONFIRMED`, `GENUINE_INVALIDATION_CONFIRMED` — all defined by, and inherited unmodified from, the authoritative shared standard.
+
+**Inherited Close Breach direction:** `CLOSE_BREACH_CANDIDATE` occurs when a confirmed candle closes above Zone Top by more than the approved Overshoot Tolerance.
+
+**Inherited Reclaim direction:** `RECLAIM_CONFIRMED` requires a confirmed close back inside the zone at or below `Zone Top − Contact Tolerance`, within the shared standard's 3-bar reclaim window.
+
+**Inherited displacement direction:** `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED` requires both a confirmed close below `Zone Bottom − Contact Tolerance` and a reclaim-to-displacement leg classified FAST or STRONG_FAST (via the approved Market Speed and Displacement Standard), within the shared standard's 3-bar displacement window.
+
+**False Invalidation meaning:** `FALSE_INVALIDATION_CONFIRMED` requires the complete Close Breach Candidate → Reclaim Confirmed → Displacement After Reclaim Confirmed sequence; a breach alone or a reclaim alone is never sufficient. May be recorded as reviewed `LIQUIDITY_AFTER_POI` evidence for the BTMM Liquidity Gate under the terms defined in the shared standard.
+
+**Genuine Invalidation effect:** `GENUINE_INVALIDATION_CONFIRMED` (Close Breach Candidate + no qualifying reclaim within the 3-bar window + a passed Sustained Breach requirement) sets `poi_lifecycle_status = INVALIDATED` for this specific POI instance; the POI is never reactivated. Any active linked BTMM setup connected to this POI becomes `BTMM_CANCELLED`, `cancellation_reason = POI_REJECTED` (the pre-existing BTMM reason — no new reason created).
+
+**Repeated Tap handling:** taps are counted (`INITIAL_TAP`/`REPEATED_TAP`/`MULTIPLE_REPEATED_TAPS`) as evidence only, using this POI's Entry Boundary (Zone Bottom) for the separation condition. No automatic degradation, upgrade, freshness, or entry-validity determination is created by tap count.
+
+**Non-repainting timing:** all inherited lifecycle events (breach, reclaim, displacement, false/genuine invalidation) become available only after their complete conditions are confirmed, per the shared standard. This is layered on top of, and does not change, the already-approved `reversal_confirmation_time` non-repainting rule for the candidate candle's own formation.
+
+**Linked BTMM effect:** as described under "Genuine Invalidation effect" and "False Invalidation meaning" above. No BTMM primary state, formation stage, mandatory gate, transition, or cancellation-reason taxonomy is changed by this inheritance.
+
+**Evidence/provenance status:** the inherited lifecycle is **Author-Approved, Author-Added Project Terminology, Engineering-Provisional, NOT YET Empirically Calibrated, NOT YET Out-of-Sample Validated, and NOT Production-Approved** — the same evidence status as the authoritative shared standard. This inheritance does not make this POI production-ready or proven profitable.
+
+**Remaining limitations:** the full quantitative preceding upward-price context (formation precondition), freshness, expiration, repeated-tap degradation, family-specific lifecycle override research, empirical calibration, out-of-sample validation, production approval, retest entry confirmation, BTMM entry logic, and risk rules (stop loss, take profit, risk-to-reward, lot sizing, news restrictions, spread, slippage) all remain unresolved and are not defined by this inheritance.
 
 ## Overlap with other POIs
 
@@ -154,15 +194,15 @@ No confirmed negative-example image caption.
 
 ## Machine-testable criteria
 
-Partial - candidate-candle qualification, the 3-candle preceding comparison group, the 3-bar reversal confirmation window, directional-continuation rejection, opposite close displacement, and STANDARD/STRONG pattern-strength classification are now all testable under Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard V1 — Provisional. Not testable: the full quantitative preceding upward-price context (formation precondition, still qualitative), freshness, partial/full mitigation, repeated-touch degradation, final invalidation, expiration, retest entry confirmation, BTMM state transitions (none defined).
+Partial - candidate-candle qualification, the 3-candle preceding comparison group, the 3-bar reversal confirmation window, directional-continuation rejection, opposite close displacement, STANDARD/STRONG pattern-strength classification, and (via direct inheritance of the POI Boundary Breach, Reclaim and Invalidation Standard — see "Shared POI Boundary Lifecycle Inheritance" above) Close Breach Candidate, Reclaim, Displacement After Reclaim, False Invalidation, Genuine Invalidation, and repeated-tap counting are now all testable. Not testable: the full quantitative preceding upward-price context (formation precondition, still qualitative), freshness, partial/full mitigation, repeated-touch degradation, expiration, retest entry confirmation, BTMM state transitions (none defined by this decision).
 
 ## Unresolved questions
 
-The full quantitative definition of the preceding upward-price context (formation precondition); which general proxy fields apply is resolved (Ambiguity 3), but their minimum thresholds are not yet set; freshness; partial/full mitigation; repeated-touch degradation; final invalidation; expiration; retest entry confirmation; BTMM state transitions (Ambiguity 14, unchanged); the terminology questions under Ambiguity 15 (unchanged).
+The full quantitative definition of the preceding upward-price context (formation precondition); which general proxy fields apply is resolved (Ambiguity 3), but their minimum thresholds are not yet set; freshness; partial/full mitigation; repeated-touch degradation; expiration; retest entry confirmation; BTMM state transitions (Ambiguity 14, unchanged). (Final invalidation, reclaim, displacement after reclaim, false invalidation, and genuine invalidation are now resolved provisionally via direct inheritance of the POI Boundary Breach, Reclaim and Invalidation Standard, Ambiguity 15 — see "Shared POI Boundary Lifecycle Inheritance" above; this did not change any Ambiguity 13 formula.)
 
 ## Author decision
 
-**Evidence status: Author-Approved, Engineering-Provisional, NOT YET Empirically Calibrated, NOT YET Out-of-Sample Validated, NOT Production-Approved.** Candidate-candle qualification, the 3-candle preceding comparison group, the 3-bar reversal confirmation window, Continuation Close Tolerance and directional-continuation rejection, opposite close displacement, Candidate Midpoint, reversal-leg measurements (via the approved Market Speed and Displacement Standard), STANDARD/STRONG reversal, overall pattern-strength classification, complete candle-range zone boundaries, and non-repainting availability are approved (provisionally) - see Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard V1 — Provisional. The full quantitative preceding-context definition, freshness, mitigation, final invalidation, expiration, and retest entry confirmation remain pending.
+**Evidence status: Author-Approved, Engineering-Provisional, NOT YET Empirically Calibrated, NOT YET Out-of-Sample Validated, NOT Production-Approved.** Candidate-candle qualification, the 3-candle preceding comparison group, the 3-bar reversal confirmation window, Continuation Close Tolerance and directional-continuation rejection, opposite close displacement, Candidate Midpoint, reversal-leg measurements (via the approved Market Speed and Displacement Standard), STANDARD/STRONG reversal, overall pattern-strength classification, complete candle-range zone boundaries, and non-repainting availability are approved (provisionally) - see Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard V1 — Provisional. Direct inheritance of the shared POI Boundary Breach, Reclaim and Invalidation Standard is also approved (provisionally) - see "Shared POI Boundary Lifecycle Inheritance" above. The full quantitative preceding-context definition, freshness, mitigation, expiration, and retest entry confirmation remain pending.
 
 ## Approval status
 
