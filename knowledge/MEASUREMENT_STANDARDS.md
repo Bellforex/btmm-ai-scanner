@@ -1034,3 +1034,140 @@ This standard fixes reaction-strength measurement math only. It explicitly does 
 - BTMM state-machine transitions (Ambiguity 14, unchanged).
 
 These remain separate, pending decisions.
+
+---
+
+## Meaningful Swing High and Swing Low Detection Standard
+
+**Status:** Approved, **Provisional** — Meaningful Swing High and Swing Low Detection Standard Version 1 — Provisional (resolves Ambiguity 10 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Does not modify any prior standard above, including the Equal Highs and Equal Lows Tolerance and Drawing Standard's own ATR-tolerance thresholds.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, M1/M5/M15/H1/H3/H4/D1/W1, different sessions, different volatility regimes, and different trend/consolidation conditions. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Five-Candle Local Structure
+
+A local pivot window = 2 confirmed candles before the candidate + the candidate candle/plateau + 2 confirmed candles after. A possible swing does not become a locally confirmed pivot until the two right-side candles have closed. For a plateau, the two-right-candle countdown begins only after the final plateau candle.
+
+### 2. Local Swing High Candidate
+
+Qualifies when its **wick high** (never close, body high, or candle colour) is the highest qualifying extreme within the five-candle window after applying Pivot Tie Tolerance — the qualifying highs on both sides must be lower after tie-tolerance handling.
+
+### 3. Local Swing Low Candidate
+
+Qualifies when its **wick low** (never close, body low, or candle colour) is the lowest qualifying extreme within the five-candle window after applying Pivot Tie Tolerance — the qualifying lows on both sides must be higher after tie-tolerance handling.
+
+### 4. Pivot Tie Tolerance
+
+```
+Pivot Tie Tolerance = MAX(2 × Minimum Price Tick, 0.02 × ATR(14))
+```
+
+ATR(14) uses the same symbol, data provider, and timeframe as the candidate pivot. The Minimum Price Tick is sourced from instrument metadata once the software layer exists. No fixed pip or point values are used.
+
+### 5. Adjacent Pivot Plateau
+
+Adjacent candles whose relevant extreme prices are within Pivot Tie Tolerance form one pivot plateau, not multiple independent swing events:
+
+```
+Swing High plateau: Pivot Price = Highest High among all plateau candles
+Swing Low plateau:  Pivot Price = Lowest Low among all plateau candles
+```
+
+Plateau Start Time and Plateau End Time are preserved. Adjacent plateau candles must not be counted as separate Equal High or Equal Low swing events. No maximum plateau length is invented.
+
+### 6. Local Confirmation State
+
+After the two required right-side candles close, the pivot is classified **LOCAL_SWING_CANDIDATE**. Local confirmation alone does not make the pivot a meaningful structural swing — it remains unavailable to Equal Highs, Equal Lows, Trendlines, Support, Resistance, or later market-structure logic until meaningful confirmation.
+
+### 7. Pivot Reference ATR
+
+```
+Single-candle pivot: Pivot Reference ATR = ATR(14) value associated with the pivot candle
+Plateau:             Pivot Reference ATR = Median ATR(14) across all plateau candles
+```
+
+Uses confirmed ATR values from the same symbol, data provider, and timeframe.
+
+### 8. Meaningful Reversal Threshold
+
+```
+Meaningful Reversal Threshold = MAX(2 × Minimum Price Tick, 0.50 × Pivot Reference ATR)
+```
+
+Protected against missing ATR, zero ATR, or invalid price metadata. A candidate without a valid Pivot Reference ATR must not receive meaningful confirmation automatically.
+
+### 9. Meaningful Swing High Confirmation
+
+```
+Swing High Reversal Excursion = Pivot Price − Lowest Low observed after the pivot or plateau
+```
+
+A local Swing High candidate becomes **CONFIRMED_MEANINGFUL_SWING_HIGH** when Swing High Reversal Excursion ≥ Meaningful Reversal Threshold. The first confirmed candle time achieving this is stored as `meaningful_confirmation_time`.
+
+### 10. Meaningful Swing Low Confirmation
+
+```
+Swing Low Reversal Excursion = Highest High observed after the pivot or plateau − Pivot Price
+```
+
+A local Swing Low candidate becomes **CONFIRMED_MEANINGFUL_SWING_LOW** when Swing Low Reversal Excursion ≥ Meaningful Reversal Threshold. The first confirmed candle time achieving this is stored as `meaningful_confirmation_time`.
+
+### 11. Candidate Replacement Before Meaningful Confirmation
+
+Before meaningful confirmation, a higher high replaces an unconfirmed Swing High candidate, and a lower low replaces an unconfirmed Swing Low candidate. The replaced candidate is marked **SUPERSEDED** (with `superseded_by_swing_id` preserved). A superseded candidate never enters the confirmed meaningful swing sequence. Superseded records are never deleted from historical annotations or audit data.
+
+### 12. Non-Repainting Requirement
+
+Once a pivot reaches meaningful confirmation: Pivot Price, Pivot Start Time, and Pivot End Time must not move; the confirmed swing must not be deleted because a later candle creates a more extreme price (later price action becomes a new swing candidate, structure event, sweep candidate, break candidate, or other future event instead). The confirmed swing must not be exposed to historical backtests at the original pivot time — it becomes available to downstream logic only at `meaningful_confirmation_time`, to prevent look-ahead bias.
+
+### 13. Alternating Meaningful Swing Sequence
+
+The confirmed meaningful swing sequence must alternate Swing High / Swing Low / Swing High / Swing Low (or the inverse starting direction). Two same-direction confirmed meaningful swings must not appear consecutively without an opposite confirmed meaningful swing between them. Before an opposite meaningful swing confirms, a more extreme same-direction candidate replaces the prior unconfirmed candidate (SS11). Higher High, Higher Low, Lower High, and Lower Low labels are **not** defined by this standard.
+
+### 14. Swing Strength Classification
+
+| Classification | Condition |
+|---|---|
+| **STANDARD_SWING** | Reversal excursion ≥ 0.50 × Pivot Reference ATR (the confirmation threshold itself) |
+| **STRONG_SWING** | Reversal excursion ≥ 1.00 × Pivot Reference ATR, achieved before the Pivot Price is materially breached |
+
+`strength_confirmation_time` is stored when the STRONG_SWING threshold is first achieved. No additional strength tiers are defined.
+
+**Material-breach limitation:** the exact numerical meaning of "materially breached" remains **unresolved**. No breach tolerance, breach-close rule, wick-breach rule, or invalidation threshold is invented by this standard — the STRONG_SWING upgrade remains partially dependent on that future, separate definition.
+
+### 15. Equal Highs and Equal Lows Dependency
+
+Equal Highs and Equal Lows must use two distinct confirmed meaningful swing events:
+- Adjacent plateau candles count as one swing event.
+- LOCAL_SWING_CANDIDATE records do not qualify.
+- SUPERSEDED candidates do not qualify.
+- At least one opposite confirmed meaningful swing must exist between two same-type swing events.
+
+The existing Equal Highs and Equal Lows ATR-tolerance standard (0.05× / 0.10× Reference ATR strength thresholds and drawing boundaries) is **unchanged** by this decision.
+
+### 16. Required States and Labels
+
+Status (kept separate from direction and strength): FORMING, LOCAL_SWING_CANDIDATE, CONFIRMED_MEANINGFUL_SWING, SUPERSEDED. Direction: SWING_HIGH, SWING_LOW. Strength: STANDARD_SWING, STRONG_SWING. These three dimensions are never combined into one opaque field.
+
+### 17. Required Fields
+
+Preserved independently (no composite swing score): `swing_id`, `swing_direction`, `pivot_price`, `pivot_start_time`, `pivot_end_time`, `local_confirmation_time`, `meaningful_confirmation_time`, `pivot_reference_atr`, `pivot_tie_tolerance`, `reversal_threshold`, `reversal_excursion`, `strength_confirmation_time`, `swing_strength`, `swing_status`, `superseded_by_swing_id`, `timeframe`, `symbol`, `data_provider`.
+
+### 18. Same-Timeframe Rule
+
+Swing detection runs independently for every timeframe. An H4 candle must not form part of an M15 swing window. Higher-timeframe and lower-timeframe swings may later be linked or compared, but they remain separate detected events with separate IDs and confirmation times.
+
+### 19. Required Conceptual Separation
+
+Meaningful swing detection must remain separate from: Higher High, Higher Low, Lower High, Lower Low, Break of Structure, Change of Character, Sweep, Liquidity grab, Trendline validity, Support clustering, Resistance clustering, POI validity, POI invalidation, BTMM state transitions, entry confirmation, and trade outcome. None of these are defined by this standard.
+
+### 20. What Remains Unresolved
+
+This standard fixes local pivot detection, plateau handling, meaningful-reversal confirmation, non-repainting availability, and STANDARD/STRONG classification only. It explicitly does **not** define:
+- The exact numerical meaning of "materially breached" (blocks a fully automatic STRONG_SWING upgrade).
+- Higher High / Higher Low / Lower High / Lower Low labels.
+- Break of Structure / Change of Character.
+- Sweep / liquidity-grab rules.
+- Trendline / Support / Resistance validity (Ambiguities 11–12, unchanged).
+- BTMM state-machine transitions (Ambiguity 14, unchanged).
+
+These remain separate, pending decisions.
