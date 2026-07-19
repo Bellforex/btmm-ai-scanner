@@ -718,7 +718,7 @@ A fast candle without valid FVG geometry is **not** an FVG. A valid geometric FV
 
 ### 6. BTMM Movement-Leg Measurements
 
-Until automatic anchors are approved (dependent on Ambiguity 14), use **expert-labelled movement-leg anchors only**. For each labelled BTMM approach or reaction leg:
+Until automatic anchor detection is approved (Ambiguity 14's resolution formalizes BTMM lifecycle states and gates but does not itself define automatic anchor detection — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below), use **expert-labelled movement-leg anchors only**. For each labelled BTMM approach or reaction leg:
 
 ```
 Leg Bar Count = Number of confirmed candles in the movement leg
@@ -767,12 +767,12 @@ No composite market-speed score or weighting formula is defined.
 
 ### 10. Anchor Limitation
 
-Automatic detection of the following remains unresolved: manipulation endpoint, approach starting price, POI first-touch price, reaction starting point, reaction endpoint. Their automatic detection depends on Ambiguity 14 (the BTMM state machine), which is **not** resolved or modified by this decision. Until Ambiguity 14 is resolved, BTMM movement-leg speed testing uses expert-labelled or otherwise explicitly approved anchors only.
+Automatic detection of the following remains unresolved: manipulation endpoint, approach starting price, POI first-touch price, reaction starting point, reaction endpoint. Ambiguity 14 (the BTMM state machine) is now resolved provisionally (see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below), but that decision formalizes lifecycle states and gates only — it does not itself define automatic anchor detection. BTMM movement-leg speed testing continues to use expert-labelled or otherwise explicitly approved anchors only.
 
 ### 11. What Remains Unresolved
 
 This standard fixes single-candle speed, FVG displacement, BTMM movement-leg, and POI dwell **measurement** math only. It explicitly does **not** resolve:
-- Ambiguity 14 (BTMM state machine) or the automatic anchors that depend on it.
+- The automatic manipulation-endpoint/approach-starting-price/reaction-endpoint anchors (Ambiguity 14's resolution formalizes BTMM lifecycle states and gates but does not itself supply automatic anchor detection).
 - Any composite/weighted final speed or activity score.
 - BTMM Accuracy (Ambiguity 8, resolved separately below).
 - Freshness, mitigation, invalidation, or expiration for any POI.
@@ -905,9 +905,8 @@ This standard fixes zone-interaction geometry only. It explicitly does **not** d
 - Sweep rules.
 - Final invalidation.
 - Expiration.
-- BTMM confirmation (Ambiguity 14, unchanged).
 
-These remain separate, pending decisions.
+These remain separate, pending decisions. (BTMM confirmation is now resolved separately — its Accuracy Gate uses this standard's classifications directly, see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
 
 ---
 
@@ -1031,9 +1030,8 @@ This standard fixes reaction-strength measurement math only. It explicitly does 
 - Final POI invalidation.
 - Expiration.
 - Trade-entry confirmation.
-- BTMM state-machine transitions (Ambiguity 14, unchanged).
 
-These remain separate, pending decisions.
+These remain separate, pending decisions. (BTMM state-machine transitions are now resolved separately — its Reaction Gate uses this standard's classifications directly, see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
 
 ---
 
@@ -1168,9 +1166,8 @@ This standard fixes local pivot detection, plateau handling, meaningful-reversal
 - Break of Structure / Change of Character.
 - Sweep / liquidity-grab rules.
 - Trendline / Support / Resistance validity (Ambiguities 11–12, unchanged).
-- BTMM state-machine transitions (Ambiguity 14, unchanged).
 
-These remain separate, pending decisions.
+These remain separate, pending decisions. (BTMM state-machine transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
 
 ---
 
@@ -1337,9 +1334,8 @@ This standard fixes anchor eligibility, slope/steepness classification, touch/pi
 - BOS or CHoCH.
 - Support clustering.
 - Resistance clustering.
-- BTMM state transitions.
 
-These remain separate, pending decisions.
+These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
 
 ---
 
@@ -1491,9 +1487,8 @@ This standard fixes origin eligibility, creator-based fixed boundaries, origin-r
 - Zone merging.
 - Zone ranking.
 - Entry confirmation.
-- BTMM state transitions.
 
-These remain separate, pending decisions.
+These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
 
 ---
 
@@ -1657,7 +1652,81 @@ This standard fixes candidate-candle qualification, the three-candle preceding c
 - Final POI invalidation.
 - Expiration.
 - Retest entry confirmation.
-- BTMM state transitions.
 - Trade outcome.
+
+These remain separate, pending decisions. (BTMM state transitions are now resolved separately — see "BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard" below; this did not change any formula in this standard.)
+
+---
+
+## BTMM Lifecycle, Gates, State Transitions, and Confirmation Timing Standard
+
+**Status:** Approved, **Provisional** — BTMM Lifecycle and Confirmation State Machine Version 1 — Provisional (resolves Ambiguity 14 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). The authoritative specification is [btmm/BTMM_STATE_MACHINE.md](btmm/BTMM_STATE_MACHINE.md); this section summarizes and cross-references it rather than duplicating it. Builds on the POI Zone Interaction Standard (Ambiguity 8), the POI Reaction Strength Standard (Ambiguity 9), the Market Speed and Displacement Standard (Ambiguity 7), and the Volume/Momentum/Price-Activity Proxy Standard (Ambiguity 3); modifies none of them.
+
+**Evidence / provisional status (must accompany every citation of this standard):** this standard is **AUTHOR-APPROVED**, **ENGINEERING-PROVISIONAL**, **NOT YET EMPIRICALLY CALIBRATED**, **NOT YET OUT-OF-SAMPLE VALIDATED**, and **NOT PRODUCTION-APPROVED**. It must not be presented as a proven profitable trading system.
+
+**Calibration requirements:** all states, gates, transitions, and thresholds below must later be tested against expert-approved BTMM examples, expert-rejected BTMM examples, XAUUSD, EURUSD, GBPUSD, M1, M5, M15, different sessions, different volatility regimes, liquidity before/within/after POIs, and different POI families. Not to be changed casually outside that calibration process.
+
+### 1. Required Separation
+
+POI validity, BTMM setup validity, liquidity evidence, BTMM pillar evidence, entry validity, risk approval, and trade outcome remain independent. `BTMM_CONFIRMED` does not automatically mean enter a trade, use a particular lot size, that the POI cannot fail, or that the trade will be profitable.
+
+### 2. Primary States
+
+Exactly five: `BTMM_CANDIDATE`, `BTMM_FORMING`, `BTMM_BLOCKED`, `BTMM_CONFIRMED`, `BTMM_CANCELLED`. Kept separate from formation stage. Full definitions in `btmm/BTMM_STATE_MACHINE.md`, "Primary Lifecycle States."
+
+### 3. Formation Stages
+
+Exactly six, used only while `primary_state = BTMM_FORMING`: `CONTEXT_CHECK`, `LIQUIDITY_MONITORING`, `APPROACH_MONITORING`, `POI_INTERACTION`, `REACTION_MONITORING`, `FINAL_GATE_EVALUATION`.
+
+### 4. Mandatory Gates
+
+Ten mandatory gates must each independently pass before `BTMM_CONFIRMED`: POI Gate, Market Direction Gate, Analytical Framework Gate, Active Session Gate, Liquidity Gate, Accuracy Gate (POI Zone Interaction Standard), Volume Pillar Gate, Reaction Gate (POI Reaction Strength Standard), Reaction Speed Gate (Market Speed and Displacement Standard), Formation Timeframe Gate (M5 or M15 required; M1-only cannot independently confirm). No weighting, majority vote, average score, or composite confirmation score. Full gate definitions and pass/fail tables in `btmm/BTMM_STATE_MACHINE.md`.
+
+### 5. Blocked-State Behavior
+
+`BTMM_BLOCKED` applies when mandatory information is unavailable but no market-based cancellation condition has occurred (e.g. `MISSING_ATR`, `MISSING_PRICE_METADATA`, `CONTEXT_UNKNOWN`, `LIQUIDITY_REVIEW_PENDING`, `VOLUME_REVIEW_PENDING`, `FORMATION_TIMEFRAME_NOT_CONFIRMED`). A blocked setup may return to `BTMM_FORMING` once the missing evidence arrives. Never represented as confirmed or cancelled.
+
+### 6. Cancellation Behavior
+
+One terminal state, `BTMM_CANCELLED`, with `cancellation_reason` preserved separately: `POI_REJECTED`, `CONTEXT_REJECTED`, `SESSION_INACTIVE`, `INTERACTION_INELIGIBLE`, `DIRECTIONAL_CONTINUATION`, `WEAK_REACTION`, `REACTION_SPEED_FAILED`, `VOLUME_PILLAR_FAILED`, `NO_LIQUIDITY_EVIDENCE`, `MANUAL_REVIEW_REJECTED`. Cancelling a BTMM setup never invalidates the underlying POI.
+
+### 7. Confirmation Timing (Non-Repainting)
+
+`BTMM_CONFIRMED` becomes available only after the complete five-bar POI reaction window has closed, all mandatory gate inputs are available, and `FINAL_GATE_EVALUATION` passes; `btmm_confirmation_time` is stored. Never exposed historically at POI creation time, manipulation time, first POI touch, or reaction-start time.
+
+### 8. Allowed and Forbidden Transitions
+
+```
+Allowed:   BTMM_CANDIDATE → BTMM_FORMING → BTMM_CONFIRMED
+           BTMM_CANDIDATE → BTMM_CANCELLED
+           BTMM_FORMING → BTMM_BLOCKED → BTMM_FORMING
+           BTMM_FORMING → BTMM_CANCELLED
+Forbidden: BTMM_CANCELLED → BTMM_CONFIRMED
+           BTMM_CONFIRMED → BTMM_CANCELLED
+```
+
+A new market cycle or later eligible interaction requires a new `btmm_setup_id`.
+
+### 9. No Retroactive Rewriting
+
+Once confirmed: `btmm_setup_id`, `poi_id`, `poi_interaction_id`, direction, and confirmation time never change; evidence used at confirmation remains auditable; a later losing trade never downgrades `BTMM_CONFIRMED`; a later profitable trade never upgrades an unconfirmed setup. Once cancelled: cancellation time/reason never move or get silently replaced; a later event creates a new setup.
+
+### 10. Required Fields
+
+Preserved independently (no composite score): `btmm_setup_id`, `poi_id`, `poi_interaction_id`, `btmm_direction`, `primary_state`, `formation_stage`, `state_entered_time`, `previous_state`, `poi_gate_status`, `market_direction_status`, `analytical_framework_status`, `session_status`, `liquidity_evidence_status`, `liquidity_location`, `liquidity_evidence_source`, `volume_pillar_status`, `approach_speed_classification`, `approach_normalized_speed_per_bar`, `approach_directional_efficiency`, `approach_directional_candle_share`, `accuracy_gate_status`, `reaction_classification`, `reaction_speed_classification`, `formation_timeframe`, `execution_timeframe`, `poi_dwell_bars`, `first_touch_time`, `reaction_start_time`, `btmm_confirmation_time`, `cancellation_time`, `cancellation_reason`, `blocked_reason`, `evidence_version`, `symbol`, `data_provider`, `created_at`, `updated_at`. A complete append-only state-transition history is preserved.
+
+### 11. What Remains Unresolved
+
+This standard fixes lifecycle states, formation stages, mandatory gates, blocked/cancellation behavior, confirmation timing, and allowed/forbidden transitions only. It explicitly does **not** define:
+- Ambiguity 15 terminology (reclaim, displacement after reclaim, repeated taps, false invalidation, genuine invalidation).
+- Automatic market-direction logic (HH, HL, LH, LL, BOS, CHoCH, moving averages, or any other invented structure rule).
+- Automatic analytical-framework context detection.
+- Automatic session schedules.
+- Maximum POI dwell time.
+- Entry confirmation, stop loss, take profit, risk-to-reward, lot sizing, or news restrictions.
+- Final POI invalidation, freshness, mitigation, or expiration.
+- Repeated-touch degradation.
+- Empirical calibration or out-of-sample validation.
+- Production approval.
 
 These remain separate, pending decisions.
