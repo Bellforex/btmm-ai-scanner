@@ -283,3 +283,26 @@ Each file received a new "Shared POI Boundary Lifecycle Inheritance" section doc
 **Excluded structures remain excluded:** Equal Highs, Equal Lows, Bullish Trendline, Bearish Trendline. **No family-specific override was introduced** for any POI in this task — the 5 override questions in Section 16 remain open and unanswered.
 
 `knowledge/POI_COVERAGE_MATRIX.md` was updated for these 4 rows only (Invalidation defined: No → Partial); no formation, boundary, confirmation, or strength readiness value was changed, and no POI was marked APPROVED. See `knowledge/KNOWLEDGE_COMPLETION_GATE.md` and `docs/PROJECT_STATE.md` for the corresponding gate and project-state updates. The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.
+
+## 22. Conditional Reconciliation Status (2026-07-19)
+
+**This section records what has happened since Section 21 above. The original audit's classifications, counts, and POI-by-POI matrix (Sections 1–20) and the Section 21 propagation record remain intact and unaltered by this update.**
+
+The **Conditional POI Lifecycle Reconciliation Audit (Group 2)** has been completed and is documented in full at `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md`. It reviewed all 8 POIs classified `CONDITIONAL_GENERIC_INHERITANCE` in Section 11 above:
+
+| poi_name | reconciliation classification |
+|---|---|
+| Buy Order Block | C. NEEDS_AVAILABILITY_TIMING_DECISION |
+| Sell Order Block | C. NEEDS_AVAILABILITY_TIMING_DECISION |
+| Buy Fair Value Gap | D. NEEDS_FAMILY_SPECIFIC_OVERRIDE_DECISION |
+| Sell Fair Value Gap | D. NEEDS_FAMILY_SPECIFIC_OVERRIDE_DECISION |
+| Base Rally | C. NEEDS_AVAILABILITY_TIMING_DECISION |
+| Base Drop | C. NEEDS_AVAILABILITY_TIMING_DECISION |
+| Support | B. NEEDS_TERMINOLOGY_RECONCILIATION |
+| Resistance | B. NEEDS_TERMINOLOGY_RECONCILIATION |
+
+Classification counts: B = 2, C = 4, D = 2, A (`READY_FOR_AUTHOR_APPROVAL`) = 0, E (`BLOCKED_INCOMPLETE_SPECIFICATION`) = 0. Total = 8.
+
+**Four author decisions were identified as required** (RECON-D1 Order Block timing, RECON-D2 Base timing, RECON-D3 FVG narrow-zone tolerance treatment, RECON-D4 Support/Resistance break-candidate terminology) — each with engineering recommendations presented but explicitly marked **NOT YET AUTHOR-APPROVED**. Full detail, formula comparisons, and decision options are in `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md`.
+
+**No conditional POI was propagated.** No individual POI rule file under `knowledge/poi_rules/` was modified by this reconciliation audit. **No original classification count from Sections 6–14 above was changed.** **No family-specific override was implemented** — RECON-D1 through RECON-D4 remain open questions with recommendations only, not decisions. The 6 `BLOCKED_INCOMPLETE_SPECIFICATION` POIs, the 4 excluded structures (Equal Highs, Equal Lows, Bullish/Bearish Trendline), and the 14 `NOT_APPLICABLE_OTHER` POIs remain untouched and unaffected by this reconciliation. The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.

@@ -127,7 +127,27 @@ Individual POI lifecycle propagation **did not occur during this audit itself**.
 - **Four explicitly excluded POIs remain excluded**: Equal Highs, Equal Lows, Bullish Trendline, Bearish Trendline.
 - **Fourteen non-applicable structures remain non-applicable**: Swing High, Swing Low, and the 12 Previous/Current Period High/Low variants (single price levels, not zones).
 
-**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **resolve conditional lifecycle inheritance and reconciliation questions for Order Blocks, Fair Value Gaps, Base formations, Support, and Resistance.**
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.**
+
+## 11. Conditional POI Lifecycle Reconciliation Audit — Group 2 (Completed)
+
+**The Conditional POI Lifecycle Reconciliation Audit (Group 2) has been completed for all 8 POIs classified `CONDITIONAL_GENERIC_INHERITANCE`** by the Section 9 audit: Buy Order Block, Sell Order Block, Buy Fair Value Gap, Sell Fair Value Gap, Base Rally, Base Drop, Support, Resistance. Full findings, per-POI reconciliation matrix, and formula comparisons are in `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md`.
+
+**Reconciliation classification counts:** `NEEDS_TERMINOLOGY_RECONCILIATION` = 2 (Support, Resistance); `NEEDS_AVAILABILITY_TIMING_DECISION` = 4 (Buy Order Block, Sell Order Block, Base Rally, Base Drop); `NEEDS_FAMILY_SPECIFIC_OVERRIDE_DECISION` = 2 (Buy Fair Value Gap, Sell Fair Value Gap); `READY_FOR_AUTHOR_APPROVAL` = 0; `BLOCKED_INCOMPLETE_SPECIFICATION` = 0. Total = 8.
+
+**Four author decisions are required**, each affecting exactly 2 POIs:
+- **RECON-D1** (Order Block lifecycle availability timing) — Buy Order Block, Sell Order Block.
+- **RECON-D2** (Base Formation lifecycle availability timing) — Base Rally, Base Drop.
+- **RECON-D3** (Fair Value Gap minimum width / narrow-zone tolerance treatment) — Buy Fair Value Gap, Sell Fair Value Gap.
+- **RECON-D4** (Support/Resistance break-candidate terminology reconciliation) — Support, Resistance.
+
+Each decision has an engineering recommendation presented for author consideration, explicitly marked **ENGINEERING RECOMMENDATION — NOT YET AUTHOR-APPROVED**.
+
+**No conditional lifecycle propagation occurred.** No individual POI rule file under `knowledge/poi_rules/` was modified. **No family-specific override was created** — RECON-D1 through RECON-D4 remain open questions, not decisions. `knowledge/POI_COVERAGE_MATRIX.md` received one dated informational note only (no row, status, readiness value, or column was changed). `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md` received an appended, dated reconciliation-status section; its original audit classifications and counts (Sections 1-21) were not rewritten.
+
+**Six `BLOCKED_INCOMPLETE_SPECIFICATION` candidates remain incomplete**: Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star — unaffected by this task.
+
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **obtain author decisions for the conditional lifecycle reconciliation questions before propagating Group 2 inheritance.**
 
 ## 5. Contradictions Found
 
