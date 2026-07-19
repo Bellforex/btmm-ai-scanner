@@ -64,7 +64,7 @@ ATR (Average True Range) does **not** replace or adjust the 2.0/3.0 Size Ratio t
 | Order Block | Displacement candle | Smaller first candle | Size Ratio computed on Total Range of each; classification table applies directly. |
 | Fair Value Gap | Displacement (middle) candle | Relevant preceding candle(s) | Total-range ratio computed as above; Body Efficiency of the displacement candle recorded separately as an additional quality signal, not a replacement condition. |
 | Base Rally / Base Drop | Departure candle | Largest Total Range among all base candles (not just one base candle) | Size Ratio must be computed against the base's *largest* candle, per the book's explicit rule. |
-| Buy-to-Sell / Sell-to-Buy | Failed directional candle | (average size of preceding candles, per existing POI catalog rule) | Total Range used for the Size Ratio; reversal confirmation afterward is evaluated as its own separate condition (see Ambiguity 13 — still unresolved), not merged into the size measurement. |
+| Buy-to-Sell / Sell-to-Buy | Failed directional candle | (average size of preceding candles, per existing POI catalog rule) | Total Range used for the Size Ratio; reversal confirmation afterward is evaluated as its own separate condition (resolved separately under Ambiguity 13 — see "Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard" below), not merged into the size measurement. |
 | Engulfing Pattern | Engulfing candle | Previous (engulfed) candle | Two separate conditions required: (1) body engulfment — the engulfing candle's body must cover the previous candle's body; (2) Total Range Size Ratio per the classification table. Both must hold; neither substitutes for the other. |
 | Pressure Wick / Liquidity Wick | — | — | This standard's ordinary displacement/body rule does **not** apply. Pressure Wick proportions (wick-to-body ratio) are handled separately under Ambiguity 6 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`, which remains unresolved. |
 
@@ -72,8 +72,9 @@ ATR (Average True Range) does **not** replace or adjust the 2.0/3.0 Size Ratio t
 
 This standard fixes *how to measure and classify candle size and body*. It does **not** resolve:
 - Ambiguity 6 (Pressure Wick wick:body proportion)
-- Ambiguity 13 ("clear reversal" distance for Buy-to-Sell/Sell-to-Buy)
 - Any other still-open item in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`
+
+(Ambiguity 13, the "clear reversal" distance for Buy-to-Sell/Sell-to-Buy, is now resolved separately — see "Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard" below; this did not change any Candle Measurement Standard formula.)
 
 (Ambiguity 2, the "small candle" volatility baseline, is resolved — see "Small Candle and Recent Market Context Standard" below.)
 
@@ -164,12 +165,11 @@ Pressure Wick / Liquidity Wick, Hammer, Shooting Star, Morning Star, and Evening
 ### 8. Important Limitation — What This Decision Does *Not* Yet Define
 
 This standard fixes the ratio/classification math only. It explicitly does **not** yet define:
-- The number of preceding candles in a comparison group (relevant to Fair Value Gap and Buy-to-Sell/Sell-to-Buy).
+- The number of preceding candles in a comparison group (relevant to Fair Value Gap; for Buy-to-Sell/Sell-to-Buy this is now resolved separately as exactly 3 candles — see "Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard" below).
 - The number of candles forming a valid base (relevant to Base Rally/Base Drop).
 - The minimum or maximum base duration (relevant to Base Rally/Base Drop).
-- Reversal confirmation after a Buy-to-Sell or Sell-to-Buy candle (Ambiguity 13, unchanged).
 
-These remain separate unresolved decisions and must not be inferred from this standard.
+These remain separate unresolved decisions and must not be inferred from this standard. (Reversal confirmation after a Buy-to-Sell or Sell-to-Buy candle, Ambiguity 13, is now resolved separately — see "Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard" below; this did not change any formula in this standard.)
 
 ---
 
@@ -1492,5 +1492,172 @@ This standard fixes origin eligibility, creator-based fixed boundaries, origin-r
 - Zone ranking.
 - Entry confirmation.
 - BTMM state transitions.
+
+These remain separate, pending decisions.
+
+---
+
+## Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard
+
+**Status:** Approved, **Provisional** — Buy-to-Sell and Sell-to-Buy Reversal Confirmation Standard Version 1 — Provisional (resolves Ambiguity 13 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on the Candle Measurement Standard, the Small Candle and Recent Market Context Standard, the Volume/Momentum/Price-Activity Proxy Standard, and the Market Speed and Displacement Standard; modifies none of them.
+
+**Evidence / provisional status (must accompany every citation of this standard):** this standard is **AUTHOR-APPROVED**, **ENGINEERING-PROVISIONAL**, **NOT YET EMPIRICALLY CALIBRATED**, **NOT YET OUT-OF-SAMPLE VALIDATED**, and **NOT PRODUCTION-APPROVED**. Its thresholds must never be presented as universal trading laws.
+
+**Calibration requirements:** all thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, relevant project timeframes, different sessions, different volatility regimes, trending markets, and consolidating markets. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Required Separation
+
+This standard determines only whether the original failed directional candle forms a valid Buy-to-Sell POI or Sell-to-Buy POI. It is kept strictly separate from: a later revisit to the POI, POI interaction geometry, POI reaction strength after a revisit, freshness, mitigation, final invalidation, BTMM confirmation, entry confirmation, and trade outcome. A later revisit or later trade result must never retroactively confirm the original pattern.
+
+### 2. Preceding Comparison Group
+
+```
+Preceding Maximum Range = largest Total Range among the 3 confirmed candles immediately before the candidate candle
+Candidate Size Ratio = Candidate Total Range ÷ Preceding Maximum Range
+```
+
+Guarded against a missing or zero Preceding Maximum Range. This three-candle comparison window is fixed and must not be changed.
+
+### 3. Buy-to-Sell Candidate Candle
+
+Must be a confirmed closed bullish candle (`Close > Open`) appearing within an existing upward-price context. The full quantitative definition of that preceding upward-price context remains unresolved and is **not** defined here using HH, HL, BOS, CHoCH, a moving average, or any other invented structure rule.
+
+```
+Bullish Close Position = (Close − Low) ÷ Total Range
+```
+
+| Tier | Candidate Size Ratio | Body Efficiency | Bullish Close Position |
+|---|---|---|---|
+| `STANDARD_BUY_TO_SELL_CANDIDATE` | ≥ 2.00 | ≥ 0.60 | ≥ 0.70 |
+| `STRONG_BUY_TO_SELL_CANDIDATE` | ≥ 3.00 | ≥ 0.70 | ≥ 0.80 |
+
+A zero-range or invalid candle cannot qualify.
+
+### 4. Sell-to-Buy Candidate Candle
+
+Must be a confirmed closed bearish candle (`Close < Open`) appearing within an existing downward-price context. The full quantitative definition of that preceding downward-price context remains unresolved and is **not** invented here.
+
+```
+Bearish Close Position = (High − Close) ÷ Total Range
+```
+
+| Tier | Candidate Size Ratio | Body Efficiency | Bearish Close Position |
+|---|---|---|---|
+| `STANDARD_SELL_TO_BUY_CANDIDATE` | ≥ 2.00 | ≥ 0.60 | ≥ 0.70 |
+| `STRONG_SELL_TO_BUY_CANDIDATE` | ≥ 3.00 | ≥ 0.70 | ≥ 0.80 |
+
+### 5. Three-Bar Reversal Confirmation Window
+
+Evaluate exactly 3 confirmed candles immediately after the candidate candle (confirmation bar 1, 2, 3). The pattern may confirm on bar 1, 2, or 3 once all required conditions are first satisfied; the earliest confirmed candle time at which they were first satisfied is stored. If confirmation bar 3 closes without Standard Reversal conditions met, classify `REJECTED_INSUFFICIENT_REVERSAL`. The confirmation window must not be extended beyond three candles by this standard.
+
+### 6. Candidate Reference ATR and Continuation Close Tolerance
+
+```
+Candidate Reference ATR = ATR(14) on the candidate candle
+Continuation Close Tolerance = MAX(2 × Minimum Price Tick, 0.10 × Candidate Reference ATR)
+```
+
+Same symbol, data provider, and timeframe. The Minimum Price Tick is sourced from instrument metadata once the software layer exists; no fixed pip/point values are used. Guarded against missing, zero, or invalid ATR or tick metadata.
+
+### 7. Directional Continuation Rejection
+
+```
+Buy-to-Sell:  REJECTED_DIRECTIONAL_CONTINUATION when Post-Candidate Close − Candidate High > Continuation Close Tolerance
+Sell-to-Buy:  REJECTED_DIRECTIONAL_CONTINUATION when Candidate Low − Post-Candidate Close > Continuation Close Tolerance
+```
+
+Applies to any post-candidate confirmed candle evaluated before reversal confirmation. A wick beyond Candidate High or Candidate Low is stored separately as `continuation_wick_excursion` and must not alone reject the pattern — confirmed close continuation is the primary rejection evidence. Once `REJECTED_DIRECTIONAL_CONTINUATION` occurs before reversal confirmation, the candidate must not later become confirmed from the same three-bar window.
+
+### 8. Opposite Close Displacement
+
+```
+Buy-to-Sell:  Lowest Reversal Close  = lowest confirmed close observed in the reversal window so far
+              Opposite Close Displacement = Candidate Close − Lowest Reversal Close
+Sell-to-Buy:  Highest Reversal Close = highest confirmed close observed in the reversal window so far
+              Opposite Close Displacement = Highest Reversal Close − Candidate Close
+
+Opposite Close Displacement Ratio = Opposite Close Displacement ÷ Candidate Total Range
+```
+
+The displacement must not be negative. Close displacement is the approved confirmation measurement; opposite-direction wick excursion may be stored separately if later required.
+
+### 9. Candidate Midpoint
+
+```
+Candidate Midpoint = (Candidate High + Candidate Low) ÷ 2
+```
+
+### 10. Reversal-Leg Measurements
+
+Using the approved Market Speed and Displacement Standard Version 1 — Provisional, evaluate the opposite-direction reversal movement over the post-candidate candles available from confirmation bar 1 through the current evaluated confirmation bar. Preserve independently: Leg Bar Count, Net Directional Distance, Leg Path Distance, Directional Efficiency, Directional Candle Share, Normalized Speed Per Bar, and Reversal Speed Classification. For Buy-to-Sell the movement direction is bearish; for Sell-to-Buy the movement direction is bullish. No composite reversal score is created, and the approved Market Speed formulas/thresholds are unchanged. Any additional anchor detail not already defined by that standard or this decision is recorded as unresolved rather than invented.
+
+### 11. Standard Reversal
+
+| Direction | Required conditions (all, within the three-bar window) |
+|---|---|
+| Buy-to-Sell | At least one confirmed post-candidate close below Candidate Midpoint; Opposite Close Displacement Ratio ≥ 0.50; Directional Efficiency ≥ 0.50; Directional Candle Share ≥ 0.67; no `REJECTED_DIRECTIONAL_CONTINUATION` |
+| Sell-to-Buy | At least one confirmed post-candidate close above Candidate Midpoint; Opposite Close Displacement Ratio ≥ 0.50; Directional Efficiency ≥ 0.50; Directional Candle Share ≥ 0.67; no `REJECTED_DIRECTIONAL_CONTINUATION` |
+
+The earliest bar on which all requirements were achieved is stored.
+
+### 12. Strong Reversal
+
+| Direction | Required conditions (all, within the three-bar window) |
+|---|---|
+| Buy-to-Sell | At least one confirmed post-candidate close below Candidate Low; Opposite Close Displacement Ratio ≥ 1.00; Directional Efficiency ≥ 0.60; Directional Candle Share ≥ 0.67; Reversal Speed Classification is FAST or STRONG FAST; no `REJECTED_DIRECTIONAL_CONTINUATION` |
+| Sell-to-Buy | At least one confirmed post-candidate close above Candidate High; Opposite Close Displacement Ratio ≥ 1.00; Directional Efficiency ≥ 0.60; Directional Candle Share ≥ 0.67; Reversal Speed Classification is FAST or STRONG FAST; no `REJECTED_DIRECTIONAL_CONTINUATION` |
+
+### 13. Overall Pattern-Strength Rule
+
+The final pattern strength is limited by the weaker required component:
+
+| Candidate candle | Opposite reversal | Pattern strength |
+|---|---|---|
+| Standard | Standard | `STANDARD_PATTERN` |
+| Standard | Strong | `STANDARD_PATTERN` |
+| Strong | Standard | `STANDARD_PATTERN` |
+| Strong | Strong | `STRONG_PATTERN` |
+
+A candidate candle without at least Standard Reversal confirmation must be rejected. A large candle alone must never be classified as a confirmed Buy-to-Sell or Sell-to-Buy POI.
+
+### 14. Complete Candle-Range Boundaries
+
+```
+Zone Bottom = Candidate Candle Low
+Zone Top = Candidate Candle High
+```
+
+Applies after successful reversal confirmation, using the complete failed-candle range. The zone must not be refined, shrunk, averaged, or recentered by this standard.
+
+### 15. Required States
+
+`FORMING` (candidate candle has not closed); `REVERSAL_PENDING` (candidate closed, candidate requirements pass, three-bar window still evaluating); `STANDARD_PATTERN`; `STRONG_PATTERN`; `REJECTED_CANDIDATE_CANDLE` (candidate fails minimum candle requirements); `REJECTED_DIRECTIONAL_CONTINUATION`; `REJECTED_INSUFFICIENT_REVERSAL`. Pattern direction (`BUY_TO_SELL`/`SELL_TO_BUY`) is kept separate, never combined into one opaque field.
+
+### 16. Non-Repainting Availability
+
+A confirmed POI becomes available to downstream logic only at `reversal_confirmation_time`; it must not appear historically at the candidate candle's original time. Once confirmed: candidate OHLC values must not move, zone boundaries must not move, reversal confirmation time must not move, and later price action must not retrospectively alter the original pattern classification. Later lifecycle events remain separate.
+
+### 17. Required Fields
+
+Preserved independently (no composite score): `failed_candle_id`, `pattern_direction`, `candidate_open`, `candidate_high`, `candidate_low`, `candidate_close`, `candidate_total_range`, `candidate_body_efficiency`, `candidate_directional_close_position`, `preceding_maximum_range`, `candidate_size_ratio`, `candidate_strength`, `candidate_reference_atr`, `continuation_close_tolerance`, `continuation_close_breach`, `continuation_wick_excursion`, `reversal_window_bars`, `opposite_close_displacement`, `opposite_close_displacement_ratio`, `directional_efficiency`, `directional_candle_share`, `normalized_speed_per_bar`, `reversal_speed_classification`, `reversal_confirmation_time`, `reversal_strength`, `pattern_strength`, `pattern_status`, `zone_top`, `zone_bottom`, `timeframe`, `symbol`, `data_provider`.
+
+### 18. Required Conceptual Separation
+
+Pattern confirmation must remain separate from: future POI interaction geometry, future POI reaction strength, freshness, partial mitigation, full mitigation, repeated-touch degradation, final invalidation, expiration, BTMM validity, entry validity, trade profitability, and trade outcome. A `STRONG_PATTERN` does not independently prove any of these.
+
+### 19. What Remains Unresolved
+
+This standard fixes candidate-candle qualification, the three-candle preceding comparison group, the three-bar reversal confirmation window, directional-continuation rejection, opposite close displacement, and STANDARD/STRONG reversal and overall pattern-strength classification only. It explicitly does **not** define:
+- The full quantitative preceding upward-price context (Buy-to-Sell).
+- The full quantitative preceding downward-price context (Sell-to-Buy).
+- Freshness.
+- Partial mitigation.
+- Full mitigation.
+- Repeated-touch degradation.
+- Final POI invalidation.
+- Expiration.
+- Retest entry confirmation.
+- BTMM state transitions.
+- Trade outcome.
 
 These remain separate, pending decisions.
