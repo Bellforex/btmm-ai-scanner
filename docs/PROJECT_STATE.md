@@ -163,7 +163,32 @@ Each decision has an engineering recommendation presented for author considerati
 
 **No formation, boundary, confirmation, or strength rule was changed for any of the 8 POIs.** No empirical calibration or production approval exists for any propagated POI — all 12 remain **Author-Approved, Engineering-Provisional, NOT YET empirically calibrated, NOT YET out-of-sample validated, and NOT production-approved**. `knowledge/POI_COVERAGE_MATRIX.md` was updated for the 4 Order Block/Base rows only (Invalidation defined: No → Partial); Buy/Sell Fair Value Gap and Support/Resistance were already Partial and required no cell change. `knowledge/poi_lifecycle/CONDITIONAL_LIFECYCLE_RECONCILIATION_AUDIT.md` and `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md` each received an appended, dated propagation section; no original finding, classification, or count was rewritten.
 
-**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **complete the six blocked candlestick POI specifications sufficiently to determine lifecycle eligibility, without inventing entry or risk rules.**
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.**
+
+## 13. Blocked Candlestick POI Specification Completion Audit — Group 3 (Completed)
+
+**The Blocked Candlestick POI Specification Completion Audit (Group 3) has been completed for all 6 POIs classified `BLOCKED_INCOMPLETE_SPECIFICATION`**: Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star. Full findings, provenance labeling, and decision options are in `knowledge/poi_lifecycle/BLOCKED_CANDLESTICK_POI_COMPLETION_AUDIT.md`.
+
+**Completion classification counts (corrected 2026-07-19):** `NEEDS_MULTIPLE_AUTHOR_DECISIONS` = **6** (all six POIs); `READY_FOR_LIFECYCLE_AFTER_DOCUMENTATION` = 0; `NEEDS_ZONE_BOUNDARY_DECISION` = 0; `NEEDS_CONFIRMATION_TIMING_DECISION` = 0; `NEEDS_FORMATION_RULE_DECISION` = 0; `NOT_A_BOUNDED_POI` = 0. Total = 6. A completed read-only consistency verification found that Bullish/Bearish Engulfing had been misclassified `NEEDS_ZONE_BOUNDARY_DECISION` — pattern confirmation at the engulfing candle's close is book-supported, but POI lifecycle-availability timing is a separately unresolved category that does not follow automatically from the zone-boundary choice, so both Engulfing POIs are corrected to `NEEDS_MULTIPLE_AUTHOR_DECISIONS`.
+
+**Nine decision records are required: seven unconditional and two conditional**, each addressing exactly one material decision category (this replaces the original 5 bundled records, which had combined zone-boundary and confirmation/availability-timing questions into single records):
+- **GROUP3-D1** (Engulfing POI zone source) — Bullish Engulfing, Bearish Engulfing. Unconditional.
+- **GROUP3-D2** (Engulfing lifecycle availability timing) — Bullish Engulfing, Bearish Engulfing. Unconditional.
+- **GROUP3-D3** (Hammer/Shooting Star quantitative formation thresholds) — Hammer, Shooting Star. Unconditional.
+- **GROUP3-D4** (Hammer/Shooting Star POI role / bounded status — a gating decision) — Hammer, Shooting Star. Unconditional.
+- **GROUP3-D5** (Hammer/Shooting Star zone source) — Hammer, Shooting Star. **Conditional on GROUP3-D4** approving a bounded outcome; `NOT APPLICABLE` if GROUP3-D4 selects signal-only.
+- **GROUP3-D6** (Hammer/Shooting Star confirmation and lifecycle availability timing) — Hammer, Shooting Star. **Conditional on GROUP3-D4**; `NOT APPLICABLE` if GROUP3-D4 selects signal-only.
+- **GROUP3-D7** (Morning/Evening Star middle-candle threshold) — Morning Star, Evening Star. Unconditional.
+- **GROUP3-D8** (Morning/Evening Star POI zone source) — Morning Star, Evening Star. Unconditional.
+- **GROUP3-D9** (Morning/Evening Star confirmation and lifecycle availability timing) — Morning Star, Evening Star. Unconditional.
+
+Six of the nine (GROUP3-D1, D2, D3, D7, D8, D9) carry an engineering recommendation that selects a specific option, explicitly marked **NOT YET AUTHOR-APPROVED**; GROUP3-D4, GROUP3-D5, and GROUP3-D6 carry only a process/deferral recommendation — no A/B/C option is selected, likewise marked **NOT YET AUTHOR-APPROVED**, with D5/D6 further conditional on GROUP3-D4.
+
+**No candlestick specification was completed.** No individual POI rule file under `knowledge/poi_rules/` was modified. **No lifecycle inheritance was propagated** to any of the 6 POIs. The already-approved Hammer/Bullish-Pressure-Wick and Shooting-Star/Bearish-Pressure-Wick label-preservation rule was confirmed by this audit, not re-decided. `knowledge/POI_COVERAGE_MATRIX.md` received one dated informational note only (no row, cell, status, readiness value, or column was changed). `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md` received an appended, dated audit-status section; its original audit classifications and counts (Sections 1–23) were not rewritten. The private source book was read for this audit but was not modified, staged, or committed.
+
+**Twelve total bounded directional POIs remain propagated** (4 Group 1 + 8 Group 2), unaffected by this audit or its correction.
+
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **obtain author decisions for the blocked candlestick POI specification questions before completing and propagating Group 3.**
 
 ## 5. Contradictions Found
 
