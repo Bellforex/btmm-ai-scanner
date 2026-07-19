@@ -34,8 +34,8 @@ none of which the book defines for any POI).
 | Shooting Star | Price Action | Bearish | P475-496 | Yes | Yes | Partial | Yes | No | N/A | No | No | No | No | No | Partial | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Morning Star | Price Action | Bullish | P497-523 | Yes | Yes | Partial | Yes | No | Yes | No | No | No | No | Yes | Partial | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
 | Evening Star | Price Action | Bearish | P497-523 | Yes | Yes | Partial | Yes | No | Yes | No | No | No | No | Yes | Partial | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
-| Bullish Trendline | Structural | Bullish | P576-589 | Yes | Partial | Partial | Partial | No | N/A | No | Yes | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
-| Bearish Trendline | Structural | Bearish | P576-589 | Yes | Partial | Partial | Partial | No | N/A | No | Yes | No | Partial | Yes | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
+| Bullish Trendline | Structural | Bullish | P576-589 | Yes | Yes | Yes | Yes | Yes | N/A | Yes | Yes | Yes | Partial | Yes | Yes | No | No | No | Partial | No | Yes | No | Partial | Yes | PARTIAL |
+| Bearish Trendline | Structural | Bearish | P576-589 | Yes | Yes | Yes | Yes | Yes | N/A | Yes | Yes | Yes | Partial | Yes | Yes | No | No | No | Partial | No | Yes | No | Partial | Yes | PARTIAL |
 | Support | Structural | Bullish | P590-602 | Yes | Yes | No | Partial | No | N/A | No | No | No | Partial | No | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Resistance | Structural | Bearish | P590-602 | Yes | Yes | No | Partial | No | N/A | No | No | No | Partial | No | No | No | No | No | No | No | Yes | No | No | Yes | NEEDS AUTHOR DECISION |
 | Equal Highs | Structural | Bearish | P603-617 | Yes | Yes | Yes | Partial | Yes | N/A | Yes | No | No | Yes | Partial | Yes | No | No | No | No | No | Yes | No | Partial | Yes | PARTIAL |
@@ -58,10 +58,12 @@ none of which the book defines for any POI).
 ## Summary Counts
 
 - Total POIs verified: **36**
-- PARTIAL: **28** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4; Equal Highs and Equal Lows moved from NEEDS AUTHOR DECISION to PARTIAL after Equal Highs and Equal Lows Standard V1 — Provisional resolved Ambiguity 5; Bullish Pressure Wick and Bearish Pressure Wick moved from NEEDS AUTHOR DECISION to PARTIAL after Pressure Wick Standard V1 — Provisional resolved Ambiguity 6; Swing High and Swing Low moved from NEEDS AUTHOR DECISION to PARTIAL after Meaningful Swing High and Swing Low Detection Standard V1 — Provisional resolved Ambiguity 10)
-- NEEDS AUTHOR DECISION: **8**
+- PARTIAL: **30** (Base Rally and Base Drop moved from NEEDS AUTHOR DECISION to PARTIAL after Base Formation Standard V1 — Provisional resolved Ambiguity 4; Equal Highs and Equal Lows moved from NEEDS AUTHOR DECISION to PARTIAL after Equal Highs and Equal Lows Standard V1 — Provisional resolved Ambiguity 5; Bullish Pressure Wick and Bearish Pressure Wick moved from NEEDS AUTHOR DECISION to PARTIAL after Pressure Wick Standard V1 — Provisional resolved Ambiguity 6; Swing High and Swing Low moved from NEEDS AUTHOR DECISION to PARTIAL after Meaningful Swing High and Swing Low Detection Standard V1 — Provisional resolved Ambiguity 10; Bullish Trendline and Bearish Trendline moved from NEEDS AUTHOR DECISION to PARTIAL after Bullish and Bearish Trendline Detection and Validation Standard V1 — Provisional resolved Ambiguity 11)
+- NEEDS AUTHOR DECISION: **6**
 
-Machine-testable-now breakdown: Partial=30, No=6
+Machine-testable-now breakdown: Partial=32, No=4
+
+Note: Bullish Trendline and Bearish Trendline's "Required location defined," "Formation rule defined," "Confirmation rule defined," "Exact drawing boundary defined," "Wick/body rule defined," "Market-structure requirement defined," and "Strength classification defined" columns were updated to Yes, and "Invalidation defined" and "Machine-testable now" to Partial, following approval of Bullish and Bearish Trendline Detection and Validation Standard V1 — Provisional (Ambiguity 11): eligible confirmed-meaningful-swing anchors, minimum 5-bar anchor spacing, the trendline/slope equation, Normalized-Slope steepness classification, Touch/Pierce tolerances, inter-anchor integrity, DRAFT/CONFIRMED/STRONG progression, TRENDLINE_BREAK_CANDIDATE detection, and non-repainting availability are now defined, all provisional pending calibration. Neither POI is marked APPROVED — final trendline invalidation, retest, reclaim, false break, sweep, expiration, repeated-touch degradation, entry confirmation, HH/HL/LH/LL, BOS/CHoCH, and Support/Resistance clustering (Ambiguity 12) all remain unresolved for both.
 
 Note: Base Rally and Base Drop's "Formation rule defined" and "Confirmation rule defined" columns were updated to Yes following the Phase 0D approval of Base Formation Standard V1 — Provisional (base candle count, compactness, and departure confirmation are now defined, subject to future calibration). Neither POI is marked APPROVED — freshness, mitigation, invalidation, and expiration remain undefined for both, and the standard itself is explicitly provisional.
 

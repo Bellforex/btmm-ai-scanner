@@ -1171,3 +1171,172 @@ This standard fixes local pivot detection, plateau handling, meaningful-reversal
 - BTMM state-machine transitions (Ambiguity 14, unchanged).
 
 These remain separate, pending decisions.
+
+---
+
+## Bullish and Bearish Trendline Detection and Validation Standard
+
+**Status:** Approved, **Provisional** — Bullish and Bearish Trendline Detection and Validation Standard Version 1 — Provisional (resolves Ambiguity 11 in `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`). Builds on the Meaningful Swing High and Swing Low Detection Standard above; does not modify it.
+
+**Calibration status:** This entire standard is provisional. All thresholds below must later be calibrated against expert-approved examples, expert-rejected examples, XAUUSD, EURUSD, GBPUSD, M1/M5/M15/H1/H3/H4/D1/W1, different sessions, different volatility regimes, trending markets, and consolidating markets. The thresholds are not to be changed casually outside that calibration process.
+
+### 1. Eligible Trendline Anchors
+
+A trendline anchor must be a `CONFIRMED_MEANINGFUL_SWING`. `FORMING`, `LOCAL_SWING_CANDIDATE`, and `SUPERSEDED` records must not serve as anchors. Plateau candles represent one confirmed meaningful swing event and therefore one possible anchor. All anchors of one trendline must share the same symbol, data provider, and timeframe — swing events from different timeframes or providers must never be combined into one trendline.
+
+### 2. Bullish Trendline Anchors
+
+A Bullish Trendline connects two distinct confirmed meaningful Swing Lows:
+
+```
+Anchor 1 Price = First Swing Low Pivot Price
+Anchor 2 Price = Second Swing Low Pivot Price
+```
+
+Anchor 2 must occur later than Anchor 1 and satisfy `Anchor 2 Price > Anchor 1 Price + Pivot Tie Tolerance`. If the two prices are within Pivot Tie Tolerance, classify the pair as **HORIZONTAL_CANDIDATE** — never a Bullish Trendline. It may later be considered under a separate, not-yet-defined Support standard.
+
+### 3. Bearish Trendline Anchors
+
+A Bearish Trendline connects two distinct confirmed meaningful Swing Highs:
+
+```
+Anchor 1 Price = First Swing High Pivot Price
+Anchor 2 Price = Second Swing High Pivot Price
+```
+
+Anchor 2 must occur later than Anchor 1 and satisfy `Anchor 2 Price < Anchor 1 Price − Pivot Tie Tolerance`. If the two prices are within Pivot Tie Tolerance, classify the pair as **HORIZONTAL_CANDIDATE** — never a Bearish Trendline. It may later be considered under a separate, not-yet-defined Resistance standard.
+
+### 4. Anchor Bar Position and Minimum Spacing
+
+```
+Single-candle swing: Anchor Bar Index = Pivot Candle Index
+Plateau swing:       Anchor Bar Index = Plateau End Bar Index
+```
+
+The Anchor Price remains the approved Pivot Price for that swing/plateau. Anchor 2 must be at least **5 confirmed bars** after Anchor 1 — fewer than 5 bars cannot form a valid trendline candidate.
+
+### 5. Trendline Equation
+
+```
+Raw Slope = (Anchor 2 Price − Anchor 1 Price) ÷ (Anchor 2 Bar Index − Anchor 1 Bar Index)
+Line Price(t) = Anchor 1 Price + Raw Slope × (t − Anchor 1 Bar Index)
+```
+
+Bullish Trendline requires Raw Slope > 0; Bearish requires Raw Slope < 0. Zero or invalid bar-index denominators are guarded against.
+
+### 6. Anchor Reference ATR
+
+```
+Anchor Reference ATR = Median ATR(14) across all confirmed candles from Anchor 1 through Anchor 2, inclusive
+```
+
+Uses the same symbol, data provider, and timeframe as the trendline. Missing, zero, or invalid Anchor Reference ATR blocks automatic slope classification.
+
+### 7. Normalized Slope and Steepness Classification
+
+```
+Normalized Slope = ABS(Raw Slope) ÷ Anchor Reference ATR
+```
+
+| Classification | Condition |
+|---|---|
+| **HORIZONTAL_CANDIDATE** | Normalized Slope < 0.02 |
+| **VALID_SLOPE** | 0.02 ≤ Normalized Slope ≤ 0.35 |
+| **TOO_STEEP** | Normalized Slope > 0.35 |
+
+A `TOO_STEEP` line must not provide valid trendline confirmation; it may be preserved as a rejected research candidate. No additional slope tiers are defined.
+
+### 8. Trendline-Specific Tolerances
+
+For each trendline interaction, using ATR(14) from the confirmed interaction candle:
+
+```
+Trendline Touch Tolerance = MAX(2 × Minimum Price Tick, 0.10 × ATR(14))
+Trendline Pierce Tolerance = MAX(2 × Minimum Price Tick, 0.20 × ATR(14))
+```
+
+ATR and Minimum Price Tick use the same instrument, provider, and timeframe as the interaction. The Minimum Price Tick is sourced from instrument metadata once the software layer exists; no fixed pip/point values are used. **These tolerances apply only to Trendlines** — they must not replace POI zone, Support, Resistance, or Equal Highs/Lows tolerances.
+
+### 9. Inter-Anchor Integrity
+
+Every confirmed candle strictly between Anchor 1 and Anchor 2 is evaluated:
+
+```
+Bullish Trendline: reject the pair if Projected Line Price − Candle Close > Trendline Pierce Tolerance for any such candle
+Bearish Trendline: reject the pair if Candle Close − Projected Line Price > Trendline Pierce Tolerance for any such candle
+```
+
+A wick-only crossing that stays within Trendline Pierce Tolerance does not automatically reject the anchor pair. This rule governs only initial anchor-pair integrity — it does not define final trendline invalidation.
+
+### 10. Draft Trendline
+
+An anchor pair becomes **DRAFT_TRENDLINE** only when all pass: both anchors eligible confirmed meaningful swings; both anchors share symbol/provider/timeframe; correct directional price condition; ≥5-confirmed-bar spacing; correct Raw Slope direction; `VALID_SLOPE` classification; inter-anchor integrity. A draft line becomes available to downstream logic only after Anchor 2 reaches `meaningful_confirmation_time` — it must not appear historically at Anchor 2's pivot time, to prevent look-ahead bias.
+
+### 11. Third-Touch Confirmation
+
+A `DRAFT_TRENDLINE` becomes **CONFIRMED_TRENDLINE** only when a third distinct confirmed meaningful swing of the same anchor direction interacts with the projected line.
+
+```
+Bullish: Bullish Touch Difference = Third Swing Low Pivot Price − Projected Line Price at the third swing bar
+  Qualifying touch: ABS(Bullish Touch Difference) ≤ Trendline Touch Tolerance
+  Controlled pierce: Bullish Touch Difference < −Trendline Touch Tolerance AND ≥ −Trendline Pierce Tolerance
+
+Bearish: Bearish Touch Difference = Projected Line Price at the third swing bar − Third Swing High Pivot Price
+  Qualifying touch: ABS(Bearish Touch Difference) ≤ Trendline Touch Tolerance
+  Controlled pierce: Bearish Touch Difference < −Trendline Touch Tolerance AND ≥ −Trendline Pierce Tolerance
+```
+
+A third swing outside Trendline Pierce Tolerance must not confirm the line. The third swing is usable only from its own `meaningful_confirmation_time`.
+
+### 12. Strong Trendline
+
+A `CONFIRMED_TRENDLINE` becomes **STRONG_TRENDLINE** after a fourth distinct confirmed meaningful swing of the same anchor direction produces another qualifying touch or controlled pierce. Summary: 2 valid anchors = DRAFT_TRENDLINE; 3 qualifying confirmed meaningful swings = CONFIRMED_TRENDLINE; ≥4 qualifying confirmed meaningful swings = STRONG_TRENDLINE. The qualifying-touch count is structural evidence only — it does not define freshness, remaining trendline strength, repeated-touch degradation, expiration, or entry validity.
+
+### 13. Trendline Break Candidate
+
+```
+Bullish: record TRENDLINE_BREAK_CANDIDATE when a confirmed candle closes below the projected line by more than Trendline Pierce Tolerance
+Bearish: record TRENDLINE_BREAK_CANDIDATE when a confirmed candle closes above the projected line by more than Trendline Pierce Tolerance
+```
+
+A `TRENDLINE_BREAK_CANDIDATE` is **not** final invalidation. Confirmed break, reclaim, retest, false break, sweep, and final invalidation are not defined by this standard.
+
+### 14. Multiple Candidate Trendlines
+
+The system may preserve multiple trendline candidates on the same timeframe. Each preserves its own anchor pair, Raw Slope, Normalized Slope, status, touch history, break-candidate history, and availability time. Older trendlines must never be silently deleted or replaced when a newer anchor pair appears. No "Best Trendline," "Primary Trendline," trendline ranking score, or composite trendline score is created.
+
+### 15. Non-Repainting Requirement
+
+After a trendline candidate is created: anchor IDs, prices, and times never move; Raw Slope is never silently recalculated; a third or fourth touch never refits the original line (a new anchor pair creates a new candidate instead). Backtests access a DRAFT_TRENDLINE only from `candidate_available_time`, a CONFIRMED_TRENDLINE only from `confirmation_time`, and a STRONG_TRENDLINE only from `strong_confirmation_time` — later-confirmed states are never exposed at earlier historical candles.
+
+### 16. Required States and Direction
+
+Status: HORIZONTAL_CANDIDATE, TOO_STEEP, DRAFT_TRENDLINE, CONFIRMED_TRENDLINE, STRONG_TRENDLINE, TRENDLINE_BREAK_CANDIDATE. Direction (kept separate): BULLISH_TRENDLINE, BEARISH_TRENDLINE. Never combined into one opaque field.
+
+### 17. Required Fields
+
+Preserved independently (no composite Trendline score): `trendline_id`, `trendline_direction`, `anchor_1_swing_id`, `anchor_2_swing_id`, `anchor_1_price`, `anchor_2_price`, `anchor_1_bar_index`, `anchor_2_bar_index`, `raw_slope`, `anchor_reference_atr`, `normalized_slope`, `trendline_status`, `candidate_available_time`, `confirmation_time`, `strong_confirmation_time`, `qualifying_touch_count`, `last_touch_time`, `last_touch_difference`, `break_candidate_time`, `timeframe`, `symbol`, `data_provider`.
+
+### 18. Required Conceptual Separation
+
+Trendline detection and validation must remain separate from: Higher High, Higher Low, Lower High, Lower Low, Break of Structure, Change of Character, Support, Resistance, Sweep, Liquidity grab, final trendline invalidation, entry confirmation, BTMM state transitions, and trade outcome. None of these are defined by this standard.
+
+### 19. What Remains Unresolved
+
+This standard fixes anchor eligibility, slope/steepness classification, touch/pierce tolerances, inter-anchor integrity, draft/confirmed/strong progression, and non-repainting availability only. It explicitly does **not** define:
+- Final trendline invalidation.
+- Required retest after a break.
+- Reclaim.
+- False break.
+- Sweep.
+- Trendline expiration.
+- Maximum trendline age.
+- Repeated-touch degradation.
+- Entry confirmation.
+- HH, HL, LH, or LL.
+- BOS or CHoCH.
+- Support clustering.
+- Resistance clustering.
+- BTMM state transitions.
+
+These remain separate, pending decisions.
