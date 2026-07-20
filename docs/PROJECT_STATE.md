@@ -288,3 +288,17 @@ The **Final Post-Group-3 Phase 0G Knowledge-Gap Audit** has been completed and i
 **Recommended next controlled task** (first item in the audit's own Part 29 sequence): a narrowly-scoped documentation-correction task limited to rewriting `knowledge/KNOWLEDGE_COMPLETION_GATE.md` condition 2's stale boundary-status text to match the coverage matrix (`P0G-B001`) — no author decision required for this specific task. **This correction has not yet been performed; P0G-B001 remains open.**
 
 **The knowledge gate remains CLOSED. Phase 0G remains unapproved. No scanner, production system, or live trading automation is approved.** No POI, lifecycle, market-structure, BTMM, or measurement-standard file was touched by this correction pass; no matrix row or status changed; no example was sourced; no option was selected for any author-decision blocker. Nothing was staged, committed, or pushed.
+
+## 16. Resolve P0G-B001 — Gate Condition 2 Boundary-Status Correction (Completed)
+
+**P0G-B001 has been resolved** through a dedicated, narrowly-scoped documentation-correction task, per the audit's own recommended first controlled task. `knowledge/POI_COVERAGE_MATRIX.md` was re-verified programmatically: all 36 rows inspected, "Exact drawing boundary defined" = Yes for all 36 of 36, No for 0, Partial for 0, no other value present — confirming exact boundaries for all 36 POIs. `knowledge/KNOWLEDGE_COMPLETION_GATE.md` condition 2's stale wording (which claimed 10 of 36 POIs lacked boundaries) was corrected to match the matrix; condition 2 is now marked MET, since exact drawing boundaries are its only requirement. Full resolution record: `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Audit Resolution — P0G-B001."
+
+**No POI specification changed. No lifecycle or trading rule changed.** No new trading rule was approved. No other blocker was resolved.
+
+**Original blocker total identified: 21** (`P0G-B001` through `P0G-B021`, unchanged). **Active unresolved blocker total: 20** (`P0G-B001` excluded as resolved; disposition now G — `HISTORICAL_OR_RESOLVED`). **Active P0 blocker count: 8.**
+
+**Current minimum Phase 0G closure set (8 blockers):** `P0G-B002`, `P0G-B003`, `P0G-B004`, `P0G-B005`, `P0G-B006`, `P0G-B007`, `P0G-B013`, and `P0G-B019`.
+
+Eighteen bounded directional POIs remain propagated, unchanged (4 Group 1 + 8 Group 2 + 6 Group 3). All 36 POI specifications remain `Status: PARTIAL`. **The knowledge gate remains CLOSED. Phase 0G remains unapproved. No scanner or software implementation is approved.**
+
+**Next controlled task:** Resolve `P0G-B002` — decide whether the approved manual/expert-label fallback is sufficient for Phase 0G or whether automatic trend and market-structure detection must be defined before the gate can close.

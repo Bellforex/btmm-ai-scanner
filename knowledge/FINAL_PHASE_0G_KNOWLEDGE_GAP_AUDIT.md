@@ -823,3 +823,51 @@ This audit creates one new file (`knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.m
 ## 34. Explicit Non-Approval Statement
 
 This document does not approve Phase 0G. It does not approve software implementation. It does not approve the scanner, database, AI model, backtesting engine, Telegram integration, or MT4/MT5 execution. It does not define any new POI formation, boundary, lifecycle, invalidation, freshness, expiration, repeated-tap, Equal High/Low sweep, Trendline lifecycle, HH/HL/LH/LL/BOS/CHoCH, BTMM gate, timeframe policy, provider policy, symbol policy, entry, stop-loss, take-profit, risk, news, session, composite-score, software-architecture, database-schema, annotation-schema, or AI-model-design rule. It records findings only.
+
+---
+
+## Post-Audit Resolution — P0G-B001
+
+**Date: 2026-07-20.**
+
+Parts 1-34 above are preserved unchanged as the **original, historical audit snapshot** — including the Part 23 summary-table row and full record for `P0G-B001` (disposition B, priority P0), and the Part 24-27 counts and closure set as they stood at the time the audit was completed and subsequently corrected for `P0G-B009`/`P0G-B013`/`P0G-B021`. None of that historical content is deleted, rewritten, or presented as though it never existed. This section records what has changed **since** that snapshot, as a separate, dated, append-only resolution.
+
+**What happened:** `P0G-B001` was a documentation-only contradiction — `knowledge/KNOWLEDGE_COMPLETION_GATE.md` condition 2 claimed 10 of 36 POIs lacked exact drawing boundaries, while `knowledge/POI_COVERAGE_MATRIX.md` already showed boundaries defined for all 36. This task re-verified the coverage matrix programmatically (all 36 rows inspected: "Exact drawing boundary defined" = Yes for 36 of 36, No for 0, Partial for 0, no other value present) and then corrected only the stale condition 2 wording in `knowledge/KNOWLEDGE_COMPLETION_GATE.md` to match the matrix.
+
+**No POI specification changed. No boundary formula changed. No lifecycle rule changed. No trading rule was approved.** This resolution is purely a documentation correction of a contradiction the audit itself had already found and flagged but explicitly declined to fix at the time (per the audit's own no-silent-resolution rule).
+
+**`P0G-B001` is now RESOLVED.** Its current disposition is **G — `HISTORICAL_OR_RESOLVED`** (previously B — `PHASE_0G_DOCUMENTATION_BLOCKER` in the original snapshot above). It is removed from the active minimum Phase 0G closure set and no longer carries an active priority (it is not P0, P1-P4, or DEFERRED — those labels apply only to open items).
+
+**Historical audit blocker count identified: 21** (`P0G-B001` through `P0G-B021`, as fixed by the original audit and its post-verification correction — unchanged).
+
+**Current active unresolved blocker count: 20** (`P0G-B001` excluded; `P0G-B002` through `P0G-B021` remain open).
+
+**Current disposition counts across all 21 identified items** (including the now-resolved `P0G-B001`): A=8, B=1, C=4, D=2, E=1, F=4, G=1 — total 21. (Compare to the original snapshot's B=2, G=0; `P0G-B001` moved from B to G, all other counts unchanged.)
+
+**Current active unresolved blockers exclude the one G item:** active unresolved disposition counts are A=8, B=1, C=4, D=2, E=1, F=4 — total 20.
+
+**Current active priority counts:** P0=8, P1=0, P2=3, P3=4, P4=1, DEFERRED=4 — total active unresolved = 20. (Compare to the original snapshot's P0=9; `P0G-B001` is no longer counted under any active priority.)
+
+**The minimum Phase 0G closure set now contains exactly 8 active blockers**, all still P0:
+1. `P0G-B002`
+2. `P0G-B003`
+3. `P0G-B004`
+4. `P0G-B005`
+5. `P0G-B006`
+6. `P0G-B007`
+7. `P0G-B013`
+8. `P0G-B019`
+
+`P0G-B001` is removed from this set because it is resolved. `P0G-B009` remains excluded (deferred outside Phase 0G — STRONG_SWING material-breach residual, optional tier only). `P0G-B021` remains excluded (deferred annotation-dataset work, dependent on `P0G-B013`). `P0G-B019` remains logically last.
+
+**Current dependency order within the active closure set:**
+1. `P0G-B002`
+2. `P0G-B003` (after `P0G-B002`)
+3. `P0G-B004` and `P0G-B005` (each independent, each its own Option A/Option B decision)
+4. `P0G-B006` and `P0G-B007` (each independent, may be combined)
+5. `P0G-B013` (the evidence-sufficiency policy decision)
+6. `P0G-B019` (after all other active P0 blockers)
+
+**No other blocker was resolved by this task.** `P0G-B002` through `P0G-B021` remain exactly as classified in Parts 23-27 above, with the `P0G-B009`/`P0G-B013`/`P0G-B021` corrections from the prior verification pass still in effect. No option was selected for `P0G-B004`, `P0G-B005`, or `P0G-B013`. No Equal High/Low lifecycle, Trendline lifecycle, freshness rule, expiration rule, or HH/HL/LH/LL/BOS/CHoCH rule was defined. No composite score was created. No software implementation began.
+
+All 36 POI specifications remain `Status: PARTIAL`. All 18 propagated POIs (4 Group 1 + 8 Group 2 + 6 Group 3) remain propagated, unchanged. **The knowledge gate remains CLOSED — resolving one documentation-only blocker does not open the gate. Phase 0G remains unapproved.** Nothing was staged, committed, or pushed by this task.
