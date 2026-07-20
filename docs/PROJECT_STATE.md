@@ -188,7 +188,26 @@ Six of the nine (GROUP3-D1, D2, D3, D7, D8, D9) carry an engineering recommendat
 
 **Twelve total bounded directional POIs remain propagated** (4 Group 1 + 8 Group 2), unaffected by this audit or its correction.
 
-**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **obtain author decisions for the blocked candlestick POI specification questions before completing and propagating Group 3.**
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.**
+
+## 14. Complete and Propagate Group 3 Candlestick POI Specifications (Completed)
+
+**GROUP3-D1 through GROUP3-D9 have been reviewed and Author-Approved**, and the shared bounded-directional-POI lifecycle has been propagated to all 6 formerly `BLOCKED_INCOMPLETE_SPECIFICATION` candlestick POIs: Bullish Engulfing Candle, Bearish Engulfing Candle, Hammer, Shooting Star, Morning Star, Evening Star. Full findings and the exact approved formulas are in `knowledge/poi_lifecycle/BLOCKED_CANDLESTICK_POI_COMPLETION_AUDIT.md`, Section 24.
+
+**Approved formation/boundary/timing per POI family:**
+- **Engulfing** (GROUP3-D1/D2): zone = complete range of the first (smaller, engulfed) candle; the second (engulfing) candle is confirmation/displacement evidence only. Lifecycle availability = `engulfing_poi_available_time = qualifying_engulfing_candle_close_time`.
+- **Hammer/Shooting Star** (GROUP3-D3/D4/D5/D6): Standard/Strong wick:body shape thresholds now defined (a distinct field, not merged with Pressure Wick Standard V1); both approved as bounded directional POIs (in addition to their existing signal role), coexisting with a Pressure Wick label with no precedence created; zone = rejection wick only (body excluded). Lifecycle availability = each pattern's own candle close (`hammer_poi_available_time`/`shooting_star_poi_available_time`).
+- **Morning/Evening Star** (GROUP3-D7/D8/D9): Standard/Strong Doji body-efficiency thresholds now defined for the middle candle. Zone = the qualifying middle Doji's complete wick-inclusive range, excluding candles 1 and 3. Lifecycle availability = the qualifying third candle's close (`morning_star_poi_available_time`/`evening_star_poi_available_time`).
+
+**6 individual POI files were updated** (`knowledge/poi_rules/price_action/bullish_engulfing.md`, `bearish_engulfing.md`, `hammer.md`, `shooting_star.md`, `morning_star.md`, `evening_star.md`), each receiving its approved formation-threshold/zone-boundary formulas directly in the relevant sections and a new "Shared POI Boundary Lifecycle Inheritance" section cross-referencing `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` without duplicating or altering its formulas.
+
+**Eighteen total bounded directional POIs are now propagated**: the 4 Group 1 POIs, the 8 Group 2 POIs, and these 6 Group 3 POIs.
+
+**No formation rule was changed except the explicitly approved GROUP3-D3 (Hammer/Shooting Star) and GROUP3-D7 (Morning/Evening Star) threshold additions** — previously undefined gaps being filled, not changes to any pre-existing formula. No entry, risk, freshness, expiration, or repeated-tap-degradation rule was introduced. No label-precedence rule was introduced. The authoritative shared lifecycle standard (`knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md`) was not modified. All six overall POI statuses remain **PARTIAL** — none is marked APPROVED. `knowledge/POI_COVERAGE_MATRIX.md` was updated for these 6 rows only (Exact drawing boundary defined and Invalidation defined for all six; Formation rule defined, Wick/body rule defined, Strength classification defined, Machine-testable now, and Status for Hammer/Shooting Star only — a status-category change from NEEDS AUTHOR DECISION to PARTIAL, updating summary counts accordingly). `knowledge/poi_lifecycle/BLOCKED_CANDLESTICK_POI_COMPLETION_AUDIT.md` and `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md` each received an appended, dated propagation section; no original finding, classification, or count was rewritten.
+
+**Six blocked candlestick POIs no longer remain — all six are now completed and propagated.** Equal Highs and Equal Lows remain excluded pending a separate sweep lifecycle; Bullish and Bearish Trendlines remain excluded pending line-specific lifecycle rules; the 14 non-applicable reference structures remain unaffected.
+
+**Phase 0G remains unapproved. The knowledge gate remains CLOSED. No scanner, production system, or live trading automation is approved.** The next controlled task is: **resolve the Equal High/Low sweep lifecycle and Trendline reclaim/invalidation lifecycle for the remaining excluded structures, and begin defining freshness, mitigation, and expiration rules for the 18 propagated POIs, without inventing entry or risk rules.**
 
 ## 5. Contradictions Found
 

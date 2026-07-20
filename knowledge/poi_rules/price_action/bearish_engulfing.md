@@ -38,11 +38,11 @@ The two-candle pair.
 
 ## Upper boundary
 
-Not explicitly given as a standalone zone formula (gap, same as Bullish Engulfing).
+**Resolved (GROUP3-D1, Author-Approved):** Zone Top = High of the first (smaller, engulfed bullish) candle. The POI is the complete High-to-Low range of the first candle that is engulfed by the qualifying second (engulfing) candle — not the engulfing candle itself, and not the combined two-candle range.
 
 ## Lower boundary
 
-Not explicitly given as a standalone zone formula.
+**Resolved (GROUP3-D1, Author-Approved):** Zone Bottom = Low of the first (smaller, engulfed bullish) candle. The second (engulfing) candle is preserved as pattern-confirmation and displacement evidence only — it is not included in the POI boundary.
 
 ## Wick treatment
 
@@ -94,11 +94,55 @@ NOT DEFINED IN BOOK.
 
 ## Invalidation
 
-Not defined in the book.
+Not defined in the book. **Formalized (POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional, resolves Ambiguity 15; propagated following author-approved GROUP3-D1 and GROUP3-D2):** this POI inherits the shared bounded-directional-POI lifecycle — Close Breach Candidate, Reclaim, Displacement After Reclaim, False Invalidation, and Genuine Invalidation are now defined at the shared-standard level, available only from `engulfing_poi_available_time` onward. See "Shared POI Boundary Lifecycle Inheritance" below and `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` for the complete, authoritative formulas and event transitions. This does not change any Engulfing formation, size-ratio, strength, location, or body-engulfment formula.
 
 ## Expiration
 
 NOT DEFINED IN BOOK.
+
+## Shared POI Boundary Lifecycle Inheritance
+
+**Applicability classification:** `BLOCKED_INCOMPLETE_SPECIFICATION` (original classification, see `knowledge/poi_lifecycle/POI_LIFECYCLE_APPLICABILITY_AUDIT.md`) → **`GENERIC_LIFECYCLE_INHERITANCE_APPROVED`** (this propagation, following author-approved GROUP3-D1 and GROUP3-D2, see `knowledge/poi_lifecycle/BLOCKED_CANDLESTICK_POI_COMPLETION_AUDIT.md`).
+
+**Authoritative shared standard:** `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` (POI Boundary Breach, Reclaim and Invalidation Standard Version 1 — Provisional, resolves Ambiguity 15). This section cross-references that standard's formulas and event transitions rather than duplicating or altering them.
+
+**Bounded-zone status:** Bounded (two-sided zone). `Zone Top > Zone Bottom` is guaranteed because the first candle's High and Low are, by definition, distinct prices for any candle with positive Total Range.
+
+**Expected direction:** BEARISH.
+
+**Zone Top mapping:** High of the first (smaller, engulfed bullish) candle (GROUP3-D1, approved).
+
+**Zone Bottom mapping:** Low of the first (smaller, engulfed bullish) candle (GROUP3-D1, approved).
+
+**Entry Boundary mapping:** Zone Bottom.
+
+**Far Boundary mapping:** Zone Top.
+
+**Pattern confirmation time:** `engulfing_pattern_confirmation_time = qualifying_engulfing_candle_close_time` — the close of the second (engulfing) candle, when direction, body-engulfment, and the 2x/3x size ratio are all evaluable (GROUP3-D2, approved).
+
+**POI lifecycle availability time (GROUP3-D2, approved):** `engulfing_poi_available_time = qualifying_engulfing_candle_close_time`. Before the second candle closes: status remains FORMING/UNCONFIRMED, the first candle's prices may be measurable but no confirmed Engulfing POI exists, and no lifecycle event may begin or be backdated. At the second candle's close, all existing mandatory Engulfing conditions are evaluated; the confirmed POI is created only if every mandatory condition passes. If the second candle fails, the candidate is rejected — no Engulfing POI and no lifecycle event are created. No third confirmation candle, first return to the zone, BOS, or entry confirmation is required.
+
+**Inherited event states:** `NO_BREACH`, `CLOSE_BREACH_CANDIDATE`, `RECLAIM_PENDING`, `RECLAIM_CONFIRMED`, `DISPLACEMENT_PENDING`, `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED`, `RECLAIM_WITHOUT_DISPLACEMENT`, `RECLAIM_FAILED`, `FALSE_INVALIDATION_CONFIRMED`, `GENUINE_INVALIDATION_CONFIRMED` — all defined by, and inherited unmodified from, the authoritative shared standard, evaluated only from `engulfing_poi_available_time` onward.
+
+**Inherited Close Breach direction:** `CLOSE_BREACH_CANDIDATE` occurs when a confirmed candle closes above Zone Top by more than the approved Overshoot Tolerance.
+
+**Inherited Reclaim direction:** `RECLAIM_CONFIRMED` requires a confirmed close back inside the zone at or below `Zone Top − Contact Tolerance`, within the shared standard's 3-bar reclaim window.
+
+**Inherited displacement direction:** `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED` requires both a confirmed close below `Zone Bottom − Contact Tolerance` and a reclaim-to-displacement leg classified FAST or STRONG_FAST (via the approved Market Speed and Displacement Standard), within the shared standard's 3-bar displacement window.
+
+**False Invalidation meaning:** `FALSE_INVALIDATION_CONFIRMED` requires the complete Close Breach Candidate → Reclaim Confirmed → Displacement After Reclaim Confirmed sequence; a breach alone or a reclaim alone is never sufficient. May be recorded as reviewed `LIQUIDITY_AFTER_POI` evidence for the BTMM Liquidity Gate under the terms defined in the shared standard.
+
+**Genuine Invalidation effect:** `GENUINE_INVALIDATION_CONFIRMED` (Close Breach Candidate + no qualifying reclaim within the 3-bar window + a passed Sustained Breach requirement) sets `poi_lifecycle_status = INVALIDATED` for this specific POI instance; the POI is never reactivated. A later valid reaction in the same general price area requires a new POI record and a new POI ID. Any active linked BTMM setup connected to this POI becomes `BTMM_CANCELLED`, `cancellation_reason = POI_REJECTED` (the pre-existing BTMM reason — no new reason created).
+
+**Repeated Tap handling:** taps are counted (`INITIAL_TAP`/`REPEATED_TAP`/`MULTIPLE_REPEATED_TAPS`) as evidence only, using this POI's Entry Boundary (Zone Bottom) for the separation condition. No automatic degradation, upgrade, freshness, or entry-validity determination is created by tap count.
+
+**Non-repainting timing:** all inherited lifecycle events (breach, reclaim, displacement, false/genuine invalidation) become available only after their complete conditions are confirmed, per the shared standard, and never before `engulfing_poi_available_time`.
+
+**Linked BTMM effect:** as described under "Genuine Invalidation effect" and "False Invalidation meaning" above. No BTMM primary state, formation stage, mandatory gate, transition, or cancellation-reason taxonomy is changed by this inheritance.
+
+**Evidence/provenance status:** the completed specification and inherited lifecycle, including the GROUP3-D1 and GROUP3-D2 decisions, are **Author-Approved, Author-Added Project Terminology, Engineering-Provisional, NOT YET Empirically Calibrated, NOT YET Out-of-Sample Validated, and NOT Production-Approved**. This inheritance does not make this POI production-ready or proven profitable.
+
+**Remaining limitations:** freshness, expiration, repeated-tap degradation, empirical calibration, out-of-sample validation, production approval, entry confirmation, and risk rules (stop loss, take profit, risk-to-reward, lot sizing, news restrictions, spread, slippage) all remain unresolved and are not defined by this inheritance. General proxy thresholds (pre-existing open question) also remain unresolved.
 
 ## Overlap with other POIs
 
@@ -114,15 +158,15 @@ No confirmed negative-example image caption.
 
 ## Machine-testable criteria
 
-Partial - engulfment + size-ratio rule testable now; no explicit zone-drawing formula for reuse.
+Partial - engulfment + size-ratio rule testable now, zone boundaries and lifecycle availability timing are now testable under GROUP3-D1/GROUP3-D2 (see "Shared POI Boundary Lifecycle Inheritance" above), and (via inheritance of the POI Boundary Breach, Reclaim and Invalidation Standard from `engulfing_poi_available_time` onward) Close Breach Candidate, Reclaim, Displacement After Reclaim, False Invalidation, Genuine Invalidation, and repeated-tap counting are now also testable. Not testable: minimum proxy thresholds (Ambiguity 3, general), freshness, mitigation, and expiration - none of it is defined.
 
 ## Unresolved questions
 
-No explicit zone-drawing formula; which proxy fields to use is resolved (Ambiguity 3), but their minimum thresholds are not yet set; no invalidation/freshness/expiration rule.
+Which proxy fields to use is resolved (Ambiguity 3), but their minimum thresholds are not yet set; no freshness/mitigation/expiration rule. (Zone-drawing formula, lifecycle availability timing, and general invalidation are now resolved provisionally via GROUP3-D1, GROUP3-D2, and inheritance of the POI Boundary Breach, Reclaim and Invalidation Standard — see "Shared POI Boundary Lifecycle Inheritance" above; this did not change any Engulfing formation formula.)
 
 ## Author decision
 
-Pending.
+GROUP3-D1 (zone boundary source: first/engulfed candle's range) and GROUP3-D2 (lifecycle availability: `engulfing_poi_available_time = qualifying_engulfing_candle_close_time`) are approved - see "Shared POI Boundary Lifecycle Inheritance" above. Freshness, mitigation, expiration, and general proxy thresholds remain pending.
 
 ## Approval status
 

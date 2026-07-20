@@ -359,3 +359,28 @@ Classification counts: A = 0, B = 0, C = 0, D = 0, **E = 6**, F = 0. Total = 6.
 **Nine decision records are identified: seven unconditional and two conditional.** Unconditional: GROUP3-D1 (Engulfing zone source), GROUP3-D2 (Engulfing lifecycle availability timing), GROUP3-D3 (Hammer/Shooting Star formation thresholds), GROUP3-D4 (Hammer/Shooting Star POI role — a gating decision), GROUP3-D7 (Morning/Evening Star middle-candle threshold), GROUP3-D8 (Morning/Evening Star zone source), GROUP3-D9 (Morning/Evening Star confirmation and availability timing). Conditional on GROUP3-D4 approving a bounded outcome: GROUP3-D5 (Hammer/Shooting Star zone source) and GROUP3-D6 (Hammer/Shooting Star confirmation and availability timing) — recorded as `NOT APPLICABLE` for any POI where GROUP3-D4 selects signal-only. Each record now addresses exactly one material decision category (zone boundary, confirmation/timing, formation rule, or POI role), replacing the original 5 bundled records (GROUP3-D1 through GROUP3-D5) that combined boundary and timing questions. Six of the nine (GROUP3-D1, D2, D3, D7, D8, D9) carry an engineering recommendation that selects a specific option, each explicitly marked **NOT YET AUTHOR-APPROVED**; GROUP3-D4, GROUP3-D5, and GROUP3-D6 carry only a process/deferral recommendation (no A/B/C option is selected), likewise marked **NOT YET AUTHOR-APPROVED** and, for D5/D6, conditional on GROUP3-D4. Full detail, provenance labeling, and decision options are in `knowledge/poi_lifecycle/BLOCKED_CANDLESTICK_POI_COMPLETION_AUDIT.md`.
 
 **No candlestick specification was completed. No individual POI rule file under `knowledge/poi_rules/` was modified.** **No lifecycle inheritance was propagated to any of the 6 POIs.** **No original classification count from Sections 6–14 above was changed.** The Hammer/Bearish Pressure Wick and Shooting Star/Bearish Pressure Wick label-preservation rule (already author-approved) was confirmed, not re-decided. The 4 Group 1 POIs, the 8 Group 2 POIs, the 4 excluded structures, and the 14 `NOT_APPLICABLE_OTHER` POIs remain untouched and unaffected by this audit or its correction — 12 bounded directional POIs remain propagated in total. The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.
+
+## 25. Group 3 Propagation Status (2026-07-19)
+
+**This section records what has happened since Section 24 above. The original 36-POI classification matrix (Sections 1–20) remains historically unchanged and unaltered by this update.**
+
+Following author approval of GROUP3-D1 through GROUP3-D9 (see `knowledge/poi_lifecycle/BLOCKED_CANDLESTICK_POI_COMPLETION_AUDIT.md`, Section 24), all 6 POIs classified `BLOCKED_INCOMPLETE_SPECIFICATION` have been completed and propagated:
+
+| poi_name | file_path |
+|---|---|
+| Bullish Engulfing Candle | `knowledge/poi_rules/price_action/bullish_engulfing.md` |
+| Bearish Engulfing Candle | `knowledge/poi_rules/price_action/bearish_engulfing.md` |
+| Hammer | `knowledge/poi_rules/price_action/hammer.md` |
+| Shooting Star | `knowledge/poi_rules/price_action/shooting_star.md` |
+| Morning Star | `knowledge/poi_rules/price_action/morning_star.md` |
+| Evening Star | `knowledge/poi_rules/price_action/evening_star.md` |
+
+**Group 1 propagated count remains 4.** **Group 2 propagated count remains 8.** **Group 3 propagated count is 6.** **Total propagated bounded directional POIs is 18.**
+
+**No original audit count was rewritten** — the Section 8 classification counts (A=4, B=8, C=6, D=2, E=2, F=14, total=36) remain exactly as originally recorded. **No excluded or non-applicable structure was propagated:**
+
+- **Equal Highs and Equal Lows remain excluded** pending a separate sweep lifecycle.
+- **Bullish and Bearish Trendlines remain excluded** pending line-specific lifecycle rules.
+- **14 `NOT_APPLICABLE_OTHER` structures remain non-applicable**: Swing High, Swing Low, and the 12 Previous/Current Period High/Low variants.
+
+No blocked candlestick POI remains — all 6 formerly `BLOCKED_INCOMPLETE_SPECIFICATION` POIs are now completed and propagated. The final knowledge gate remains **CLOSED**; Phase 0G remains unapproved.
