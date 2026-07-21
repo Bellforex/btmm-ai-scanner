@@ -451,11 +451,35 @@ Following author review, **Phase 1B Decision Groups 1 through 8 are `AUTHOR-APPR
 - **mypy** = `>=2.3.0,<3`
 - **Ruff** = `>=0.15.22,<0.16`
 - **Configuration modules** (`config/__init__.py`, `config/enums.py`, `config/loader.py`) remain in Batch 1B-A, scoped to standard-library-only content (no YAML, no Pydantic, no `pydantic-settings`)
-- **Batch 1B-A remains exactly nine files** — unchanged from the prior approved scope
+- **Batch 1B-A remains exactly nine files** — unchanged from the prior approved scope (**superseded by Section 26 below**)
 
-**Environment facts recorded by the audit:** `uv` is not installed. Python `3.12.13` is not installed. Python `3.14.6` remains the only installed local runtime discovered by the audit — it is untouched and will not be used as the project runtime. No virtual environment exists. No lockfile exists. **No implementation has begun. Batch 1B-A remains unapproved for execution** — the remaining metadata fields (description, readme, license, authors, classifiers), minimum-OS position, and license-field content, plus the eventual Pydantic constraint for Batch 1B-B, remain open. All Phase 0G limitations remain binding; Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
+**Environment facts recorded by the audit:** `uv` is not installed. Python `3.12.13` is not installed. Python `3.14.6` remains the only installed local runtime discovered by the audit — it is untouched and will not be used as the project runtime. No virtual environment exists. No lockfile exists. **No implementation has begun. Batch 1B-A remains unapproved for execution** — the remaining metadata fields (description, readme, license, authors, classifiers), minimum-OS position, and license-field content, plus the eventual Pydantic constraint for Batch 1B-B, remain open (**this remaining-fields statement is superseded by Section 26 below**). All Phase 0G limitations remain binding; Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
 
-**Next controlled task:** Resolve the remaining Batch 1B-A metadata, configuration-contract, test-content and execution-scope decisions before authorizing installation or file creation.
+**Next controlled task:** Resolve the remaining Batch 1B-A metadata, configuration-contract, test-content and execution-scope decisions before authorizing installation or file creation. (**Superseded — see Section 26's next-task statement.**)
+
+## 26. Phase 1B-A Decision Group 3 — Metadata, Configuration Contract, Tests and Git Hygiene (Completed)
+
+**Phase 1B-A Decision Group 3 = `AUTHOR-APPROVED`:**
+
+- **Project metadata approved** — full `[project]` field set (`name`, `version`, `description`, `authors`, `requires-python`, `dependencies`, `license`, `classifiers`); exact TOML content recorded in `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9a.
+- **Proprietary licence expression approved** — `license = "LicenseRef-Proprietary"`.
+- **README omitted from Batch 1B-A** — no `README.md` file, no `readme` field.
+- **Licence file omitted from Batch 1B-A** — no `LICENSE`/`LICENCE` file; only the `license` string expression.
+- **PyPI upload-prevention classifier approved** — `Private :: Do Not Upload`, among exactly six approved classifiers.
+- **Windows 11 x64 validation position approved** — the validated initial development environment.
+- **Cross-platform compatibility not established** — no OS-independence claim is made; Linux/macOS validation remains deferred.
+- **Configuration enum boundary approved** — `InternalSymbol` (`XAUUSD`/`EURUSD`/`GBPUSD`) and `Timeframe` (`M1`/`M5`/`M15`/`H1`/`H3`/`H4`/`D1`/`W1`), both `StrEnum`; no POI/lifecycle/BTMM/validation-state enum.
+- **Configuration-loader boundary approved** — `BTMM_CONFIG_` prefix, three-level precedence, shallow deterministic merge, standard-library-only.
+- **Secret-key rejection boundary approved** — rejects keys containing `password`/`secret`/`token`/`credential`/`api_key`/`private_key`; never reads `.env`; never returns/logs/defaults credential values.
+- **Import and precedence test boundaries approved** — exact coverage for `tests/test_import_smoke.py` and `tests/test_config_precedence.py` recorded in `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 23a.
+- **`.gitignore` correction approved** — joins Batch 1B-A as a modified existing file (preserving `references/private/*`; adding Python/uv/test/type-check/Ruff/coverage/build exclusions); **`.gitignore` itself is not modified by this documentation task.**
+- **Batch 1B-A scope revised from nine to ten changed paths** — nine new files plus one modified existing file (`.gitignore`).
+- **Batch 1B-A not approved for execution.**
+- **No implementation exists** — no `pyproject.toml`, `uv.lock`, `.python-version`, `src/`, `tests/`, or `.gitignore` modification exists anywhere in the repository. No Python, uv, or package was installed.
+
+All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED` but not implemented; all 20 Architecture Decision Gates remain `AUTHOR-DECISION RESOLVED` but not implemented. All Phase 0G limitations remain binding. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
+
+**Next controlled task:** Resolve exact function signatures, exception types, package exports, tool-configuration sections, implementation command sequence and rollback procedure before authorizing Batch 1B-A execution.
 
 **All 17 technology decisions remain author-approved but not implemented. All 20 architecture decision gates remain author-decision resolved but not implemented.** Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only. All Phase 0G limitations remain binding, unchanged by this planning task.
 

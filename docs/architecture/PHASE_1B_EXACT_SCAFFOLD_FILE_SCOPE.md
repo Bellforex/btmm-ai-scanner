@@ -61,9 +61,9 @@ This document does not, and no companion edit made alongside it does:
 | 6 | Whether to create `.python-version` | Yes — **RESOLVED, REQUIRED in Batch 1B-A**; exact content = `3.12.13` — **RESOLVED** (via item #1) | Rely on `pyproject.toml`'s `requires-python` only (rejected) | Pins the exact local/dev interpreter for uv | None significant — both inclusion and content are now resolved | NO — RESOLVED | AUTHOR-APPROVED | YES — APPROVED | 1B-A |
 | 7 | Exact runtime dependency versions | **Batch 1B-A: NONE required — RESOLVED.** Batch 1B-B: Pydantic v2 constraint remains `Not chosen here` | Loosely-pinned ranges vs. exact pins (still open for 1B-B) | Batch 1B-A's `config/enums.py`/`config/loader.py` are standard-library-only (see Section 17's Batch 1B-A Dependency Baseline note below); no runtime dependency is needed until Batch 1B-B's executable contracts | Batch 1B-A: none (no dependency exists to pin). Batch 1B-B: unpinned/loose versions would reduce determinism | NO for 1B-A (nothing to resolve); YES for 1B-B (Pydantic constraint still open) | AUTHOR-APPROVED (Batch 1B-A = NONE) / REQUIRES AUTHOR DECISION (Batch 1B-B Pydantic constraint) | YES | 1B-A (resolved: none) / 1B-B (still open) |
 | 8 | Exact development dependency versions | **RESOLVED:** `pytest>=9.1.1,<10`; `mypy>=2.3.0,<3`; `ruff>=0.15.22,<0.16` | Exact pins vs. bounded ranges (bounded ranges chosen) | Bounded ranges express intent while `uv.lock` supplies the exact reproducible resolution | None significant | NO — RESOLVED | AUTHOR-APPROVED (origin: ENGINEERING-RECOMMENDED) | YES — APPROVED | 1B-A / 1B-F |
-| 9 | `pyproject.toml` metadata fields | Minimal PEP 621 set: name, version, description, readme, requires-python, license, authors, classifiers. **`requires-python` sub-field — RESOLVED: `>=3.12,<3.13`.** `name` and `version` also resolved (`btmm-ai-scanner`, `0.1.0` — see Section 7/Part 3). Remaining fields (description, readme, license, authors, classifiers) **not chosen here** | A larger metadata set (urls, keywords, etc.) | Minimum viable metadata for a private, pre-release package | Missing fields may need later rework | PARTIAL — `requires-python`/`name`/`version` RESOLVED; remaining metadata fields still blocking | AUTHOR-APPROVED (`requires-python`, `name`, `version`) / REQUIRES AUTHOR DECISION (remaining metadata fields' exact values) | YES | 1B-A |
-| 10 | Minimum supported operating systems | No OS restriction proposed (pure-Python) | Restrict to Windows only, or Linux/CI-only | Affects CI matrix and classifiers | An untested OS could fail silently if later restricted | NO for scaffold itself; YES for CI matrix | REQUIRES AUTHOR DECISION | YES | 1B-F |
-| 11 | License-field position | SPDX expression in `[project.license]`, plus a `LICENSE` file at repo root | License text embedded only in `pyproject.toml` | Matches current PEP 639 guidance | None significant | YES (which license, if any, is unresolved) | REQUIRES AUTHOR DECISION | YES | 1B-A |
+| 9 | `pyproject.toml` metadata fields | **RESOLVED — full field set decided:** `name = "btmm-ai-scanner"`; `version = "0.1.0"`; `description = "Deterministic software foundation for the BTMM and POI AI scanner."`; `authors = [{ name = "Bellforex" }]`; `requires-python = ">=3.12,<3.13"`; `dependencies = []`; `license = "LicenseRef-Proprietary"` (see item 11); `classifiers` = the six approved values (Decision Group 3). **Explicitly omitted from Batch 1B-A, by decision, not by gap:** `readme`, `license-files`, `maintainers`, `keywords`, `project.urls`, `project.scripts`, entry points, `dynamic`, `optional-dependencies`, GUI metadata, CLI metadata | A larger metadata set (urls, keywords, readme, maintainers, etc.) — rejected for Batch 1B-A | Minimum viable metadata for a private, pre-release package; every omitted field is a deliberate decision, not an oversight | None significant — every field's fate (populate or omit) is now decided | NO — RESOLVED | AUTHOR-APPROVED (origin: ENGINEERING-RECOMMENDED) | YES — APPROVED | 1B-A |
+| 10 | Minimum supported operating systems | **RESOLVED:** Windows 11 x64 is the validated initial development environment. **Package compatibility claim: NOT YET ESTABLISHED** — Batch 1B-A uses only portable Python standard-library functionality (no Windows-only filesystem assumptions, no registry access, no COM integration, no shell-specific implementation), but OS-independence is not *claimed* until actually tested. No operating-system classifier is included. Linux and macOS validation remain deferred | Restrict to Windows only (rejected — would falsely claim a restriction that isn't technically required); claim full cross-platform support now (rejected — untested) | Affects CI matrix and classifiers; avoids an unverified compatibility claim | None significant — the *position* (what to claim and what not to claim) is now decided, even though the underlying multi-OS testing itself remains future work | NO — RESOLVED (position); the actual cross-platform validation itself remains a future CI/testing task, not a scaffold blocker | AUTHOR-APPROVED (origin: ENGINEERING-RECOMMENDED) | YES — APPROVED | 1B-A / 1B-F |
+| 11 | License-field position | **RESOLVED:** `license = "LicenseRef-Proprietary"` — a PEP 639 license-expression string in `[project]`, with **no `LICENSE`/`LICENCE` file** created in Batch 1B-A (the file itself is an explicit omission, per Decision Group 3) | SPDX expression + a `LICENSE` file (rejected for Batch 1B-A — no licence file is created); license text embedded only in `pyproject.toml` (closer to what was chosen, minus a file) | Matches the project's proprietary, non-public-release status without requiring a separate licence-file artifact this batch | None significant | NO — RESOLVED | AUTHOR-APPROVED (origin: ENGINEERING-RECOMMENDED) | YES — APPROVED | 1B-A |
 | 12 | Initial package version | `0.1.0` — **RESOLVED** | `0.0.1` (rejected) | SemVer pre-1.0 convention for unreleased software | None significant | NO — RESOLVED | AUTHOR-APPROVED (origin: ENGINEERING-RECOMMENDED) | YES — APPROVED | 1B-A |
 | 13 | Exact YAML configuration filenames | Not chosen here | `config/default.yaml` + `config/<environment>.yaml`, vs. one monolithic file | Must match the approved three-level precedence | Filename collision with the `config/` **code** module if unresolved | YES | REQUIRES AUTHOR DECISION | YES | Deferred beyond 1B-A–1B-F (see Part 17) |
 | 14 | Exact configuration-directory placement | Not chosen here | Top-level `config/` (currently a protected path for this task) vs. package-internal `src/<package>/config/defaults/` | Top-level `config/` is explicitly protected/off-limits during this planning task | Choosing wrong risks colliding with the protected-path list | YES | REQUIRES AUTHOR DECISION | YES | Deferred |
@@ -86,25 +86,35 @@ This document does not, and no companion edit made alongside it does:
 
 **No item above is silently decided.** Items 16–17 are marked `Blocking scaffold: NO` only because they restate a design principle (Section 5) already implicit in the author-approved "no empty placeholder directories" instruction — they are not new technology or naming decisions.
 
-**Recalculated totals, following the Phase 1B-A Runtime and Dependency Baseline decision (supersedes the prior Phase 1B-0 Package Identity and Layout recalculation above it in session history):**
+**Recalculated totals, following the Phase 1B-A Decision Group 3 — Metadata, Configuration Contract, Tests and Git Hygiene decision (supersedes the prior Phase 1B-A Runtime and Dependency Baseline recalculation above it in session history):**
 
 | Category | Count | Items |
 |---|---|---|
 | Total blocking-decision rows | 30 | 1–30 |
-| Author-approved decisions (fully resolved, no residual blocking sub-item) | 8 | 1 (exact Python patch, `3.12.13`), 2 (distribution name), 3 (import package), 4 (layout), 5 (build backend + exact `uv_build` constraint), 6 (`.python-version` inclusion + exact content), 8 (development dependency versions), 12 (initial version) |
-| Remaining unresolved-and-blocking decisions | 14 | 7 (Batch 1B-A resolved to NONE, but Batch 1B-B's exact Pydantic constraint remains open), 9 (`requires-python`/`name`/`version` resolved, but remaining `pyproject.toml` metadata fields — description, readme, license, authors, classifiers — remain open), 10, 11, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30 |
+| Fully author-approved decisions (no residual blocking sub-item) | 11 | 1 (exact Python patch), 2 (distribution name), 3 (import package), 4 (layout), 5 (build backend + exact constraint), 6 (`.python-version` inclusion + content), 8 (development dependency versions), 9 (full metadata field set, including explicit omissions), 10 (minimum-OS position), 11 (license-field position), 12 (initial version) |
+| Remaining unresolved-and-blocking decisions | 11 | 7 (Batch 1B-A resolved to NONE, but Batch 1B-B's exact Pydantic constraint remains open), 18, 19, 20, 21, 25, 26, 27, 28, 29, 30 |
 | Deferred decisions (scope beyond the current batches, not yet blocking) | 8 | 13, 14, 15, 16, 17, 22, 23, 24 |
 
-**8 + 14 + 8 = 30.** Items 7 and 9 are each **partially** resolved — their Batch 1B-A-relevant portion is settled (Batch 1B-A needs zero runtime dependencies; `requires-python`/`name`/`version` are fixed), but each still carries a genuinely open sub-item (Pydantic's exact version constraint for Batch 1B-B; the remaining `pyproject.toml` metadata field values) — both are therefore counted in the "unresolved-and-blocking" bucket, not the "author-approved" bucket, so that neither Pydantic nor the remaining metadata fields are ever presented as fully resolved. **No decision outside items 1, 5, 6, 7 (partial), 8, and 9 (partial) was newly touched by this correction** — items 2, 3, 4, and 12 were already resolved by the prior Phase 1B-0 decision and are unchanged here.
+**11 + 11 + 8 = 30.** This matches the expected result stated in the governing instruction exactly — actual counting confirms it rather than assuming it. Item 7 remains **partially** resolved — Batch 1B-A's own portion is settled (zero runtime dependencies), but Batch 1B-B's exact Pydantic version constraint remains genuinely open, so item 7 stays in the "unresolved-and-blocking" bucket rather than "fully author-approved," to avoid ever presenting Pydantic's constraint as resolved. **This correction newly resolved only items 9, 10, and 11** (previously unresolved or partially unresolved); items 1, 2, 3, 4, 5, 6, 8, and 12 were already resolved by prior decisions and are unchanged here. **Not silently resolved by this or any prior correction:** exact function signatures, exact exception classes, exact `__init__.py` contents, exact Ruff configuration, exact mypy configuration, exact pytest configuration, the installation sequence, the rollback sequence, Pydantic's version constraint, YAML library/filename/placement decisions, and CI workflow content — all remain open, tracked in Section 6 (items 7, 13–17, 20, 28) and Part 14 of `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`'s own remaining-sub-decisions list, or simply not yet addressed by any decision round.
 
 **Additional decisions approved by this correction, not modeled as their own numbered row in the table above** (per the "do not change the total row count" instruction, these are recorded here in prose instead of as new rows 31+):
 - **Whether uv-managed Python is permitted:** `AUTHOR-APPROVED` — uv-managed Python is permitted and preferred. The existing local Python 3.14.6 (discovered by the Phase 1B-A Runtime and Dependency Environment Audit) must not be removed, modified, or used as the project runtime. A system-installed interpreter is acceptable only when it exactly satisfies the approved runtime (`3.12.13`) and is provenance-recorded. Project execution must use `uv run` or the project virtual environment.
 - **Exact uv version policy:** `AUTHOR-APPROVED` — `uv == 0.11.30`, recorded as `[tool.uv] required-version = "==0.11.30"` in the future `pyproject.toml`.
 - **Direct-dependency constraint policy (as a policy, distinct from any specific package's version number):** `AUTHOR-APPROVED` — direct dependencies use reviewed bounded ranges in `pyproject.toml`; exact direct and transitive versions are resolved in a committed `uv.lock`; dependency upgrades require review and testing; no fully floating dependency ranges are permitted.
 - **Whether configuration modules remain in Batch 1B-A:** `AUTHOR-APPROVED` — yes, `config/__init__.py`, `config/enums.py`, and `config/loader.py` remain in Batch 1B-A, scoped to standard-library-only content (foundational enums, plain mappings, environment-variable reading, deterministic precedence merging, secret-value exclusion) — no YAML parsing, no Pydantic models, no `pydantic-settings`, no filesystem configuration loading, no production/provider-specific configuration, and no credential persistence in this batch.
-- **Whether the nine-file Batch 1B-A scope remains unchanged:** `AUTHOR-APPROVED` — unchanged; the file list and count in Section 9/14 stand exactly as before.
+- **Whether the nine-file Batch 1B-A scope remains unchanged:** **SUPERSEDED by the Phase 1B-A Decision Group 3 revision below** — Batch 1B-A now contains ten changed paths (nine new files plus one modified existing file, `.gitignore`). See Section 14's revised batch row and Section 9's new `.gitignore` inventory row.
 
-All five items above carry: Recommendation origin `ENGINEERING-RECOMMENDED`; Current author-decision status `AUTHOR-APPROVED`; Implementation status `NOT YET IMPLEMENTED`; Production status `NOT PRODUCTION-APPROVED`.
+**Phase 1B-A Decision Group 3 — Metadata, Configuration Contract, Tests and Git Hygiene (`AUTHOR-APPROVED`):**
+
+- **Project metadata:** the full `[project]` field set is now resolved (Section 6 items 9, 10, 11) — see the pyproject.toml plan following Section 9's inventory table for the exact TOML content.
+- **Configuration enums (`src/btmm_ai_scanner/config/enums.py`):** exactly two `StrEnum` classes are approved — `InternalSymbol` (`XAUUSD`, `EURUSD`, `GBPUSD`) and `Timeframe` (`M1`, `M5`, `M15`, `H1`, `H3`, `H4`, `D1`, `W1`), both using uppercase string values. No POI-type, lifecycle-state, BTMM-state, or validation-state enum is introduced; no provider-specific symbol or unsupported timeframe is added; no resampling logic exists. See Section 17 for the full boundary.
+- **Configuration loader (`src/btmm_ai_scanner/config/loader.py`):** approved responsibilities are reading approved non-secret runtime environment variables (prefix `BTMM_CONFIG_`, e.g. `BTMM_CONFIG_LOG_LEVEL` → `log_level`), normalizing keys, merging three precedence layers deterministically (project defaults → environment-specific non-secret overrides → runtime environment overrides, later overrides earlier), returning a new mapping without mutating caller-owned input, using the standard library only, and a **shallow top-level merge only** (no nested/deep merge). See Section 17 for the full boundary.
+- **Secret boundary:** the loader must reject keys containing indicators such as `password`, `secret`, `token`, `credential`, `api_key`, `private_key`; it must not read `.env`, return credential values, log credential names or values, or create credential defaults; actual secret retrieval remains a separate, future, unbuilt boundary.
+- **Test boundaries:** `tests/test_import_smoke.py` and `tests/test_config_precedence.py` — exact approved/prohibited coverage recorded in Section 23.
+- **Git hygiene (`.gitignore`):** joins Batch 1B-A as a **modified existing file** (not a new file). Preserves `references/private/*`; adds `.venv/`, `.env`/`.env.*`/`!.env.example`, `__pycache__/`/`*.py[cod]`, `.pytest_cache/`/`.mypy_cache/`/`.ruff_cache/`, `.coverage`/`coverage.xml`/`htmlcov/`, `build/`/`dist/`/`*.egg-info/`. Does **not** ignore `pyproject.toml`, `uv.lock`, `.python-version`, source code, tests, reviewed configuration, reviewed manifests, or documentation. **`.gitignore` is not modified by this documentation task** — see Section 9's new inventory row.
+- **Revised Batch 1B-A scope:** ten changed paths total (nine new implementation files + one modified existing file, `.gitignore`). Batch 1B-A remains `NOT YET AUTHOR-APPROVED FOR EXECUTION`.
+
+All items above (both this Decision Group 3 block and the five items preceding it) carry: Recommendation origin `ENGINEERING-RECOMMENDED`; Current author-decision status `AUTHOR-APPROVED`; Implementation status `NOT YET IMPLEMENTED`; Production status `NOT PRODUCTION-APPROVED`.
 
 ## 7. Proposed Package and Distribution Identity
 
@@ -145,6 +155,7 @@ btmm-ai-scanner/
 ├── docs/                                  (existing — unchanged)
 ├── knowledge/                             (existing — unchanged)
 ├── references/                            (existing — unchanged)
+├── .gitignore                             (existing — proposed MODIFICATION, Batch 1B-A, Decision Group 3 — creation order 0, precedes all other Batch 1B-A files)
 ├── pyproject.toml                         (proposed, Batch 1B-A — file scope, exact contents in Part 8/Section 17)
 ├── uv.lock                                (proposed, Batch 1B-A — created only after pyproject.toml and dependency set are approved)
 ├── .python-version                        (proposed, Batch 1B-A — REQUIRED, inclusion AUTHOR-APPROVED; exact patch content still pending Blocking Decision #1)
@@ -208,7 +219,7 @@ btmm-ai-scanner/
         └── ci.yml                          (Batch 1B-F)
 ```
 
-**No directory or file in this tree is created by this document.** `measurements/`, `domain/`, `poi/`, `lifecycle/`, `btmm/`, `annotations/`, `replay/`, `scripts/`, `migrations/`, `manifests/rules/`, and `manifests/schemas/` remain correctly absent, matching Section 5's conservative-scaffold principle.
+**No directory or file in this tree is created or modified by this document — including `.gitignore`, which remains untouched by this documentation task despite being a proposed Batch 1B-A modification.** `measurements/`, `domain/`, `poi/`, `lifecycle/`, `btmm/`, `annotations/`, `replay/`, `scripts/`, `migrations/`, `manifests/rules/`, and `manifests/schemas/` remain correctly absent, matching Section 5's conservative-scaffold principle.
 
 ## 9. Exact File Inventory
 
@@ -216,7 +227,8 @@ Every proposed file, one row each. **Creation order** matches Section 15. **Inde
 
 | Batch | Exact path | New/Modified | File type | Purpose | Approved decision supported | Required content | Prohibited content | Direct dependencies | Tests required | Blocking unresolved decision | Creation order | Scope status |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1B-A | `pyproject.toml` | New | TOML manifest | Project/build metadata, dependency declarations | Register #1–#8, #12–#13; Phase 1B-0 Package Identity and Layout decision; Phase 1B-A Runtime and Dependency Baseline (`requires-python = ">=3.12,<3.13"`, `[build-system].requires = ["uv_build>=0.11.30,<0.12"]`, `[tool.uv].required-version = "==0.11.30"`, dev group `pytest>=9.1.1,<10` / `mypy>=2.3.0,<3` / `ruff>=0.15.22,<0.16`, zero runtime dependencies) | Build-system table (`uv_build>=0.11.30,<0.12`), project metadata (`name = "btmm-ai-scanner"`, `version = "0.1.0"`, `requires-python = ">=3.12,<3.13"`), `[tool.uv]` version requirement, `src`-layout package discovery pointing at `btmm_ai_scanner`, an empty/absent runtime-dependency list, a development-dependency group with the three bounded ranges above | Secrets, entry/risk fields, any runtime dependency (Batch 1B-A has none) | None | Import-smoke test passes | #9, #11 (remaining metadata fields — description, readme, license, authors, classifiers) | 1 | Required in initial scaffold |
+| 1B-A | `.gitignore` | **Modified** (existing file) | Ignore-pattern text | Excludes Python/uv/test/build artifacts from version control | Decision Group 3 (Git Hygiene) | Preserve `references/private/*`; add `.venv/`, `.env`/`.env.*`/`!.env.example`, `__pycache__/`/`*.py[cod]`, `.pytest_cache/`/`.mypy_cache/`/`.ruff_cache/`, `.coverage`/`coverage.xml`/`htmlcov/`, `build/`/`dist/`/`*.egg-info/` | Ignoring `pyproject.toml`, `uv.lock`, `.python-version`, source code, tests, reviewed configuration, reviewed manifests, or documentation | None | N/A (no test exercises `.gitignore` directly) | None — fully resolved | 0 (precedes all other Batch 1B-A files) | Required in initial scaffold — **not modified by this documentation task** |
+| 1B-A | `pyproject.toml` | New | TOML manifest | Project/build metadata, dependency declarations | Register #1–#8, #12–#13; Phase 1B-0 Package Identity and Layout decision; Phase 1B-A Runtime and Dependency Baseline; Phase 1B-A Decision Group 3 (full metadata field set) | `[project]` table: `name = "btmm-ai-scanner"`, `version = "0.1.0"`, `description = "Deterministic software foundation for the BTMM and POI AI scanner."`, `authors = [{ name = "Bellforex" }]`, `requires-python = ">=3.12,<3.13"`, `dependencies = []`, `license = "LicenseRef-Proprietary"`, `classifiers` (six approved values, Section 6 item 9); `[build-system]` table (`uv_build>=0.11.30,<0.12`); `[tool.uv]` version requirement; `src`-layout package discovery pointing at `btmm_ai_scanner`; a development-dependency group with the three bounded ranges (`pytest`, `mypy`, `ruff`) | Secrets, entry/risk fields, any runtime dependency (Batch 1B-A has none); `readme`, `license-files`, `maintainers`, `keywords`, `project.urls`, `project.scripts`, entry points, `dynamic`, `optional-dependencies` (all explicitly omitted, Section 6 item 9) | None | Import-smoke test passes | None — metadata fully resolved (Section 6 items 9, 10, 11) | 1 | Required in initial scaffold |
 | 1B-A | `uv.lock` | New | Lockfile | Reproducible dependency resolution | Register #3; Phase 1B-A Runtime and Dependency Baseline | Resolved dependency graph for the dev group only (`pytest`, `mypy`, `ruff` and their transitive deps) — no runtime dependency to resolve | Secrets | `pyproject.toml` | N/A (generated) | None — `uv.lock` cannot exist until `uv` and Python 3.12.13 are installed during an authorized implementation task | 2 | Required in initial scaffold (cannot be generated by documentation alone) |
 | 1B-A | `.python-version` | New | Text | Local/dev interpreter pin | Register #1–#2; Phase 1B-0 Package Identity and Layout decision (inclusion); Phase 1B-A Runtime and Dependency Baseline (exact content) | Exact content: `3.12.13` | Nothing else | `pyproject.toml`'s `requires-python` | N/A | None — both inclusion and content are resolved | 3 | Required in initial scaffold |
 | 1B-A | `src/btmm_ai_scanner/__init__.py` | New | Python | Package root, version export | Register #1, #3, #12 | `__version__` constant | Business logic | `pyproject.toml` version | Import smoke test | #3 | 4 | Required in initial scaffold |
@@ -266,13 +278,53 @@ Every proposed file, one row each. **Creation order** matches Section 15. **Inde
 | 1B-E | `tests/unit/test_offline_file_stub.py` | New | Python test | Deterministic offline behavior, no network | Group 7 | No-network-access assertion | Live network call | `ingestion/offline_file_source.py` | Self | None | 48 | Required in later foundation batch |
 | 1B-F | `.github/workflows/ci.yml` | New | YAML (CI workflow) | Runs Ruff format check, Ruff lint, mypy, pytest | Group 5 | Offline-safe job steps only | Credentials, deployment steps, live connections | `pyproject.toml`, `uv.lock` | N/A (the workflow itself is verification) | #28 (trigger policy), #29–#30 (repo settings, outside file scope) | 49 | Required in later foundation batch |
 
-**Total proposed files: 49** (all required — `.python-version`'s *inclusion* is no longer conditional, per the Phase 1B-0 Package Identity and Layout decision; only its exact patch-version *content* remains pending Blocking Decision #1). **None is created by this document.** Every row above is either "Required in initial scaffold" (Batch 1B-A, 9 files), "Required in later foundation batch" (Batches 1B-B through 1B-F, 39 files), or explicitly excluded as "Deferred beyond Phase 1B" (manifests, raw-storage I/O, provider adapters — see Section 6) or "Prohibited" (any entry/risk/execution file — none appears above). **No file listed above is marked as already created — every row remains a proposal only.**
+**Total proposed changed paths: 50** (49 files + 1 modified existing file, `.gitignore`, added by the Phase 1B-A Decision Group 3 — Metadata, Configuration Contract, Tests and Git Hygiene correction). `.python-version`'s *inclusion and content* are both fully resolved (`3.12.13`). **`.gitignore` had no prior row in this inventory — this is a newly added row, not a reclassification of an existing one.** **None is created or modified by this document.** Every row above is either "Required in initial scaffold" (Batch 1B-A, now 10 changed paths: 9 new files + 1 modified `.gitignore`), "Required in later foundation batch" (Batches 1B-B through 1B-F, 40 files — see the corrected 1B-D count of 7, not 6, below), or explicitly excluded as "Deferred beyond Phase 1B" (manifests, raw-storage I/O, provider adapters — see Section 6) or "Prohibited" (any entry/risk/execution file — none appears above). **No file listed above is marked as already created or modified — every row remains a proposal only.**
+
+### 9a. Batch 1B-A `pyproject.toml` Metadata Plan (Decision Group 3, `AUTHOR-APPROVED`)
+
+**`pyproject.toml` is not created by this document.** The following is the exact future `[project]` metadata content, once Batch 1B-A is separately authorized for execution:
+
+```toml
+[project]
+name = "btmm-ai-scanner"
+version = "0.1.0"
+description = "Deterministic software foundation for the BTMM and POI AI scanner."
+authors = [
+    { name = "Bellforex" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = []
+license = "LicenseRef-Proprietary"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Private :: Do Not Upload",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.30,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = "==0.11.30"
+```
+
+**Explicitly omitted from Batch 1B-A** (a decision, not a gap): `readme` field and no `README.md` file; `license-files` field and no licence file; `maintainers`; `keywords`; `project.urls`; `project.scripts`; entry points; `dynamic` metadata; `optional-dependencies`; GUI metadata; CLI metadata.
+
+**Prohibited classifiers and claims (binding):** no deprecated `License ::` classifier; no operating-system classifier; no public-release classifier; no production-readiness claim; no trading-profitability claim; no AI-performance claim; no financial-product claim.
+
+**Development-dependency group** (not yet a fixed `pyproject.toml` section name — dependency-group mechanics remain an implementation detail): `pytest>=9.1.1,<10`; `mypy>=2.3.0,<3`; `ruff>=0.15.22,<0.16`.
+
+**Not silently resolved by this plan:** exact `[tool.ruff]`, `[tool.mypy]`, or `[tool.pytest.ini_options]` configuration sections — none of their contents is chosen here.
 
 ## 10. File-by-File Responsibilities
 
 Responsibilities are recorded per-file in Section 9's "Purpose" and "Required content"/"Prohibited content" columns. Summarized by batch:
 
-- **1B-A (Toolchain and Package Shell):** establishes the installable package boundary and configuration-precedence code, with zero domain contracts. Its two tests only prove the package imports and that precedence ordering works — neither touches trading logic.
+- **1B-A (Toolchain and Package Shell):** establishes `.gitignore` hygiene, the installable package boundary, and configuration-precedence code, with zero domain contracts. Its two tests only prove the package imports and that precedence ordering works — neither touches trading logic.
 - **1B-B (Core Foundation Contracts):** establishes value types (identity, fingerprint, version) and the first five data-contract shapes (A, B, M, N, plus Q/R stubs), with zero executable validation or ingestion logic.
 - **1B-C (Validation and Eligibility Foundation):** establishes the Group 6 policy enums and the 8-step eligibility gate as code *interfaces*, explicitly without any provider-specific detection mechanism (Blocking Decisions #26–#27 remain open).
 - **1B-D (Audit and Operational Logging Foundation):** establishes the audit-event shape, an append-only writer *interface* (no physical storage target chosen — Blocking Decision #22 remains open), and structured logging configuration, kept strictly separate from audit.
@@ -301,9 +353,16 @@ Unchanged from `REPOSITORY_SCAFFOLD_PLAN.md` Section 4: `A --> B` means "A depen
 
 ## 14. Implementation Batches
 
-| Batch | Name | Scope (files) | Depends on | Author decisions required | Implementation risks | Tests required | Acceptance criteria | Rollback boundary | Independently committable |
+| Batch | Name | Scope (changed paths) | Depends on | Author decisions required | Implementation risks | Tests required | Acceptance criteria | Rollback boundary | Independently committable |
 |---|---|---|---|---|---|---|---|---|---|
-| 1B-A | Toolchain and Package Shell | 9 files (Section 9) | None (first batch) | Resolved: #2–#6, #12 (package identity, layout, build backend, `.python-version` inclusion, initial version). Still required: #1 (exact patch version), #7–#11 (dependency versions, metadata fields, OS support, license) | Wrong package identity requires a rename across all later batches (identity risk now resolved; remaining risk is limited to unpinned dependency/metadata detail) | `test_import_smoke.py`, `test_config_precedence.py` | Package installs via `uv`; both tests pass; no YAML/config data file exists yet | Revert this batch alone (no later batch exists yet) | YES (it is the first batch) |
+| 1B-A | Toolchain and Package Shell | **10 changed paths** (Section 9): 9 new files + 1 modified existing file (`.gitignore`) | None (first batch) | **Fully resolved:** #1–#6, #8–#12 (exact patch version, package identity, layout, build backend, `.python-version`, dependency versions, full metadata field set, OS position, license position, initial version). **Still required:** none for the items this batch actually needs — remaining open items (#7 Batch 1B-B Pydantic constraint; #18–#21, #25–#30) belong to later batches, not to 1B-A itself | Package-identity risk is resolved; remaining risk is limited to exact function signatures/exception classes/tool-configuration sections, none of which is chosen here | `test_import_smoke.py`, `test_config_precedence.py` | Package installs via `uv`; both tests pass; `.gitignore` correctly excludes build/tool artifacts; no YAML/config data file exists yet | Revert this batch alone (no later batch exists yet) | YES (it is the first batch) |
+| 1B-B | Core Foundation Contracts | 13 files | 1B-A | #18–#21, #25 (enum, serialization, fingerprint, timestamp semantics — shape only) | Wrong contract module boundary requires refactor before later batches build on it | 5 contract/type unit tests | All contract shapes construct valid/invalid cases correctly; no entry/risk field exists | Revert to end of 1B-A | YES, once 1B-A is committed |
+| 1B-C | Validation and Eligibility Foundation | 12 files | 1B-B | #18, #26–#27 (enum finality, detection mechanism explicitly still deferred) | Premature provider-specific logic could leak in if not reviewed carefully | 7 unit tests | Eligibility gate matches the approved 8-step sequence; zero synthetic-fill code exists | Revert to end of 1B-B | YES, once 1B-B is committed |
+| 1B-D | Audit and Operational Logging Foundation | **7 files** (corrected from a prior mislabeling of 6 — Section 9 lists `audit/__init__.py`, `audit/events.py`, `audit/writer.py`, `observability/__init__.py`, `observability/logging_config.py`, `test_audit_log_separation.py`, `test_secret_redaction.py`) | 1B-B (contracts/types) | None new (Group 4/5 already approved) | Conflating audit and operational logs would violate an approved separation | 2 unit tests | Audit and log stores remain structurally separate; secret-redaction test passes | Revert to end of 1B-C | YES, once 1B-B is committed (does not require 1B-C) |
+| 1B-E | Provider-Neutral Ingestion Boundary | 7 files | 1B-B (contracts) | None new (Group 7 already approved at policy level) | Any accidental provider-specific code would violate `INTERFACE_ONLY`/`OFFLINE_FILE`-only scope | 2 unit tests | Port stays provider-neutral; offline stub makes zero network calls | Revert to end of 1B-D (or 1B-B if 1B-D not yet done) | YES, once 1B-B is committed |
+| 1B-F | CI Foundation | 1 file | 1B-A (pyproject/uv.lock must exist for CI to run against) | #28 (trigger policy); #29–#30 (repository settings, not files) | An overly permissive workflow could accidentally gain network/credential access | N/A (workflow itself is the verification layer) | Workflow runs Ruff/mypy/pytest against Batches A–E's code, offline-safe, on the approved trigger | Revert to end of 1B-E (or earliest batch present) | YES, once 1B-A is committed |
+
+**Total across all batches: 50 changed paths** (10 + 13 + 12 + 7 + 7 + 1 = 50), matching Section 9's corrected inventory total.
 
 **Batch 1B-A Runtime and Dependency Baseline (`AUTHOR-APPROVED`):**
 
@@ -317,18 +376,26 @@ Unchanged from `REPOSITORY_SCAFFOLD_PLAN.md` Section 4: `A --> B` means "A depen
 | Tool requirement | `uv==0.11.30` (via `[tool.uv].required-version`) |
 | Configuration-module scope | `config/enums.py` and `config/loader.py` are standard-library-only — no YAML parsing, no Pydantic, no `pydantic-settings` |
 
-**Batch 1B-A remains `NOT YET AUTHOR-APPROVED FOR EXECUTION`.** The Phase 1B-0 Package Identity and Layout decision and this Runtime and Dependency Baseline together resolve the batch's package-identity, interpreter, build-backend, and dependency-version blocking items; the remaining metadata fields (row 9: description, readme, license, authors, classifiers) must still be separately author-approved before any Batch 1B-A file is created. **Recommendation origin: `ENGINEERING-RECOMMENDED`. Current author-decision status: `AUTHOR-APPROVED` (for the baseline recorded in the table above). Implementation status: `NOT YET IMPLEMENTED`. Production status: `NOT PRODUCTION-APPROVED`.**
-| 1B-B | Core Foundation Contracts | 13 files | 1B-A | #18–#21, #25 (enum, serialization, fingerprint, timestamp semantics — shape only) | Wrong contract module boundary requires refactor before later batches build on it | 5 contract/type unit tests | All contract shapes construct valid/invalid cases correctly; no entry/risk field exists | Revert to end of 1B-A | YES, once 1B-A is committed |
-| 1B-C | Validation and Eligibility Foundation | 12 files | 1B-B | #18, #26–#27 (enum finality, detection mechanism explicitly still deferred) | Premature provider-specific logic could leak in if not reviewed carefully | 7 unit tests | Eligibility gate matches the approved 8-step sequence; zero synthetic-fill code exists | Revert to end of 1B-B | YES, once 1B-B is committed |
-| 1B-D | Audit and Operational Logging Foundation | 6 files | 1B-B (contracts/types) | None new (Group 4/5 already approved) | Conflating audit and operational logs would violate an approved separation | 2 unit tests | Audit and log stores remain structurally separate; secret-redaction test passes | Revert to end of 1B-C | YES, once 1B-B is committed (does not require 1B-C) |
-| 1B-E | Provider-Neutral Ingestion Boundary | 7 files | 1B-B (contracts) | None new (Group 7 already approved at policy level) | Any accidental provider-specific code would violate `INTERFACE_ONLY`/`OFFLINE_FILE`-only scope | 2 unit tests | Port stays provider-neutral; offline stub makes zero network calls | Revert to end of 1B-D (or 1B-B if 1B-D not yet done) | YES, once 1B-B is committed |
-| 1B-F | CI Foundation | 1 file | 1B-A (pyproject/uv.lock must exist for CI to run against) | #28 (trigger policy); #29–#30 (repository settings, not files) | An overly permissive workflow could accidentally gain network/credential access | N/A (workflow itself is the verification layer) | Workflow runs Ruff/mypy/pytest against Batches A–E's code, offline-safe, on the approved trigger | Revert to end of 1B-E (or earliest batch present) | YES, once 1B-A is committed |
+**Batch 1B-A Metadata, Configuration Contract, Tests and Git Hygiene (Decision Group 3, `AUTHOR-APPROVED`):**
+
+| Aspect | Approved value |
+|---|---|
+| Project metadata | Full `[project]` field set — see Section 9a |
+| Classifiers | Six approved values (Section 6 item 9) |
+| Minimum-OS position | Windows 11 x64 validated initial environment; cross-platform compatibility claim `NOT YET ESTABLISHED` |
+| License-field position | `license = "LicenseRef-Proprietary"`; no licence file |
+| Configuration enums | `InternalSymbol` (3 values), `Timeframe` (8 values) — see Section 17 |
+| Configuration loader | `BTMM_CONFIG_` prefix, 3-level precedence, shallow merge, secret-key rejection — see Section 17 |
+| Test boundaries | See Section 23 |
+| `.gitignore` | Joins Batch 1B-A as a modified existing file — see Section 9 |
+
+**Batch 1B-A remains `NOT YET AUTHOR-APPROVED FOR EXECUTION`.** Package identity, interpreter, build backend, dependency versions, the full metadata field set, the OS position, the license position, and the configuration/test/git-hygiene boundaries are all now resolved; exact function signatures, exact exception classes, exact `__init__.py` contents, exact Ruff/mypy/pytest configuration sections, the installation sequence, and the rollback sequence remain unresolved and are not silently decided here. **Recommendation origin: `ENGINEERING-RECOMMENDED`. Current author-decision status: `AUTHOR-APPROVED` (for the baselines recorded above). Implementation status: `NOT YET IMPLEMENTED`. Production status: `NOT PRODUCTION-APPROVED`.**
 
 **No batch is implemented by this document.** Each requires its own separate, explicit author instruction to create.
 
 ## 15. File-Creation Order
 
-Matches Section 9's "Creation order" column exactly: **1–9** (Batch 1B-A) → **10–22** (Batch 1B-B) → **23–34** (Batch 1B-C) → **35–41** (Batch 1B-D) → **42–48** (Batch 1B-E) → **49** (Batch 1B-F). Within 1B-D and 1B-E, either batch may follow 1B-B directly (both depend only on 1B-B, not on each other or on 1B-C) — the numbering above reflects one valid linear order, not an additional dependency.
+Matches Section 9's "Creation order" column exactly: **0** (`.gitignore`, modified first, precedes every other Batch 1B-A path) → **1–9** (Batch 1B-A's nine new files) → **10–22** (Batch 1B-B) → **23–34** (Batch 1B-C) → **35–41** (Batch 1B-D, corrected to 7 files/paths) → **42–48** (Batch 1B-E) → **49** (Batch 1B-F). Within 1B-D and 1B-E, either batch may follow 1B-B directly (both depend only on 1B-B, not on each other or on 1B-C) — the numbering above reflects one valid linear order, not an additional dependency. **`.gitignore`'s order-0 position is a deliberate numbering choice** (preceding order 1 rather than renumbering all 49 subsequent entries) — it does not imply any dependency relationship beyond "modified before the rest of Batch 1B-A."
 
 ## 16. Dependency-Installation Order
 
@@ -350,6 +417,39 @@ Matches Section 9's "Creation order" column exactly: **1–9** (Batch 1B-A) → 
 No production, staging, or live-environment configuration file is proposed — there is no present need at this scaffold stage.
 
 **Batch 1B-A Dependency Baseline note (`AUTHOR-APPROVED`, referenced from Section 6 row 7):** because Batch 1B-A creates no actual YAML file (the filename/placement decisions, #13–#14, remain deferred), `config/enums.py` and `config/loader.py` need nothing beyond the Python standard library to fulfil their Batch 1B-A scope — foundational enums (`enum.Enum`/`StrEnum`), plain dict/mapping merges, `os.environ` reads, deterministic precedence resolution, and secret-value exclusion. **No YAML parser, Pydantic model, or `pydantic-settings` is required, installed, or used in Batch 1B-A.** Pydantic remains approved for executable data contracts beginning in Batch 1B-B (Section 19); its exact version constraint remains unresolved.
+
+### 17a. Configuration Enum Contract (Decision Group 3, `AUTHOR-APPROVED`)
+
+| Field | Detail |
+|---|---|
+| Exact path | `src/btmm_ai_scanner/config/enums.py` |
+| Approved classes | `InternalSymbol` (`StrEnum`); `Timeframe` (`StrEnum`) |
+| `InternalSymbol` values | `XAUUSD`, `EURUSD`, `GBPUSD` (uppercase strings, matching the approved values exactly) |
+| `Timeframe` values | `M1`, `M5`, `M15`, `H1`, `H3`, `H4`, `D1`, `W1` (uppercase strings, matching the approved values exactly) |
+| Permitted content | Two `StrEnum` classes with the values above only |
+| Prohibited content | Any POI-type enum; any lifecycle-state enum; any BTMM-state enum; any validation-state enum; any provider-specific symbol; any unsupported timeframe; any resampling logic |
+| Standard-library-only requirement | Yes — `enum.StrEnum` (stdlib since Python 3.11) only, no third-party import |
+| Required tests | Exercised indirectly by `tests/test_import_smoke.py` (import) and `tests/test_config_precedence.py` (usage in precedence merging) |
+| Deferred behavior | Exact function signatures and any helper/validation method on these enums are not defined here |
+
+### 17b. Configuration Loader Contract (Decision Group 3, `AUTHOR-APPROVED`)
+
+| Field | Detail |
+|---|---|
+| Exact path | `src/btmm_ai_scanner/config/loader.py` |
+| Approved responsibilities | Read approved non-secret runtime environment variables; normalize approved environment keys; merge configuration layers deterministically; return a new mapping; preserve caller-owned input mappings; standard library only |
+| Environment-variable prefix | `BTMM_CONFIG_` (example: `BTMM_CONFIG_LOG_LEVEL` → `log_level`) |
+| Approved precedence (later overrides earlier) | (1) Project defaults; (2) Environment-specific non-secret overrides; (3) Runtime environment overrides |
+| Approved merge behavior | **Shallow top-level merge only** — no nested/deep merge |
+| Permitted content | Environment reading, key normalization, shallow deterministic merging, returning a new mapping, secret-value exclusion |
+| Prohibited content | YAML parsing; filesystem configuration loading; Pydantic models; `pydantic-settings`; nested merge behavior; production configuration; provider-specific configuration; configuration persistence; logging configuration values; credential storage; trading-rule validation |
+| Standard-library-only requirement | Yes |
+| Required tests | `tests/test_config_precedence.py` |
+| Deferred behavior | Exact function signatures, exact exception classes, and exact return-type structure are not defined here |
+
+### 17c. Secret Boundary (Decision Group 3, `AUTHOR-APPROVED`)
+
+The non-secret configuration loader must **reject** any key containing indicators such as: `password`, `secret`, `token`, `credential`, `api_key`, `private_key`. Rules: do not read `.env`; do not return credential values; do not log credential names or values; do not create credential defaults; do not add provider API keys. **Actual secret retrieval remains a separate, future, unbuilt boundary** — this loader only excludes secret-like keys, it does not manage secrets.
 
 ## 18. Rule and Schema Manifest Scope
 
@@ -376,6 +476,34 @@ Covered file-by-file in Section 9 (Batch 1B-E rows). Summary: `ingestion/port.py
 Exact proposed test paths and names are listed in full in Section 8 (tree) and Section 9 (inventory) — 18 test files across Batches 1B-A through 1B-E: `test_import_smoke.py`, `test_config_precedence.py`, `test_identity_and_fingerprint.py`, `test_semver.py`, `test_raw_candle_contract.py`, `test_normalized_candle_contract.py`, `test_manifest_compatibility_classes.py`, `test_candle_completeness.py`, `test_exact_duplicate.py`, `test_conflicting_duplicate_quarantine.py`, `test_missing_gap.py`, `test_no_synthetic_fill.py`, `test_validation_eligibility.py`, `test_processing_version_preservation.py`, `test_audit_log_separation.py`, `test_secret_redaction.py`, `test_ingestion_port_contract.py`, `test_offline_file_stub.py`. **No fixture or test file is created by this document.**
 
 **Phase 0G lifecycle-test restrictions remain fully binding and are unaffected by this scaffold plan:** full lifecycle tests remain limited to the 18 propagated bounded directional POIs (none of which appear in this scaffold at all — POI/lifecycle modules are entirely out of scope for Batches 1B-A–1B-F); Equal Highs/Equal Lows/both Trendlines remain limited to construction/classification/permitted-state/prohibition tests only, once their module exists (it does not, in this scope); generic bounded-lifecycle tests remain `NOT_APPLICABLE` to the 14 non-bounded reference structures. **No detector test is proposed or needed in this initial scaffold** — no detector module exists in Section 8's tree.
+
+### 23a. Batch 1B-A Test Boundaries (Decision Group 3, `AUTHOR-APPROVED`)
+
+**`tests/test_import_smoke.py` — approved coverage:**
+- `btmm_ai_scanner` imports
+- `btmm_ai_scanner.config` imports
+- `InternalSymbol` imports
+- `Timeframe` imports
+- `config.loader` imports
+- Importing performs no filesystem write
+- Importing performs no network action
+
+**`tests/test_import_smoke.py` — prohibited scope:** POIs; market structure; BTMM; ingestion; AI; signals; trading; profitability; databases; live providers.
+
+**`tests/test_config_precedence.py` — approved coverage:**
+1. Defaults remain when no override exists
+2. Environment-specific values override defaults
+3. Runtime environment values override both earlier layers
+4. Input mappings remain unchanged
+5. `BTMM_CONFIG_` is stripped
+6. Environment keys are normalized
+7. Secret-like keys are rejected
+8. Merge results are deterministic
+9. No YAML or filesystem input is required
+10. Tests use controlled mappings or monkeypatched environment values
+11. Tests do not depend on real machine credentials or configuration
+
+**Confirmed for both tests:** no detector test enters Batch 1B-A; no ingestion test enters Batch 1B-A; no lifecycle test enters Batch 1B-A; no AI, signal, risk, or execution test enters Batch 1B-A. All Phase 0G testing restrictions (above) remain unchanged.
 
 ## 24. CI Scope
 
