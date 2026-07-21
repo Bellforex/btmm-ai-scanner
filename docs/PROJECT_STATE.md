@@ -435,7 +435,27 @@ Following author review, **Phase 1B Decision Groups 1 through 8 are `AUTHOR-APPR
 
 **No implementation occurred.** No package or dependency file exists (`pyproject.toml`, `uv.lock`, `.python-version`, and every proposed Python file remain proposals only). **Batch 1B-A remains unapproved for execution** — the remaining blocking items (exact Python patch, exact runtime/development dependency versions, remaining `pyproject.toml` metadata fields, minimum-OS position, license-field content) must still be separately resolved before any Batch 1B-A file is created. All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED` but not implemented; all 20 Architecture Decision Gates remain `AUTHOR-DECISION RESOLVED` but not implemented. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only. All Phase 0G limitations remain binding, unchanged by this correction.
 
-**Next controlled task:** Review and resolve the remaining Batch 1B-A implementation blockers, then approve the exact nine-file Batch 1B-A scope before creating any file.
+**This "exact Python patch remains unresolved" statement is superseded by Section 25 below.**
+
+## 25. Phase 1B-A Runtime and Dependency Baseline (Completed)
+
+**Phase 1B-A Runtime and Dependency Baseline = `AUTHOR-APPROVED`** (following the read-only Phase 1B-A Runtime and Dependency Environment Audit and the author's subsequent decisions):
+
+- **Python** = `3.12.13`
+- **uv-managed Python** = permitted and preferred
+- **uv** = `0.11.30`
+- **`uv_build`** = `>=0.11.30,<0.12`
+- **`requires-python`** = `>=3.12,<3.13`
+- **Batch 1B-A runtime dependencies** = none
+- **pytest** = `>=9.1.1,<10`
+- **mypy** = `>=2.3.0,<3`
+- **Ruff** = `>=0.15.22,<0.16`
+- **Configuration modules** (`config/__init__.py`, `config/enums.py`, `config/loader.py`) remain in Batch 1B-A, scoped to standard-library-only content (no YAML, no Pydantic, no `pydantic-settings`)
+- **Batch 1B-A remains exactly nine files** — unchanged from the prior approved scope
+
+**Environment facts recorded by the audit:** `uv` is not installed. Python `3.12.13` is not installed. Python `3.14.6` remains the only installed local runtime discovered by the audit — it is untouched and will not be used as the project runtime. No virtual environment exists. No lockfile exists. **No implementation has begun. Batch 1B-A remains unapproved for execution** — the remaining metadata fields (description, readme, license, authors, classifiers), minimum-OS position, and license-field content, plus the eventual Pydantic constraint for Batch 1B-B, remain open. All Phase 0G limitations remain binding; Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
+
+**Next controlled task:** Resolve the remaining Batch 1B-A metadata, configuration-contract, test-content and execution-scope decisions before authorizing installation or file creation.
 
 **All 17 technology decisions remain author-approved but not implemented. All 20 architecture decision gates remain author-decision resolved but not implemented.** Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only. All Phase 0G limitations remain binding, unchanged by this planning task.
 
