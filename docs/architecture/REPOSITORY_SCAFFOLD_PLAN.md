@@ -348,6 +348,23 @@ Approved constraints on the eventual scaffold:
 - **The installation sequence (Stages A–J) is `AUTHOR-APPROVED`:** repository preflight → install uv 0.11.30 → verify Python 3.12.13 availability → install managed Python (existing 3.14.6 untouched) → modify `.gitignore` → create the nine handwritten files → generate `uv.lock` → `uv sync --locked` → verification → git-scope verification. Full detail in `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 16a.
 - **The rollback procedure is `AUTHOR-APPROVED`:** stop-and-report on any unexpected result; restore only `.gitignore`; delete only the nine new paths and generated `.venv/`; no `git reset --hard`/`git clean -fd(x)`/force push; installed uv/Python are not auto-removed. Full detail in Section 27a.
 - **Acceptance criteria are `AUTHOR-APPROVED`:** the full exact checklist in `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 28a — including exactly ten changed paths, exact interpreter/tool versions, all four verification gates (Ruff format, Ruff lint, mypy, pytest) passing, and no secret exposure.
-- **No implementation has occurred.** No `pyproject.toml`, `uv.lock`, `.python-version`, `src/`, or `tests/` exists. No Python, uv, or package was installed. `.gitignore` remains unmodified. **Batch 1B-A remains ten changed paths and remains not authorized for execution.**
+- **No implementation has occurred.** No `pyproject.toml`, `uv.lock`, `.python-version`, `src/`, or `tests/` exists. No Python, uv, or package was installed. `.gitignore` remains unmodified. **Batch 1B-A remains ten changed paths and remains not authorized for execution.** *(This bullet described the state at the time of that decision round. It is superseded by Section 10 below, which records that Batch 1B-A has since been implemented, verified, committed, and pushed.)*
 
 This section does not replace or erase the original scaffold proposal in Sections 1–8 above — it only adds the exact-scope cross-reference and the current decision status.
+
+## 10. Phase 1B-A Implementation Closure
+
+- **Commit hash and message:** `47cfd699bb7f4893774579f1693abbbb57b91607` — "Implement Phase 1B-A software foundation".
+- **Ten-path scope completed:** `.gitignore` (modified) plus nine new files (`.python-version`, `pyproject.toml`, `src/btmm_ai_scanner/__init__.py`, `src/btmm_ai_scanner/config/__init__.py`, `src/btmm_ai_scanner/config/enums.py`, `src/btmm_ai_scanner/config/loader.py`, `tests/test_config_precedence.py`, `tests/test_import_smoke.py`, `uv.lock`) — matching the previously documented plan exactly.
+- **Package shell created:** `src/btmm_ai_scanner/__init__.py` (docstring only, no side effects).
+- **Configuration enums and loader created:** `InternalSymbol`/`Timeframe` (`StrEnum`); `load_configuration` with the approved three-layer precedence, shallow merge, key validation, and secret-rejection boundary.
+- **Test foundation created:** `test_import_smoke.py` (3 tests) and `test_config_precedence.py` (11 tests, 31 collected cases including parametrization) — 34 collected, 34 passed overall.
+- **Lockfile created:** `uv.lock`, generated via `uv lock`, verified via `uv lock --check` (14 resolved packages, zero runtime dependencies, dev dependencies exactly `pytest==9.1.1`/`mypy==2.3.0`/`ruff==0.15.22`).
+- **Project environment verified:** `uv sync --locked` created `.venv/` (git-ignored, absent from Git status); all four verification gates (Ruff format, Ruff lint, mypy, pytest) passed.
+- **`.gitignore` updated:** approved Python/uv/test/type-check/Ruff/coverage/build exclusions added; `references/private/*` preserved unchanged; no source/test/config/manifest file newly ignored.
+- **Runtime dependencies remain empty:** `[project].dependencies = []`, confirmed in both `pyproject.toml` and `uv.lock`.
+- **Verification results passed:** all results recorded in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 18b and `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 31.
+
+**Batch 1B-A status: `IMPLEMENTED`. `VERIFIED`. `COMMITTED`. `PUSHED`. `NOT PRODUCTION-APPROVED`.**
+
+**Batch 1B-A is closed. Batches 1B-B through 1B-F remain `NOT YET IMPLEMENTED`; Batch 1B-B has not started.** The procedural exception governing this closure (two in-scope test-file fixes made without pausing for separate re-authorization, subsequently disclosed via forensic review and accepted by explicit author exception) and the external, non-blocking Python minor-version alias anomaly are recorded in full in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Sections 18c–18d — neither is hidden or minimized here.
