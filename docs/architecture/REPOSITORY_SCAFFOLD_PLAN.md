@@ -16,7 +16,7 @@ btmm-ai-scanner/
 ├── knowledge/                (existing — untouched by this plan)
 ├── references/               (existing — untouched by this plan)
 ├── src/                      (proposed, Phase 1B)
-│   └── btmm_scanner/         (proposed application package)
+│   └── btmm_ai_scanner/         (proposed application package)
 │       ├── config/
 │       ├── contracts/
 │       ├── ingestion/
@@ -45,98 +45,98 @@ btmm-ai-scanner/
 
 For each proposed directory: purpose, what may live there, what must not live there, allowed dependency direction, and whether creation is recommended in Phase 1B.
 
-### `src/btmm_scanner/config/`
+### `src/btmm_ai_scanner/config/`
 - **Purpose:** Symbol/provider/timeframe enums, environment settings, active rule/schema version pointers.
 - **May contain:** config loader code, config schema, environment-variable mapping.
 - **Must not contain:** trading rules, POI logic, secrets in plain text.
 - **Allowed dependency direction:** none (lowest layer; nothing below it).
 - **Phase 1B creation:** Recommended.
 
-### `src/btmm_scanner/contracts/`
+### `src/btmm_ai_scanner/contracts/`
 - **Purpose:** Data-contract definitions (Raw Candle, Normalized Candle, POI Record, etc. — the executable form of `DATA_CONTRACTS_AND_SCHEMA_PLAN.md`).
 - **May contain:** schema/type definitions, schema-version manifest.
 - **Must not contain:** business logic, I/O code.
 - **Allowed dependency direction:** `config` only.
 - **Phase 1B creation:** Recommended (contract definitions only, no executable validation logic required in 1B itself unless the author approves the schema-validation technology in Decision Gate #3).
 
-### `src/btmm_scanner/ingestion/`
+### `src/btmm_ai_scanner/ingestion/`
 - **Purpose:** Raw Data Ingestion Boundary — accepts external market data, writes immutable Raw Candle Records.
 - **May contain:** provider-adapter code (once a provider/API is author-approved), raw-record writers.
 - **Must not contain:** normalization logic, POI logic, validity decisions of any kind. **Ingestion code must never decide POI validity.**
 - **Allowed dependency direction:** `contracts`, `config` only.
 - **Phase 1B creation:** Directory only, no adapter implementation (Decision Gate #13 — "ingestion-adapter boundary" — requires more research and is not resolved by Phase 1A).
 
-### `src/btmm_scanner/normalization/`
+### `src/btmm_ai_scanner/normalization/`
 - **Purpose:** Converts Raw Candle Records into Normalized Candle Records.
 - **May contain:** timezone conversion, OHLC canonicalization, confirmed-candle flagging.
 - **Must not contain:** measurement formulas, POI logic.
 - **Allowed dependency direction:** `contracts`, `config`, `ingestion` (read-only).
 - **Phase 1B creation:** Recommended (directory + interface stub only).
 
-### `src/btmm_scanner/measurements/`
+### `src/btmm_ai_scanner/measurements/`
 - **Purpose:** Implements the already-Author-Approved formulas from `knowledge/MEASUREMENT_STANDARDS.md`.
 - **May contain:** Candle Measurement Standard V1, Small Candle Standard V1, Volume/Momentum Proxy Standard V1, Market Speed Standard V1, POI Zone Interaction Standard V1 implementations — nothing beyond what is Author-Approved.
 - **Must not contain:** any new, un-approved formula; POI or BTMM logic.
 - **Allowed dependency direction:** `normalization` (read-only), `config`.
 - **Phase 1B creation:** Directory only, no formula implementation in 1B.
 
-### `src/btmm_scanner/domain/`
+### `src/btmm_ai_scanner/domain/`
 - **Purpose:** Meaningful Swing, Trendline, Support/Resistance entities.
 - **May contain:** swing-detection, trendline-candidate, support/resistance-zone logic per the already-approved standards.
 - **Must not contain:** HH/HL/LH/LL/BOS/CHoCH (formally deferred, `P0G-B003`); any automated Equal High/Low or Trendline specialized lifecycle (formally deferred, `P0G-B004`/`P0G-B005`).
 - **Allowed dependency direction:** `measurements`, `config`.
 - **Phase 1B creation:** Directory only, no logic implementation in 1B.
 
-### `src/btmm_scanner/poi/`
+### `src/btmm_ai_scanner/poi/`
 - **Purpose:** The 36 POI type representations and their formation/boundary rules.
 - **May contain:** POI record construction per each POI's approved specification.
 - **Must not contain:** trade placement of any kind. **POI detectors must never place trades.**
 - **Allowed dependency direction:** `domain`, `measurements`, `config`.
 - **Phase 1B creation:** Directory only, no detector implementation in 1B.
 
-### `src/btmm_scanner/lifecycle/`
+### `src/btmm_ai_scanner/lifecycle/`
 - **Purpose:** The shared Boundary Breach/Reclaim/Invalidation lifecycle (18 propagated POIs) and the descriptive Freshness/Age standard.
 - **May contain:** implementations of `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` and `POI_FRESHNESS_AND_AGE_STANDARD.md`, exactly as approved.
 - **Must not contain:** any mitigation percentage/state, any automatic age-expiration threshold, any repeated-tap degradation formula (all remain undefined/deferred).
 - **Allowed dependency direction:** `poi`, `config`.
 - **Phase 1B creation:** Directory only, no logic implementation in 1B.
 
-### `src/btmm_scanner/btmm/`
+### `src/btmm_ai_scanner/btmm/`
 - **Purpose:** Future BTMM setup evaluation against the state machine in `knowledge/btmm/BTMM_STATE_MACHINE.md`.
 - **May contain:** BTMM state machine implementation, once approved for implementation.
 - **Must not contain:** entry, stop-loss, take-profit, position-sizing, or risk logic.
 - **Allowed dependency direction:** `poi`, `lifecycle`, `annotations`, `config`.
 - **Phase 1B creation:** Directory only, no logic implementation in 1B.
 
-### `src/btmm_scanner/annotations/`
+### `src/btmm_ai_scanner/annotations/`
 - **Purpose:** Manual expert label capture (`context_input_source`, `liquidity_event_source`, `trendline_event_source`, all `= MANUAL_EXPERT_LABEL`).
 - **May contain:** annotation record construction, reviewer-identity capture.
 - **Must not contain:** any representation of a manual label as automatic detection.
 - **Allowed dependency direction:** `domain`, `poi`, `config`.
 - **Phase 1B creation:** Recommended (directory + record shape only — this is one of the explicitly permitted controlled-foundation categories).
 
-### `src/btmm_scanner/provenance/`
+### `src/btmm_ai_scanner/provenance/`
 - **Purpose:** Cross-cutting lineage tracking for every record in every layer.
 - **May contain:** provenance-record construction and lookup.
 - **Must not contain:** business/trading logic.
 - **Allowed dependency direction:** `config` only; depended upon by every layer above it.
 - **Phase 1B creation:** Recommended.
 
-### `src/btmm_scanner/validation/`
+### `src/btmm_ai_scanner/validation/`
 - **Purpose:** Cross-cutting data-quality and schema-conformance checks.
 - **May contain:** OHLC consistency checks, duplicate/missing/out-of-order candle detection, provider/symbol/timeframe checks.
 - **Must not contain:** POI or BTMM validity decisions (data-quality validity and trading validity are different concepts — see `PROVENANCE_VALIDATION_AND_AUDIT_PLAN.md`).
 - **Allowed dependency direction:** `contracts`, `config`.
 - **Phase 1B creation:** Recommended.
 
-### `src/btmm_scanner/replay/`
+### `src/btmm_ai_scanner/replay/`
 - **Purpose:** Historical replay engine — re-runs the pipeline against pinned raw data and pinned rule/schema versions.
 - **May contain:** replay orchestration, pinned-version resolution.
 - **Must not contain:** any write path back into live/raw records.
 - **Allowed dependency direction:** every layer through `poi`/`lifecycle`, read-only.
 - **Phase 1B creation:** Directory only, no engine implementation in 1B.
 
-### `src/btmm_scanner/audit/`
+### `src/btmm_ai_scanner/audit/`
 - **Purpose:** Aggregates audit events into reviewable reports.
 - **May contain:** audit-event aggregation, reporting.
 - **Must not contain:** trading-signal generation.
@@ -270,20 +270,20 @@ The proposed structure and dependency direction must make each of the following 
 
 | Directory | Recommended in Phase 1B |
 |---|---|
-| `src/btmm_scanner/config/` | Yes |
-| `src/btmm_scanner/contracts/` | Yes (contract definitions only) |
-| `src/btmm_scanner/ingestion/` | Directory only, no adapter |
-| `src/btmm_scanner/normalization/` | Directory + interface stub only |
-| `src/btmm_scanner/measurements/` | Directory only |
-| `src/btmm_scanner/domain/` | Directory only |
-| `src/btmm_scanner/poi/` | Directory only |
-| `src/btmm_scanner/lifecycle/` | Directory only |
-| `src/btmm_scanner/btmm/` | Directory only |
-| `src/btmm_scanner/annotations/` | Yes (record shape only) |
-| `src/btmm_scanner/provenance/` | Yes |
-| `src/btmm_scanner/validation/` | Yes |
-| `src/btmm_scanner/replay/` | Directory only |
-| `src/btmm_scanner/audit/` | Yes |
+| `src/btmm_ai_scanner/config/` | Yes |
+| `src/btmm_ai_scanner/contracts/` | Yes (contract definitions only) |
+| `src/btmm_ai_scanner/ingestion/` | Directory only, no adapter |
+| `src/btmm_ai_scanner/normalization/` | Directory + interface stub only |
+| `src/btmm_ai_scanner/measurements/` | Directory only |
+| `src/btmm_ai_scanner/domain/` | Directory only |
+| `src/btmm_ai_scanner/poi/` | Directory only |
+| `src/btmm_ai_scanner/lifecycle/` | Directory only |
+| `src/btmm_ai_scanner/btmm/` | Directory only |
+| `src/btmm_ai_scanner/annotations/` | Yes (record shape only) |
+| `src/btmm_ai_scanner/provenance/` | Yes |
+| `src/btmm_ai_scanner/validation/` | Yes |
+| `src/btmm_ai_scanner/replay/` | Directory only |
+| `src/btmm_ai_scanner/audit/` | Yes |
 | `tests/fixtures/` | Directory only, no fixture files |
 | `tests/unit/`, `tests/integration/`, `tests/replay/` | Directory only, no test files |
 | `scripts/` | Directory only |
@@ -301,10 +301,27 @@ The proposed structure and dependency direction must make each of the following 
 Approved constraints on the eventual scaffold:
 
 - **Toolchain (Group 1):** Python 3.12 (one pinned patch version); uv as package manager; `pyproject.toml` as the central manifest; `uv.lock` as the committed reproducibility lockfile; Pydantic v2; pytest; mypy; Ruff (formatter and linter).
-- **Storage (Group 2):** Parquet for bulk tabular historical records and JSONL for append-only event/audit streams, kept in explicitly separated roles; no initial database (`src/btmm_scanner/` contracts remain file-based); no initial `migrations/` implementation.
-- **Ingestion boundary (Groups 3, 7):** `src/btmm_scanner/ingestion/` exposes only a provider-neutral `MarketDataSourcePort` interface (`INTERFACE_ONLY`); early retrieval is restricted to `OFFLINE_FILE` mode; no provider-specific adapter (FXCM, TradingView, or otherwise) and no live connection of any kind.
+- **Storage (Group 2):** Parquet for bulk tabular historical records and JSONL for append-only event/audit streams, kept in explicitly separated roles; no initial database (`src/btmm_ai_scanner/` contracts remain file-based); no initial `migrations/` implementation.
+- **Ingestion boundary (Groups 3, 7):** `src/btmm_ai_scanner/ingestion/` exposes only a provider-neutral `MarketDataSourcePort` interface (`INTERFACE_ONLY`); early retrieval is restricted to `OFFLINE_FILE` mode; no provider-specific adapter (FXCM, TradingView, or otherwise) and no live connection of any kind.
 - **Future Risk-Control Interface:** remains deferred, exactly as stated in Section 5 above and in `PHASE_1A_SOFTWARE_FOUNDATION_ARCHITECTURE.md` SS7.16 — unaffected by this decision round.
 - **Manifests (Group 8):** the approved future scaffold destinations `manifests/rules/` and `manifests/schemas/` are confirmed as the eventual homes for rule-version and schema-version manifests. **No file is created in either directory by this task.**
 - **No containers:** no `Dockerfile`, `docker-compose.yml`, or container-specific assumption is introduced into this plan by these decisions.
 
 **These constraints refine which options within the existing Section 2–6 proposal are now author-approved; they do not add a new proposed directory, and they do not authorize creating any directory or file.** The exact scaffold file set (including `manifests/rules/` and `manifests/schemas/`) remains subject to a separate, explicit implementation-review task before any file is created.
+
+## 9. Phase 1B Exact Scope Planning
+
+**No scaffold has been created by this section.** The exact, file-level implementation scope proposed against this plan is now recorded canonically in `docs/architecture/PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` — this section only cross-references that document; it does not restate its content.
+
+- **Exact-scope document:** `docs/architecture/PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` — defines a 49-file inventory across six proposed implementation batches (1B-A through 1B-F), each mapped to this plan's directory structure (Sections 1–8 above, now using the author-approved `src/btmm_ai_scanner/` package path throughout).
+- **Exact implementation batches remain pending author approval.** Batch boundaries (Toolchain and Package Shell; Core Foundation Contracts; Validation and Eligibility Foundation; Audit and Operational Logging Foundation; Provider-Neutral Ingestion Boundary; CI Foundation) are proposed only.
+- **Package identity and layout are now `AUTHOR-APPROVED`** (Phase 1B-0 Package Identity and Layout decision): distribution name `btmm-ai-scanner`; import package `btmm_ai_scanner`; source-package path `src/btmm_ai_scanner/`; `src` layout (not flat layout). **Note:** this plan's own Section 2 illustrative tree, and every per-directory heading in Section 3, previously showed `src/btmm_scanner/` (without `_ai_`); that stale reference has now been corrected throughout this document to `src/btmm_ai_scanner/`.
+- **`uv_build` is now `AUTHOR-APPROVED` as the build backend.** (Previously unresolved; `hatchling` and `setuptools` were considered and not chosen.) The exact `uv_build` dependency version remains unresolved.
+- **`0.1.0` is now `AUTHOR-APPROVED` as the initial project version.**
+- **`.python-version` inclusion in Batch 1B-A is now `AUTHOR-APPROVED`** — it is no longer optional or conditional. Its exact patch-version content remains unresolved (see below).
+- **Exact Python 3.12 patch version remains unresolved** — Section 8's constraints confirm Python 3.12 with a pinned patch policy; the specific patch number is not yet chosen, and remains deferred until the implementation environment is verified.
+- **No empty placeholder directories will be created.** Consistent with this plan's existing per-directory documentation (Section 3) and the conservative-scaffold principle in the exact-scope document: a directory is proposed for creation only when at least one reviewed file will exist inside it. `measurements/`, `domain/`, `poi/`, `lifecycle/`, `btmm/`, `annotations/`, `replay/`, `scripts/`, `migrations/`, and `manifests/` remain correctly absent from the near-term proposed scope.
+- **No scaffold has been created.** No `src/`, `pyproject.toml`, `uv.lock`, `.python-version`, or any package file exists as a result of this decision or this document.
+- **Batch 1B-A has not been approved for execution.** Package identity, layout, build backend, initial version, and `.python-version` inclusion are resolved; the exact Python patch version, exact dependency versions, remaining `pyproject.toml` metadata fields, minimum-OS position, and license-field content remain open, per `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 6. **Each batch requires separate review and commit** — no batch may be implemented, and no batch's files created, until the author has separately approved every blocking decision relevant to that batch and the batch's exact file list.
+
+This section does not replace or erase the original scaffold proposal in Sections 1–8 above — it only adds the exact-scope cross-reference and the current decision status.

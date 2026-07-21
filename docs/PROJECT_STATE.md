@@ -411,3 +411,32 @@ Following author review, **Phase 1B Decision Groups 1 through 8 are `AUTHOR-APPR
 **No scaffold exists. No technology is installed. No executable schema exists. No ingestion adapter exists. No provider connection exists.** All Phase 0G limitations remain binding: Condition 3 = NOT MET, Condition 4 = MET, Condition 7 = PARTIALLY MET (non-passing); all 36 POIs remain `Status: PARTIAL`; eighteen bounded directional POIs remain propagated, unchanged; active unresolved blockers remain **15**. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only — not unconditionally open.
 
 **Next controlled task:** Phase 1B repository scaffold implementation — define and review the exact directory, configuration, manifest, contract-stub, validation-stub, test and CI file scope before creating any files.
+
+## 23. Phase 1B-0 — Exact Scaffold Scope Planning (Completed)
+
+**Phase 1B author-decision commit:** `52c2139708a2582d0cbc04067be67fc3051a526b` ("Document Phase 1B author decisions").
+
+**Phase 1B-0 exact scaffold scope planning has begun and is now complete for this task.** A new planning document, `docs/architecture/PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`, defines a 49-file inventory across six proposed implementation batches (1B-A Toolchain and Package Shell; 1B-B Core Foundation Contracts; 1B-C Validation and Eligibility Foundation; 1B-D Audit and Operational Logging Foundation; 1B-E Provider-Neutral Ingestion Boundary; 1B-F CI Foundation), plus a 30-item blocking-decision table.
+
+**No implementation artifact exists.** No package identity had yet been author-approved as of this task's completion (`btmm-ai-scanner` distribution / `btmm_ai_scanner` import package were proposed only, both `REQUIRES AUTHOR DECISION`); no build backend had yet been approved. **This package-identity status is superseded by Section 24 below.** No exact Python patch version has yet been selected (3.12 series confirmed; exact patch pending) — this remains true and is unaffected by Section 24. **No scaffold batch has yet been approved for execution.**
+
+## 24. Phase 1B-0 Package Identity and Layout Decision (Completed)
+
+**Approved Phase 1B-0 Package Identity and Layout decision** (supersedes the "package identity remains pending" statement in Section 23 above, which accurately reflected the state at that task's completion):
+
+- **Distribution** = `btmm-ai-scanner`
+- **Import package** = `btmm_ai_scanner`
+- **Source path** = `src/btmm_ai_scanner/`
+- **Layout** = `src` (src-layout, not flat-layout)
+- **Build backend** = `uv_build`
+- **Initial version** = `0.1.0`
+- **`.python-version`** belongs in Batch 1B-A — its *inclusion* is now `AUTHOR-APPROVED` (no longer optional/conditional); its exact patch-version *content* remains unresolved.
+- **Exact Python patch remains unresolved** — the specific 3.12.x patch value is deferred until the implementation environment is verified.
+
+**No implementation occurred.** No package or dependency file exists (`pyproject.toml`, `uv.lock`, `.python-version`, and every proposed Python file remain proposals only). **Batch 1B-A remains unapproved for execution** — the remaining blocking items (exact Python patch, exact runtime/development dependency versions, remaining `pyproject.toml` metadata fields, minimum-OS position, license-field content) must still be separately resolved before any Batch 1B-A file is created. All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED` but not implemented; all 20 Architecture Decision Gates remain `AUTHOR-DECISION RESOLVED` but not implemented. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only. All Phase 0G limitations remain binding, unchanged by this correction.
+
+**Next controlled task:** Review and resolve the remaining Batch 1B-A implementation blockers, then approve the exact nine-file Batch 1B-A scope before creating any file.
+
+**All 17 technology decisions remain author-approved but not implemented. All 20 architecture decision gates remain author-decision resolved but not implemented.** Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only. All Phase 0G limitations remain binding, unchanged by this planning task.
+
+**Next controlled task:** Review and author-approve the exact Phase 1B scaffold identity, blocking implementation decisions, batch boundaries and file inventory before creating Batch 1B-A.
