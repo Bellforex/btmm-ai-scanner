@@ -339,3 +339,26 @@ Two Author-Approved corrective clarifications were applied, per `knowledge/FINAL
 No POI specification's overall status changed from `PARTIAL`. No numeric trading threshold, lifecycle state, mitigation state, degradation rule, age-expiration threshold, or rollover-timing rule was defined or modified. Eighteen bounded directional POIs remain propagated, unchanged. All 36 POI specifications remain `Status: PARTIAL`. **The knowledge gate remains CLOSED. Phase 0G remains unapproved. No software implementation is approved.**
 
 **Next controlled task (unchanged):** Perform `P0G-B019` — final author review and sign-off of the coverage matrix and Phase 0G knowledge package, without approving software implementation.
+
+## 19. P0G-B019 Final Author Sign-Off — Controlled Phase 0G Baseline (Completed)
+
+**The author approved `P0G-B019`.** Commit `316ca6f9e816850ac6883cd2f34b6027b52b0d84` ("Document Phase 0G policy decisions and clarifications") is the immediate pre-sign-off checkpoint. The current Phase 0G knowledge package is accepted as the **AUTHOR-APPROVED CONTROLLED BASELINE**. Full decision record: `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Audit Resolution — P0G-B019 Final Author Sign-Off," and `knowledge/POI_COVERAGE_MATRIX.md`, "Phase 0G Author Sign-Off — P0G-B019."
+
+**Governance statuses:**
+```
+Phase 0G Status        = AUTHOR-APPROVED CONTROLLED BASELINE
+Knowledge Gate Status  = OPEN FOR CONTROLLED FOUNDATION WORK
+Gate Opening Basis     = AUTHOR-APPROVED BASELINE EXCEPTION
+```
+
+**`P0G-B019` is RESOLVED** — disposition moves from A to **G — `HISTORICAL_OR_RESOLVED`**, no active priority, removed from the minimum Phase 0G closure set.
+
+**Individual technical condition statuses are unchanged and remain binding:** Condition 3 = **NOT MET**; Condition 4 = **MET**; Condition 7 = **PARTIALLY MET**, explicitly non-passing. The gate opens through this explicit author-approved exception, not because all 8 technical conditions passed.
+
+**Blocker counts:** Historical identified blockers = **21** (unchanged). Active unresolved blockers = **15** (down from 16 — `P0G-B019` excluded as resolved). Active P0 blockers = **0**. **Minimum Phase 0G closure set = EMPTY.**
+
+**All 36 POI specifications remain `Status: PARTIAL`.** Eighteen bounded directional POIs remain propagated, unchanged. Every deferred limitation remains binding: mitigation/degradation (undefined for all 36 POIs), Equal High/Low and Trendline specialized automated lifecycles (formally deferred), HH/HL/LH/LL/BOS/CHoCH (formally deferred, undefined), automatic trend/market-structure detection (deferred), empirical calibration and out-of-sample validation (outstanding for every provisional standard), entry/risk rules (deferred).
+
+**No production or trading automation is approved.** This sign-off permits planning and controlled implementation only for: repository and package structure; configuration models; data contracts; candle schemas; POI and event schemas; annotation structures; provenance structures; deterministic unit-test fixtures; historical-data ingestion planning; validation infrastructure; audit infrastructure. It does **not** authorize: live trading; automated order execution; MT4/MT5 bots; Telegram trading signals; production deployment; autonomous trend detection; automatic Equal High/Low sweep detection; automatic Trendline final-break detection; AI model training; unreviewed self-learning; entry/stop-loss/take-profit/position-sizing/risk automation; or any profitability/production-readiness claim.
+
+**Next controlled task:** Phase 1A — define the software-foundation architecture and repository scaffold plan for configuration, data contracts, schemas, provenance, validation and deterministic testing, without implementing POI detectors, AI training, signals or trading execution.

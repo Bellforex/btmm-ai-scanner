@@ -976,3 +976,72 @@ Two Author-Approved corrective clarifications were applied to the documentation 
 | **Total active** | **16** |
 
 **Only active P0 blocker: `P0G-B019`. Minimum Phase 0G closure set: `P0G-B019` only.** `P0G-B019` is **not resolved** by this task. No POI status changed from `PARTIAL`. No numeric trading threshold changed. No lifecycle state was created. No mitigation percentage, mitigation state, repeated-tap degradation, automatic expiration, age threshold, or period-rollover-timing rule was defined or modified. All 18 propagated POIs remain unchanged. **The knowledge gate remains CLOSED. Phase 0G remains unapproved.** Nothing was staged, committed, or pushed by this task.
+
+---
+
+## Post-Audit Resolution — P0G-B019 Final Author Sign-Off
+
+**Date: 2026-07-21.**
+
+Parts 1-34 and every prior append-only section above (including the historical Part 23 full record for `P0G-B019`, disposition A / priority P0) are preserved unchanged. This section records the final author decision on `P0G-B019` — the author's own coverage-matrix sign-off act, gate condition 8 — as a separate, dated, append-only resolution.
+
+1. **The author approved `P0G-B019` Option A.** The current Phase 0G knowledge package (36 POI specifications, the 18-POI shared-lifecycle propagation, all Author-Approved standards in `knowledge/MEASUREMENT_STANDARDS.md`, the BTMM state machine, the POI Boundary Breach standard, the freshness/age standard, and every decision recorded in this audit through `P0G-B013A`) is accepted as the **AUTHOR-APPROVED CONTROLLED BASELINE**.
+2. **The current knowledge package is accepted as the controlled Phase 0G baseline** — reviewed, sufficient to authorize *controlled foundation work only* (see `knowledge/KNOWLEDGE_COMPLETION_GATE.md` for the exact permitted/prohibited scope), not as a claim of technical completeness.
+3. **`P0G-B019` is RESOLVED.**
+4. **`P0G-B019` moves from disposition A to disposition G — `HISTORICAL_OR_RESOLVED`.**
+5. **`P0G-B019` has no active priority** (not P0, P1-P4, or DEFERRED).
+6. **The minimum Phase 0G closure set is now empty** — zero active P0 blockers remain.
+7. **Active unresolved blockers reduce from 16 to 15** (`P0G-B019` excluded as resolved).
+8. **Historical identified blockers remain 21**, unchanged.
+9. **Conditions 3 and 7 retain their technical statuses** — Condition 3 remains `NOT MET`; Condition 7 remains `PARTIALLY MET` and is explicitly treated as non-passing for gate-condition purposes. Neither was altered by this sign-off.
+10. **All 36 POI specifications remain `Status: PARTIAL`.** None became `APPROVED`.
+11. **This sign-off is not production approval.** It is not an empirical-validation claim, not an out-of-sample-validation claim, and not a profitability or production-readiness claim.
+12. **Every deferred blocker remains active and binding** — `P0G-B003` (HH/HL/LH/LL/BOS/CHoCH), `P0G-B004` (Equal High/Low specialized lifecycle), `P0G-B005` (Trendline specialized lifecycle), `P0G-B008/B012/B015/B020` (empirical-calibration items), `P0G-B009/B010/B011/B021` (explicitly deferred items), `P0G-B014` (documentation blocker), `P0G-B016` (entry/risk, deferred), `P0G-B017/B018` (software specifications) are all unresolved and unaffected by this decision.
+
+**Governance distinction — three separate concepts, never merged:**
+- **Phase 0G transition approval** (this section): the author's explicit decision to accept the current knowledge package as a controlled baseline and open the gate for controlled foundation work only.
+- **Technical completion of all deferred requirements**: NOT achieved by this section — mitigation, family-specific overrides, Equal High/Low and Trendline specialized lifecycles, automatic trend/market-structure detection, empirical calibration, and out-of-sample validation all remain open, tracked exactly as before.
+- **Production approval**: NOT granted by this section, and not implied by it. No live trading, automated execution, or AI training is authorized.
+
+**Current disposition counts across all 21 identified blockers, after this decision:**
+
+| Disposition | Count | Blocker IDs |
+|---|---|---|
+| A — `PHASE_0G_AUTHOR_DECISION_BLOCKER` | 0 | (none) |
+| B — `PHASE_0G_DOCUMENTATION_BLOCKER` | 1 | B014 |
+| C — `EMPIRICAL_CALIBRATION_ITEM` | 4 | B008, B012, B015, B020 |
+| D — `SOFTWARE_IMPLEMENTATION_SPECIFICATION` | 2 | B017, B018 |
+| E — `ENTRY_RISK_OR_TRADE_MANAGEMENT_DEFERRED` | 1 | B016 |
+| F — `EXPLICITLY_DEFERRED_OUTSIDE_PHASE_0G` | 7 | B003, B004, B005, B009, B010, B011, B021 |
+| G — `HISTORICAL_OR_RESOLVED` | 6 | B001, B002, B006, B007, B013, B019 |
+| **Total** | **21** | |
+
+**Active unresolved blocker total: 15** (the 6 G items excluded).
+
+**Current active priority counts:**
+
+| Priority | Count | Blocker IDs |
+|---|---|---|
+| P0 | 0 | (none) |
+| P1 | 0 | (none) |
+| P2 | 3 | B014, B017, B018 |
+| P3 | 4 | B008, B012, B015, B020 |
+| P4 | 1 | B016 |
+| DEFERRED | 7 | B003, B004, B005, B009, B010, B011, B021 |
+| **Total active unresolved** | **15** | |
+
+**Minimum Phase 0G closure set: EMPTY.** Zero active P0 blockers remain.
+
+**Governance statuses, effective this date:**
+
+```
+Phase 0G Status        = AUTHOR-APPROVED CONTROLLED BASELINE
+Knowledge Gate Status   = OPEN FOR CONTROLLED FOUNDATION WORK
+Gate Opening Basis      = AUTHOR-APPROVED BASELINE EXCEPTION
+```
+
+**Permitted controlled foundation scope**: repository and package structure; configuration models; data contracts; candle schemas; POI and event schemas; annotation structures; provenance structures; deterministic unit-test fixtures; historical-data ingestion planning; validation infrastructure; audit infrastructure.
+
+**Still prohibited**: live trading; automated order execution; MT4 bots; MT5 bots; Telegram trading signals; production deployment; autonomous trend detection; automatic Equal High/Low sweep detection; automatic Trendline final-break detection; AI model training; unreviewed self-learning; entry automation; stop-loss automation; take-profit automation; position-sizing automation; risk automation; profitability claims; production-readiness claims.
+
+No blocker other than `P0G-B019` was resolved by this decision. No POI, lifecycle, boundary, formation, or invalidation rule was changed. No numeric trading threshold was changed. No software implementation began. All 36 POI specifications remain `Status: PARTIAL`; all 18 propagated POIs remain unchanged. **The knowledge gate is now `OPEN FOR CONTROLLED FOUNDATION WORK` only — not approved for production, trading automation, or AI training.** Nothing was staged, committed, or pushed by this task.
