@@ -516,4 +516,22 @@ All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED` but not
 
 All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED`; a limited subset (items 1, 2, 3, 5, 6, 7, 8, and partially 17) is now `IMPLEMENTED` or `PARTIALLY IMPLEMENTED` — full item-by-item detail in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 18f (totals: 7 implemented, 1 partially implemented, 9 not yet implemented). All 20 Architecture Decision Gates remain `AUTHOR-DECISION RESOLVED`; a limited subset (gates 1, 2, 4, 18 fully; gates 8, 9, 19 partially) is now implemented — full detail in Section 18g of the same document (totals: 4 implemented, 3 partially implemented, 13 not yet implemented). All Phase 0G limitations remain binding. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
 
-**Next controlled task:** Define and author-approve the exact Batch 1B-B Core Foundation Contracts scope, including Pydantic versioning, module boundaries, immutable record contracts, identifiers, fingerprints, version references, provenance fields and manifest-contract boundaries before creating any Batch 1B-B file.
+**Next controlled task:** Define and author-approve the exact Batch 1B-B Core Foundation Contracts scope, including Pydantic versioning, module boundaries, immutable record contracts, identifiers, fingerprints, version references, provenance fields and manifest-contract boundaries before creating any Batch 1B-B file. (**Superseded — see Section 29 below.**)
+
+## 29. Phase 1B-B Decision Group 1 — Dependencies and Value-Type Boundary (Completed)
+
+**Phase 1B-B Decision Group 1:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.
+
+**Exact approved dependency:** `pydantic>=2.13.4,<2.14`.
+
+- **Current runtime dependency count remains 0** because implementation has not begun. Pydantic is approved but not installed or locked.
+- **No UUID library is approved.** No SemVer library is approved. No canonical-JSON library is approved.
+- **UUIDv7 generation remains deferred.** UUIDv7 validation rules (reject invalid text, nil UUID, non-v7 UUID; canonical lowercase hyphenated serialization; immutable) are approved.
+- **SHA256Fingerprint validation rules are approved** (64 characters, lowercase-only, hexadecimal-only; uppercase rejected, not normalized). **Fingerprint generation remains deferred** — Batch 1B-B does not calculate fingerprints, and does not decide canonical input fields, identity inclusion, timestamp inclusion, or provenance/lineage inclusion.
+- **JSON Schema file generation remains deferred.** Manifest contracts remain shape-only (no file writing, loading, persistence, or supersession).
+- **Current minimum future Batch 1B-B changed-path count = 15** (13 inventoried files + `pyproject.toml` + `uv.lock`). **Final changed-path count remains unresolved** pending author decision on two candidate test files (`test_validation_result.py`, `test_provenance_record.py`).
+- **Batch 1B-B implementation remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 19; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 11.
+
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 2 covering the exact Pydantic base-model configuration, project-owned SemVer grammar and comparison behavior, UUIDv7 validation mechanics, SHA256Fingerprint representation mechanics, serialization behavior and exact tests for `contracts/types.py`.

@@ -368,3 +368,20 @@ This section does not replace or erase the original scaffold proposal in Section
 **Batch 1B-A status: `IMPLEMENTED`. `VERIFIED`. `COMMITTED`. `PUSHED`. `NOT PRODUCTION-APPROVED`.**
 
 **Batch 1B-A is closed. Batches 1B-B through 1B-F remain `NOT YET IMPLEMENTED`; Batch 1B-B has not started.** The procedural exception governing this closure (two in-scope test-file fixes made without pausing for separate re-authorization, subsequently disclosed via forensic review and accepted by explicit author exception) and the external, non-blocking Python minor-version alias anomaly are recorded in full in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Sections 18c–18d — neither is hidden or minimized here.
+
+## 11. Phase 1B-B Decision Group 1 — Approved Dependency and Value-Type Boundary
+
+**Does not alter the Phase 1B-A closed status above.** Batch 1B-A remains `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `NOT PRODUCTION-APPROVED`, `CLOSED`.
+
+- **Pydantic bounded dependency approved:** `pydantic>=2.13.4,<2.14`.
+- **Dependency not yet added.** `pyproject.toml` and `uv.lock` remain unchanged by this documentation task.
+- **Pydantic contract models required.** Plain-dataclass placeholder contracts are rejected.
+- **UUIDv7 validation-only strategy:** Batch 1B-B validates caller-supplied UUIDv7 identities; it does not generate them. No external UUIDv7 package is approved.
+- **SHA-256 validation-only strategy:** `SHA256Fingerprint` validates exactly 64 lowercase hexadecimal characters; no fingerprint calculation occurs in Batch 1B-B.
+- **No canonical-JSON library approved.** No SemVer package approved — a project-owned `SemVer` value type is planned for `contracts/types.py` instead, with exact grammar/parsing/comparison still unresolved.
+- **No JSON Schema file export in Batch 1B-B.** Pydantic models remain the source of truth; any generated schema export is a later, explicitly scoped batch's concern.
+- **Manifest contracts remain shape-only** — no manifest file writing, loading, persistence, or supersession mechanism; no `manifests/` directory is created.
+- **Current provisional scope = 15 changed paths** (13 inventoried files + `pyproject.toml` + `uv.lock`). **Final scope remains unresolved** pending author decision on two candidate test files (`test_validation_result.py`, `test_provenance_record.py`), neither yet added to the inventory.
+- **Batch 1B-B remains unimplemented and unauthorized for execution.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 19; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9 (Batch 1B-B rows) and Section 14 (batch table).

@@ -416,3 +416,115 @@ This document is a **governance record**, not an engineering recommendation of i
 | 20 | CI policy | **NOT YET IMPLEMENTED** | No `.github/workflows/` file exists; Batch 1B-F scope. |
 
 **Current totals (corrected): IMPLEMENTED = 4 (gates 1, 2, 4, 18). PARTIALLY IMPLEMENTED = 3 (gates 8, 9, 19). NOT YET IMPLEMENTED = 13 (gates 3, 5, 6, 7, 10, 11, 12, 13, 14, 15, 16, 17, 20). Total = 20.** PRODUCTION-APPROVED remains **0** for every gate. *(Correction note: gate 19 was originally, incorrectly listed as fully `IMPLEMENTED` — it is corrected here to `PARTIALLY IMPLEMENTED`, since only the secret-*rejection* boundary exists; the dedicated runtime secret-retrieval boundary does not. This moves gate 19 from the `IMPLEMENTED` bucket to the `PARTIALLY IMPLEMENTED` bucket; no other gate's classification changed.)*
+
+---
+
+## 19. Phase 1B-B Decision Group 1 — Dependencies and Value-Type Boundary
+
+**Status: `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`. `BATCH 1B-B NOT AUTHORIZED FOR EXECUTION`.** This section records decisions that resolve *what* Batch 1B-B's dependency and value-type boundary will be — it does not create `contracts/`, `tests/unit/`, any schema, any manifest, or any generated file, and it does not modify `pyproject.toml` or `uv.lock`. No dependency is installed or locked by this section.
+
+### 19A. Pydantic Runtime Dependency
+
+**Approved future project dependency:** `pydantic>=2.13.4,<2.14`.
+
+- Pydantic v2 begins in Batch 1B-B.
+- Pydantic models are the contract source of truth.
+- **Plain-dataclass placeholder contracts are rejected** — this resolves the ambiguity previously recorded in `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 19 ("whether Pydantic v2 is actually used... versus a plain-dataclass placeholder").
+- `pydantic-settings` remains deferred.
+- No second validation framework is permitted.
+- `pyproject.toml` and `uv.lock` will be modified only during an authorized Batch 1B-B implementation — **not by this document**.
+- The dependency is approved but not yet added. Runtime dependency count in the repository remains **0**.
+
+### 19B. UUIDv7 Validation-Only Boundary
+
+- Batch 1B-B **validates** caller-supplied UUIDv7 identities.
+- Batch 1B-B **does not generate** UUIDv7 identities.
+- No external UUIDv7 package is approved.
+- No project-owned UUIDv7 generator is approved.
+- UUID generation is deferred to a future record-creation or ingestion boundary.
+- Tests will use fixed, known-valid UUIDv7 examples.
+- Invalid UUID text is rejected.
+- Nil UUID is rejected.
+- Non-version-7 UUID is rejected.
+- Serialization uses the canonical lowercase, hyphenated UUID string.
+- Identity values are immutable.
+
+**Project-relevant fact:** Python 3.12.13 does not provide the required standard-library UUIDv7 constructor for project generation, and generation is therefore deliberately outside Batch 1B-B.
+
+### 19C. SHA-256 Fingerprint Validation-Only Boundary
+
+`SHA256Fingerprint` validates exactly:
+- 64 characters
+- Lowercase only
+- Hexadecimal only
+
+Rules:
+- Uppercase hexadecimal is rejected.
+- Uppercase values are **not** silently normalized.
+- Incorrect lengths are rejected.
+- Non-hexadecimal characters are rejected.
+- Fingerprints are immutable.
+- Fingerprints remain separate from UUID identity.
+- **Batch 1B-B does not calculate fingerprints.**
+- Batch 1B-B does not define canonical fingerprint input fields.
+- Batch 1B-B does not decide identity inclusion (in a future fingerprint calculation).
+- Batch 1B-B does not decide timestamp inclusion.
+- Batch 1B-B does not decide provenance or lineage inclusion.
+- Batch 1B-B does not implement record fingerprint generation.
+
+### 19D. Canonical JSON Boundary
+
+- No canonical-JSON dependency enters Batch 1B-B.
+- No `compute_fingerprint()` helper is approved.
+- No RFC 8785 compliance claim is permitted.
+- Pydantic JSON serialization may be used only to test normal contract serialization.
+- Canonical persisted serialization and hashing remain unresolved and deferred.
+
+### 19E. SemVer Dependency Strategy
+
+- No external SemVer package enters Batch 1B-B.
+- A project-owned immutable SemVer value type is planned for `src/btmm_ai_scanner/contracts/types.py`.
+- Exact grammar is unresolved.
+- Parsing behavior is unresolved.
+- Comparison behavior is unresolved.
+- Prerelease support is unresolved.
+- Build-metadata support is unresolved.
+- Leading-zero rules are unresolved.
+- Initial contract and schema versions remain unresolved.
+- `test_semver.py` cannot be finalized before Decision Group 2.
+
+### 19F. JSON Schema Boundary
+
+- Pydantic models remain the source of truth.
+- In-memory Pydantic schema representations are permitted.
+- Batch 1B-B does not write JSON Schema files.
+- Batch 1B-B does not create a schema-export script.
+- Batch 1B-B does not create a schema directory.
+- No generated-schema inventory row is added.
+- Formal JSON Schema export belongs to a later, explicitly scoped batch.
+
+### 19G. Manifest Boundary
+
+- Rule-version and schema-version manifest contracts remain shape-only.
+- No manifest file writing is approved.
+- No manifest loading is approved.
+- No manifest directory is created.
+- No manifest persistence is approved.
+- No manifest supersession mechanism is approved.
+- Compatibility-class value contracts remain planned for Batch 1B-B.
+
+### 19H. Blocking Author-Decision Register — Accounting Update
+
+**Resolved for Batch 1B-B scope** (`AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`):
+- **BB-1** — Exact Pydantic version range → `pydantic>=2.13.4,<2.14` (Section 19A).
+- **BB-2** — UUIDv7 generation strategy for Batch 1B-B → validation-only; no generation, no library (Section 19B).
+- **BB-5** — Fingerprint generation boundary → Batch 1B-B does not calculate fingerprints (Section 19C).
+- **BB-6** — Fingerprint identity and metadata inclusion boundary for this batch → not decided in this batch; deferred alongside fingerprint calculation itself (Section 19C).
+- **BB-12** — Manifest shape-only boundary → confirmed unchanged, shape-only (Section 19G).
+- **BB-13** — JSON Schema generation timing → deferred to a later, explicitly scoped batch (Section 19F).
+
+**Partially resolved:**
+- **BB-3** — SemVer implementation strategy: **dependency strategy resolved** (no external package; project-owned type in `contracts/types.py`); **grammar, parsing, and comparison behavior remain unresolved** (Section 19E).
+- **BB-4** — Base Pydantic model strategy: **Pydantic use resolved** (Pydantic v2, dataclass placeholders rejected); **exact model configuration** (`frozen`, `extra`, strict validation, etc.) **remains unresolved** (Section 19A; see also the prior audit's Part 7 findings).
+
+**No other BB decision is marked resolved by this section.** BB-7 through BB-11, BB-14, and BB-15 remain exactly as previously reported in the Phase 1B-B Core Foundation Contracts Scope Audit.
