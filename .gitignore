@@ -18,3 +18,20 @@ node_modules/
 models/
 datasets/raw/
 artifacts/
+
+# Python packaging and tooling caches (Batch 1B-A)
+!.env.example
+
+*.py[cod]
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.coverage
+coverage.xml
+htmlcov/
+
+build/
+dist/
+*.egg-info/
