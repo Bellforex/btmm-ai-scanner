@@ -479,8 +479,25 @@ Following author review, **Phase 1B Decision Groups 1 through 8 are `AUTHOR-APPR
 
 All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED` but not implemented; all 20 Architecture Decision Gates remain `AUTHOR-DECISION RESOLVED` but not implemented. All Phase 0G limitations remain binding. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
 
-**Next controlled task:** Resolve exact function signatures, exception types, package exports, tool-configuration sections, implementation command sequence and rollback procedure before authorizing Batch 1B-A execution.
+**Next controlled task:** Resolve exact function signatures, exception types, package exports, tool-configuration sections, implementation command sequence and rollback procedure before authorizing Batch 1B-A execution. (**Superseded — see Section 27 below.**)
 
-**All 17 technology decisions remain author-approved but not implemented. All 20 architecture decision gates remain author-decision resolved but not implemented.** Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only. All Phase 0G limitations remain binding, unchanged by this planning task.
+## 27. Phase 1B-A Decision Group 4 — Interfaces, Tool Configuration, Execution Sequence and Rollback (Completed)
+
+**Phase 1B-A Decision Group 4 = `AUTHOR-APPROVED`:**
+
+- **Function interfaces approved** — `load_configuration(project_defaults, environment_overrides, *, environ=None) -> dict`; exact `ENV_PREFIX = "BTMM_CONFIG_"`; exact key-validation, runtime-normalization, and secret-detection behavior. Full detail: `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 17b/17c.
+- **Exception hierarchy approved** — `ConfigurationError(ValueError)` → `InvalidConfigurationKeyError`, `SecretConfigurationKeyError`, with fixed generic messages that never expose a rejected key or value. Section 17e.
+- **Package exports approved** — `src/btmm_ai_scanner/__init__.py` (docstring only, no `__version__`); `config/__init__.py` re-exports exactly seven named symbols. Sections 9b, 17d.
+- **Tool configuration approved** — exact `[tool.ruff]`, `[tool.mypy]`, `[tool.pytest]`, and `[dependency-groups]` content. Section 9a.
+- **Test-function scope approved** — 3 named tests in `test_import_smoke.py`; 11 named tests in `test_config_precedence.py`. Section 23a.
+- **Installation sequence approved** — Stages A–J (repository preflight → uv 0.11.30 install → Python 3.12.13 availability check → managed Python install → `.gitignore` update → handwritten file creation → lockfile generation → `uv sync --locked` → verification → git-scope verification). Section 16a.
+- **Rollback procedure approved** — stop-and-report discipline; approved/prohibited rollback commands; installed tooling not auto-removed. Section 27a.
+- **Acceptance criteria approved** — the full exact Batch 1B-A pass/fail checklist. Section 28a.
+- **No implementation exists.** No `pyproject.toml`, `uv.lock`, `.python-version`, `src/`, or `tests/` exists. `uv` remains uninstalled. Python 3.12.13 remains uninstalled (Python 3.14.6 remains the only local runtime, untouched). No virtual environment exists. `.gitignore` remains unmodified.
+- **Batch 1B-A remains not authorized for execution.**
+
+**The pre-existing 30-row blocking-decision table is unchanged by this decision round** (verified by direct count: 30 total, 11 fully author-approved, 11 unresolved-and-blocking, 8 deferred) — none of Decision Group 4's items corresponds to an existing numbered row; they are recorded as a separate implementation-specific approval accounting (`PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 6a). All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED` but not implemented; all 20 Architecture Decision Gates remain `AUTHOR-DECISION RESOLVED` but not implemented. All Phase 0G limitations remain binding. Knowledge Gate remains **OPEN FOR CONTROLLED FOUNDATION WORK** only.
+
+**Next controlled task:** Review and explicitly authorize the exact Phase 1B-A implementation run, including installation of uv 0.11.30, managed Python 3.12.13, modification of `.gitignore`, creation of the nine approved files, lockfile generation and verification — without staging or committing until review.
 
 **Next controlled task:** Review and author-approve the exact Phase 1B scaffold identity, blocking implementation decisions, batch boundaries and file inventory before creating Batch 1B-A.
