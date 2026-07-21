@@ -100,6 +100,22 @@ Not defined in the book.
 
 NOT DEFINED IN BOOK.
 
+## Phase 0G Rejection-Criterion Applicability
+
+**Resolves `P0G-B013A` (rejection-criterion applicability clarification, Author-Approved) — `rejection_criterion_status = NOT_APPLICABLE` for this POI.** See `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Decision Clarifications — P0G-B006 Interaction Timing and P0G-B013A Rejection Applicability."
+
+- This structure is a deterministic calendar-period extremum, not a candidate candlestick or pattern formation that either passes or fails a confirmation threshold.
+- Every valid completed or active period necessarily has a high and a low — there is no candidate to reject.
+- The absence of a candidate-rejection rule is intentional and not a missing trading rule.
+- Existing period validity requirements still apply. Invalid timestamps, wrong period assignment, missing data, or malformed source data are data-quality failures, not trading-pattern rejection criteria, and are out of scope for this clarification.
+- Existing boundary definitions (above) remain unchanged.
+- Existing confirmation/availability wording (above) remains unchanged.
+- Existing rollover uncertainty remains unresolved where already documented (see Unresolved questions below) — this clarification does not resolve rollover or expiration timing.
+- Existing period-identity rules remain unchanged.
+- No lifecycle, interaction, entry, or risk rule is created by this clarification.
+
+Overall status remains **PARTIAL**.
+
 ## Overlap with other POIs
 
 One of twelve variants of the same underlying 'period extreme' family; also conceptually overlaps with Swing Highs/Lows and Equal Highs/Lows (all are prior-extreme liquidity levels).

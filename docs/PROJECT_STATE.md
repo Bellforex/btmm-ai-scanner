@@ -302,3 +302,40 @@ The **Final Post-Group-3 Phase 0G Knowledge-Gap Audit** has been completed and i
 Eighteen bounded directional POIs remain propagated, unchanged (4 Group 1 + 8 Group 2 + 6 Group 3). All 36 POI specifications remain `Status: PARTIAL`. **The knowledge gate remains CLOSED. Phase 0G remains unapproved. No scanner or software implementation is approved.**
 
 **Next controlled task:** Resolve `P0G-B002` — decide whether the approved manual/expert-label fallback is sufficient for Phase 0G or whether automatic trend and market-structure detection must be defined before the gate can close.
+
+## 17. Document Approved Phase 0G Decisions — P0G-B002 through P0G-B007 and P0G-B013 (Completed)
+
+Seven author decisions have been documented, per `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Audit Author Decisions — P0G-B002 through P0G-B007 and P0G-B013":
+
+1. **`P0G-B002` (manual context fallback vs. automatic detection) — RESOLVED.** The reviewed manual/expert-label fallback (`context_input_source = MANUAL_EXPERT_LABEL`) is sufficient for Phase 0G; automatic trend/market-structure detection is deferred to a later specialized module. Documented in `knowledge/btmm/BTMM_STATE_MACHINE.md`, "Phase 0G Input-Source Policy," and `knowledge/btmm/BTMM_MASTER_SUMMARY.md`.
+2. **`P0G-B003` (HH/HL/LH/LL/BOS/CHoCH adoption) — formally deferred outside Phase 0G.** Not mandatory machine concepts for the current knowledge phase; none of the six terms was defined. Permitted reviewed labels `context_direction`/`context_alignment` documented as supplementary evidence only, alongside the existing `market_direction_status`/`analytical_framework_status` gate fields.
+3. **`P0G-B004` (Equal Highs/Equal Lows specialized lifecycle) — formally deferred outside Phase 0G.** Equal Highs/Lows remain confirmed liquidity-reference structures; the generic bounded lifecycle is explicitly prohibited; a reviewed manual expert liquidity-event label (`liquidity_event_source = MANUAL_EXPERT_LABEL`) may be used as evidence. Documented in `knowledge/poi_rules/structural/equal_highs.md` and `equal_lows.md`, "Phase 0G Specialized Lifecycle Deferral." Existing geometry, tolerance, confirmation, and strength rules unchanged.
+4. **`P0G-B005` (Trendline specialized lifecycle) — formally deferred outside Phase 0G**, on the same pattern, tagged `trendline_event_source = MANUAL_EXPERT_LABEL`. Documented in `knowledge/poi_rules/structural/bullish_trendline.md` and `bearish_trendline.md`, "Phase 0G Specialized Lifecycle Deferral." Existing anchors, slopes, tolerances, touches, and states unchanged.
+5. **`P0G-B006` (POI freshness and mitigation model) — RESOLVED.** Purely descriptive freshness: `freshness_status = FRESH | INTERACTED | NOT_AUTOMATICALLY_EVALUATED | NOT_APPLICABLE`. No mitigation state or degradation formula defined.
+6. **`P0G-B007` (POI expiration-by-age model) — RESOLVED.** Purely descriptive age tracking; `automatic_age_expiration = DISABLED`; `age_effect = DESCRIPTIVE_ONLY`. No age-based expiration threshold defined.
+7. **`P0G-B013` (negative-example sufficiency policy) — RESOLVED.** Positive examples, explicit mandatory rules, and explicit rejection criteria accepted as sufficient for Phase 0G; negative-example dataset creation remains deferred to `P0G-B021`. No example was sourced, created, copied, or annotated.
+
+**New file:** `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md` (resolves `P0G-B006`/`P0G-B007`; Author-Approved, Engineering-Provisional, NOT YET empirically calibrated, NOT YET out-of-sample validated, NOT production-approved).
+
+**No POI boundary, formation rule, or generic lifecycle applicability was changed. No HH/HL/LH/LL/BOS/CHoCH rule, Equal High/Low sweep rule, Trendline final-break rule, freshness-degradation threshold, or age-expiration threshold was defined. No negative example was sourced, created, copied, or annotated.**
+
+Current disposition counts across all 21 originally identified blockers: A=1 (`P0G-B019`), B=1 (`P0G-B014`), C=4, D=2, E=1, F=7, G=5 — total 21. **Active unresolved blockers: 16.** Active priority counts: P0=1, P1=0, P2=3, P3=4, P4=1, DEFERRED=7 — total active 16. **Minimum Phase 0G closure set: exactly one blocker, `P0G-B019`.**
+
+Equal Highs, Equal Lows, Bullish Trendline, and Bearish Trendline each remain overall `Status: PARTIAL` — none is marked APPROVED. All 36 POI specifications remain `Status: PARTIAL`. Eighteen bounded directional POIs remain propagated, unchanged (4 Group 1 + 8 Group 2 + 6 Group 3). **The knowledge gate remains CLOSED. Phase 0G remains unapproved. No scanner or software implementation is approved.**
+
+**Next controlled task:** Perform `P0G-B019` — final author review and sign-off of the coverage matrix and Phase 0G knowledge package, without approving software implementation.
+
+## 18. Apply Corrective Documentation Patch — P0G-B006 and P0G-B013A (Completed)
+
+Two Author-Approved corrective clarifications were applied, per `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Decision Clarifications — P0G-B006 Interaction Timing and P0G-B013A Rejection Applicability":
+
+- **`P0G-B006`** now explicitly requires `qualifying_interaction_time > poi_availability_time` — interaction time must be strictly later than availability time. Formation candles and the availability/confirmation candle itself do not change `FRESH` to `INTERACTED`; an event at exactly `poi_availability_time` does not qualify. Documented in `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`.
+- **`P0G-B013A`** defines `rejection_criterion_status = EXPLICIT | NOT_APPLICABLE`. **Twenty-four POIs** have explicit candidate/pattern rejection rules (22 pre-existing + Bullish/Bearish Pressure Wick, both now explicitly tagged). **Twelve deterministic period-reference POIs** (Current/Previous Day/Week/Month High/Low) use `NOT_APPLICABLE`, each now recording a new "Phase 0G Rejection-Criterion Applicability" section.
+
+**Conditions 3 and 7's stale wording was corrected** in `knowledge/KNOWLEDGE_COMPLETION_GATE.md`: both now accurately state that observational freshness (`P0G-B006`) and descriptive age tracking with automatic age expiration disabled (`P0G-B007`) are defined, that all 36 POIs have exact drawing boundaries, and that mitigation, family-specific overrides, and the Equal High/Low and Trendline specialized lifecycles remain the genuinely open items. **Condition 3 remains NOT MET.** **Condition 7's content was corrected; its status label remains PARTIALLY MET, unchanged** — this task did not force it to a literal "NOT MET" label, since that would misstate genuine partial progress already reflected there; see the completion report for this discrepancy. **Condition 4 is now recorded as MET** under the approved evidence-sufficiency policy, following programmatic verification that all 36 POIs have a determined rejection-applicability status (24 EXPLICIT + 12 NOT_APPLICABLE, 0 missing).
+
+`P0G-B013` remains resolved (disposition G). Blocker counts are unchanged: 21 historically identified, 16 active unresolved, disposition A=1/B=1/C=4/D=2/E=1/F=7/G=5, active priority P0=1/P1=0/P2=3/P3=4/P4=1/DEFERRED=7. **`P0G-B019` remains the only active P0 blocker and the entire minimum Phase 0G closure set — not resolved by this task.**
+
+No POI specification's overall status changed from `PARTIAL`. No numeric trading threshold, lifecycle state, mitigation state, degradation rule, age-expiration threshold, or rollover-timing rule was defined or modified. Eighteen bounded directional POIs remain propagated, unchanged. All 36 POI specifications remain `Status: PARTIAL`. **The knowledge gate remains CLOSED. Phase 0G remains unapproved. No software implementation is approved.**
+
+**Next controlled task (unchanged):** Perform `P0G-B019` — final author review and sign-off of the coverage matrix and Phase 0G knowledge package, without approving software implementation.

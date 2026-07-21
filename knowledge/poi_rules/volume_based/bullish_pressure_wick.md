@@ -32,6 +32,8 @@ Resolved under Pressure Wick Standard V1 — Provisional (Ambiguity 6): on a con
 
 Resolved under Pressure Wick Standard V1 — Provisional: status is **CANDIDATE** before the candle closes and becomes **CONFIRMED** once the candle closes and all mandatory formation conditions pass. RETESTED, MITIGATED, SWEPT, BROKEN, and EXPIRED are not defined by this decision. The book's own recommendation still applies on top of this: do not enter blindly when price returns to the wick - drop to a lower timeframe for confirmation and a more precise entry (this remains a qualitative, not formally defined, entry-confirmation rule - see "Still unresolved" below).
 
+**Rejection-criterion clarification (`P0G-B013A`, Author-Approved) — `rejection_criterion_status = EXPLICIT`.** If any mandatory confirmation threshold above (Lower Wick Share, Body Efficiency, Lower Wick vs. Upper Wick ratio, or Bullish Close Position) is not satisfied, the candle does not become a confirmed Bullish Pressure Wick POI. This introduces no new numeric threshold, no new lifecycle state, and no `REJECTED` lifecycle status — it is a documentation clarification of the pre-existing "all of" mandatory-condition structure above. Failure to confirm is not lifecycle invalidation and does not create a POI identity. Standard and Strong thresholds, existing geometry, boundary, availability, and lifecycle inheritance remain unchanged. See `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Decision Clarifications — P0G-B006 Interaction Timing and P0G-B013A Rejection Applicability."
+
 ## Origin candle or level
 
 The single confirmed wick candle.

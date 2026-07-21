@@ -84,7 +84,7 @@ Resolved under Bullish and Bearish Trendline Detection and Validation Standard V
 
 ## Freshness
 
-NOT DEFINED IN BOOK.
+`freshness_status = NOT_AUTOMATICALLY_EVALUATED` (resolved under `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`, `P0G-B006`) — see "Phase 0G Specialized Lifecycle Deferral" below. Not defined in the book.
 
 ## Partial mitigation
 
@@ -100,7 +100,24 @@ Not defined in the book. Resolved partially under Bullish and Bearish Trendline 
 
 ## Expiration
 
-NOT DEFINED IN BOOK.
+`expiration_status = NOT_AUTOMATICALLY_EVALUATED` (resolved under `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`, `P0G-B007`) — see "Phase 0G Specialized Lifecycle Deferral" below. Not defined in the book.
+
+## Phase 0G Specialized Lifecycle Deferral
+
+**Resolves `P0G-B005` (Trendline final invalidation/retest/reclaim/false-break/expiration lifecycle) — Option B approved: the specialized lifecycle is formally deferred outside Phase 0G.** See `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Audit Author Decisions — P0G-B002 through P0G-B007 and P0G-B013," for the full decision record.
+
+- **Existing permitted states:** DRAFT_TRENDLINE, CONFIRMED_TRENDLINE, STRONG_TRENDLINE, and TRENDLINE_BREAK_CANDIDATE (per the existing Formation/Confirmation/Strength classification sections above) remain usable only within their documented limits.
+- **Generic bounded lifecycle prohibited:** the shared POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard (`knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md`) is explicitly excluded from Trendlines and must never be silently applied.
+- **Final automated lifecycle deferred:** final break confirmation, retest, reclaim, false break, invalidation, reactivation, new Trendline identity rules, and expiration remain undefined and are not implemented by this decision.
+- **Manual expert label permitted:** a reviewed manual expert Trendline-event label may be used as analytical context. Required source tag: `trendline_event_source = MANUAL_EXPERT_LABEL`.
+- **Permitted operations:** construct Bullish and Bearish Trendlines (per the existing formation rules above); record DRAFT; record CONFIRMED; record STRONG; record BREAK_CANDIDATE; use Trendlines as reviewed analytical context; use reviewed manual expert event labels.
+- **Prohibited lifecycle inferences:** treating BREAK_CANDIDATE as final invalidation; automatically confirming a final break; automatically declaring retest, reclaim, or false break; automatically invalidating, reactivating, or expiring a Trendline; applying the generic bounded lifecycle; silently creating a new Trendline identity; allowing an unresolved Trendline event (without a reviewed manual expert label) to satisfy a BTMM gate.
+- **BREAK_CANDIDATE is not final invalidation** — this remains unchanged from the existing Invalidation section above.
+- **Freshness and expiration:** `NOT_AUTOMATICALLY_EVALUATED` (see Freshness/Expiration sections above and `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`).
+- **Existing anchor, slope, touch, pierce, and strength rules (Ambiguity 11) are unchanged** by this decision.
+- **No entry role is created** by this decision.
+
+Overall status remains **PARTIAL**. This Trendline is not marked APPROVED.
 
 ## Overlap with other POIs
 

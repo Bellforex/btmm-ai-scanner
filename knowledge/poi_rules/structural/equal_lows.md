@@ -82,7 +82,7 @@ Resolved under Equal Highs and Equal Lows Standard V1 — Provisional: **STRONG*
 
 ## Freshness
 
-NOT DEFINED IN BOOK.
+`freshness_status = NOT_AUTOMATICALLY_EVALUATED` (resolved under `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`, `P0G-B006`) — see "Phase 0G Specialized Lifecycle Deferral" below. Not defined in the book.
 
 ## Partial mitigation
 
@@ -98,7 +98,23 @@ Not defined in the book.
 
 ## Expiration
 
-NOT DEFINED IN BOOK.
+`expiration_status = NOT_AUTOMATICALLY_EVALUATED` (resolved under `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`, `P0G-B007`) — see "Phase 0G Specialized Lifecycle Deferral" below. Not defined in the book.
+
+## Phase 0G Specialized Lifecycle Deferral
+
+**Resolves `P0G-B004` (Equal High/Equal Low sweep lifecycle) — Option B approved: the specialized lifecycle is formally deferred outside Phase 0G.** See `knowledge/FINAL_PHASE_0G_KNOWLEDGE_GAP_AUDIT.md`, "Post-Audit Author Decisions — P0G-B002 through P0G-B007 and P0G-B013," for the full decision record.
+
+- **Liquidity-reference role:** Equal Lows remains a confirmed liquidity-reference structure (sell-side liquidity expected below Zone Bottom), not a directional entry zone.
+- **Generic bounded lifecycle prohibited:** the shared POI Boundary Breach, Reclaim, Repeated Tap, and Invalidation Standard (`knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md`) is explicitly excluded from Equal Lows and must never be silently applied.
+- **Automated specialized lifecycle deferred:** SWEPT, BROKEN, reclaim, and false-sweep detection remain undefined and are not implemented by this decision.
+- **Manual expert label permitted:** a reviewed manual expert liquidity-event label may be used as liquidity-location evidence. Required source tag: `liquidity_event_source = MANUAL_EXPERT_LABEL`.
+- **Permitted operations:** detect and confirm the Equal Lows structure (per the existing formation/confirmation rules above); record its zone (Zone Top/Zone Bottom, per the existing drawing boundaries above); record its strength (STRONG/STANDARD/NOT EQUAL, per the existing strength classification above); use it as reviewed liquidity-location evidence; use reviewed manual expert liquidity-event labels.
+- **Prohibited operations:** automatically declaring SWEPT; automatically declaring BROKEN; automatically declaring reclaim or false sweep; automatically invalidating or reactivating the structure; applying the generic bounded lifecycle; treating the structure as a bullish or bearish entry zone; silently inferring an event from a wick or close; allowing the structure alone (without a reviewed manual expert label) to satisfy a BTMM liquidity-event gate.
+- **Freshness and expiration:** `NOT_AUTOMATICALLY_EVALUATED` (see Freshness/Expiration sections above and `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`).
+- **Existing geometry, tolerance, confirmation, and strength rules (Ambiguity 5) are unchanged** by this decision.
+- **No entry role is created** by this decision.
+
+Overall status remains **PARTIAL**. This POI is not marked APPROVED.
 
 ## Overlap with other POIs
 

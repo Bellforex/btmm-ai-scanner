@@ -871,3 +871,108 @@ Parts 1-34 above are preserved unchanged as the **original, historical audit sna
 **No other blocker was resolved by this task.** `P0G-B002` through `P0G-B021` remain exactly as classified in Parts 23-27 above, with the `P0G-B009`/`P0G-B013`/`P0G-B021` corrections from the prior verification pass still in effect. No option was selected for `P0G-B004`, `P0G-B005`, or `P0G-B013`. No Equal High/Low lifecycle, Trendline lifecycle, freshness rule, expiration rule, or HH/HL/LH/LL/BOS/CHoCH rule was defined. No composite score was created. No software implementation began.
 
 All 36 POI specifications remain `Status: PARTIAL`. All 18 propagated POIs (4 Group 1 + 8 Group 2 + 6 Group 3) remain propagated, unchanged. **The knowledge gate remains CLOSED — resolving one documentation-only blocker does not open the gate. Phase 0G remains unapproved.** Nothing was staged, committed, or pushed by this task.
+
+---
+
+## Post-Audit Author Decisions — P0G-B002 through P0G-B007 and P0G-B013
+
+**Date: 2026-07-20.**
+
+The original blocker records and historical snapshots in Parts 1-34 and the "Post-Audit Resolution — P0G-B001" section above are preserved unchanged. This section records seven further author decisions, as a separate, dated, append-only addition. None of these decisions approve Phase 0G; none resolve `P0G-B019`; none write software.
+
+**Decision 1 — `P0G-B002` (manual context fallback vs. automatic detection).** Approved: the reviewed manual/expert-label fallback is sufficient for Phase 0G; automatic trend and market-structure detection is deferred to a later specialized module and is not required for knowledge-gate closure. `context_input_source = MANUAL_EXPERT_LABEL` is the permitted source; an automatic detector is not required for Phase 0G, not yet approved, and remains required later only for autonomous operation. This decision does not define HH/HL/LH/LL/BOS/CHoCH, does not change a BTMM gate, and does not approve scanner implementation, automatic detection, or Phase 0G. Documented in `knowledge/btmm/BTMM_STATE_MACHINE.md`, "Phase 0G Input-Source Policy," and `knowledge/btmm/BTMM_MASTER_SUMMARY.md`. **Status: RESOLVED. Disposition: G — `HISTORICAL_OR_RESOLVED`. No active priority.**
+
+**Decision 2 — `P0G-B003` (HH/HL/LH/LL/BOS/CHoCH adoption).** Approved: HH, HL, LH, LL, BOS, and CHoCH are formally deferred outside Phase 0G — not mandatory machine concepts for the current knowledge phase. Permitted reviewed context labels: `context_direction = BULLISH | BEARISH | NEUTRAL | UNCLEAR`, `context_alignment = ALIGNED | MISALIGNED | UNCLEAR` (supplementary reviewed-evidence annotations only, documented in `knowledge/btmm/BTMM_STATE_MACHINE.md`, "Phase 0G Input-Source Policy" — they do not replace or redefine the existing `market_direction_status`/`analytical_framework_status` gate fields). Existing Meaningful Swing rules (Ambiguity 10) are unchanged. None of the six deferred terms (HH, HL, LH, LL, BOS, CHoCH) is defined by this decision. **Status: active deferred item. Disposition: F — `EXPLICITLY_DEFERRED_OUTSIDE_PHASE_0G`. Priority: DEFERRED. Removed from the minimum Phase 0G closure set.**
+
+**Decision 3 — `P0G-B004` (Equal Highs/Equal Lows specialized lifecycle).** Approved: Option B — formally defer the specialized Equal High/Low lifecycle outside Phase 0G. Equal Highs and Equal Lows remain confirmed liquidity-reference structures. Permitted: detect and confirm the structure; record its zone; record its strength; use it as reviewed liquidity-location evidence; use reviewed manual expert liquidity-event labels (`liquidity_event_source = MANUAL_EXPERT_LABEL`). Prohibited: automatically declaring SWEPT or BROKEN; automatically declaring reclaim or false sweep; automatically invalidating or reactivating the structure; applying the generic bounded lifecycle; treating the structure as a bullish/bearish entry zone; silently inferring an event from a wick or close; allowing the structure alone to satisfy a BTMM liquidity-event gate. Documented in `knowledge/poi_rules/structural/equal_highs.md` and `equal_lows.md`, "Phase 0G Specialized Lifecycle Deferral." Existing geometry, tolerance, confirmation, and strength rules (Ambiguity 5) unchanged. **Status: active deferred item. Disposition: F. Priority: DEFERRED. Removed from the minimum closure set.**
+
+**Decision 4 — `P0G-B005` (Trendline specialized lifecycle).** Approved: formally defer the specialized Trendline lifecycle outside Phase 0G. Permitted: construct Bullish/Bearish Trendlines; record DRAFT/CONFIRMED/STRONG/BREAK_CANDIDATE; use Trendlines as reviewed analytical context; use reviewed manual expert event labels (`trendline_event_source = MANUAL_EXPERT_LABEL`). Prohibited: treating BREAK_CANDIDATE as final invalidation; automatically confirming a final break; automatically declaring retest, reclaim, or false break; automatically invalidating, reactivating, or expiring a Trendline; applying the generic bounded lifecycle; silently creating a new Trendline identity; allowing an unresolved Trendline event to satisfy a BTMM gate. Documented in `knowledge/poi_rules/structural/bullish_trendline.md` and `bearish_trendline.md`, "Phase 0G Specialized Lifecycle Deferral." Existing anchors, slopes, tolerances, touches, and states unchanged. **Status: active deferred item. Disposition: F. Priority: DEFERRED. Removed from the minimum closure set.**
+
+**Decision 5 — `P0G-B006` (POI freshness and mitigation model).** Approved: observational freshness only. `freshness_status = FRESH | INTERACTED | NOT_AUTOMATICALLY_EVALUATED | NOT_APPLICABLE`. A bounded directional POI is `FRESH` from its approved availability time; the first qualifying interaction (reusing the existing approved interaction and Contact Tolerance rules) changes it to `INTERACTED`; a Near Miss does not remove freshness; `INTERACTED` cannot return to `FRESH` for the same POI identity; a newly formed POI requires a new POI ID and its own freshness state. Freshness is descriptive only and does not automatically change strength, validity, lifecycle status, BTMM eligibility, entry validity, invalidation, or expiration. For Equal Highs/Lows and Trendlines, `freshness_status = NOT_AUTOMATICALLY_EVALUATED` while their specialized lifecycles remain deferred. `PARTIALLY_MITIGATED`, `FULLY_MITIGATED`, and any degradation effect remain undefined. Documented in `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`. **Status: RESOLVED. Disposition: G. No active priority.**
+
+**Decision 6 — `P0G-B007` (POI expiration-by-age model).** Approved: track POI age descriptively with no automatic age-based expiration. `age_start_time = approved_poi_available_time`; permitted descriptive fields `age_in_confirmed_bars`, `elapsed_time_since_availability`; `automatic_age_expiration = DISABLED`; `age_effect = DESCRIPTIVE_ONLY`. Age alone never causes weakening, expiration, invalidation, BTMM rejection, entry prohibition, strength reduction, or a new POI identity. Day/week/month reference structures continue their own existing period-rollover and identity rules, unchanged. For Equal Highs/Lows and Trendlines, `expiration_status = NOT_AUTOMATICALLY_EVALUATED`. No candle-count, elapsed-time, or family-specific expiration threshold is defined. Documented in `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`. **Status: RESOLVED. Disposition: G. No active priority.**
+
+**Decision 7 — `P0G-B013` (negative-example sufficiency policy).** Approved: positive examples, explicit mandatory rules, and explicit rejection criteria are sufficient for Phase 0G. For each POI, Phase 0G documentation must establish what qualifies, which mandatory condition causes rejection, how boundaries are drawn, when confirmation occurs, and what remains unresolved or deferred. A comprehensive negative/counter-example dataset is deferred to the annotation and validation phase; `P0G-B021` remains responsible for later negative examples, near-miss examples, ambiguous examples, rejected candidates, provenance, and reviewer labels. No example was sourced, created, copied, or annotated by this decision. Documented in `knowledge/btmm/BTMM_MASTER_SUMMARY.md`, "Phase 0G Input-Source Policy." **Status: RESOLVED. Disposition: G. No active priority.**
+
+**`P0G-B021` remains unaffected by these seven decisions: Disposition F, Priority DEFERRED, active deferred item, dependent on `P0G-B013`'s outcome (now resolved as above) — its own dataset-creation work remains deferred to the future annotation-data preparation phase and was not performed here.**
+
+**Current disposition counts across all 21 identified blockers, after these seven decisions:**
+
+| Disposition | Count | Blocker IDs |
+|---|---|---|
+| A — `PHASE_0G_AUTHOR_DECISION_BLOCKER` | 1 | B019 |
+| B — `PHASE_0G_DOCUMENTATION_BLOCKER` | 1 | B014 |
+| C — `EMPIRICAL_CALIBRATION_ITEM` | 4 | B008, B012, B015, B020 |
+| D — `SOFTWARE_IMPLEMENTATION_SPECIFICATION` | 2 | B017, B018 |
+| E — `ENTRY_RISK_OR_TRADE_MANAGEMENT_DEFERRED` | 1 | B016 |
+| F — `EXPLICITLY_DEFERRED_OUTSIDE_PHASE_0G` | 7 | B003, B004, B005, B009, B010, B011, B021 |
+| G — `HISTORICAL_OR_RESOLVED` | 5 | B001, B002, B006, B007, B013 |
+| **Total** | **21** | |
+
+**Current active unresolved blocker total: 16** (the 5 G items — `P0G-B001`, `P0G-B002`, `P0G-B006`, `P0G-B007`, `P0G-B013` — are excluded).
+
+**Current active priority counts:**
+
+| Priority | Count | Blocker IDs |
+|---|---|---|
+| P0 | 1 | B019 |
+| P1 | 0 | (none) |
+| P2 | 3 | B014, B017, B018 |
+| P3 | 4 | B008, B012, B015, B020 |
+| P4 | 1 | B016 |
+| DEFERRED | 7 | B003, B004, B005, B009, B010, B011, B021 |
+| **Total active unresolved** | **16** | |
+
+**The only active P0 blocker is `P0G-B019`.** **The current minimum Phase 0G closure set is exactly one blocker: `P0G-B019`** — the author's final review and sign-off of the coverage matrix and Phase 0G knowledge package. This section does not resolve `P0G-B019`, does not approve Condition 8, and does not approve Phase 0G.
+
+No POI boundary, formation rule, or generic lifecycle applicability was changed by these seven decisions. No Equal High/Low sweep, Trendline final-break, reclaim, or false-break rule was defined. No HH/HL/LH/LL/BOS/CHoCH rule was defined. No automatic freshness-degradation or age-expiration threshold was introduced. No negative example was sourced, created, copied, or annotated. All 36 POI specifications remain `Status: PARTIAL`; all 18 propagated POIs remain unchanged. **The knowledge gate remains CLOSED. Phase 0G remains unapproved.** Nothing was staged, committed, or pushed by this task.
+
+---
+
+## Post-Decision Clarifications — P0G-B006 Interaction Timing and P0G-B013A Rejection Applicability
+
+**Date: 2026-07-20.**
+
+Two Author-Approved corrective clarifications were applied to the documentation package already recorded above, following the read-only verification that identified the "post-availability interaction" ambiguity and the Pressure Wick/period-reference rejection-applicability gaps. Neither clarification reopens, reverses, or changes the disposition of any blocker; both remain within the scope of already-RESOLVED items.
+
+**`P0G-B006` interaction-timing clarification:**
+- Machine rule: `qualifying_interaction_time > poi_availability_time` — the interaction must be strictly later than the POI's own approved availability time.
+- Formation candles and availability/confirmation candles are excluded from counting as the first qualifying interaction; an event whose time exactly equals `poi_availability_time` does not qualify.
+- Documented in `knowledge/poi_lifecycle/POI_FRESHNESS_AND_AGE_STANDARD.md`, "7. First Qualifying Interaction."
+- No interaction threshold, Contact Tolerance formula, or Zone Interaction Standard geometry was changed — only the timing gate was clarified.
+- No age-counting convention (0-vs-1 bar indexing) was introduced.
+- `P0G-B006` remains **RESOLVED**. Disposition remains **G — `HISTORICAL_OR_RESOLVED`**. No blocker-count change.
+
+**`P0G-B013A` rejection-applicability clarification:**
+- Explicit rejection criteria remain required for candidate-based and pattern-based POIs (unchanged).
+- `rejection_criterion_status = NOT_APPLICABLE` is now explicitly recorded for exactly the 12 deterministic calendar-reference POIs (Current Day High/Low, Previous Day High/Low, Current Week High/Low, Previous Week High/Low, Current Month High/Low, Previous Month High/Low) — documented in each file's own new "Phase 0G Rejection-Criterion Applicability" section, reasoning that a completed or active calendar period necessarily has a high and a low, so no candidate-rejection concept applies.
+- `rejection_criterion_status = EXPLICIT` is now explicitly recorded for both Bullish and Bearish Pressure Wick — documented as a clarification of the pre-existing "all of" mandatory-condition structure (Lower/Upper Wick Share, Body Efficiency, wick-ratio, Close Position): if any mandatory threshold is not satisfied, the candle does not become a confirmed Pressure Wick POI. No new numeric threshold, lifecycle state, or `REJECTED` status was introduced.
+- The remaining 22 candidate/pattern-based POIs already carried explicit, machine-identifiable rejection language in their existing text prior to this task (e.g., "the candidate is rejected," `INVALID BASE`, `REJECTED_ORIGIN_CANDIDATE`, `TOO_STEEP`, `NOT EQUAL`, `REJECTED_CANDIDATE_CANDLE`, `REJECTED_DIRECTIONAL_CONTINUATION`, `REJECTED_INSUFFICIENT_REVERSAL`) and were not modified by this task.
+- This clarification does not remove rejection requirements from any pattern-based POI, does not resolve rollover timing, does not change any period-identity rule, boundary, confirmation/availability rule, or interaction rule, and does not create any entry or risk rule.
+- `P0G-B013` remains **RESOLVED**. Disposition remains **G**. `P0G-B021` remains deferred for dataset creation, unaffected. No new blocker was created. No blocker-count change.
+
+**36-POI rejection-applicability result:** `EXPLICIT = 24` (22 pre-existing + 2 Pressure Wick newly tagged), `NOT_APPLICABLE = 12` (period-reference POIs newly tagged), `MISSING = 0`. Total = 36.
+
+**Blocker arithmetic — unchanged by this task:**
+
+| | |
+|---|---|
+| Historical identified | 21 |
+| Active unresolved | 16 |
+| Disposition A | 1 (`P0G-B019`) |
+| Disposition B | 1 (`P0G-B014`) |
+| Disposition C | 4 |
+| Disposition D | 2 |
+| Disposition E | 1 |
+| Disposition F | 7 |
+| Disposition G | 5 |
+| **Total** | **21** |
+| Active priority P0 | 1 (`P0G-B019`) |
+| Active priority P1 | 0 |
+| Active priority P2 | 3 |
+| Active priority P3 | 4 |
+| Active priority P4 | 1 |
+| Active priority DEFERRED | 7 |
+| **Total active** | **16** |
+
+**Only active P0 blocker: `P0G-B019`. Minimum Phase 0G closure set: `P0G-B019` only.** `P0G-B019` is **not resolved** by this task. No POI status changed from `PARTIAL`. No numeric trading threshold changed. No lifecycle state was created. No mitigation percentage, mitigation state, repeated-tap degradation, automatic expiration, age threshold, or period-rollover-timing rule was defined or modified. All 18 propagated POIs remain unchanged. **The knowledge gate remains CLOSED. Phase 0G remains unapproved.** Nothing was staged, committed, or pushed by this task.
