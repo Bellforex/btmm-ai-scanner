@@ -69,3 +69,30 @@ This section clarifies test scope only; **no fixture is created by this clarific
 ## 6. Approval Status
 
 **ENGINEERING-RECOMMENDED**, pending author review. No test framework is installed (see the Technology-Stack Decision Register in `PHASE_1A_SOFTWARE_FOUNDATION_ARCHITECTURE.md`, item 5, pytest recommended but not yet author-approved). No fixture or test file exists as a result of this document.
+
+## 7. Post-Phase 1A Approved Future Test Environment (Decision Groups 1–8)
+
+**No fixture or test file is created by this section.** Full decision detail is recorded canonically in `docs/architecture/PHASE_1B_AUTHOR_DECISION_REGISTER.md`. The following are now `AUTHOR-APPROVED` (`NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`) as the future test environment, once a scaffold exists:
+
+- **Runtime and tooling (Group 1):** Python 3.12 (one pinned patch version); pytest as the test runner; mypy for static-type checking; Ruff formatter and Ruff linter for style/lint checks.
+- **CI (Group 5):** GitHub Actions running Ruff format check, Ruff lint, mypy, and pytest on every push. CI is offline-safe by default: no live broker/FXCM/TradingView credentials, no private-book access, no deployment, and no order execution may ever be exercised by CI.
+
+**Additional planned test categories** (extending SS2's table above, still zero fixtures/tests created):
+
+| Planned future test category | Validates |
+|---|---|
+| Candle-completeness tests | `candle_completeness_status` transitions correctly; only `CONFIRMED_COMPLETE` candles become analytically eligible (Decision Group 6). |
+| Exact-duplicate tests | `duplicate_classification = EXACT_DUPLICATE` preserves every raw envelope, never creates a second normalized candle, and never overwrites the first record. |
+| Conflicting-duplicate quarantine tests | `duplicate_classification = CONFLICTING_DUPLICATE` results in `QUARANTINED` status, preserves every raw record, and never silently picks a winner or produces a measurement. |
+| Gap-status tests | `gap_status` transitions (`POTENTIAL_GAP` → `CONFIRMED_MISSING` → `RESOLVED`, and `EXPECTED_NON_TRADING_INTERVAL`) match the approved policy; contiguous windows become ineligible exactly per rule. |
+| No-synthetic-fill tests | No forward fill, back fill, interpolation, previous-close copying, invented zero-volume candle, or silent time compression ever occurs. |
+| Validation-eligibility tests | The 8-step processing sequence (`PROVENANCE_VALIDATION_AND_AUDIT_PLAN.md` SS9a) gates Normalization and Measurement exactly as specified; presence alone never grants eligibility. |
+| Identity-versus-fingerprint tests | UUIDv7 record identity and SHA-256 `content_fingerprint` remain distinct fields; neither substitutes for the other; identity is never silently reused. |
+| Manifest compatibility-class tests | `BACKWARD_COMPATIBLE` / `BREAKING` / `DOCUMENTATION_ONLY` classification matches the approved examples (e.g., a required-field removal is always `BREAKING`). |
+| Schema/processing-version preservation tests | Historical `schema_version` and `processing_version` references are never silently rewritten; reprocessing always produces a new record or replay output. |
+| Provider-neutral ingestion-interface tests | `MarketDataSourcePort` never leaks provider-specific behavior into contract or result shapes; the interface remains provider-neutral. |
+| `OFFLINE_FILE` stub-behavior tests | The early, interface-only retrieval mode behaves deterministically against a fixed offline file, with no network access attempted. |
+| Audit/log-separation tests | Operational (structured JSON) logs and authoritative JSONL audit events remain in separate stores and are never conflated. |
+| Secret-redaction tests | No audit event, validation report, or log line ever contains a password, token, API key, `.env` content, or unredacted credential. |
+
+**All Phase 0G lifecycle-test restrictions from SS4a above remain fully binding and unaffected by this decision round:** `P0G-B004` and `P0G-B005` remain binding, unresolved blockers; full lifecycle tests remain limited to the 18 propagated bounded directional POIs; Equal Highs, Equal Lows, and both Trendlines remain limited to construction/classification/permitted-state/prohibition tests only; generic bounded-lifecycle tests remain `NOT_APPLICABLE` to the 14 non-bounded reference structures. **No fixture file is created by this section.**

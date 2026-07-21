@@ -517,3 +517,27 @@ See Section 9 above for the complete proposed data-flow diagram (identical conte
 **Totals: READY FOR AUTHOR DECISION = 16. REQUIRES MORE RESEARCH = 4. DEFERRED BEYOND PHASE 1B = 0. Total = 20.** No gate has been moved between classifications from the prior version of this document — these totals are unchanged; only the clarifying note above and gate #6's annotation are new. Migration strategy (Part 7 item 14) and containerization strategy (Part 7 item 16) are Technology-Register decisions only — **they are not separate members of this 20-gate list.**
 
 None of these 20 items is approved by this document. Phase 1B (repository scaffold creation) should not begin until the author has reviewed and approved (or amended) this register and this gate list, per a separate, explicit instruction.
+
+---
+
+# Post-Phase 1A Author Decisions — Phase 1B Groups 1–8
+
+**This section is added after the original Phase 1A planning record above; nothing above it in this document has been rewritten.** Following author review, all eight Decision Groups below were approved. The full detail of every decision, including per-decision recommendation origin, author-decision status, implementation status, and production status, is recorded canonically in `docs/architecture/PHASE_1B_AUTHOR_DECISION_REGISTER.md` — this section summarizes and cross-references that register; it does not restate every field.
+
+**The eight decision groups:**
+1. **Core Python Toolchain** — Python 3.12, pinned patch-version policy, uv, `pyproject.toml`, `uv.lock`, Pydantic v2, pytest, mypy, Ruff formatter, Ruff linter.
+2. **Storage Foundation** — Parquet + JSONL role separation, no initial database, append-only/immutable/partitioned/provider-traceable raw storage, no migration system until a database is approved.
+3. **Time, Symbols and Configuration** — canonical UTC normalization with source-timezone preservation, canonical internal symbols with explicit provider-mapping fields, canonical uppercase timeframe enum, YAML + versioned manifest configuration with a three-level precedence order, environment-variable secrets with dev-only `.env`.
+4. **Identity, Versioning and Audit** — UUIDv7 record identity, SHA-256 content fingerprint (kept separate from identity), MAJOR.MINOR.PATCH versioning, the approved lineage field set, JSONL append-only audit storage.
+5. **CI, Logging and Reproducibility** — stdlib structured-JSON logging (kept separate from audit), GitHub Actions with Ruff/mypy/pytest checks, `pyproject.toml`/`uv.lock` discipline, deferred containerization.
+6. **Candle Data-Quality Policies** — `candle_completeness_status`, `duplicate_classification`, and `gap_status` enums, resolving Gates 10–12 at the policy level.
+7. **Ingestion-Adapter Boundary** — a provider-neutral `MarketDataSourcePort` interface, `INTERFACE_ONLY` scaffold position, `OFFLINE_FILE`-only early retrieval, resolving Gate 13 at the architecture-policy level.
+8. **Rule and Schema Version Manifests** — canonical UTF-8 JSON manifest format, the rule-version and schema-version manifest field sets, `BACKWARD_COMPATIBLE`/`BREAKING`/`DOCUMENTATION_ONLY` compatibility classes.
+
+**Status of all decisions:** all **17** Technology-Stack Decision Register items (Part 7 above) are now `AUTHOR-APPROVED`. All **20** Architecture Decision Gates (Part 10 above) are now resolved at the author-decision level (`AUTHOR-DECISION RESOLVED`). **Zero are implemented. Zero are production-approved.** Every item's original recommendation origin (`ENGINEERING-RECOMMENDED` / `ENGINEERING-PROVISIONAL` / `DEFERRED`) remains historically visible in Part 7 above and in the Phase 1B register — approval does not erase origin.
+
+**The original readiness snapshot is not silently replaced.** Part 10's historical classification — READY FOR AUTHOR DECISION = 16, REQUIRES MORE RESEARCH = 4, DEFERRED BEYOND PHASE 1B = 0 — remains printed above, unchanged, as the accurate record of gate *readiness* at the time of the Phase 1A commit (`a142da371c766bbc3489d7d9ae26e6421527c6c9`). The *current* post-decision status (20 resolved, 0 pending, 0 implemented, 0 production-approved) is recorded separately in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Part 13, as an addition alongside the historical snapshot, not a replacement of it.
+
+**Unresolved implementation sub-decisions remain binding** — including but not limited to: exact Python patch version, exact raw-payload encoding, retention policy, partition naming, exact fingerprint field sets, canonical JSON serialization procedure, exact validation-status enum, candle-close timestamp convention, DST/trading-day/week-start/month-boundary/provider-session handling, provider-specific adapters, FXCM/TradingView connectivity, data licensing, branch-protection/PR policy, future database/migration/containerization choices, the Future Risk-Control Interface, and all entry/risk/AI/signal/execution logic. The full list is maintained in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Part 14.
+
+**No scaffold has been created by this section or by the decisions it summarizes.** Repository-scaffold creation remains a separate, explicit, future task.
