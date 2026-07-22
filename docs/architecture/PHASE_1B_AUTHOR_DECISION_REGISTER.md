@@ -980,3 +980,265 @@ Future exports from `src/btmm_ai_scanner/contracts/__init__.py` — **Decision G
 - **Global timestamp policy** (exact candle-close timestamp convention across all future contracts, DST handling, trading-day/week-start/month-boundary handling, provider-session handling — the remaining Phase 1B-A sub-decisions): **`NOT YET RESOLVED`.**
 
 **No other BB decision is marked resolved by this section.**
+
+## 22. Phase 1B-B Decision Group 4 — ValidationResult and ProvenanceRecord Contracts
+
+**Status: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`. `BATCH 1B-B NOT AUTHORIZED FOR EXECUTION`.**
+
+This section documents author-approved decisions for Contract N (Validation Result) and Contract M (Provenance Record). It does not alter the Phase 1B-A closed status and does not alter Decision Groups 1, 2 or 3. No file under `src/`, `tests/`, or any dependency/config file is created or modified by this section.
+
+### 22A. Validation Classifications
+
+Future enums for `src/btmm_ai_scanner/contracts/validation_result.py`:
+
+```python
+class ValidationStatus(StrEnum):
+    VALID = "VALID"
+    INVALID = "INVALID"
+    INDETERMINATE = "INDETERMINATE"
+
+
+class AnalyticalEligibility(StrEnum):
+    ELIGIBLE = "ELIGIBLE"
+    INELIGIBLE = "INELIGIBLE"
+    UNDETERMINED = "UNDETERMINED"
+```
+
+- No aliases; no automatic values. `ValidationStatus` and `AnalyticalEligibility` remain separate concepts.
+- `VALID` — the subject satisfies the specified validation profile. `INVALID` — the subject fails the specified validation profile. `INDETERMINATE` — evidence is insufficient to decide.
+- `ELIGIBLE` — permits later analytical use. `INELIGIBLE` — prohibits later analytical use. `UNDETERMINED` — eligibility has not been established.
+- Eligibility does not imply profitability, trade validity, production approval, or execution permission.
+
+### 22B. ValidationResult Exact Field Contract
+
+```python
+class ValidationResult(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    subject_record_id: UUIDv7
+
+    validation_profile: str
+    status: ValidationStatus
+    analytical_eligibility: AnalyticalEligibility
+    reason_codes: tuple[str, ...]
+
+    evaluated_at_utc: datetime
+
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    provenance_id: UUIDv7
+```
+
+**Exact field count: 12.**
+
+- Every field is required — no default identifier, fingerprint, timestamp, status, eligibility, version, or provenance ID.
+- `record_id` identifies the `ValidationResult`; `subject_record_id` identifies the evaluated record. `record_id` must differ from `subject_record_id`. The subject is not embedded; no mutable Python-object reference is stored.
+- `provenance_id` references a separate `ProvenanceRecord` (§22H) by identity only.
+
+### 22C. Validation Profile and Reason Codes
+
+**`validation_profile`:** strict string; nonempty; not whitespace-only; no leading/trailing whitespace; exact text preserved; provider-neutral; no automatic normalization.
+
+**`reason_codes: tuple[str, ...]`:** immutable tuple; unique values; strict strings; order preserved; no automatic sorting. Each code matches `^[A-Z][A-Z0-9_]*$`.
+
+Approved examples: `CANDLE_INCOMPLETE`, `TIMESTAMP_MISMATCH`, `CONFLICTING_DUPLICATE`, `RULE_EVIDENCE_INSUFFICIENT`.
+
+Rejected: lowercase codes; blank codes; whitespace; leading/trailing whitespace; empty strings; malformed codes; duplicate codes.
+
+**Explicitly excluded:** human-readable validation messages; numeric or confidence scores; warning text; free-form notes.
+
+### 22D. Status and Eligibility Consistency
+
+| `status` | Permitted `analytical_eligibility` |
+|---|---|
+| `VALID` | `ELIGIBLE`, `INELIGIBLE`, `UNDETERMINED` |
+| `INVALID` | `INELIGIBLE` only |
+| `INDETERMINATE` | `UNDETERMINED` only |
+
+- `ELIGIBLE` requires `status == VALID`.
+- `INVALID` requires at least one reason code. `INDETERMINATE` requires at least one reason code.
+- `VALID` + `INELIGIBLE` requires at least one reason code. `VALID` + `UNDETERMINED` requires at least one reason code.
+- `VALID` + `ELIGIBLE` may have an empty reason-code tuple.
+- Structural validity and analytical eligibility remain separate. `ValidationResult` does not upgrade `CandleCompleteness`. `CONFIRMED_COMPLETE` does not automatically mean `ELIGIBLE`. `INCOMPLETE` may still be structurally `VALID` but analytically `INELIGIBLE`.
+
+### 22E. Validation Timestamp
+
+`evaluated_at_utc: datetime` — naive datetime rejected; aware datetime with known offset accepted; deterministically normalized to UTC; microseconds preserved; no rounding.
+
+Represents when the validation result was produced. Does not replace the subject's event, availability, or processing timestamps. No relationship to arbitrary subject timestamps is enforced in Batch 1B-B.
+
+### 22F. Evidence Classification
+
+Future enum for `src/btmm_ai_scanner/contracts/provenance_record.py`:
+
+```python
+class EvidenceClassification(StrEnum):
+    BOOK_SOURCED = "BOOK-SOURCED"
+    BOOK_SUPPORTED_UNDERLYING_CONCEPT = (
+        "BOOK-SUPPORTED UNDERLYING CONCEPT"
+    )
+    AUTHOR_APPROVED = "AUTHOR-APPROVED"
+    AUTHOR_ADDED_PROJECT_TERMINOLOGY = (
+        "AUTHOR-ADDED PROJECT TERMINOLOGY"
+    )
+    ENGINEERING_PROVISIONAL = "ENGINEERING-PROVISIONAL"
+    EMPIRICALLY_CALIBRATED = "EMPIRICALLY-CALIBRATED"
+    OUT_OF_SAMPLE_VALIDATED = "OUT-OF-SAMPLE-VALIDATED"
+    PRODUCTION_APPROVED = "PRODUCTION-APPROVED"
+```
+
+- Exact project evidence-label strings preserved; no aliases; no automatic values.
+- The classification records evidence status; the contract does not prove that the classification was legitimately granted.
+- `PRODUCTION-APPROVED` is representable for future records. The current project is not production-approved; Batch 1B-B is not production-approved. Assignment authority remains governed outside the model.
+
+### 22G. Provenance Source Reference
+
+```python
+class ProvenanceSourceReference(ContractModel):
+    source_reference: str
+    source_record_id: UUIDv7 | None
+    source_version: SemVer | None
+```
+
+**Exact field count: 3.**
+
+- All fields are required (`source_record_id`/`source_version` may hold `None`, but the field itself must be present).
+- `source_reference` is strict, nonblank, unpadded; exact text preserved. It may identify a document, rule, repository item, dataset, or other provider-neutral source. It is not interpreted as a filesystem path or a URL; it does not load, open, or contact the source.
+- `source_record_id` references an internal UUIDv7 record when one exists. `source_version` uses `SemVer` when the source is versioned. No provider-specific source enum exists.
+
+### 22H. ProvenanceRecord Exact Field Contract
+
+```python
+class ProvenanceRecord(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    subject_record_id: UUIDv7
+
+    sources: tuple[ProvenanceSourceReference, ...]
+    parent_provenance_ids: tuple[UUIDv7, ...]
+    evidence_classification: EvidenceClassification
+
+    created_at_utc: datetime
+
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+```
+
+**Exact field count: 10.**
+
+- Every field is required. `sources` must contain at least one entry; `parent_provenance_ids` may be empty.
+- No default identifier, fingerprint, classification, timestamp, or version.
+- `ProvenanceRecord` deliberately has no `provenance_id` field.
+
+### 22I. Provenance Identity and Local Lineage
+
+- `record_id` identifies the provenance record; `subject_record_id` identifies the record whose origin is described. `record_id` must differ from `subject_record_id`. The subject record is not embedded.
+- Exact duplicate `ProvenanceSourceReference` entries are rejected. `parent_provenance_ids` must contain unique UUIDv7 values. `record_id` may not appear in `parent_provenance_ids`.
+- `source_record_id` may not equal `ProvenanceRecord.record_id`; `source_record_id` may not equal `subject_record_id`.
+- Source order is preserved; parent-provenance order is preserved; no automatic sorting. Multiple parent provenance references are allowed.
+
+**Explicitly excluded enforcement:** global graph acyclicity; cross-record existence; parent-record loading; multi-record transaction consistency; supersession; provenance persistence; database foreign keys.
+
+**Record:** only local direct self-reference and duplicate validation are approved. Global cycle detection belongs to a later lineage or repository boundary.
+
+### 22J. Provenance Timestamp
+
+`created_at_utc: datetime` — naive datetime rejected; aware datetime accepted; deterministically normalized to UTC; microseconds preserved; no rounding.
+
+Represents `ProvenanceRecord` creation time. It is administrative provenance metadata, not the subject's event timestamp. No original-timezone companion is required. It is system-generated canonical time, not provider-supplied market time.
+
+**Record:** Decision Group 4 resolves timestamp mechanics only for `ValidationResult` and `ProvenanceRecord`. It does not establish one universal timestamp field set.
+
+### 22K. Version and Fingerprint Boundary
+
+Both contracts require `content_fingerprint`, `rule_version`, `contract_version`, `schema_version`. `ValidationResult` additionally requires `provenance_id`.
+
+- Fingerprints remain caller-supplied and validation-only; no fingerprint calculation; no canonical JSON hashing.
+- No default versions; initial versions remain unresolved. `rule_version`, `contract_version`, and `schema_version` may differ. Historical version values remain immutable.
+- `ProvenanceRecord.record_id` is the ID referenced by other records' `provenance_id`. `ProvenanceRecord` does not recursively require another `provenance_id`.
+
+### 22L. Serialization Boundary
+
+**Python mode:** UUIDs remain `uuid.UUID`; timestamps remain `datetime`; enums remain enum instances; versions remain `SemVer`; `sources`/`parent_provenance_ids` remain tuples; fingerprints and reason codes remain strings.
+
+**JSON mode:** UUIDs serialize canonically; UTC timestamps serialize as UTC instants; enum values use their exact approved strings; `SemVer` serializes to exact validated text; tuples serialize as JSON arrays; field names remain unchanged; no aliases.
+
+**Required round trips:** `validation_result → model_dump_json() → model_validate_json() → equal model`; `provenance_record → model_dump_json() → model_validate_json() → equal model`.
+
+**Explicit non-claims:** not canonical JSON; not a persisted manifest format; not fingerprint-byte format; not stable cryptographic serialization.
+
+### 22M. Exact ValidationResult Test Functions (16)
+
+Planned for `tests/unit/test_validation_result.py`:
+1. `test_validation_result_accepts_valid_contract`
+2. `test_validation_result_requires_exact_field_set`
+3. `test_validation_result_is_frozen`
+4. `test_validation_result_rejects_extra_fields`
+5. `test_validation_result_requires_distinct_record_and_subject_ids`
+6. `test_validation_result_rejects_blank_or_padded_profile`
+7. `test_validation_result_validates_status_values`
+8. `test_validation_result_validates_eligibility_values`
+9. `test_validation_result_enforces_status_eligibility_consistency`
+10. `test_validation_result_validates_reason_code_format`
+11. `test_validation_result_rejects_duplicate_reason_codes`
+12. `test_validation_result_requires_reasons_for_noneligible_or_nonvalid_results`
+13. `test_validation_result_rejects_naive_evaluated_at`
+14. `test_validation_result_normalizes_evaluated_at_to_utc`
+15. `test_validation_result_requires_version_and_provenance_types`
+16. `test_validation_result_round_trips_through_json`
+
+**Required parameter coverage:** `VALID`+`ELIGIBLE` with empty reasons; `VALID`+`INELIGIBLE`; `VALID`+`UNDETERMINED`; `INVALID`+`INELIGIBLE`; `INDETERMINATE`+`UNDETERMINED`; reject `INVALID`+`ELIGIBLE`; reject `INDETERMINATE`+`ELIGIBLE`; missing required reasons; duplicate reasons; lowercase reason codes; padded reason codes; blank reason codes; malformed reason codes; blank or padded validation profile; naive timestamp; non-UTC aware timestamp normalized to UTC; fixed UUIDv7 values.
+
+**Record:** no fingerprint calculation; no complete Pydantic prose assertions.
+
+### 22N. Exact ProvenanceRecord Test Functions (17)
+
+Planned for `tests/unit/test_provenance_record.py`:
+1. `test_provenance_source_reference_accepts_valid_values`
+2. `test_provenance_source_reference_requires_exact_field_set`
+3. `test_provenance_source_reference_rejects_blank_or_padded_reference`
+4. `test_provenance_record_accepts_valid_contract`
+5. `test_provenance_record_requires_exact_field_set`
+6. `test_provenance_record_is_frozen`
+7. `test_provenance_record_rejects_extra_fields`
+8. `test_provenance_record_requires_distinct_record_and_subject_ids`
+9. `test_provenance_record_requires_nonempty_sources`
+10. `test_provenance_record_rejects_duplicate_sources`
+11. `test_provenance_record_rejects_self_source_references`
+12. `test_provenance_record_validates_evidence_classification`
+13. `test_provenance_record_rejects_naive_created_at`
+14. `test_provenance_record_normalizes_created_at_to_utc`
+15. `test_provenance_record_validates_parent_provenance_ids`
+16. `test_provenance_record_requires_version_types`
+17. `test_provenance_record_round_trips_through_json`
+
+**Required parameter coverage:** external source with no internal record ID or source version; internal source with UUIDv7 and SemVer; multiple source references; empty sources tuple; exact duplicate sources; self-referencing source IDs; empty parent-provenance tuple; multiple unique parent IDs; duplicate parent IDs; provenance record ID appearing as a parent; every `EvidenceClassification` value; naive timestamp rejection; UTC normalization; fixed UUIDv7 values.
+
+**Record:** no source loading; no network access; no fingerprint calculation.
+
+### 22O. Contract Exports
+
+Future exports from `src/btmm_ai_scanner/contracts/__init__.py` — **Decision Group 4 additions:** `AnalyticalEligibility`, `EvidenceClassification`, `ProvenanceRecord`, `ProvenanceSourceReference`, `ValidationResult`, `ValidationStatus`. These join the previously approved exports from Decision Groups 2 and 3.
+
+**Record:** exact complete `__all__` order remains unresolved until manifest contracts are approved. No implementation export exists yet.
+
+### 22P. Decision Accounting
+
+**Decision Group 4: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** Resolves: exact `ValidationResult` fields (§22B); `ValidationStatus` classification (§22A); `AnalyticalEligibility` classification (§22A); status/eligibility consistency (§22D); reason-code format and requirements (§22C); `ValidationResult` timestamp mechanics (§22E); exact `ProvenanceRecord` fields (§22H); `ProvenanceSourceReference` shape (§22G); `EvidenceClassification` values (§22F); local provenance-lineage rules (§22I); exact dedicated `ValidationResult` tests (§22M); exact dedicated `ProvenanceRecord` tests (§22N); BB-8; BB-14; final Batch 1B-B path count.
+
+**BB-8 — Validation status and analytical eligibility classification scheme: `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.**
+
+**BB-14 — ProvenanceRecord shape and local lineage-reference rules: `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.**
+
+**BB-7 — Timestamp normalization contract: `PARTIALLY RESOLVED`.**
+- Timestamp policy resolved for Contracts A, B, M and N (§21H/§21I and §22E/§22J).
+- Global timestamp policy (candle-close convention, DST, trading-day/week/month boundaries, provider-session handling) remains **`NOT YET RESOLVED`.**
+
+**BB-9 — Provenance/lineage graph rules: `PARTIALLY RESOLVED`.**
+- Local multi-parent provenance references resolved (§22I).
+- Direct self-reference and duplicate validation resolved (§22I).
+- Global lineage graph remains **`NOT YET RESOLVED`.** Cycle enforcement remains **`NOT YET RESOLVED`.** Persistence remains **`NOT YET RESOLVED`.**
+
+**No other BB decision is marked resolved by this section.**

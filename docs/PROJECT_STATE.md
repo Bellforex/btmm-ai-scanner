@@ -572,4 +572,24 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 20; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 21; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 13.
 
-**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 4 covering ValidationResult and ProvenanceRecord exact fields, validation-status classification, analytical eligibility, provenance/source-reference structure, evidence classification, lineage references, timestamps and whether dedicated test files are added to the inventory.
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 4 covering ValidationResult and ProvenanceRecord exact fields, validation-status classification, analytical eligibility, provenance/source-reference structure, evidence classification, lineage references, timestamps and whether dedicated test files are added to the inventory. (**Superseded — see Section 32 below.**)
+
+## 32. Phase 1B-B Decision Group 4 — ValidationResult and ProvenanceRecord Contracts (Completed)
+
+**Phase 1B-B Decision Group 4:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.
+
+- **`ValidationResult` approved** — exact 12-field contract (§22B). **`ValidationStatus` approved** (`VALID`/`INVALID`/`INDETERMINATE`). **`AnalyticalEligibility` approved** (`ELIGIBLE`/`INELIGIBLE`/`UNDETERMINED`).
+- **Reason-code and status/eligibility consistency rules approved** — immutable, unique, uppercase-pattern reason codes; `VALID`/`INVALID`/`INDETERMINATE` × eligibility matrix with mandatory reasons for every non-`VALID`+`ELIGIBLE` outcome.
+- **`ValidationResult` timestamps approved** — `evaluated_at_utc`: naive rejected, aware normalized to UTC, microseconds preserved.
+- **`ProvenanceSourceReference` approved** — exact 3-field contract (§22G). **`ProvenanceRecord` approved** — exact 10-field contract (§22H). **`EvidenceClassification` approved** (8 exact project evidence-label values, including `PRODUCTION-APPROVED`, representable but not currently granted).
+- **Local provenance lineage approved** — unique `parent_provenance_ids`, no self-reference, no duplicate source references; global cycle detection and persistence explicitly out of scope.
+- **16 `ValidationResult` test functions approved** (`test_validation_result.py`). **17 `ProvenanceRecord` test functions approved** (`test_provenance_record.py`).
+- **BB-8 resolved** (validation status/eligibility classification scheme). **BB-14 resolved** (ProvenanceRecord shape and local lineage-reference rules).
+- **BB-7 partially resolved for Contracts A/B/M/N** — timestamp policy now additionally resolved for `ValidationResult`/`ProvenanceRecord`; the global timestamp policy remains unresolved.
+- **BB-9 partially resolved** — local multi-parent provenance references and self-reference/duplicate validation resolved; global lineage graph, cycle enforcement, and persistence remain unresolved.
+- **Inventory now 52 rows. Batch 1B-B now 15 inventoried files. Final future changed-path count = 17.**
+- **Runtime dependencies remain empty. No source or test file exists. Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 22; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 14.
+
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 5 covering RuleVersionManifest and SchemaVersionManifest exact fields, compatibility-class enum behavior, manifest identity/version references, supersession references, final `contracts/__init__.py` exports, initial contract/schema version policy, and exact manifest contract tests.

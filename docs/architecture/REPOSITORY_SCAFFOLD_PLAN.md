@@ -419,3 +419,23 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 20.
 - **Scope remains provisionally 15 changed paths.** **Batch 1B-B remains unauthorized.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 21.
+
+## 14. Phase 1B-B Decision Group 4 — Approved Validation and Provenance Contracts
+
+**Does not alter the Phase 1B-A closed status or the Phase 1B-B Decision Group 1/2/3 boundaries above.**
+
+- **`ValidationStatus`** (`VALID`/`INVALID`/`INDETERMINATE`) and **`AnalyticalEligibility`** (`ELIGIBLE`/`INELIGIBLE`/`UNDETERMINED`) — kept structurally separate; eligibility implies no profitability, trade-validity, production-approval, or execution claim.
+- **`ValidationResult` exact field count = 12.**
+- **Reason-code policy:** immutable `tuple[str, ...]`, unique, order-preserved, each code matching `^[A-Z][A-Z0-9_]*$`; no scores, confidence values, or free-form messages.
+- **Status/eligibility consistency:** `VALID` permits `ELIGIBLE`/`INELIGIBLE`/`UNDETERMINED`; `INVALID` requires `INELIGIBLE`; `INDETERMINATE` requires `UNDETERMINED`; every non-`VALID`+`ELIGIBLE` outcome requires at least one reason code.
+- **`evaluated_at_utc` policy:** naive datetime rejected; aware datetime deterministically normalized to UTC; microseconds preserved; no rounding.
+- **`EvidenceClassification`** (8 exact project evidence-label values, including `PRODUCTION-APPROVED`) — representable now; the project itself remains not production-approved.
+- **`ProvenanceSourceReference` exact field count = 3.** **`ProvenanceRecord` exact field count = 10.**
+- **Local multi-parent lineage rules:** unique `parent_provenance_ids`; no self-reference; no duplicate `ProvenanceSourceReference` entries; no self-referencing `source_record_id`; global cycle detection and persistence explicitly out of scope.
+- **`created_at_utc` policy:** naive datetime rejected; aware datetime deterministically normalized to UTC; microseconds preserved; administrative provenance metadata only.
+- **Exact `ValidationResult` test count = 16. Exact `ProvenanceRecord` test count = 17.**
+- **No dependency or implementation change has occurred.** `pyproject.toml`, `uv.lock`, `.gitignore`, `.python-version`, `src/`, and `tests/` all remain unchanged by this documentation task.
+- **Inventory updated to 52 rows. Batch 1B-B updated to 15 inventoried files. Final Batch 1B-B changed-path count is now resolved at 17.**
+- **Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 22.
