@@ -401,3 +401,21 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 19; `PHASE_1B_EXACT_
 - **Batch 1B-B remains unauthorized for execution.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 20.
+
+## 13. Phase 1B-B Decision Group 3 — Approved Candle Contract Design
+
+**Does not alter the Phase 1B-A closed status or the Phase 1B-B Decision Group 1/2 boundaries above.**
+
+- **Candle-specific enums:** `CandleCompleteness` (`CONFIRMED_COMPLETE`/`INCOMPLETE`/`UNKNOWN`), `CandleVolumeKind` (`TICK`/`TRADE`/`UNKNOWN`) — no analytical-eligibility field of any kind.
+- **Decimal policy:** `Decimal` required for `open`/`high`/`low`/`close`/`volume`; int/float/str input rejected; no rounding or quantization; provider precision preserved.
+- **Volume policy:** `TICK`/`TRADE` require non-`None` volume; `UNKNOWN` permits `None`.
+- **`RawCandle` exact field count = 23.** **`NormalizedCandle` exact field count = 26.**
+- **Timestamp normalization and original-offset preservation:** canonical fields (`event_time_utc`/`availability_time_utc`/`processing_time_utc`) require timezone-aware input, deterministically normalized to UTC; original fields (`original_event_time`/`original_availability_time`/`original_timezone`) preserve the source offset and label; the canonical and original instants must match.
+- **Timestamp ordering:** `availability_time_utc > event_time_utc`; `processing_time_utc >= event_time_utc`; `CONFIRMED_COMPLETE` additionally requires `processing_time_utc >= availability_time_utc`.
+- **Completeness boundary:** completeness is mandatory and structurally separate from analytical eligibility, which belongs to a future `ValidationResult`.
+- **Raw-to-normalized parent reference:** `NormalizedCandle.raw_candle_id` references `RawCandle.record_id`; `NormalizedCandle.record_id` must differ from it; no fingerprint calculation, no embedded object, no generic lineage graph.
+- **Exact `RawCandle` test count = 19. Exact `NormalizedCandle` test count = 19.**
+- **No dependency or implementation change has occurred.** `pyproject.toml`, `uv.lock`, `.gitignore`, `.python-version`, `src/`, and `tests/` all remain unchanged by this documentation task.
+- **Scope remains provisionally 15 changed paths.** **Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 21.

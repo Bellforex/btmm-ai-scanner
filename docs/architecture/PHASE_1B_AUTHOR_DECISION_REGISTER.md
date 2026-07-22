@@ -718,3 +718,265 @@ Planned for `tests/unit/test_semver.py`:
 **BB-4 — Base Pydantic model strategy: `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.** Pydantic `BaseModel` strategy resolved (Section 20A); exact shared `ContractModel` configuration resolved (Section 20A); scalar `SemVer` `RootModel` exception resolved (Section 20D); `UUIDv7` representation resolved (Section 20B); `SHA256Fingerprint` representation resolved (Section 20C); serialization behavior resolved (Section 20F).
 
 **No other BB decision is marked resolved by this section.** BB-7 through BB-11, BB-14, and BB-15 remain exactly as previously reported.
+
+---
+
+## 21. Phase 1B-B Decision Group 3 — Raw Candle and Normalized Candle Contracts
+
+**Status: `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`. `BATCH 1B-B NOT AUTHORIZED FOR EXECUTION`.** This section records the exact field contracts for `RawCandle` (Contract A) and `NormalizedCandle` (Contract B) in `src/btmm_ai_scanner/contracts/raw_candle.py` and `normalized_candle.py`. **No file is created, no dependency is added, and no test is written by this section.**
+
+### 21A. Candle-Specific Enums
+
+Approved future enums in `src/btmm_ai_scanner/contracts/raw_candle.py`:
+
+```python
+class CandleCompleteness(StrEnum):
+    CONFIRMED_COMPLETE = "CONFIRMED_COMPLETE"
+    INCOMPLETE = "INCOMPLETE"
+    UNKNOWN = "UNKNOWN"
+
+
+class CandleVolumeKind(StrEnum):
+    TICK = "TICK"
+    TRADE = "TRADE"
+    UNKNOWN = "UNKNOWN"
+```
+
+- No aliases. No automatic values.
+- **No `analytically_eligible` enum. No analytical-eligibility Boolean.** Completeness and analytical eligibility remain separate — `CONFIRMED_COMPLETE` does not itself grant analytical eligibility. Analytical eligibility belongs to the later `ValidationResult` boundary.
+- `TICK` and `TRADE` describe volume semantics only; `UNKNOWN` does not imply tick volume.
+
+### 21B. Decimal and OHLC Policy
+
+**Python `Decimal` is the exact numeric type** for `open`, `high`, `low`, `close`, `volume`.
+
+- Python-mode input must be `Decimal`; integer, float, and string input are all rejected.
+- Binary floating-point is not used internally.
+- Prices must be finite and strictly greater than zero.
+- Volume must be finite and `>= 0` when present.
+- No fixed decimal-place count, no quantization, no rounding — provider precision is preserved.
+- JSON round trips must not convert through binary float.
+
+**OHLC invariants:** `high >= open`, `high >= close`, `high >= low`; `low <= open`, `low <= close`, `low <= high`. Open and close must lie inside inclusive `[low, high]`. A doji is valid. Equal high and low are valid when all four OHLC values are equal.
+
+### 21C. Volume Policy
+
+```python
+volume: Decimal | None
+volume_kind: CandleVolumeKind
+```
+
+- `TICK` requires non-`None` volume. `TRADE` requires non-`None` volume.
+- `UNKNOWN` permits `Decimal` volume or `None`. **`None` is allowed only when `volume_kind` is `UNKNOWN`.**
+- No conversion between tick and trade volume; no assumption that provider volumes are comparable; no volume-unit conversion in Batch 1B-B.
+
+### 21D. RawCandle Exact Field Contract
+
+```python
+class RawCandle(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+
+    provider: str
+    source_reference: str
+    source_symbol: str
+    source_timeframe: str
+
+    event_time_utc: datetime
+    availability_time_utc: datetime
+    processing_time_utc: datetime
+
+    original_event_time: datetime
+    original_availability_time: datetime
+    original_timezone: str
+
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+
+    volume: Decimal | None
+    volume_kind: CandleVolumeKind
+    completeness: CandleCompleteness
+
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    provenance_id: UUIDv7
+```
+
+**Exact field count: 23.** Every field is required; only `volume` may hold `None`. No default `record_id`, fingerprint, version, or `provenance_id`.
+
+### 21E. Raw Source String Policy
+
+Exact strict nonempty strings: `provider`, `source_reference`, `source_symbol`, `source_timeframe`, `original_timezone`.
+
+- Leading, trailing, and whitespace-only values are all rejected.
+- Values preserved exactly — no automatic lowercasing/uppercasing, no provider-specific normalization.
+- Provider remains provider-neutral: **no FXCM enum, no TradingView enum, no provider-specific identifier type.**
+
+**RawCandle field meanings:** `event_time_utc` = candle-open instant; `availability_time_utc` = candle-close or availability instant; `processing_time_utc` = instant the raw record was received or constructed.
+
+**Binding clarification:** "raw" means provider-facing and not internally normalized. **Raw does not mean unchecked or invalid.**
+
+### 21F. NormalizedCandle Exact Field Contract
+
+```python
+class NormalizedCandle(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    raw_candle_id: UUIDv7
+
+    provider: str
+    source_reference: str
+    source_symbol: str
+    source_timeframe: str
+
+    symbol: InternalSymbol
+    timeframe: Timeframe
+
+    event_time_utc: datetime
+    availability_time_utc: datetime
+    processing_time_utc: datetime
+
+    original_event_time: datetime
+    original_availability_time: datetime
+    original_timezone: str
+
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+
+    volume: Decimal | None
+    volume_kind: CandleVolumeKind
+    completeness: CandleCompleteness
+
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    provenance_id: UUIDv7
+```
+
+**Exact field count: 26.** Every field is required; only `volume` may hold `None`. `NormalizedCandle` is provider-traceable, already mapped to `InternalSymbol` and `Timeframe`, already contains canonical UTC timestamps, and already uses the approved numeric types. **The model validates normalized input — it does not perform normalization.**
+
+**Explicitly excluded from this contract:** `RawCandle.to_normalized()`; `NormalizedCandle.from_raw()`; provider-symbol mapping; timeframe mapping; resampling; synthetic candle construction; gap filling; duplicate resolution; filesystem loading; network ingestion.
+
+### 21G. Raw-to-Normalized Lineage
+
+`raw_candle_id: UUIDv7` is the direct parent reference on `NormalizedCandle`.
+
+- `NormalizedCandle` has its own `record_id`, which **must differ** from `raw_candle_id`.
+- `NormalizedCandle` has its own caller-supplied `content_fingerprint` — **no fingerprint is calculated.**
+- `RawCandle` is not embedded; no Python-object pointer is stored.
+- `provenance_id` remains a separate reference. **No generic lineage graph is introduced. No supersession mechanism is introduced.**
+
+### 21H. Timestamp Representation
+
+All timestamp fields are timezone-aware `datetime`.
+
+**Canonical fields:** `event_time_utc`, `availability_time_utc`, `processing_time_utc`. Naive datetime rejected; aware datetime with known UTC offset accepted; canonical fields converted deterministically to UTC; no unknown/missing timezone inferred; UTC instants serialize in ISO 8601 UTC form; microseconds preserved (no second/minute/candle-boundary rounding).
+
+**Original fields:** `original_event_time`, `original_availability_time`, `original_timezone`. Must be timezone-aware; supplied offsets are preserved; `original_timezone` stores the source-provided timezone label, is descriptive only, and is not used to localize a naive datetime; original timestamps are not converted in the stored Python representation.
+
+**Required instant correspondence:** `original_event_time` converted to UTC `==` `event_time_utc`; `original_availability_time` converted to UTC `==` `availability_time_utc`. Original event and availability timestamps may carry different offsets across a daylight-saving transition — no assumption requires their offsets to match.
+
+### 21I. Timestamp Ordering
+
+`availability_time_utc > event_time_utc`; `processing_time_utc >= event_time_utc`. For `CONFIRMED_COMPLETE`: `processing_time_utc >= availability_time_utc`.
+
+- A candle processed before availability cannot be `CONFIRMED_COMPLETE`.
+- `INCOMPLETE` and `UNKNOWN` may be processed before or after availability.
+
+**Explicitly deferred:** exact timeframe duration; market-session validation; weekend/holiday validation; daylight-saving session-length rules; provider candle-close conventions; D1 candle-duration rules; trading-calendar membership.
+
+### 21J. Completeness Boundary
+
+`CONFIRMED_COMPLETE` = explicitly confirmed complete by the future provider/data-quality boundary. `INCOMPLETE` = known to be incomplete. `UNKNOWN` = completeness has not been established.
+
+- Completeness is mandatory. Valid OHLC does **not** imply `CONFIRMED_COMPLETE`. Normalization does not upgrade completeness automatically.
+- **No `eligible` field. No `valid_for_analysis` field. No `quality_score` field. No `confidence` field.** Analytical eligibility belongs to `ValidationResult`; only a later data-quality process may establish completeness.
+
+### 21K. Version and Provenance Fields
+
+Both contracts require `rule_version`, `contract_version`, `schema_version`, `provenance_id`.
+
+- All version values use `SemVer`. No default versions; initial versions unresolved.
+- `rule_version` identifies the construction/normalization rule set; `contract_version` identifies the logical contract version; `schema_version` identifies the validation/schema version. The three versions may differ.
+- Historical values remain immutable. `provenance_id` is a UUIDv7 reference only — the provenance record is not embedded, no manifest ID is added, no manifest fingerprint is added.
+
+### 21L. Serialization Boundary
+
+**Python mode:** `record_id`/`raw_candle_id`/`provenance_id` remain `uuid.UUID`; OHLC/volume remain `Decimal`; timestamps remain `datetime`; symbol/timeframe/completeness/volume-kind remain enums; versions remain `SemVer`.
+
+**JSON mode:** UUIDs serialize canonically; `Decimal` exact numeric values preserved without binary-float conversion; canonical timestamps serialize as UTC instants; original timestamps retain explicit offsets; enums serialize to approved strings; `SemVer` serializes to exact validated text; field names unchanged; no aliases.
+
+**Required round trip:** `candle → model_dump_json() → model_validate_json() → equal candle`.
+
+**Explicit non-claims:** not canonical JSON; not fingerprint serialization; not stable cryptographic bytes; not a persisted manifest format; not RFC 8785.
+
+### 21M. Exact RawCandle Test Functions (19)
+
+Planned for `tests/unit/test_raw_candle_contract.py`:
+1. `test_raw_candle_accepts_valid_contract`
+2. `test_raw_candle_requires_exact_field_set`
+3. `test_raw_candle_is_frozen`
+4. `test_raw_candle_rejects_extra_fields`
+5. `test_raw_candle_requires_strict_decimal_inputs`
+6. `test_raw_candle_rejects_nonpositive_prices`
+7. `test_raw_candle_enforces_ohlc_bounds`
+8. `test_raw_candle_validates_volume_kind_and_value`
+9. `test_raw_candle_validates_completeness_values`
+10. `test_raw_candle_rejects_naive_timestamps`
+11. `test_raw_candle_normalizes_aware_canonical_times_to_utc`
+12. `test_raw_candle_preserves_original_timestamp_offsets`
+13. `test_raw_candle_requires_original_and_utc_instants_to_match`
+14. `test_raw_candle_requires_event_before_availability`
+15. `test_raw_candle_requires_processing_not_before_event`
+16. `test_raw_candle_rejects_complete_status_before_availability`
+17. `test_raw_candle_rejects_blank_or_padded_source_text`
+18. `test_raw_candle_requires_version_and_provenance_types`
+19. `test_raw_candle_round_trips_through_json`
+
+**Required parameter coverage:** float/integer/string substitutes for `Decimal`; zero price; negative price; open above high; close below low; negative volume; missing volume for `TICK`; missing volume for `TRADE`; `None` volume for `UNKNOWN`; naive datetime; non-UTC aware canonical input; original offset preservation; original/canonical instant mismatch; equal event and availability times; processing before event; `CONFIRMED_COMPLETE` before availability; blank source strings; padded source strings.
+
+**Record:** parameterization permitted; fixed UUIDv7 values only; no fingerprint calculation; no complete Pydantic prose assertions.
+
+### 21N. Exact NormalizedCandle Test Functions (19)
+
+Planned for `tests/unit/test_normalized_candle_contract.py`:
+1. `test_normalized_candle_accepts_valid_contract`
+2. `test_normalized_candle_requires_exact_field_set`
+3. `test_normalized_candle_is_frozen`
+4. `test_normalized_candle_rejects_extra_fields`
+5. `test_normalized_candle_requires_distinct_raw_and_normalized_identities`
+6. `test_normalized_candle_requires_internal_symbol_and_timeframe_enums`
+7. `test_normalized_candle_preserves_source_traceability_fields`
+8. `test_normalized_candle_requires_strict_decimal_inputs`
+9. `test_normalized_candle_rejects_nonpositive_prices`
+10. `test_normalized_candle_enforces_ohlc_bounds`
+11. `test_normalized_candle_validates_volume_kind_and_value`
+12. `test_normalized_candle_validates_completeness_values`
+13. `test_normalized_candle_rejects_naive_timestamps`
+14. `test_normalized_candle_normalizes_aware_canonical_times_to_utc`
+15. `test_normalized_candle_preserves_original_timestamp_offsets`
+16. `test_normalized_candle_requires_original_and_utc_instants_to_match`
+17. `test_normalized_candle_enforces_timestamp_ordering`
+18. `test_normalized_candle_requires_version_and_provenance_types`
+19. `test_normalized_candle_round_trips_through_json`
+
+**Record:** no provider API call; no market-data loading; no symbol/timeframe mapping; no synthetic candle creation; fixed UUIDv7 values; no fingerprint calculation; no complete Pydantic prose assertions.
+
+### 21O. Contract Exports
+
+Future exports from `src/btmm_ai_scanner/contracts/__init__.py` — **Decision Group 3 additions:** `CandleCompleteness`, `CandleVolumeKind`, `NormalizedCandle`, `RawCandle`. Alongside Decision Group 2 exports: `ContractModel`, `SHA256Fingerprint`, `SemVer`, `UUIDv7`. **The final complete `__all__` order remains unresolved** until all Batch 1B-B contract files are approved. No implementation export exists yet.
+
+### 21P. Decision Accounting
+
+**Decision Group 3: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** Resolves, for Contracts A and B: exact `RawCandle` fields (§21D); exact `NormalizedCandle` fields (§21F); Decimal numeric policy (§21B); OHLC invariants (§21B); volume representation (§21C); completeness representation (§21A/§21J); provider-neutral source traceability (§21E); UTC normalization mechanics (§21H); original-timezone preservation (§21H); candle timestamp ordering (§21I); raw-to-normalized parent identity (§21G); exact `RawCandle` tests (§21M); exact `NormalizedCandle` tests (§21N).
+
+**BB-7 — Timestamp normalization contract: `PARTIALLY RESOLVED`.**
+- **Timestamp contract for RawCandle and NormalizedCandle:** `AUTHOR-APPROVED`, `RESOLVED FOR CONTRACTS A/B`, `NOT YET IMPLEMENTED` (§21H/§21I).
+- **Global timestamp policy** (exact candle-close timestamp convention across all future contracts, DST handling, trading-day/week-start/month-boundary handling, provider-session handling — the remaining Phase 1B-A sub-decisions): **`NOT YET RESOLVED`.**
+
+**No other BB decision is marked resolved by this section.**

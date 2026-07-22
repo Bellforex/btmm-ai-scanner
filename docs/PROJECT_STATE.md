@@ -552,4 +552,24 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 19; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 20; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 12.
 
-**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 3 covering exact RawCandle and NormalizedCandle fields, numeric types, timestamp fields, UTC normalization rules, original-timezone preservation, completeness indicators and exact contract tests.
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 3 covering exact RawCandle and NormalizedCandle fields, numeric types, timestamp fields, UTC normalization rules, original-timezone preservation, completeness indicators and exact contract tests. (**Superseded — see Section 31 below.**)
+
+## 31. Phase 1B-B Decision Group 3 — Raw Candle and Normalized Candle Contracts (Completed)
+
+**Phase 1B-B Decision Group 3:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.
+
+- **`RawCandle` contract approved** — exact 23-field contract (§21D). **`NormalizedCandle` contract approved** — exact 26-field contract (§21F).
+- **`CandleCompleteness` approved** (`CONFIRMED_COMPLETE`/`INCOMPLETE`/`UNKNOWN`). **`CandleVolumeKind` approved** (`TICK`/`TRADE`/`UNKNOWN`).
+- **Decimal and OHLC policy approved** — strict `Decimal` input, no coercion, no rounding; `high`/`low`/`open`/`close` invariants.
+- **Volume policy approved** — `TICK`/`TRADE` require non-`None` volume; `UNKNOWN` permits `None`.
+- **UTC normalization for candle contracts approved** — canonical fields deterministically converted to UTC from timezone-aware input; naive datetime rejected.
+- **Original timezone preservation approved** — original event/availability timestamps and timezone label preserved separately from canonical UTC fields, with required instant correspondence.
+- **Completeness remains separate from eligibility** — no `eligible`/`valid_for_analysis`/`quality_score`/`confidence` field; analytical eligibility belongs to a future `ValidationResult`.
+- **Raw-to-normalized lineage approved** — `NormalizedCandle.raw_candle_id` references `RawCandle.record_id`; `record_id` must differ; no fingerprint calculation, no generic lineage graph, no supersession mechanism.
+- **19 `RawCandle` test functions approved** (`test_raw_candle_contract.py`). **19 `NormalizedCandle` test functions approved** (`test_normalized_candle_contract.py`).
+- **BB-7 partially resolved for Contracts A/B only** — the RawCandle/NormalizedCandle timestamp contract is resolved; the global timestamp policy (candle-close convention, DST, trading-day/week/month boundaries, provider-session handling) remains unresolved.
+- **Runtime dependencies remain empty. No source or test file exists. Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 21; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 13.
+
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 4 covering ValidationResult and ProvenanceRecord exact fields, validation-status classification, analytical eligibility, provenance/source-reference structure, evidence classification, lineage references, timestamps and whether dedicated test files are added to the inventory.
