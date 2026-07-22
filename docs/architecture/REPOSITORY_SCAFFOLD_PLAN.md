@@ -385,3 +385,19 @@ This section does not replace or erase the original scaffold proposal in Section
 - **Batch 1B-B remains unimplemented and unauthorized for execution.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 19; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9 (Batch 1B-B rows) and Section 14 (batch table).
+
+## 12. Phase 1B-B Decision Group 2 — Approved Core Value-Type Design
+
+**Does not alter the Phase 1B-A closed status or the Phase 1B-B Decision Group 1 dependency boundary above.**
+
+- **`ContractModel` configuration:** shared frozen base for all record contracts (`extra="forbid"`, `frozen=True`, `strict=True`, `validate_default=True`, `revalidate_instances="always"`, `allow_inf_nan=False`, `str_strip_whitespace=False`, `use_enum_values=False`). `RootModel` is not used for record contracts. `frozen=True` protects Python-level field assignment only — it does not itself define append-only storage, lineage, supersession, or database immutability; those remain separately unresolved.
+- **UUIDv7 validation mechanics:** an annotated `UUIDv7` type accepting a `uuid.UUID` instance or canonical lowercase hyphenated string; rejects nil, non-v7, non-RFC-variant, and non-canonical text; no generation, no timestamp extraction, no business-timestamp assumption.
+- **`SHA256Fingerprint` representation:** an annotated `str` type requiring exactly 64 lowercase hexadecimal characters, strict, no trimming, no normalization; no calculation method.
+- **SemVer grammar and API:** a project-owned `SemVer` (`RootModel[str]`) implementing the full Semantic Versioning 2.0.0 grammar, with `SemVer.parse()`, `compare_precedence()`, and `same_precedence_as()` — no rich comparison operators (`__lt__`/`__le__`/`__gt__`/`__ge__`).
+- **Serialization boundary:** ordinary Pydantic JSON/Python-mode serialization only — explicitly not canonical JSON, not RFC 8785, not a persisted manifest format.
+- **Exact test-function counts:** 17 functions planned for `tests/unit/test_identity_and_fingerprint.py`; 15 functions planned for `tests/unit/test_semver.py`.
+- **No dependency or implementation change has occurred.** `pyproject.toml`, `uv.lock`, `.gitignore`, `.python-version`, `src/`, and `tests/` all remain unchanged by this documentation task.
+- **Scope remains provisionally 15 paths** (13 inventoried files + `pyproject.toml` + `uv.lock`); final count still pending the two candidate-test decision.
+- **Batch 1B-B remains unauthorized for execution.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 20.

@@ -523,8 +523,198 @@ Rules:
 - **BB-12** — Manifest shape-only boundary → confirmed unchanged, shape-only (Section 19G).
 - **BB-13** — JSON Schema generation timing → deferred to a later, explicitly scoped batch (Section 19F).
 
-**Partially resolved:**
-- **BB-3** — SemVer implementation strategy: **dependency strategy resolved** (no external package; project-owned type in `contracts/types.py`); **grammar, parsing, and comparison behavior remain unresolved** (Section 19E).
-- **BB-4** — Base Pydantic model strategy: **Pydantic use resolved** (Pydantic v2, dataclass placeholders rejected); **exact model configuration** (`frozen`, `extra`, strict validation, etc.) **remains unresolved** (Section 19A; see also the prior audit's Part 7 findings).
+**Partially resolved (as of Decision Group 1):**
+- **BB-3** — SemVer implementation strategy: **dependency strategy resolved** (no external package; project-owned type in `contracts/types.py`); **grammar, parsing, and comparison behavior remain unresolved** (Section 19E). *(Superseded — fully resolved by Decision Group 2, Section 20, below.)*
+- **BB-4** — Base Pydantic model strategy: **Pydantic use resolved** (Pydantic v2, dataclass placeholders rejected); **exact model configuration** (`frozen`, `extra`, strict validation, etc.) **remains unresolved** (Section 19A; see also the prior audit's Part 7 findings). *(Superseded — fully resolved by Decision Group 2, Section 20, below.)*
 
 **No other BB decision is marked resolved by this section.** BB-7 through BB-11, BB-14, and BB-15 remain exactly as previously reported in the Phase 1B-B Core Foundation Contracts Scope Audit.
+
+---
+
+## 20. Phase 1B-B Decision Group 2 — Base Contract Model, SemVer and Core Value Types
+
+**Status: `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`. `BATCH 1B-B NOT AUTHORIZED FOR EXECUTION`.** This section records the exact design of `src/btmm_ai_scanner/contracts/types.py`'s shared base model, UUIDv7 and SHA-256 value types, and the project-owned `SemVer` type. **No file is created, no dependency is added, and no test is written by this section.**
+
+### 20A. Shared Contract Model
+
+**Location:** `src/btmm_ai_scanner/contracts/types.py`. **Public name:** `ContractModel`.
+
+**Approved conceptual configuration:**
+
+```python
+class ContractModel(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_default=True,
+        revalidate_instances="always",
+        allow_inf_nan=False,
+        str_strip_whitespace=False,
+        use_enum_values=False,
+    )
+```
+
+- Record contracts use `ContractModel`. Record contracts do not use `RootModel`.
+- Unknown fields are rejected (`extra="forbid"`).
+- Values are not silently coerced (`strict=True`).
+- Defaults are validated (`validate_default=True`).
+- Nested contract models are revalidated (`revalidate_instances="always"`).
+- NaN and positive/negative infinity are rejected (`allow_inf_nan=False`).
+- Strings are not globally trimmed or normalized (`str_strip_whitespace=False`).
+- Enums remain enum instances in Python mode (`use_enum_values=False`).
+- Models are assignment-frozen (`frozen=True`).
+- Frozen contracts may use only immutable collection types (e.g., tuples, frozensets) unless a later decision permits otherwise.
+
+**Prohibited configurations:** `validate_assignment`; `arbitrary_types_allowed`; `from_attributes`; `populate_by_name`; alias generators; field aliases; by-alias serialization; custom `json_encoders`; global string conversion; number-to-string coercion.
+
+**Immutability limitation (binding clarification):** `frozen=True` protects normal Python field assignment only. It does **not** establish append-only storage, define lineage, define supersession, or define database immutability. `model_copy(update=...)` remains unapproved. Copying records into new identities remains unresolved. Storage-level mutation rules remain unresolved. *(This directly resolves the "Python object immutability vs. storage immutability" ambiguity flagged in the prior Phase 1B-B Core Foundation Contracts Scope Audit, Part 11 — the two are now explicitly distinguished, though the storage-level rules themselves remain a separate, still-open decision.)*
+
+### 20B. UUIDv7 Representation
+
+**Approved named annotated value type:** `UUIDv7`.
+
+```python
+UUIDv7 = Annotated[
+    UUID,
+    BeforeValidator(_validate_uuidv7),
+    PlainSerializer(str, return_type=str, when_used="json"),
+]
+```
+
+**Accepted inputs:** a `uuid.UUID` instance; a canonical lowercase, hyphenated UUID string.
+
+**Validation requirements:** input must be `UUID` or `str`; string input must already equal the canonical `str(UUID(...))` form; version must be exactly 7; variant must be RFC-compatible; nil UUID is rejected; invalid UUID text is rejected; uppercase UUID text is rejected; compact UUID text is rejected; braced UUID text is rejected; non-version-7 UUID values are rejected; values are **not** silently normalized.
+
+**Runtime representation:** Python representation = `uuid.UUID`; Python-mode dump = `uuid.UUID`; JSON-mode dump = canonical lowercase hyphenated string.
+
+**Record:** no UUID generator is approved; no UUID timestamp extraction is approved; no assumption links the UUIDv7-embedded timestamp to a business timestamp; tests use fixed UUID values. *(This is the value-type contract shape only — Decision Group 1's Section 19B validation-only boundary and "no generation" rule are unaffected and unchanged.)*
+
+### 20C. SHA256Fingerprint Representation
+
+**Approved value type:**
+
+```python
+SHA256Fingerprint = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    ),
+]
+```
+
+**Record:** exactly 64 characters; lowercase ASCII hexadecimal only; strict string input; no whitespace trimming; no uppercase normalization; no `sha256:` prefix; no bytes input; no integer input; no calculation method; no digest recomputation; no record-content comparison; runtime and JSON representations remain the exact string; `UUIDv7` and `SHA256Fingerprint` are non-interchangeable. *(This is the value-type contract shape only — Decision Group 1's Section 19C validation-only boundary and "no calculation" rule are unaffected and unchanged.)*
+
+### 20D. Project-Owned SemVer
+
+**Approved public type:**
+
+```python
+class SemVer(RootModel[str]):
+    ...
+
+model_config = ConfigDict(
+    frozen=True,
+    strict=True,
+    str_strip_whitespace=False,
+)
+```
+
+**Full Semantic Versioning 2.0.0 grammar adopted:** `MAJOR.MINOR.PATCH`; `MAJOR.MINOR.PATCH-PRERELEASE`; `MAJOR.MINOR.PATCH+BUILD`; `MAJOR.MINOR.PATCH-PRERELEASE+BUILD`.
+
+**Grammar rules:** major/minor/patch are non-negative integers; core numeric components reject leading zeroes; prerelease identifiers are dot-separated; prerelease identifiers allow ASCII letters, digits, and hyphens; empty prerelease identifiers are rejected; numeric prerelease identifiers reject leading zeroes; build identifiers are dot-separated; build identifiers allow ASCII letters, digits, and hyphens; empty build identifiers are rejected; numeric build identifiers **may** contain leading zeroes; surrounding whitespace is rejected; internal whitespace is rejected; a leading `v` is rejected; partial versions (e.g., `1`, `1.2`) are rejected; exact valid input text is preserved without normalization.
+
+**Approved public API:**
+- `SemVer.parse(value: str) -> SemVer`
+- `version.compare_precedence(other: SemVer) -> int` — returns `-1` (lower precedence), `0` (same precedence), or `1` (higher precedence)
+- `version.same_precedence_as(other: SemVer) -> bool`
+- `str(version) -> original validated string`
+
+**Approved read-only properties:** `major: int`; `minor: int`; `patch: int`; `prerelease: tuple[str, ...] | None`; `build_metadata: tuple[str, ...] | None`.
+
+### 20E. SemVer Precedence
+
+**Precedence order:** (1) major numerically; (2) minor numerically; (3) patch numerically; (4) prerelease identifiers.
+
+**Rules:** a release has higher precedence than its matching prerelease; numeric prerelease identifiers compare numerically; numeric identifiers have lower precedence than non-numeric identifiers; non-numeric identifiers compare using ASCII lexical order; when compared identifiers are equal, the version with more prerelease identifiers has higher precedence; **build metadata is ignored for precedence.**
+
+**Equality rules:** exact model equality includes the entire original validated text; build metadata participates in exact equality; build metadata does **not** participate in precedence.
+
+**Example:** `1.0.0+build.1 != 1.0.0+build.2`, but `SemVer.parse("1.0.0+build.1").same_precedence_as(SemVer.parse("1.0.0+build.2"))` is `True`.
+
+**Not implemented or approved:** `__lt__`, `__le__`, `__gt__`, `__ge__`. Callers must use `compare_precedence()`.
+
+**Record:** initial contract version remains unresolved; initial schema version remains unresolved.
+
+### 20F. Serialization Boundary
+
+**Python-mode behavior:** `UUIDv7` remains `uuid.UUID`; `SHA256Fingerprint` remains `str`; `SemVer` dumps as its root string; enums remain enum instances; contract models retain typed values.
+
+**JSON-mode behavior:** `UUIDv7` becomes canonical lowercase UUID text; `SHA256Fingerprint` remains unchanged; `SemVer` becomes the exact validated text; enums serialize to their string values; field names remain unchanged; no aliases are used.
+
+**Round-trip requirement:** `model → model_dump_json() → model_validate_json() → equal model`.
+
+**Explicit non-claim:** this is ordinary Pydantic serialization only, and is **not**: canonical JSON; fingerprint serialization; RFC 8785; a persisted manifest format; stable byte ordering; or cryptographic-hash equivalence. *(Decision Group 1's Section 19D canonical-JSON deferral is unaffected and unchanged.)*
+
+### 20G. Exact Identity and Fingerprint Test Functions (17)
+
+Planned for `tests/unit/test_identity_and_fingerprint.py`:
+1. `test_contract_model_is_frozen`
+2. `test_contract_model_forbids_extra_fields`
+3. `test_contract_model_rejects_type_coercion`
+4. `test_contract_model_validates_default_values`
+5. `test_contract_model_revalidates_nested_instances`
+6. `test_contract_model_rejects_nan_and_infinity`
+7. `test_uuidv7_accepts_canonical_string_and_uuid_instance`
+8. `test_uuidv7_rejects_invalid_text`
+9. `test_uuidv7_rejects_nil_and_non_version_seven_values`
+10. `test_uuidv7_rejects_non_rfc_variant`
+11. `test_uuidv7_rejects_noncanonical_text`
+12. `test_uuidv7_serialization_modes`
+13. `test_sha256_fingerprint_accepts_exact_lowercase_hex`
+14. `test_sha256_fingerprint_rejects_invalid_values`
+15. `test_sha256_fingerprint_serializes_without_normalization`
+16. `test_identity_and_fingerprint_are_not_interchangeable`
+17. `test_core_value_types_round_trip_through_json`
+
+**Required parameter coverage:** NaN; positive infinity; negative infinity; invalid UUID text; nil UUID; UUIDv4; UUID with non-RFC variant; uppercase UUID text; compact UUID text; braced UUID text; uppercase fingerprint; 63-character fingerprint; 65-character fingerprint; non-hex fingerprint.
+
+**Record:** parameterization is permitted; no additional function name enters this file without review; tests use fixed UUID values; tests do not generate UUIDv7 values.
+
+### 20H. Exact SemVer Test Functions (15)
+
+Planned for `tests/unit/test_semver.py`:
+1. `test_semver_accepts_valid_semver_2_0_0_values`
+2. `test_semver_rejects_invalid_values`
+3. `test_semver_rejects_leading_zeroes`
+4. `test_semver_preserves_exact_text`
+5. `test_semver_parse_returns_semver`
+6. `test_semver_is_frozen`
+7. `test_semver_serializes_as_json_string`
+8. `test_semver_compares_core_versions`
+9. `test_semver_orders_prerelease_before_release`
+10. `test_semver_compares_prerelease_identifiers`
+11. `test_semver_ignores_build_metadata_for_precedence`
+12. `test_semver_exact_equality_includes_build_metadata`
+13. `test_semver_same_precedence_ignores_build_metadata`
+14. `test_semver_does_not_define_rich_ordering`
+15. `test_semver_round_trips_through_json`
+
+**Required valid examples:** `0.1.0`; `1.0.0`; `1.0.0-alpha`; `1.0.0-alpha.1`; `1.0.0-0.3.7`; `1.0.0-x.7.z.92`; `1.0.0+20130313144700`; `1.0.0-beta+exp.sha.5114f85`.
+
+**Required invalid examples:** `1`; `1.2`; `v1.2.3`; `01.2.3`; `1.02.3`; `1.2.03`; `1.0.0-01`; `1.0.0-`; `1.0.0+`; `1.0.0-alpha..1`; `1.0.0 alpha`; a leading-space variant of `1.0.0`.
+
+**Required precedence chain:** `1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-alpha.beta < 1.0.0-beta < 1.0.0-beta.2 < 1.0.0-beta.11 < 1.0.0-rc.1 < 1.0.0`.
+
+**Record:** tests may be parameterized; tests must not assert complete Pydantic human-readable error prose — stable behavior and relevant error locations may be asserted instead; no additional function name enters this file without review.
+
+### 20I. Decision Accounting — BB-3 and BB-4 Fully Resolved
+
+**BB-3 — SemVer implementation strategy: `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.** Project-owned SemVer strategy resolved (Section 20D); full grammar resolved (Section 20D); parsing resolved (Section 20D); precedence resolved (Section 20E); build-metadata behavior resolved (Section 20E); exact API resolved (Section 20D).
+
+**BB-4 — Base Pydantic model strategy: `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.** Pydantic `BaseModel` strategy resolved (Section 20A); exact shared `ContractModel` configuration resolved (Section 20A); scalar `SemVer` `RootModel` exception resolved (Section 20D); `UUIDv7` representation resolved (Section 20B); `SHA256Fingerprint` representation resolved (Section 20C); serialization behavior resolved (Section 20F).
+
+**No other BB decision is marked resolved by this section.** BB-7 through BB-11, BB-14, and BB-15 remain exactly as previously reported.

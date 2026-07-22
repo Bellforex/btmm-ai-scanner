@@ -534,4 +534,22 @@ All 17 Technology-Stack Decision Register items remain `AUTHOR-APPROVED`; a limi
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 19; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 11.
 
-**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 2 covering the exact Pydantic base-model configuration, project-owned SemVer grammar and comparison behavior, UUIDv7 validation mechanics, SHA256Fingerprint representation mechanics, serialization behavior and exact tests for `contracts/types.py`.
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 2 covering the exact Pydantic base-model configuration, project-owned SemVer grammar and comparison behavior, UUIDv7 validation mechanics, SHA256Fingerprint representation mechanics, serialization behavior and exact tests for `contracts/types.py`. (**Superseded — see Section 30 below.**)
+
+## 30. Phase 1B-B Decision Group 2 — Base Contract Model, SemVer and Core Value Types (Completed)
+
+**Phase 1B-B Decision Group 2:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.
+
+- **BB-3 resolved** — project-owned SemVer strategy, full SemVer 2.0.0 grammar, parsing, precedence, build-metadata behavior, and exact API all `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.
+- **BB-4 resolved** — Pydantic `BaseModel` strategy, exact shared `ContractModel` configuration, the `SemVer` `RootModel` scalar exception, `UUIDv7`/`SHA256Fingerprint` representations, and serialization behavior all `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.
+- **`ContractModel` configuration approved** — `extra="forbid"`, `frozen=True`, `strict=True`, `validate_default=True`, `revalidate_instances="always"`, `allow_inf_nan=False`, `str_strip_whitespace=False`, `use_enum_values=False`. `frozen=True` protects field assignment only — it does not define append-only storage, lineage, supersession, or database immutability, which remain separately unresolved.
+- **UUIDv7 mechanics approved** — validation-only annotated type; accepts `uuid.UUID` or canonical lowercase hyphenated string; rejects nil/non-v7/non-RFC-variant/non-canonical text; no generation.
+- **SHA256Fingerprint mechanics approved** — exactly 64 lowercase hexadecimal characters, strict, no normalization; no calculation.
+- **SemVer grammar/API approved** — full SemVer 2.0.0 grammar; `SemVer.parse()`, `compare_precedence()`, `same_precedence_as()`; no rich comparison operators.
+- **Serialization boundary approved** — ordinary Pydantic JSON/Python-mode serialization only; explicitly not canonical JSON, RFC 8785, or a persisted manifest format.
+- **Exact tests for `contracts/types.py` approved** — 17 functions for `test_identity_and_fingerprint.py`; 15 functions for `test_semver.py` (full names in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Sections 20G–20H).
+- **Runtime dependencies remain empty.** No source or test file exists yet. **Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 20; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 12.
+
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 3 covering exact RawCandle and NormalizedCandle fields, numeric types, timestamp fields, UTC normalization rules, original-timezone preservation, completeness indicators and exact contract tests.
