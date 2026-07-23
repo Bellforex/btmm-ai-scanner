@@ -634,4 +634,21 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 23; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 24; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/16b; `REPOSITORY_SCAFFOLD_PLAN.md` Section 16.
 
-**Next controlled task:** Commit and push the Decision Group 6 documentation. After that commit, wait for the exact separate author authorization: `AUTHORIZE PHASE 1B-B IMPLEMENTATION`.
+**Next controlled task:** Commit and push the Decision Group 6 documentation. After that commit, wait for the exact separate author authorization: `AUTHORIZE PHASE 1B-B IMPLEMENTATION`. (**Superseded — see Section 35 below.**)
+
+## 35. Phase 1B-B Baseline Correction 6A (Completed)
+
+**Phase 1B-B Baseline Correction 6A:** `AUTHOR-APPROVED`. `DOCUMENTATION NOT YET COMMITTED`. `IMPLEMENTATION AUTHORIZATION ALREADY GRANTED`. `IMPLEMENTATION NOT YET STARTED`. `NOT PRODUCTION-APPROVED`.
+
+**Context:** Section 34's Decision Group 6 documentation was committed as `70fde0b8e49c2ef48397ea29090f6a36af61899b`, which necessarily advanced HEAD past the `9249c1584389993f22a3d5753f9fc37d6e00fc9c` baseline that document had named as its own implementation starting commit and rollback point — creating a contradiction with Decision Group 6's own mandatory HEAD-match stop condition.
+
+- **Corrected baseline:** `70fde0b8e49c2ef48397ea29090f6a36af61899b`.
+- **Corrected rollback target:** `70fde0b8e49c2ef48397ea29090f6a36af61899b`.
+- **Historical pre-Decision-Group-6 checkpoint only:** `9249c1584389993f22a3d5753f9fc37d6e00fc9c` — no longer the active baseline, rollback target, or clean-tree target.
+- **Runtime dependencies remain empty. No implementation path exists.** The 17-path implementation scope, the 132-test-function boundary, and all other Decision Group 6 gates are unchanged.
+- **The author's implementation authorization is valid** — `AUTHORIZE PHASE 1B-B IMPLEMENTATION` was explicitly confirmed by the author during the drafting of this correction (in response to a clarifying question about whether it had genuinely been provided already — it had not, until that confirmation). The author does not need to repeat the phrase.
+- **Implementation remains blocked until this Baseline Correction 6A documentation is committed and pushed.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 25; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/16b; `REPOSITORY_SCAFFOLD_PLAN.md` Section 16A.
+
+**Next controlled task:** Commit and push Baseline Correction 6A documentation. After that commit, begin the already-authorized Phase 1B-B implementation from the corrected clean synchronized baseline.

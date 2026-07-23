@@ -478,3 +478,16 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 23.
 - **Batch 1B-B remains unauthorized.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 24.
+
+### 16A. Baseline Correction 6A — Corrected Post-Documentation Starting Point
+
+**`AUTHOR-APPROVED`, `DOCUMENTATION CORRECTION ONLY`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+- **Corrected starting commit:** `70fde0b8e49c2ef48397ea29090f6a36af61899b`.
+- **Corrected rollback/clean-tree target:** `70fde0b8e49c2ef48397ea29090f6a36af61899b`.
+- **Historical checkpoint:** `9249c1584389993f22a3d5753f9fc37d6e00fc9c` — this is **not** the active implementation baseline; it predates the Decision Group 6 documentation commit that necessarily advanced HEAD past it.
+- **No other implementation-control rule changes.** Branch, Python/uv baselines, the 17-path scope, the dependency-lock procedure, the Stage A–E sequence, the 132-test-function boundary, all quality gates, stop conditions, the correction boundary, and the rollback restrictions (Section 16) are all unchanged.
+- **Implementation authorization has already been granted** — the author explicitly confirmed `AUTHORIZE PHASE 1B-B IMPLEMENTATION` during the drafting of this correction.
+- **Implementation may start only after this correction is reviewed, committed, and pushed** — implementation has not started as of this documentation task.
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 25.
