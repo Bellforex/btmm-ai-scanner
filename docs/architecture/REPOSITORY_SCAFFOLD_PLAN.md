@@ -491,3 +491,17 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 24.
 - **Implementation may start only after this correction is reviewed, committed, and pushed** — implementation has not started as of this documentation task.
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 25.
+
+### 16B. Baseline Correction 6B — Execution-Captured Baseline Policy
+
+**`AUTHOR-APPROVED`, `DOCUMENTATION CORRECTION ONLY`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+- **Fixed pre-commit hashes repeatedly became stale after governance documentation commits** — Decision Group 6's baseline went stale when it was committed; Correction 6A's replacement baseline went stale when it, too, was committed.
+- **The active implementation baseline is now captured from the clean synchronized HEAD immediately before the first implementation change** — not hard-coded to any fixed commit.
+- **The same captured hash is the rollback target.** The hash is recorded in the implementation report. No separate pre-implementation documentation commit is required to record it.
+- **`cc43df0dbdc6148567cb33c71a87bf0441f0f351` is only the current candidate baseline** at the time this correction was authored — a newer clean synchronized HEAD must be captured if HEAD changes before implementation begins.
+- **All other Decision Group 6 controls remain unchanged** (Section 16): branch, Python/uv baselines, the 17-path scope, the dependency-lock procedure, the Stage A–E sequence, the 132-test-function boundary, all quality gates, stop conditions, the correction boundary, and the rollback restrictions.
+- **Existing implementation authorization remains valid** — Correction 6B neither creates nor revokes it (Section 16A / `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §25C).
+- **Implementation may begin only after Correction 6B is committed and pushed.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 26.

@@ -651,4 +651,29 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 24; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 25; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/16b; `REPOSITORY_SCAFFOLD_PLAN.md` Section 16A.
 
-**Next controlled task:** Commit and push Baseline Correction 6A documentation. After that commit, begin the already-authorized Phase 1B-B implementation from the corrected clean synchronized baseline.
+**Next controlled task:** Commit and push Baseline Correction 6A documentation. After that commit, begin the already-authorized Phase 1B-B implementation from the corrected clean synchronized baseline. (**Superseded — see Section 36 below.**)
+
+## 36. Phase 1B-B Baseline Correction 6B — Execution-Captured Baseline Policy (Completed)
+
+**Phase 1B-B Baseline Correction 6B:** `AUTHOR-APPROVED`. `DOCUMENTATION NOT YET COMMITTED`. `IMPLEMENTATION AUTHORIZATION ALREADY VALID`. `IMPLEMENTATION NOT YET STARTED`. `NOT PRODUCTION-APPROVED`.
+
+**Active baseline policy:**
+- No permanent pre-implementation hash is hard-coded.
+- The clean synchronized HEAD immediately before the first implementation change becomes the execution-captured baseline.
+- The same hash becomes the rollback target.
+- The captured full hash must be included in the implementation report.
+- No implementation modification occurs before capture.
+- No extra documentation commit is required after capture.
+
+**Historical checkpoints:**
+- `9249c1584389993f22a3d5753f9fc37d6e00fc9c`: pre-Decision-Group-6 historical checkpoint.
+- `70fde0b8e49c2ef48397ea29090f6a36af61899b`: pre-Correction-6A historical checkpoint.
+- `cc43df0dbdc6148567cb33c71a87bf0441f0f351`: current candidate baseline when Correction 6B was authored.
+
+- **Runtime dependencies remain empty. No implementation path exists.** Inventory remains 52 rows. Batch 1B-B remains 15 inventoried files. Final implementation scope remains 17 paths. The 132-test-function boundary remains unchanged.
+- **Existing implementation authorization remains valid** — confirmed during the drafting of Correction 6A; Correction 6B neither creates nor revokes it.
+- **Implementation remains blocked until Correction 6B is committed and pushed.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 26; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/16b; `REPOSITORY_SCAFFOLD_PLAN.md` Section 16B.
+
+**Next controlled task:** Commit and push Baseline Correction 6B documentation. After that commit, begin the already-authorized Batch 1B-B implementation by capturing the clean synchronized execution baseline before making any implementation change.
