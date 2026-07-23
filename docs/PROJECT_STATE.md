@@ -613,4 +613,25 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 22; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 23; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 15.
 
-**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 6 covering final implementation sequence, exact dependency-lock procedure, per-file construction order, verification commands, stop conditions, rollback boundary, final 17-path execution authorization and post-implementation closure criteria.
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 6 covering final implementation sequence, exact dependency-lock procedure, per-file construction order, verification commands, stop conditions, rollback boundary, final 17-path execution authorization and post-implementation closure criteria. (**Superseded — see Section 34 below.**)
+
+## 34. Phase 1B-B Decision Group 6 — Implementation Sequence, Verification Gates and Rollback Boundary (Completed)
+
+**Phase 1B-B Decision Group 6:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`. `BATCH 1B-B IMPLEMENTATION NOT AUTHORIZED`.
+
+- **Exact implementation baseline approved** — starting commit `9249c1584389993f22a3d5753f9fc37d6e00fc9c` on `main`; clean tree; synchronized `origin/main`; Python `3.12.13`; `uv` `0.11.30`; 34-test baseline; empty runtime dependencies (§24A).
+- **Exact 17-path boundary approved** — 2 modified (`pyproject.toml`, `uv.lock`) + 15 new (8 `contracts/` files, 7 `tests/unit/` files); no 18th path; no documentation change during implementation (§24B).
+- **Dependency-lock procedure approved** — `uv add "pydantic>=2.13.4,<2.14"` → `uv lock --check` → `uv sync --locked`, with existing dev-tool versions verified unchanged (§24C).
+- **Stage A–E sequence approved** — Stage A (`ContractModel`/`UUIDv7`/`SHA256Fingerprint`/`SemVer`), Stage B (`CandleCompleteness`/`CandleVolumeKind`/`RawCandle`/`NormalizedCandle`, reusing existing `InternalSymbol`/`Timeframe`), Stage C (`ProvenanceSourceReference`/`EvidenceClassification`/`ProvenanceRecord`/`ValidationStatus`/`AnalyticalEligibility`/`ValidationResult`), Stage D (`CompatibilityClass`/`RuleVersionManifest`/`SchemaVersionManifest`), Stage E (final 17-name `contracts/__init__.py` exports) (§24D–§24H).
+- **132 top-level test functions approved** (17+15+19+19+16+17+29), with a mandatory static AST-based function-name and count comparison (§24I).
+- **Quality gates approved** — targeted Ruff on new files during construction; repository-wide `uv lock --check`/`ruff format --check .`/`ruff check .`/`mypy src tests`/`pytest -q`; full 17-name import verification (§24J).
+- **Stop conditions approved** — baseline mismatch, dirty tree, branch divergence, wrong toolchain version, baseline-test regression, dependency-range violation, enum/field-contract violation, an 18th path, documentation/private-reference change, unapproved helper, any gate failure, or test-name/export mismatch (§24K).
+- **Correction boundary approved** — syntax/import/type/validator/test/formatting corrections permitted within the 17 paths; field/version/export/test changes require a new author decision (§24L).
+- **Rollback point approved** — same baseline commit; no automatic rollback; destructive git operations explicitly prohibited; an authorized future rollback may touch only `pyproject.toml`, `uv.lock`, and the 15 new files (§24M).
+- **Review-before-commit approved** — a successful implementation run ends with exactly 17 unstaged, uncommitted, unpushed paths, submitted for architectural review before any commit instruction (§24N).
+- **Closure sequence approved** — authorization → implementation → stop unstaged → review → commit/push implementation → separate closure documentation → closure review → closure commit/push → batch closed but not production-approved (§24O).
+- **Runtime dependencies remain empty. No implementation file exists. Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 24; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/16b; `REPOSITORY_SCAFFOLD_PLAN.md` Section 16.
+
+**Next controlled task:** Commit and push the Decision Group 6 documentation. After that commit, wait for the exact separate author authorization: `AUTHORIZE PHASE 1B-B IMPLEMENTATION`.

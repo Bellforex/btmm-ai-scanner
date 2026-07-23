@@ -458,3 +458,23 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 22.
 - **Batch 1B-B remains unauthorized.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 23.
+
+## 16. Phase 1B-B Decision Group 6 — Approved Implementation Control Plan
+
+**Does not alter the Phase 1B-A closed status or the Phase 1B-B Decision Group 1–5 boundaries above. `BATCH 1B-B IMPLEMENTATION NOT AUTHORIZED`.**
+
+- **Approved baseline commit:** `9249c1584389993f22a3d5753f9fc37d6e00fc9c` on branch `main`. **Python baseline:** `3.12.13`. **uv baseline:** `0.11.30`. **Existing test baseline:** 34 passing tests.
+- **Exact 17-path scope:** 2 modified (`pyproject.toml`, `uv.lock`) + 15 new (8 `contracts/` files, 7 `tests/unit/` files). No eighteenth path authorized; no documentation file may change during implementation.
+- **Dependency-lock procedure:** `uv add "pydantic>=2.13.4,<2.14"` → `uv lock --check` → `uv sync --locked`; existing dev-tool versions (`pytest 9.1.1`/`mypy 2.3.0`/`Ruff 0.15.22`) must remain unchanged.
+- **Stage A–E construction sequence:** Stage A (`ContractModel`/`UUIDv7`/`SHA256Fingerprint`/`SemVer` + 32 tests) → Stage B (`CandleCompleteness`/`CandleVolumeKind`/`RawCandle`/`NormalizedCandle` + 38 tests, reusing existing `InternalSymbol`/`Timeframe`) → Stage C (`ProvenanceSourceReference`/`EvidenceClassification`/`ProvenanceRecord`/`ValidationStatus`/`AnalyticalEligibility`/`ValidationResult` + 33 tests) → Stage D (`CompatibilityClass`/`RuleVersionManifest`/`SchemaVersionManifest` + 29 tests) → Stage E (finalize the 17-name `contracts/__init__.py` export order).
+- **Exact 132 top-level test-function total** (17+15+19+19+16+17+29), verified by a mandatory static AST-based function-name and count comparison.
+- **Final quality gates:** `uv lock --check`; `ruff format --check .`; `ruff check .`; `mypy src tests`; `pytest -q`; full 17-name import verification.
+- **Mandatory stop conditions:** baseline mismatch, dirty tree, branch divergence, wrong toolchain version, baseline-test regression, dependency-range violation, enum mismatch, field-contract violation, an 18th path, documentation change, unapproved helper, any gate failure, or a test-name/export mismatch — each requires an immediate stop without staging, committing, or pushing.
+- **Correction boundary:** syntax/import/type/validator/test/formatting corrections permitted within the 17 paths; field renames/reorders/retypes, new defaults/coercion/exports/tests, or relaxed validation all require a new author decision.
+- **Rollback boundary:** approved rollback point is the same baseline commit; no automatic rollback approved; `git reset --hard`/`git clean`/force checkout/history rewriting explicitly prohibited; an authorized future rollback may touch only `pyproject.toml`, `uv.lock`, and the 15 new files.
+- **Stop-before-staging requirement:** a successful implementation run ends with exactly 17 unstaged, uncommitted, unpushed paths, submitted for architectural review before any commit instruction.
+- **Separate implementation-authorization phrase:** `AUTHORIZE PHASE 1B-B IMPLEMENTATION` — distinct from and later than this Decision Group 6 approval.
+- **No dependency or implementation change has occurred.** `pyproject.toml`, `uv.lock`, `.gitignore`, `.python-version`, `src/`, and `tests/` all remain unchanged by this documentation task.
+- **Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 24.
