@@ -592,4 +592,25 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 21; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 22; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 14.
 
-**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 5 covering RuleVersionManifest and SchemaVersionManifest exact fields, compatibility-class enum behavior, manifest identity/version references, supersession references, final `contracts/__init__.py` exports, initial contract/schema version policy, and exact manifest contract tests.
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 5 covering RuleVersionManifest and SchemaVersionManifest exact fields, compatibility-class enum behavior, manifest identity/version references, supersession references, final `contracts/__init__.py` exports, initial contract/schema version policy, and exact manifest contract tests. (**Superseded — see Section 33 below.**)
+
+## 33. Phase 1B-B Decision Group 5 — Version Manifests, Compatibility, Supersession and Initial Versions (Completed)
+
+**Phase 1B-B Decision Group 5:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.
+
+- **`CompatibilityClass` approved** (`FULLY_COMPATIBLE`/`BACKWARD_COMPATIBLE`/`FORWARD_COMPATIBLE`/`INCOMPATIBLE`/`UNKNOWN`).
+- **`RuleVersionManifest` approved** — exact 12-field contract (§23B). **`SchemaVersionManifest` approved** — exact 14-field contract (§23C).
+- **Initial/successor consistency approved** — initial manifests require `supersedes_manifest_id is None` and `compatibility_with_previous == UNKNOWN`; successor manifests require both predecessor references together and strictly higher SemVer precedence (downgrades, exact-same-version, and build-metadata-only differences all rejected).
+- **Local manifest supersession approved** — `supersedes_manifest_id` identifies exactly one direct predecessor; self-supersession rejected; global chain/cycle/persistence concerns explicitly deferred.
+- **Manifest timestamp policy approved** — `effective_at_utc`: naive rejected, aware normalized to UTC, microseconds preserved.
+- **Initial Batch 1B-B versions approved at `0.1.0`** — every rule/contract/schema/manifest-contract/manifest-schema version, supplied explicitly by callers with no field default.
+- **29 manifest test functions approved** (`test_manifest_compatibility_classes.py`) — corrected from an earlier provisional count of 27.
+- **Final 17-name `contracts/__init__.py` export order approved** (§23M).
+- **BB-7 fully resolved for Batch 1B-B** — timestamp mechanics now resolved for every Batch 1B-B contract (A, B, M, N, Q, R); the global timestamp policy beyond Batch 1B-B remains unresolved.
+- **BB-9 remains partially resolved globally** — local manifest supersession now resolved alongside previously resolved raw-to-normalized and multi-parent provenance references; global lineage graph, cycle detection, and persistence remain unresolved.
+- **Inventory remains 52 rows. Batch 1B-B remains 15 inventoried files. Final changed-path count remains 17.**
+- **Runtime dependencies remain empty. No source or test file exists. Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 23; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9/14; `REPOSITORY_SCAFFOLD_PLAN.md` Section 15.
+
+**Next controlled task:** Define and author-approve Phase 1B-B Decision Group 6 covering final implementation sequence, exact dependency-lock procedure, per-file construction order, verification commands, stop conditions, rollback boundary, final 17-path execution authorization and post-implementation closure criteria.

@@ -1242,3 +1242,235 @@ Future exports from `src/btmm_ai_scanner/contracts/__init__.py` — **Decision G
 - Global lineage graph remains **`NOT YET RESOLVED`.** Cycle enforcement remains **`NOT YET RESOLVED`.** Persistence remains **`NOT YET RESOLVED`.**
 
 **No other BB decision is marked resolved by this section.**
+
+## 23. Phase 1B-B Decision Group 5 — Version Manifests, Compatibility, Supersession and Initial Versions
+
+**Status: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`. `BATCH 1B-B NOT AUTHORIZED FOR EXECUTION`.**
+
+This section documents author-approved decisions for Contract Q (`RuleVersionManifest`) and Contract R (`SchemaVersionManifest`), completing Batch 1B-B's core-foundation contract scope. It does not alter the Phase 1B-A closed status and does not alter Decision Groups 1, 2, 3 or 4. No file under `src/`, `tests/`, or any dependency/config file is created or modified by this section.
+
+### 23A. Compatibility Classification
+
+Future enum for `src/btmm_ai_scanner/contracts/rule_version_manifest.py`:
+
+```python
+class CompatibilityClass(StrEnum):
+    FULLY_COMPATIBLE = "FULLY_COMPATIBLE"
+    BACKWARD_COMPATIBLE = "BACKWARD_COMPATIBLE"
+    FORWARD_COMPATIBLE = "FORWARD_COMPATIBLE"
+    INCOMPATIBLE = "INCOMPATIBLE"
+    UNKNOWN = "UNKNOWN"
+```
+
+- **`FULLY_COMPATIBLE`** — old and new versions are mutually consumable.
+- **`BACKWARD_COMPATIBLE`** — the newer implementation can consume artifacts produced under the previous version.
+- **`FORWARD_COMPATIBLE`** — the previous implementation can consume artifacts produced under the newer version.
+- **`INCOMPATIBLE`** — neither compatibility direction is guaranteed.
+- **`UNKNOWN`** — compatibility has not been established.
+
+No aliases; no automatic values. Compatibility is relative to the declared previous version. Compatibility classification is separate from SemVer precedence and does not prove testing occurred; it does not imply production approval. A major-version increase does not automatically mean `INCOMPATIBLE`; a patch-version increase does not automatically prove compatibility. Compatibility must be supplied explicitly by the caller.
+
+### 23B. RuleVersionManifest Exact Field Contract
+
+```python
+class RuleVersionManifest(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+
+    rule_set_name: str
+    rule_version: SemVer
+    previous_rule_version: SemVer | None
+    compatibility_with_previous: CompatibilityClass
+    supersedes_manifest_id: UUIDv7 | None
+
+    effective_at_utc: datetime
+    evidence_classification: EvidenceClassification
+
+    manifest_contract_version: SemVer
+    manifest_schema_version: SemVer
+    provenance_id: UUIDv7
+```
+
+**Exact field count: 12.**
+
+- Every field is required — `previous_rule_version` and `supersedes_manifest_id` may hold `None`, but both fields must be present. No default identifier, fingerprint, version, compatibility class, timestamp, evidence classification, or provenance ID.
+- `rule_set_name`: strict string; nonempty; not whitespace-only; no leading/trailing whitespace; exact text preserved; provider-neutral; no normalization; no alias mapping.
+
+### 23C. SchemaVersionManifest Exact Field Contract
+
+```python
+class SchemaVersionManifest(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+
+    schema_name: str
+    schema_version: SemVer
+    previous_schema_version: SemVer | None
+    compatibility_with_previous: CompatibilityClass
+    supersedes_manifest_id: UUIDv7 | None
+
+    effective_at_utc: datetime
+
+    target_contract_name: str
+    target_contract_version: SemVer
+    evidence_classification: EvidenceClassification
+
+    manifest_contract_version: SemVer
+    manifest_schema_version: SemVer
+    provenance_id: UUIDv7
+```
+
+**Exact field count: 14.**
+
+- Every field is required — `previous_schema_version` and `supersedes_manifest_id` may hold `None`, but both fields must be present.
+- `schema_name` and `target_contract_name`: nonempty; not whitespace-only; no leading/trailing whitespace; exact text preserved; no automatic normalization; no dynamic import; no target-contract loading or inspection.
+
+### 23D. Initial-Manifest Consistency
+
+Approved initial-manifest combination: `previous version = None`, `supersedes_manifest_id = None`, `compatibility_with_previous = UNKNOWN`.
+
+- **`RuleVersionManifest`:** `previous_rule_version is None` requires `supersedes_manifest_id is None` and `compatibility_with_previous == UNKNOWN`.
+- **`SchemaVersionManifest`:** `previous_schema_version is None` requires `supersedes_manifest_id is None` and `compatibility_with_previous == UNKNOWN`.
+
+Initial manifests cannot claim compatibility with a nonexistent predecessor and cannot contain a supersession reference.
+
+### 23E. Successor-Manifest Consistency
+
+Successor manifests require `previous version != None` and `supersedes_manifest_id != None`.
+
+- Both predecessor references must be present together — a previous version without `supersedes_manifest_id` is rejected; `supersedes_manifest_id` without a previous version is rejected.
+- `record_id` must differ from `supersedes_manifest_id`.
+- Current version must differ from previous version and must have higher SemVer precedence. Version downgrades are rejected; the exact same version is rejected; equal-precedence versions differing only by build metadata are rejected. Skipping versions is permitted. Compatibility may remain `UNKNOWN`.
+- The contract does not verify referenced-manifest existence, and does not verify the predecessor contains the declared previous version.
+
+**Permitted examples:** `0.1.0 → 0.1.1`; `0.1.0 → 0.2.0`; `0.9.0 → 1.0.0`.
+
+**Rejected examples:** `0.2.0 → 0.1.0`; `1.0.0 → 1.0.0`; `1.0.0+build.1 → 1.0.0+build.2`.
+
+### 23F. Local Manifest Supersession
+
+`supersedes_manifest_id` represents the direct manifest record being replaced.
+
+**Approved local checks:** self-supersession rejected; initial manifest has no supersession reference; successor manifest requires exactly one supersession reference; only one direct superseded manifest permitted; historical manifests remain immutable; supersession does not delete or mutate the previous manifest.
+
+**Explicitly deferred:** referenced-manifest existence; cross-record version agreement; global supersession-chain completeness; global cycle detection; branch conflict resolution; manifest persistence; database foreign keys; atomic storage transactions; latest-manifest lookup.
+
+### 23G. Manifest Timestamp
+
+Both manifests use `effective_at_utc: datetime` — naive datetime rejected; aware datetime accepted; deterministically normalized to UTC; microseconds preserved; no rounding.
+
+Represents when the manifested version becomes effective. Does not represent record construction time or a market-event time. No original-timezone companion field. Future-dated effective timestamps are permitted. No ordering against predecessor effective time is enforced.
+
+**Record:** Decision Group 5 completes timestamp mechanics for every Batch 1B-B contract.
+
+### 23H. Evidence, Fingerprint and Provenance Boundary
+
+Both manifests require `content_fingerprint`, `evidence_classification`, `provenance_id`.
+
+- Fingerprints remain caller-supplied and validation-only; no manifest fingerprint calculation; no canonical JSON hashing.
+- Evidence classification uses the exact approved project labels (§22F); `PRODUCTION-APPROVED` remains representable; the current project is not production-approved; Batch 1B-B is not production-approved.
+- `provenance_id` references a separate `ProvenanceRecord` by identity only — provenance is not embedded. The contract does not verify classification authority.
+
+### 23I. Manifest Contract and Schema Versions
+
+Both manifest contracts require `manifest_contract_version` and `manifest_schema_version`.
+
+- These describe the manifest record's own logical contract and schema — distinct from `rule_version`/`schema_version` and distinct from `target_contract_version`. No default is permitted.
+
+### 23J. Initial Batch 1B-B Version Policy
+
+**Author-approved initial values:** initial rule version `0.1.0`; initial logical contract version `0.1.0`; initial schema version `0.1.0`; initial manifest contract version `0.1.0`; initial manifest schema version `0.1.0`.
+
+**Application:** initial `RawCandle.rule_version`/`.contract_version`/`.schema_version` = `0.1.0`; initial `NormalizedCandle` versions = `0.1.0`; initial `ValidationResult` versions = `0.1.0`; initial `ProvenanceRecord` versions = `0.1.0`; initial manifest contract version = `0.1.0`; initial manifest schema version = `0.1.0`; the first `RuleVersionManifest` describes rule version `0.1.0`; the first `SchemaVersionManifest` for each contract describes schema version `0.1.0`; initial schema manifests target contract version `0.1.0`.
+
+**Rules:** values are supplied explicitly by callers; no Pydantic field default; no automatic version injection; no module-level mutable version state. `0.1.0` identifies the first pre-production contract generation and does not imply production readiness. Later changes require explicit version decisions; later versions require new immutable records.
+
+### 23K. Serialization Boundary
+
+**Python mode:** IDs remain `uuid.UUID`; timestamps remain `datetime`; compatibility and evidence values remain enum instances; versions remain `SemVer`; names and fingerprints remain strings.
+
+**JSON mode:** UUID values serialize canonically; effective timestamps serialize as UTC instants; enum values serialize using exact approved strings; `SemVer` values serialize as exact validated text; field names remain unchanged; no aliases.
+
+**Required round trips:** `rule_manifest → model_dump_json() → model_validate_json() → equal rule_manifest`; `schema_manifest → model_dump_json() → model_validate_json() → equal schema_manifest`.
+
+**Explicit non-claims:** not canonical JSON; not a filesystem manifest format; not a persisted wire format; not fingerprint-byte serialization.
+
+### 23L. Exact Manifest Test Functions (29)
+
+**The approved count is 29, not 27.** Planned for `tests/unit/test_manifest_compatibility_classes.py`:
+
+1. `test_compatibility_class_values_are_exact`
+2. `test_rule_version_manifest_accepts_initial_manifest`
+3. `test_rule_version_manifest_accepts_successor_manifest`
+4. `test_rule_version_manifest_requires_exact_field_set`
+5. `test_rule_version_manifest_is_frozen`
+6. `test_rule_version_manifest_rejects_extra_fields`
+7. `test_rule_version_manifest_rejects_blank_or_padded_rule_set_name`
+8. `test_rule_version_manifest_enforces_initial_reference_consistency`
+9. `test_rule_version_manifest_enforces_successor_reference_consistency`
+10. `test_rule_version_manifest_requires_increasing_rule_version`
+11. `test_rule_version_manifest_rejects_equal_precedence_successor`
+12. `test_rule_version_manifest_rejects_self_supersession`
+13. `test_rule_version_manifest_normalizes_effective_at_to_utc`
+14. `test_rule_version_manifest_requires_version_evidence_and_provenance_types`
+15. `test_rule_version_manifest_round_trips_through_json`
+16. `test_schema_version_manifest_accepts_initial_manifest`
+17. `test_schema_version_manifest_accepts_successor_manifest`
+18. `test_schema_version_manifest_requires_exact_field_set`
+19. `test_schema_version_manifest_is_frozen`
+20. `test_schema_version_manifest_rejects_extra_fields`
+21. `test_schema_version_manifest_rejects_blank_or_padded_names`
+22. `test_schema_version_manifest_enforces_initial_reference_consistency`
+23. `test_schema_version_manifest_enforces_successor_reference_consistency`
+24. `test_schema_version_manifest_requires_increasing_schema_version`
+25. `test_schema_version_manifest_rejects_equal_precedence_successor`
+26. `test_schema_version_manifest_rejects_self_supersession`
+27. `test_schema_version_manifest_normalizes_effective_at_to_utc`
+28. `test_schema_version_manifest_requires_target_version_evidence_and_provenance_types`
+29. `test_schema_version_manifest_round_trips_through_json`
+
+**Required parameter coverage:** all five `CompatibilityClass` values; initial manifests; successor manifests; previous version without manifest ID; manifest ID without previous version; self-supersession; downgrade; exact same version; equal precedence with different build metadata; valid patch increase; valid minor increase; valid major increase; blank names; padded names; naive timestamp rejection; non-UTC aware timestamp normalized to UTC; every `EvidenceClassification` value; fixed UUIDv7 values; initial version `0.1.0`.
+
+**Record:** no fingerprint calculation; no manifest loading; no persistence; no complete Pydantic prose assertions.
+
+### 23M. Final Contracts Package Exports
+
+Final exact public export order for `src/btmm_ai_scanner/contracts/__init__.py`:
+
+```python
+__all__ = [
+    "ContractModel",
+    "SHA256Fingerprint",
+    "SemVer",
+    "UUIDv7",
+    "CandleCompleteness",
+    "CandleVolumeKind",
+    "RawCandle",
+    "NormalizedCandle",
+    "AnalyticalEligibility",
+    "ValidationResult",
+    "ValidationStatus",
+    "EvidenceClassification",
+    "ProvenanceRecord",
+    "ProvenanceSourceReference",
+    "CompatibilityClass",
+    "RuleVersionManifest",
+    "SchemaVersionManifest",
+]
+```
+
+**Exact export count: 17.**
+
+**Rules:** no wildcard exports; no private validator exported; no UUID generator exported; no fingerprint-generation function exported; no persistence helper exported; no loading helper exported; no additional public name enters Batch 1B-B without author review.
+
+### 23N. Decision Accounting
+
+**Decision Group 5: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** Resolves: `CompatibilityClass` exact values (§23A); `CompatibilityClass` meanings (§23A); exact `RuleVersionManifest` fields (§23B); exact `SchemaVersionManifest` fields (§23C); initial-manifest consistency (§23D); successor-manifest consistency (§23E); local manifest supersession (§23F); manifest effective-time mechanics (§23G); initial Batch 1B-B version policy (§23J); exact manifest tests (§23L); final contracts package exports (§23M).
+
+**BB-7 — Timestamp normalization contract: `AUTHOR-APPROVED`, `RESOLVED FOR BATCH 1B-B SCOPE`, `NOT YET IMPLEMENTED`.** Timestamp mechanics are now resolved for all Batch 1B-B contracts (Contracts A, B, M, N, Q, R). The global timestamp policy (candle-close convention, DST, trading-day/week/month boundaries, provider-session handling), which spans beyond Batch 1B-B, remains **`NOT YET RESOLVED`.**
+
+**BB-9 — Provenance/lineage graph rules: `PARTIALLY RESOLVED`.**
+- **Locally resolved:** raw-to-normalized parent reference (§21G); multi-parent provenance references (§22I); local manifest supersession references (§23F).
+- **Globally unresolved:** global lineage graph; cross-record existence; global cycle detection; persistence; supersession-chain repository validation.
+
+**No other BB decision is marked resolved by this section.**

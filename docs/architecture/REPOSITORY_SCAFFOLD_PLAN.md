@@ -439,3 +439,22 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 21.
 - **Batch 1B-B remains unauthorized.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 22.
+
+## 15. Phase 1B-B Decision Group 5 — Approved Version Manifest Design
+
+**Does not alter the Phase 1B-A closed status or the Phase 1B-B Decision Group 1/2/3/4 boundaries above.**
+
+- **`CompatibilityClass`** (`FULLY_COMPATIBLE`/`BACKWARD_COMPATIBLE`/`FORWARD_COMPATIBLE`/`INCOMPATIBLE`/`UNKNOWN`) — relative to the declared previous version; separate from SemVer precedence; must be supplied explicitly, never inferred from version-number shape.
+- **`RuleVersionManifest` exact field count = 12. `SchemaVersionManifest` exact field count = 14.**
+- **Initial-manifest consistency:** no previous version ⇒ no `supersedes_manifest_id`, `compatibility_with_previous == UNKNOWN`.
+- **Successor-manifest consistency:** previous version and `supersedes_manifest_id` required together; current version must have strictly higher SemVer precedence; downgrades, exact-same-version, and equal-precedence build-metadata-only successors are all rejected.
+- **Local supersession boundary:** `supersedes_manifest_id` identifies exactly one direct predecessor; self-supersession rejected; global chain completeness, cycle detection, and persistence explicitly out of scope.
+- **`effective_at_utc` policy:** naive datetime rejected; aware datetime deterministically normalized to UTC; microseconds preserved; represents when the manifested version becomes effective, not record construction time.
+- **Initial version policy:** every Batch 1B-B rule/contract/schema/manifest-contract/manifest-schema version starts at `0.1.0`, supplied explicitly by the caller, no field default.
+- **Exact manifest test count = 29** (`test_manifest_compatibility_classes.py`) — corrected from an earlier provisional count of 27.
+- **Final `contracts/__init__.py` export count = 17**, exact order resolved.
+- **No dependency or implementation change has occurred.** `pyproject.toml`, `uv.lock`, `.gitignore`, `.python-version`, `src/`, and `tests/` all remain unchanged by this documentation task.
+- **Inventory remains 52 rows. Batch 1B-B remains 15 inventoried files. Final Batch 1B-B changed-path count remains 17.**
+- **Batch 1B-B remains unauthorized.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 23.
