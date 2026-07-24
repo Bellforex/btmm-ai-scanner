@@ -676,4 +676,22 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 25; `PHASE_1B_EXACT_
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 26; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/16b; `REPOSITORY_SCAFFOLD_PLAN.md` Section 16B.
 
-**Next controlled task:** Commit and push Baseline Correction 6B documentation. After that commit, begin the already-authorized Batch 1B-B implementation by capturing the clean synchronized execution baseline before making any implementation change.
+**Next controlled task:** Commit and push Baseline Correction 6B documentation. After that commit, begin the already-authorized Batch 1B-B implementation by capturing the clean synchronized execution baseline before making any implementation change. (**Superseded — see Section 37 below.**)
+
+## 37. Phase 1B-B Implementation Closure (Completed)
+
+**Phase 1B-B:** `AUTHOR-AUTHORIZED`. `IMPLEMENTED`. `VERIFIED`. `ARCHITECTURALLY AUDITED`. `COMMITTED`. `PUSHED`. `CLOSED`. `NOT PRODUCTION-APPROVED`.
+
+- **Implementation commit:** `1b8602a5dcc97a89be51ba5ee65ab4940751567a` ("Implement Phase 1B-B contract foundation").
+- **Execution baseline:** `4074a80fe53b7784d3a51a3ac15f2fe85d244104`.
+- **Working tree clean after implementation commit; `origin/main` synchronized.**
+- **Runtime dependency:** `pydantic>=2.13.4,<2.14`. **Resolved Pydantic:** `2.13.4`.
+- **Full suite:** 221 passed. **Original baseline:** 34 passed. **Exact top-level test functions:** 132.
+- **Architectural audit:** `PASS WITH NON-BLOCKING FINDINGS`. **No blocking finding.**
+- **Pre-commit padded reason-code coverage correction completed** — `test_validation_result_validates_reason_code_format` gained the `" CODE_A"` case; `ValidationResult` remained 16 functions; grand total remained 132.
+- **Procedural deviation disclosed and accepted for closure** — a temporary `scratch_ast_check.py` briefly introduced an 18th untracked path during AST verification; deleted before final verification; never staged or committed; recorded in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §27I as `DISCLOSED NON-PERSISTENT PROCEDURAL DEVIATION`.
+- **No production approval.**
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 27; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 14/32; `REPOSITORY_SCAFFOLD_PLAN.md` Section 17.
+
+**Next controlled phase:** Phase 1B-C — Market-Data Pipeline Definition and Controlled Implementation Planning. Phase 1B-C should begin with a narrow architecture/decision step covering: provider-neutral candle ingestion boundary; FXCM/TradingView canonical-source mapping; raw-to-normalized candle flow; duplicate and missing-candle handling; storage/replay boundary; idempotency; availability-time semantics; historical versus live ingestion separation; exact first implementation batch scope. **This documentation task does not begin that implementation.**

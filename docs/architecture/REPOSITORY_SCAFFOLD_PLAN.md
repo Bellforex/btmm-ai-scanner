@@ -505,3 +505,19 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 25.
 - **Implementation may begin only after Correction 6B is committed and pushed.**
 
 Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 26.
+
+## 17. Phase 1B-B Implementation Closure
+
+**Batch 1B-B: `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `CLOSED`. `NOT PRODUCTION-APPROVED`.**
+
+- **The contract foundation was implemented successfully**, preserving the exact 17-path scope approved across Decision Groups 1–6 and Baseline Corrections 6A/6B. Committed and pushed at `1b8602a5dcc97a89be51ba5ee65ab4940751567a` ("Implement Phase 1B-B contract foundation"), captured from execution baseline `4074a80fe53b7784d3a51a3ac15f2fe85d244104`.
+- **Contract, candle, provenance, validation, and manifest foundations now exist:** `ContractModel`/`UUIDv7`/`SHA256Fingerprint`/`SemVer` (Stage A); `CandleCompleteness`/`CandleVolumeKind`/`RawCandle`/`NormalizedCandle` (Stage B); `EvidenceClassification`/`ProvenanceSourceReference`/`ProvenanceRecord`/`ValidationStatus`/`AnalyticalEligibility`/`ValidationResult` (Stage C); `CompatibilityClass`/`RuleVersionManifest`/`SchemaVersionManifest` (Stage D); the exact 17-name public export boundary (Stage E).
+- **Pydantic is the sole runtime dependency** (`pydantic>=2.13.4,<2.14`, resolved to `2.13.4`). `pytest 9.1.1`/`mypy 2.3.0`/`Ruff 0.15.22` unchanged.
+- **Full suite reports 221 passing tests** (34 original baseline + 187 new, across exactly 132 top-level test functions). **Architectural audit found no blocking defect** — verdict `PASS WITH NON-BLOCKING FINDINGS — READY FOR COMMIT REVIEW`.
+- **A policy-preserving pre-commit test-coverage correction** was applied to `test_validation_result_validates_reason_code_format` (added padded reason-code case `" CODE_A"`), and **a disclosed non-persistent procedural deviation** (temporary `scratch_ast_check.py`, deleted before final verification, never staged or committed) is recorded — full detail in `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §27G/§27I.
+
+**Phase 1B-B establishes validated internal contracts only.** It does not yet provide: market-data ingestion; FXCM adapters; candle persistence; historical replay; POI detection; BTMM detection; chart visualization; TradingView mirroring; alerts; backtesting; paper trading; MT5 execution; MT4 execution; production approval.
+
+**Next engineering direction:** market-data pipeline planning and implementation, leading toward historical replay and the first indicator prototype. Neither the indicator nor the robot has started.
+
+Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 27.
