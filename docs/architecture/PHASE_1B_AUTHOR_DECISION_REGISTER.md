@@ -1781,3 +1781,145 @@ During the implementation's AST verification, Claude temporarily created `scratc
 ### 27J. Closure Accounting
 
 **Phase 1B-B: `AUTHOR-AUTHORIZED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.** Inventory remains 52 rows. Batch 1B-B remains 15 inventoried files. No Phase 1B-C work has begun.
+
+## 28. Phase 1B-C Decision Group 1 — Market-Data Pipeline Architecture
+
+**Status: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+This section records an author-approved architecture, not yet an implementation. No file under `src/`, `tests/`, or any dependency/config file is created or modified by this section. It reuses the closed Batch 1B-B contracts (`RawCandle`, `NormalizedCandle`, `ValidationResult`, `ProvenanceRecord`, `RuleVersionManifest`, `SchemaVersionManifest`, `InternalSymbol`, `Timeframe`) without proposing any duplicate candle, symbol, timeframe, validation, or provenance model. `InternalSymbol` (`XAUUSD`/`EURUSD`/`GBPUSD`) and `Timeframe` (`M1`/`M5`/`M15`/`H1`/`H3`/`H4`/`D1`/`W1`) were directly inspected in `src/btmm_ai_scanner/config/enums.py` and already cover every timeframe and symbol named below.
+
+### 28A. Provider, Provider Symbols, and Canonical Visual Reference
+
+**Provider identity:** `FXCM`. **Initial provider symbols** (the provider's own payload-facing symbols): `XAUUSD`, `EURUSD`, `GBPUSD`. **Canonical TradingView visual-comparison references** (a separate, display-only mapping): `FXCM:XAUUSD`, `FXCM:EURUSD`, `FXCM:GBPUSD` — **TradingView is not the execution broker**, and the TradingView ticker must **not** be treated as though it were necessarily the provider payload's raw symbol; the two remain independently mapped. **Internal symbols:** the existing `InternalSymbol.XAUUSD`/`InternalSymbol.EURUSD`/`InternalSymbol.GBPUSD` members (§28 preamble), reused without duplication. The architecture remains provider-neutral so a second source may be added later without redesign.
+
+### 28B. Pipeline Responsibility
+
+**In scope:** receiving provider candle records; preserving source metadata; building `RawCandle` records; validating source candle integrity; mapping source symbols/timeframes; producing `NormalizedCandle` records; detecting exact duplicates; detecting conflicting revisions; detecting potential missing-candle gaps; emitting records to a storage/replay boundary.
+
+**Explicitly out of scope:** POI detection; market-structure detection; BTMM detection; indicator drawing; signal generation; trade execution; risk management; AI model inference.
+
+### 28C. Historical and Live Separation
+
+Two ingestion entry points: **historical ingestion** and **live ingestion**. They share one immutable, provider-neutral `SourceCandleInput` contract and the same strict validation/construction policy, but must not share hidden mutable state.
+
+- **Historical ingestion:** processes bounded candle collections; supports deterministic replay; may process candles faster than real time; must preserve original event and availability timestamps; must not impersonate live arrival behavior.
+- **Live ingestion:** processes sequential incoming records; uses actual processing time; must handle delayed, duplicate, and revised candles; must not rewrite historical records silently.
+
+`raw_candle_builder.py` exposes two explicit, stateless public construction entry points implementing this separation: `build_historical_raw_candle` and `build_live_raw_candle` (full detail §28K.4).
+
+### 28D. Raw-to-Normalized Flow
+
+**First-implementation-batch flow (starts at `SourceCandleInput`):** `SourceCandleInput` → structural/input validation → availability-evidence decision (§28H) → `RawCandle` construction → `ValidationResult` → symbol/timeframe mapping → `NormalizedCandle` → idempotency decision → potential-gap observation → storage/replay port boundary.
+
+**Future external flow (explicitly out of the first batch, §28K):** provider payload → future provider adapter/parser → `SourceCandleInput` → first-batch pipeline (above). The first batch never accepts or parses a raw external provider payload directly — it begins at the already-constructed `SourceCandleInput` boundary.
+
+`RawCandle` and `NormalizedCandle` remain immutable (per §21). Corrections create new records rather than mutating earlier records. Validation failure does not silently discard the source input — a `RawCandle` is constructed whenever complete availability evidence and every other requirement pass, and a `ValidationResult` (§22) records `INVALID`/`INDETERMINATE` against it, keeping invalid and indeterminate records auditable rather than dropped. When availability evidence is incomplete, no `RawCandle` is constructed at all (§28H) — the `INDETERMINATE`/`REJECTED` outcome is recorded directly against the `SourceCandleInput` via `IngestionResult` (§28J).
+
+### 28E. Source Mapping
+
+A source-mapping registry boundary maps `(provider, provider_symbol, provider_timeframe)` to `(InternalSymbol, Timeframe)`. Initial approved provider-symbol mappings: `FXCM` `XAUUSD` → `InternalSymbol.XAUUSD`; `FXCM` `EURUSD` → `InternalSymbol.EURUSD`; `FXCM` `GBPUSD` → `InternalSymbol.GBPUSD` — keyed on the **provider payload's own symbol** (§28A), not the TradingView ticker. TradingView visual-reference metadata (`FXCM:XAUUSD` etc.) is a **separate mapping**, used only for canonical visual comparison, and is never consulted by the source-mapping registry that produces `InternalSymbol`/`Timeframe`. **No duplicate symbol or timeframe enum is proposed** — the existing `InternalSymbol`/`Timeframe` members already cover every value needed, including `W1`, `D1`, `H4`, `H3`, `H1`, `M15`, `M5`, `M1`. Synthetic timeframe aggregation (e.g., deriving `H3` from smaller candles) is **not approved for the first implementation batch** and, if ever proposed, must be explicitly separated from source mapping as its own decision.
+
+### 28F. Source Reference Semantics, Idempotency, and Duplicates
+
+**`source_reference` semantics:** a stable logical identifier for the provider feed, data series, or approved source channel from which the candle originated. It must remain stable across replaying or reimporting the same source series; it must **not** be a temporary local filename, an import-session UUID, or a download-batch identifier — file, batch, and import-session identity belong in `ProvenanceRecord` or a later ingestion-metadata record, not in `source_reference`. This stable meaning is required because `source_reference` participates in the source identity key below.
+
+**Source candle identity key** (project-owned, immutable, first batch): `(provider, source_reference, source_symbol, source_timeframe, event_time_utc)`. This identifies a **source-series candle observation**. Content fingerprint alone is **not** used as identity. A canonical candle-slot identity spanning different providers or source references is a separate, later concern and is **not** silently merged in the first batch.
+
+| Identity key | Content fingerprint | Outcome |
+|---|---|---|
+| Same | Same | `EXACT_DUPLICATE` — replay-safe, no second normalized record required, no error, auditable decision |
+| Same | Different | `CONFLICTING_REVISION` — see the quarantine rules below (resolved as RM-1, §28M) |
+| New | — | `NEW_RECORD` |
+
+**Idempotency service boundary:** stateless. It receives a candidate `RawCandle` (or source identity) and the existing records for that same source identity (supplied via `CandleReadRepository`, §28I), and returns an explicit idempotency decision. It must not maintain hidden process-global state, implement a database, implement an in-memory production repository, or mutate existing candles. Test-local in-memory doubles are permitted.
+
+### 28G. Missing-Candle Handling
+
+Missing-candle handling is **gap observation, not automatic fabrication**. Gap comparison occurs **only between candles belonging to the same mapped internal symbol and timeframe series**. The first implementation batch: compares consecutive normalized-candle event times using the expected interval for the mapped timeframe; emits a gap observation when an expected interval appears absent; never creates synthetic candle values; never interpolates OHLC or volume; never classifies weekends or closures.
+
+The first implementation batch supports only `POTENTIAL_GAP` (resolved as GAP-1, §28M). `CONFIRMED_GAP` and `EXPECTED_MARKET_CLOSURE` remain unavailable until a trading-session calendar is approved.
+
+### 28H. Availability-Time Semantics
+
+`event_time_utc` represents the candle's market event boundary; `availability_time_utc` represents when the provider made the candle available as a usable record; `processing_time_utc` represents when this system processed it. `RawCandle.availability_time_utc` and `RawCandle.original_availability_time` remain required, non-optional fields (§21D) — Batch 1B-B contracts are closed and no field change is proposed. This representation resolves AT-1 without changing the completed Phase 1B-B `RawCandle` contract.
+
+**`SourceCandleInput` availability keys (corrected):** `availability_time_utc: datetime | None` and `original_availability_time: datetime | None` — **both keys are mandatory on the input structure; their values are explicitly nullable.** Neither field has an automatic default; both must be supplied by the caller; omitting either key entirely is an invalid source-input structure (a structural error, distinct from the availability-evidence decision below). Explicit `None` represents unavailable provider evidence — the pipeline never silently substitutes an omitted field with `None`, and never invents availability evidence.
+
+**Exact availability-evidence decision matrix, evaluated before any `RawCandle` is constructed:**
+
+1. **Both fields present as valid, timezone-aware `datetime` values representing the same instant:** continue approved timestamp validation (naive rejection, UTC normalization, original/canonical instant correspondence, per §21H); `RawCandle` construction may proceed once every other requirement passes.
+2. **Both fields explicitly `None`:** outcome `INDETERMINATE`; no `RawCandle` is constructed; no `NormalizedCandle` is constructed; `processing_time_utc` is not substituted; recommended reason code `AVAILABILITY_TIME_UNAVAILABLE`.
+3. **Exactly one field is `None` and the other holds a value:** outcome `REJECTED`; no `RawCandle` is constructed; recommended reason code `AVAILABILITY_TIME_PAIR_INCONSISTENT`.
+4. **Either supplied availability datetime is naive, malformed, or does not match the corresponding instant:** outcome `REJECTED`; no `RawCandle` is constructed; an explicit validation reason code is used; this is **not** reinterpreted as unavailable evidence (case 2) — a badly formed value is a rejection, not an absence.
+
+**AT-1 status: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`** (§28M).
+
+### 28I. Storage and Replay Boundary
+
+Interfaces only in the first implementation batch: `RawCandleSink`, `NormalizedCandleSink`, `CandleReadRepository`, `HistoricalReplaySource`. `CandleReadRepository` is the approved port through which the idempotency service (§28F) later obtains existing records for a source identity. **Not implemented in the first batch:** PostgreSQL, SQLite, Redis, Kafka, cloud storage, database migrations, ORM models. In-memory test doubles only.
+
+### 28J. Error and Result Model
+
+**Recommendation:** one enum (`IngestionOutcome`: `ACCEPTED`, `REJECTED`, `INDETERMINATE`, `EXACT_DUPLICATE`, `CONFLICTING_REVISION`) plus one generic `IngestionResult` model carrying the outcome and a reference to the affected record(s), **combined with a separate, narrowly-scoped `GapObservation` model** for `POTENTIAL_GAP`. Rationale: a gap observation describes a relationship *between two records* (the interval that is missing), not an outcome *of processing one record* — folding it into the same per-record outcome enum would force awkward null/context fields on every other outcome. Unstructured exceptions are not the pipeline's only output; exceptions remain reserved for genuine programming errors, not for expected pipeline decisions.
+
+### 28K. First Implementation Batch (Recommended, Compact)
+
+**Explicitly excluded from the first batch:** network API calls; WebSocket connections; TradingView scraping; database persistence; historical file downloads; live FXCM connectivity; POI logic; BTMM logic; indicator visualization; alerts; backtesting; robot execution. **Also explicitly excluded (corrected first-batch input boundary):** FXCM REST response parsing; FXCM WebSocket parsing; CSV parsing; broker-specific payload adapters; any raw external provider payload parser. **The first batch begins at `SourceCandleInput`** (§28D) — it does not accept or parse raw external provider payload formats directly. A future provider adapter translates raw provider payloads into `SourceCandleInput`; the first batch validates, maps, and processes already-constructed `SourceCandleInput` values only. Controlled fixtures construct `SourceCandleInput` directly for testing.
+
+**Caller-supplied identity and version boundary (binding on every file below):** the pipeline must **not** generate UUIDv7 record IDs, UUIDv7 provenance IDs, SHA-256 content fingerprints, rule versions, contract versions, or schema versions — these remain caller-supplied by controlled fixtures or future adapters. The first batch validates and assembles approved contracts only. **No UUID generator, fingerprint calculator, canonical-JSON hash implementation, or automatic version default may be added.** `SourceCandleInput` must carry, directly or through an explicitly supplied construction context, every value required to construct a `RawCandle` without hidden generation.
+
+**Proposed source files (9):**
+
+| # | Exact path | Responsibility | Direct dependencies | New/Modified | Why in the first batch |
+|---|---|---|---|---|---|
+| 1 | `src/btmm_ai_scanner/market_data/__init__.py` | Marks `market_data` as a package | package root | New | Minimal package boundary, matching the `contracts/__init__.py` pattern |
+| 2 | `src/btmm_ai_scanner/market_data/source_input.py` | Provider-neutral, immutable `SourceCandleInput` shape — mandatory-but-nullable `availability_time_utc`/`original_availability_time` (§28H); caller-supplied identifiers, fingerprints, and versions; no provider networking or payload parsing | none (stdlib only) | New | Establishes the provider-neutral, availability-gated entry point before any `RawCandle` is built (§28H); the first batch's actual starting point (§28D) |
+| 3 | `src/btmm_ai_scanner/market_data/source_mapping.py` | FXCM source-mapping registry (policy only): `(provider, provider_symbol, provider_timeframe) → (InternalSymbol, Timeframe)`, separate from the TradingView visual-reference mapping. **Not** an FXCM network adapter or payload parser | `config/enums.py` | New | Required before normalization can assign `InternalSymbol`/`Timeframe` (§28E) |
+| 4 | `src/btmm_ai_scanner/market_data/results.py` | `IngestionOutcome` enum, `IngestionResult` model — no gap-relationship model here | none (stdlib + `uuid`) | New | Shared result vocabulary needed by every downstream service |
+| 5 | `src/btmm_ai_scanner/market_data/raw_candle_builder.py` | `build_historical_raw_candle`/`build_live_raw_candle` stateless entry points, **each accepting a `SourceCandleInput`, never an arbitrary provider dictionary**; availability-evidence decision (§28H); `RawCandle` construction; `ValidationResult` integration; no hidden generation | `contracts/raw_candle.py`, `contracts/validation_result.py`, `market_data/source_input.py`, `market_data/results.py` | New | First stage of the approved flow, implementing historical/live separation exactly (§28C) |
+| 6 | `src/btmm_ai_scanner/market_data/normalization.py` | Produces `NormalizedCandle` from a validated `RawCandle` using `source_mapping.py` | `contracts/raw_candle.py`, `contracts/normalized_candle.py`, `market_data/source_mapping.py` | New | Second stage of the approved flow |
+| 7 | `src/btmm_ai_scanner/market_data/idempotency.py` | Stateless source candle identity key and `EXACT_DUPLICATE`/`CONFLICTING_REVISION`/`NEW_RECORD` decision | `contracts/raw_candle.py`, `market_data/results.py` | New | Implements §28F exactly |
+| 8 | `src/btmm_ai_scanner/market_data/gap_observation.py` | `GapObservation` model; `POTENTIAL_GAP` classification; expected-interval comparison; no synthetic candle creation | `contracts/normalized_candle.py`, `config/enums.py` | New | Implements §28G exactly (`POTENTIAL_GAP` only) |
+| 9 | `src/btmm_ai_scanner/market_data/ports.py` | `RawCandleSink`/`NormalizedCandleSink`/`CandleReadRepository`/`HistoricalReplaySource` protocol interfaces | `contracts/raw_candle.py`, `contracts/normalized_candle.py`, `market_data/results.py` | New | Implements §28I exactly; interfaces only, no concrete storage |
+
+**Proposed test files (8), unit tests only:**
+
+| # | Exact path | Covers | Function count |
+|---|---|---|---|
+| 1 | `tests/unit/test_source_input_and_results.py` | `SourceCandleInput` shape/immutability; mandatory-but-nullable availability keys; the exact decision matrix (both present/valid; both `None` → `INDETERMINATE`; one `None` → `REJECTED`; naive/malformed/mismatched → `REJECTED`); caller-supplied identity/version boundary; `IngestionOutcome`/`IngestionResult` | 8 |
+| 2 | `tests/unit/test_source_mapping.py` | Source mapping, provider-symbol vs. TradingView-reference separation | 7 |
+| 3 | `tests/unit/test_raw_candle_builder.py` | Raw candle construction from `SourceCandleInput` only (never an arbitrary provider payload dictionary); UTC/original timestamp preservation; invalid input rejection; no RawCandle without complete availability evidence; historical/live entry points; no provider parser or network adapter invoked | 8 |
+| 4 | `tests/unit/test_normalization.py` | Normalization, symbol/timeframe mapping | 7 |
+| 5 | `tests/unit/test_idempotency.py` | Exact-duplicate detection, conflicting-revision quarantine, statelessness | 8 |
+| 6 | `tests/unit/test_gap_observation.py` | Potential-gap detection, same-series-only comparison, no synthetic fabrication | 7 |
+| 7 | `tests/unit/test_ingestion_ports.py` | Interface conformance, in-memory test doubles | 6 |
+| 8 | `tests/unit/test_historical_live_separation_and_no_synthetic_fabrication.py` | Historical/live separation, no silent mutation, no synthetic candle fabrication, auditable invalid/indeterminate records | 6 |
+
+**Total proposed new paths: 17** (9 new source files + 8 new test files). **No dependency change is required** — the batch reuses the already-approved Pydantic dependency and the closed Batch 1B-B contracts. **No documentation file would change during that implementation** (matching the Batch 1B-B pattern). **No eighteenth implementation path is proposed.**
+
+### 28L. Test and Quality Boundary
+
+**Recommended exact top-level test-function count: 57**, distributed exactly as the table in §28K: `test_source_input_and_results.py` 8; `test_source_mapping.py` 7; `test_raw_candle_builder.py` 8; `test_normalization.py` 7; `test_idempotency.py` 8; `test_gap_observation.py` 7; `test_ingestion_ports.py` 6; `test_historical_live_separation_and_no_synthetic_fabrication.py` 6 (`8+7+8+7+8+7+6+6 = 57`). This count is a recommendation pending author approval, in the same manner as Batch 1B-B's per-file counts were recommended before being approved.
+
+**Preserved from Batch 1B-B without change:** Ruff; mypy; pytest; `uv lock --check`; strict path-scope verification; stop-before-staging; read-only architectural audit before commit.
+
+### 28M. Open Author Decisions
+
+Each item below is **`AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`** — the author explicitly approved all three resolutions (§28N). None of the three authorizes production use or implementation outside the exact first-batch scope (§28K).
+
+**AT-1 — Availability-time-quality representation. `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+*Recommended resolution (corrected):* `SourceCandleInput.availability_time_utc`/`.original_availability_time` are mandatory keys with explicitly nullable (`datetime | None`) values, no automatic default, both always supplied by the caller — omitting either key is an invalid input structure, distinct from a supplied `None`. The exact decision matrix (§28H): both present and consistent → continue normal validation, `RawCandle` may be constructed; both explicitly `None` → `INDETERMINATE`, no `RawCandle`/`NormalizedCandle` constructed, reason code `AVAILABILITY_TIME_UNAVAILABLE`; exactly one `None` → `REJECTED`, no `RawCandle` constructed, reason code `AVAILABILITY_TIME_PAIR_INCONSISTENT`; naive/malformed/instant-mismatched values → `REJECTED` via an explicit validation reason code, never reinterpreted as absence. `processing_time_utc` is never silently substituted as `availability_time_utc`; no artificial microsecond or timeframe offset may be invented; no Phase 1B-B candle-contract change is required; a later, author-approved availability-assumption policy with explicit provenance/quality metadata may be introduced by a future provider adapter; controlled historical fixtures may supply known availability times so the first pipeline batch can be implemented and tested. *Alternative rejected:* adding a field directly to `RawCandle` — rejected because Batch 1B-B contracts are closed, and mixing ingestion metadata into the provider-facing domain contract blurs its boundary. *Engineering reason:* keeps `RawCandle` stable while still refusing to invent certainty, and cleanly separates "structurally missing key" from "explicitly declared unavailable" from "malformed value." *Effect on indicator timeline:* does not block the controlled market-data pipeline or historical replay using approved fixtures; actual provider backfills lacking availability metadata remain quarantined until a later adapter policy is approved.
+
+**RM-1 — Conflicting-revision resolution policy. `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+*Recommended resolution:* for the first implementation batch, same source identity plus a different fingerprint produces `CONFLICTING_REVISION`; the candidate `RawCandle` remains auditable and the existing record reference remains auditable; neither record is silently overwritten; the conflict result must expose both relevant record identifiers/references; the unresolved candidate must not be emitted as an accepted downstream `NormalizedCandle`; no automatic winner is selected; no newest-arrival, highest-volume, or latest-processing-time rule is permitted; revision-resolution policy is deferred to a later controlled decision. *Alternative rejected:* automatic "latest received wins" resolution — rejected because it could silently discard a legitimate provider correction, violating the no-silent-overwrite principle (§28F). *Engineering reason:* the pipeline's job is detection and quarantine, not adjudication. *Effect on indicator timeline:* does not block ordinary non-conflicting candle streams; protects the future indicator from consuming ambiguous revised candles.
+
+**GAP-1 — Trading-session/calendar boundary. `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+*Recommended resolution:* the first implementation batch supports only `POTENTIAL_GAP`; gap comparison occurs only between candles belonging to the same mapped internal symbol and timeframe series; the service compares consecutive event times against the expected interval; it never fabricates candles, never interpolates OHLC or volume, and does not classify weekends or closures; `CONFIRMED_GAP` and `EXPECTED_MARKET_CLOSURE` remain unavailable until a trading-session calendar is approved by a dedicated future decision group. *Alternative rejected:* hand-rolling an ad hoc weekend-only calendar now — rejected because it would miss holidays/rollovers and risks quietly becoming the de facto calendar without dedicated review. *Engineering reason:* calendar correctness affects gap-quality classification, not candle admission. *Effect on indicator timeline:* does not block the first indicator prototype; potential gaps can be surfaced as data-quality warnings.
+
+**No settled Phase 1B-B decision is reopened by this section.**
+
+### 28N. Author Approval Record
+
+The author explicitly approved Phase 1B-C Decision Group 1 in full, including every correction applied across §28A–§28M. **No further architecture correction is required before implementation-control planning.** Approval covers the complete corrected architecture package: provider/provider-symbol/TradingView-visual-reference separation (§28A); pipeline responsibility boundary (§28B); historical/live separation via stateless builders (§28C); the corrected `SourceCandleInput`-starting flow (§28D); source mapping (§28E); `source_reference` semantics, the source identity key, and stateless idempotency (§28F); `POTENTIAL_GAP`-only gap observation (§28G); the corrected availability-time decision matrix (§28H); the storage/replay port boundary (§28I); the result-model recommendation (§28J); the exact 17-path first-batch scope (§28K); the 57-function test allocation (§28L); and the `AUTHOR-APPROVED` AT-1/RM-1/GAP-1 resolutions (§28M).
+
+**This approval does not authorize production use. This approval does not authorize implementation outside the exact first-batch scope named in §28K. Implementation has not started.**
