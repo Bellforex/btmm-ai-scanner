@@ -1923,3 +1923,462 @@ Each item below is **`AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-A
 The author explicitly approved Phase 1B-C Decision Group 1 in full, including every correction applied across §28A–§28M. **No further architecture correction is required before implementation-control planning.** Approval covers the complete corrected architecture package: provider/provider-symbol/TradingView-visual-reference separation (§28A); pipeline responsibility boundary (§28B); historical/live separation via stateless builders (§28C); the corrected `SourceCandleInput`-starting flow (§28D); source mapping (§28E); `source_reference` semantics, the source identity key, and stateless idempotency (§28F); `POTENTIAL_GAP`-only gap observation (§28G); the corrected availability-time decision matrix (§28H); the storage/replay port boundary (§28I); the result-model recommendation (§28J); the exact 17-path first-batch scope (§28K); the 57-function test allocation (§28L); and the `AUTHOR-APPROVED` AT-1/RM-1/GAP-1 resolutions (§28M).
 
 **This approval does not authorize production use. This approval does not authorize implementation outside the exact first-batch scope named in §28K. Implementation has not started.**
+
+## 29. Phase 1B-C Decision Group 2 — Exact Market-Data Pipeline Implementation Controls
+
+**Status: `AUTHOR-APPROVED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+This decision group does not reopen Phase 1B-C Decision Group 1 (§28, `AUTHOR-APPROVED`). It defines every implementation detail necessary to code the approved 17-path first batch (§28K) without improvisation: exact model fields, exact function signatures, exact enum values, exact outcome matrices, exact protocol definitions, exact package exports, and the exact 57 test-function names. This approval authorizes only the exact controlled first implementation batch named in §29A; it does not by itself authorize implementation — implementation begins only after a separate, explicit author authorization naming this decision group (per the execution-captured baseline policy, §26).
+
+### 29A. Exact First-Batch File Scope (Restated, Unchanged From §28K)
+
+No change from the approved 17-path scope. Restated here for a single implementation-ready reference:
+
+| # | Path | Kind |
+|---|------|------|
+| 1 | `src/btmm_ai_scanner/market_data/__init__.py` | New |
+| 2 | `src/btmm_ai_scanner/market_data/source_input.py` | New |
+| 3 | `src/btmm_ai_scanner/market_data/results.py` | New |
+| 4 | `src/btmm_ai_scanner/market_data/source_mapping.py` | New |
+| 5 | `src/btmm_ai_scanner/market_data/raw_candle_builder.py` | New |
+| 6 | `src/btmm_ai_scanner/market_data/normalization.py` | New |
+| 7 | `src/btmm_ai_scanner/market_data/idempotency.py` | New |
+| 8 | `src/btmm_ai_scanner/market_data/gap_observation.py` | New |
+| 9 | `src/btmm_ai_scanner/market_data/ports.py` | New |
+| 10 | `tests/unit/test_source_input_and_results.py` | New |
+| 11 | `tests/unit/test_source_mapping.py` | New |
+| 12 | `tests/unit/test_raw_candle_builder.py` | New |
+| 13 | `tests/unit/test_normalization.py` | New |
+| 14 | `tests/unit/test_idempotency.py` | New |
+| 15 | `tests/unit/test_gap_observation.py` | New |
+| 16 | `tests/unit/test_ingestion_ports.py` | New |
+| 17 | `tests/unit/test_historical_live_separation_and_no_synthetic_fabrication.py` | New |
+
+No `pyproject.toml`/`uv.lock` change. No file outside this list. No modification to any Batch 1B-A/1B-B path or to `src/btmm_ai_scanner/config/enums.py`.
+
+### 29B. `source_input.py` — Exact `SourceCandleInput` Contract
+
+`SourceCandleInput` is a `ContractModel` (reusing the exact Batch 1B-B base: `extra="forbid", frozen=True, strict=True, validate_default=True, revalidate_instances="always", allow_inf_nan=False, str_strip_whitespace=False, use_enum_values=False`). Field order mirrors `RawCandle`'s existing 23-field order exactly, with only `availability_time_utc` and `original_availability_time` becoming nullable:
+
+| # | Field | Type | Validation |
+|---|-------|------|------------|
+| 1 | `record_id` | `UUIDv7` | reused type |
+| 2 | `content_fingerprint` | `SHA256Fingerprint` | reused type |
+| 3 | `provider` | `str` | nonblank, unstripped (`require_nonblank_stripped_text`) |
+| 4 | `source_reference` | `str` | nonblank, unstripped |
+| 5 | `source_symbol` | `str` | nonblank, unstripped |
+| 6 | `source_timeframe` | `str` | nonblank, unstripped |
+| 7 | `event_time_utc` | `datetime` | aware required, normalized to UTC (`require_aware_datetime` + `to_utc`) |
+| 8 | `availability_time_utc` | `datetime \| None` | **key mandatory**; if not `None`: aware required, normalized to UTC; if `None`: passed through unchanged |
+| 9 | `processing_time_utc` | `datetime` | aware required, normalized to UTC |
+| 10 | `original_event_time` | `datetime` | aware required, offset preserved (no forced UTC normalization) |
+| 11 | `original_availability_time` | `datetime \| None` | **key mandatory**; if not `None`: aware required, offset preserved; if `None`: passed through unchanged |
+| 12 | `original_timezone` | `str` | nonblank, unstripped |
+| 13 | `open` | `Decimal` | `validate_price` |
+| 14 | `high` | `Decimal` | `validate_price` |
+| 15 | `low` | `Decimal` | `validate_price` |
+| 16 | `close` | `Decimal` | `validate_price` |
+| 17 | `volume` | `Decimal \| None` | `validate_volume` |
+| 18 | `volume_kind` | `CandleVolumeKind` | reused type |
+| 19 | `completeness` | `CandleCompleteness` | reused type |
+| 20 | `rule_version` | `SemVer` | reused type |
+| 21 | `contract_version` | `SemVer` | reused type |
+| 22 | `schema_version` | `SemVer` | reused type |
+| 23 | `provenance_id` | `UUIDv7` | reused type |
+
+**Corrected validation-layer policy (supersedes the prior "Strong recommendation" text — corrects a contradiction identified in the read-only architectural audit between §29B, §29C and §29E):** `SourceCandleInput` construction owns **all** structural/type validity for every field, including both nullable availability fields: required-key validation (all 23 keys must be supplied, including both nullable availability keys — a missing key is a distinct `ValidationError` from a supplied `None`); strict field-type validation; datetime parsing/type validation; timezone-awareness validation; UTC normalization of canonical timestamp fields; original-offset preservation; structural `Decimal` and string validation. **This includes awareness/format validity of `availability_time_utc`/`original_availability_time` when either is supplied (not `None`):** a malformed or naive availability datetime **cannot construct a `SourceCandleInput`** — it fails with a Pydantic `ValidationError` at the `SourceCandleInput` boundary, before any builder is invoked. Such inputs never reach `build_historical_raw_candle`/`build_live_raw_candle` (§29E), and the builders do not — and structurally cannot — convert an impossible `SourceCandleInput` construction into an `IngestionResult`. A future provider adapter may catch and translate a `SourceCandleInput` `ValidationError` into an external rejected-payload result; that adapter is outside this batch's scope.
+
+**Clarification of Decision Group 1's AT-1 language (§28H/§28M):** AT-1's statement that malformed or naive availability evidence is "`REJECTED`" means **structurally rejected at the `SourceCandleInput` boundary** (a construction-time `ValidationError`) — it does **not** mean "the builder returns `IngestionOutcome.REJECTED`." Only the exactly-one-`None` case and the both-valid-but-mismatched-instant case reach the builder as a graceful `IngestionOutcome.REJECTED` result (§29E). This distinction is now stated explicitly to prevent the two mechanisms from being conflated.
+
+`SourceCandleInput` does **not** enforce the cross-field pairing rule (exactly one `None` is invalid) or the instant-correspondence rule between `availability_time_utc` and `original_availability_time` when both are supplied and both are individually well-formed, aware values — those two specific business-level decision-matrix rules are resolved entirely by `raw_candle_builder.py` (§29E), which inspects a structurally-valid `SourceCandleInput` (one that has already survived all type/format/awareness validation) and returns the appropriate `IngestionOutcome` rather than raising an exception. This keeps a single, non-duplicated location (the builder) for the two cross-field availability-evidence decisions that cannot be expressed as a per-field structural constraint, while every per-field structural/format concern — including awareness and well-formedness of the availability fields themselves — belongs exclusively to `SourceCandleInput`.
+
+Model-level cross-field checks (in a `model_validator(mode="after")`, mirroring `RawCandle`'s existing invariants exactly since these do not depend on availability's presence): OHLC bounds (`low <= min(open, close) <= max(open, close) <= high`); `volume`/`volume_kind` pairing; `original_event_time` corresponds to the same instant as `event_time_utc`. The `original_availability_time`/`availability_time_utc` instant-correspondence check is deliberately **not** performed here (see above); it is a builder responsibility, reachable only when both values are individually well-formed and aware.
+
+`SourceCandleInput` has no `to_raw_candle()` method and constructs no `RawCandle`. It is a pure caller-supplied input value.
+
+**No `SourceCandleInput` field has a default value.** All 23 keys must be supplied by the caller on every construction, including both nullable availability keys (`availability_time_utc`, `original_availability_time`), which must be explicitly supplied as either a well-formed aware `datetime` or `None` — never omitted.
+
+### 29C. `results.py` — Exact `IngestionOutcome` and `IngestionResult`
+
+```python
+class IngestionOutcome(StrEnum):
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    INDETERMINATE = "INDETERMINATE"
+    EXACT_DUPLICATE = "EXACT_DUPLICATE"
+    CONFLICTING_REVISION = "CONFLICTING_REVISION"
+```
+
+Exactly the 5 values already fixed by §28J. No `NEW_RECORD` member (resolved in §29G).
+
+```python
+class IngestionResult(ContractModel):
+    outcome: IngestionOutcome
+    reason_codes: tuple[str, ...]
+    candidate_raw_candle: RawCandle | None
+    candidate_normalized_candle: NormalizedCandle | None
+    existing_record_id: UUIDv7 | None
+```
+
+Reason-code syntax: reuses the identical policy already approved for `ValidationResult` — pattern `^[A-Z][A-Z0-9_]*$`, unique within the tuple, order-preserving. This is the same regex/helper, applied to a distinct field on a distinct model (no shared runtime state with `ValidationResult`).
+
+**Exact enforceable outcome-to-field matrix**, enforced by a `model_validator(mode="after")` (avoids an "everything optional" model; corrects the prior calling-convention-only language identified in the read-only architectural audit — every rule below is a model-enforced invariant, not merely a documented convention):
+
+**`ACCEPTED`:**
+- `candidate_raw_candle` is required (not `None`).
+- `candidate_normalized_candle` may be `None` or present.
+- `existing_record_id` must be `None`.
+- `reason_codes` must be empty.
+- When `candidate_normalized_candle` is present, its `raw_candle_id` must equal `candidate_raw_candle.record_id` — enforced by the same `model_validator`.
+
+**`REJECTED`:**
+- `reason_codes` must contain at least one approved code (§29C's eight-code vocabulary below).
+- `candidate_normalized_candle` must be `None`.
+- `existing_record_id` must be `None`.
+- `candidate_raw_candle` may be `None` or present, depending on which stage rejected the record (`None` if rejected before `RawCandle` construction; present if rejected at a later stage, e.g. normalization).
+
+**`INDETERMINATE`:**
+- `reason_codes` must contain at least one approved code.
+- `candidate_normalized_candle` must be `None`.
+- `existing_record_id` must be `None`.
+- `candidate_raw_candle` must be `None` (only reachable before `RawCandle` construction, per AT-1's corrected structural-vs-builder boundary, §29B).
+
+**`EXACT_DUPLICATE`:**
+- `candidate_raw_candle` is required (not `None`).
+- `candidate_normalized_candle` must be `None` — the result must not release a second accepted `NormalizedCandle`.
+- `existing_record_id` is required (not `None`).
+- `reason_codes` may be empty (identified via the identity/fingerprint match itself, not a rejection reason).
+
+**`CONFLICTING_REVISION`:**
+- `candidate_raw_candle` is required (not `None`).
+- `candidate_normalized_candle` must be `None` — no accepted downstream `NormalizedCandle` is exposed; no automatic winner is selected.
+- `existing_record_id` is required (not `None`).
+- `reason_codes` must include `CONFLICTING_REVISION_DETECTED` (§29C's vocabulary, below — this code belongs to the authoritative Section 29C list; §29G uses it and does not introduce a separate code).
+
+No other field combination is valid; the `model_validator` rejects any `IngestionResult` construction that does not match its outcome's exact rule set above.
+
+`candidate_normalized_candle` is populated only when the result authorizes downstream emission. For `EXACT_DUPLICATE`/`CONFLICTING_REVISION`, a `NormalizedCandle` may have already been constructed earlier in the pipeline (idempotency runs after normalization per §28D's flow), but it is deliberately **not** carried into the result — this prevents any accidental downstream consumption of a candidate that must not be emitted, satisfying §28F/RM-1's "must not be emitted as an accepted downstream `NormalizedCandle`" requirement by construction rather than by caller discipline.
+
+**Approved reason-code vocabulary for this batch — exactly eight codes, closed list:** `AVAILABILITY_TIME_UNAVAILABLE` (both availability values `None`, §29E outcome 1); `AVAILABILITY_TIME_PAIR_INCONSISTENT` (exactly one availability value `None`, §29E outcome 2); `AVAILABILITY_TIME_INVALID` (both availability values are valid, individually well-formed, aware datetimes but do not represent the same instant, §29E outcome 3 — **applies to the valid-aware instant-mismatch case only**; a naive or malformed availability value never reaches this reason code because it never reaches the builder at all, per §29B's corrected structural boundary); `RAW_CANDLE_VALIDATION_FAILED`; `UNSUPPORTED_PROVIDER`; `UNSUPPORTED_PROVIDER_SYMBOL`; `UNSUPPORTED_PROVIDER_TIMEFRAME`; `CONFLICTING_REVISION_DETECTED` (idempotency-stage conflicting-fingerprint detection, §29G — this code is part of this same authoritative list, not a separate addition). **No reason code outside this exact eight-code list may be emitted by this batch.**
+
+### 29D. `source_mapping.py` — Exact FXCM Mapping API
+
+Public API:
+
+```python
+FXCM_PROVIDER: str = "FXCM"
+
+class UnsupportedProviderError(ValueError): ...
+class UnsupportedProviderSymbolError(ValueError): ...
+class UnsupportedProviderTimeframeError(ValueError): ...
+
+def resolve_internal_symbol(provider: str, provider_symbol: str) -> InternalSymbol: ...
+def resolve_timeframe(provider: str, provider_timeframe: str) -> Timeframe: ...
+```
+
+Symbol registry (provider-symbol → `InternalSymbol`, FXCM only): `"XAUUSD" → InternalSymbol.XAUUSD`, `"EURUSD" → InternalSymbol.EURUSD`, `"GBPUSD" → InternalSymbol.GBPUSD`.
+
+Timeframe registry (provider-timeframe → `Timeframe`, FXCM only, all 8 existing members, verified against `src/btmm_ai_scanner/config/enums.py`, no invented member): `"M1" → Timeframe.M1`, `"M5" → Timeframe.M5`, `"M15" → Timeframe.M15`, `"H1" → Timeframe.H1`, `"H3" → Timeframe.H3`, `"H4" → Timeframe.H4`, `"D1" → Timeframe.D1`, `"W1" → Timeframe.W1`.
+
+`resolve_internal_symbol`/`resolve_timeframe` raise `UnsupportedProviderError` when `provider != FXCM_PROVIDER`; raise `UnsupportedProviderSymbolError`/`UnsupportedProviderTimeframeError` when the provider is `FXCM_PROVIDER` but the symbol/timeframe key is absent from the registry. Lookup is an exact-match `dict` lookup: **case-sensitive, no whitespace trimming, no normalization** — a padded or differently-cased key simply fails to match, raising the appropriate error without any dedicated padding-detection code.
+
+**No TradingView-reference lookup function exists in this module.** The `FXCM:XAUUSD`/`FXCM:EURUSD`/`FXCM:GBPUSD` visual-reference tickers (§28A) remain documentation-only; no code path in the first batch resolves or validates a TradingView ticker string.
+
+### 29E. `raw_candle_builder.py` — Exact Builder Signatures
+
+```python
+def build_historical_raw_candle(source_input: SourceCandleInput) -> IngestionResult: ...
+def build_live_raw_candle(source_input: SourceCandleInput) -> IngestionResult: ...
+```
+
+Both are stateless and delegate to one shared private helper, `_build_raw_candle_from_source_input(source_input: SourceCandleInput) -> IngestionResult`, which contains the entire availability decision matrix and `RawCandle` construction. In this first batch both public functions have **identical behavior** — the separate names exist so that historical and live call sites remain textually distinct and independently traceable in future batches, even though Batch-1 logic does not yet diverge (consistent with §28C's "explicit, stateless entry points" intent, not a claim that behavior differs today).
+
+`processing_time_utc` originates entirely from `SourceCandleInput.processing_time_utc`, supplied by the caller (a fixture in this batch; a future adapter thereafter). **Neither function calls `datetime.now()` or any wall-clock source.** No `Clock` protocol is introduced — the caller-supplied-value pattern already used throughout §28 makes one unnecessary. **The builders do not generate UUIDs, fingerprints, provenance IDs, or version values** — every such value already exists on the caller-supplied `SourceCandleInput` and is copied into the constructed `RawCandle` unchanged.
+
+**Exact outcome mapping — builder availability decisions own only the four cases below** (a structurally-valid `SourceCandleInput`, per §29B's corrected boundary, is a precondition for every case; malformed or naive availability values never reach this table because they never reach the builder):
+
+| # | Condition | Outcome | `candidate_raw_candle` | Reason code |
+|---|---|---|---|---|
+| 1 | Both availability values are `None` | `INDETERMINATE` | `None` | `AVAILABILITY_TIME_UNAVAILABLE`; no `RawCandle`, no `NormalizedCandle` |
+| 2 | Exactly one availability value is `None` | `REJECTED` | `None` | `AVAILABILITY_TIME_PAIR_INCONSISTENT`; no `RawCandle`, no `NormalizedCandle` |
+| 3 | Both values are valid, individually well-formed, aware datetimes but do not represent the same instant | `REJECTED` | `None` | `AVAILABILITY_TIME_INVALID`; no `RawCandle`, no `NormalizedCandle` |
+| 4 | Both values are valid aware datetimes representing the same instant | Continue `RawCandle` construction | — | — |
+
+A fifth condition applies after case 4 continues: if availability evidence is sufficient but `RawCandle`'s own construction raises `ValidationError` (e.g. an OHLC/volume invariant unrelated to availability), the outcome is `REJECTED`, `candidate_raw_candle=None`, reason code `RAW_CANDLE_VALIDATION_FAILED`. Otherwise, case 4 produces `ACCEPTED` with `candidate_raw_candle` present.
+
+**Expected versus unexpected errors (boundary restated for clarity):** a Pydantic `ValidationError` raised while constructing `SourceCandleInput` occurs entirely before builder invocation and is never caught or translated by the builder — no statement in this section implies malformed or naive `SourceCandleInput` values reach `build_historical_raw_candle`/`build_live_raw_candle`. Expected `RawCandle`-construction validation failures (case 5 above) are converted to a `REJECTED` `IngestionResult`. Unexpected programming errors, invariant bugs, and programmer type violations not represented by the outcome table above (e.g. passing a non-`SourceCandleInput` object, a `TypeError`) may propagate and are expected to trigger a test failure — the builders must not catch `BaseException`, and must not indiscriminately catch every `Exception`, only the specific expected `ValidationError` case named above.
+
+### 29F. `normalization.py` — Exact Normalization Function
+
+```python
+def normalize_raw_candle(
+    raw_candle: RawCandle,
+    *,
+    normalized_record_id: UUIDv7,
+    normalized_content_fingerprint: SHA256Fingerprint,
+    normalized_rule_version: SemVer,
+    normalized_contract_version: SemVer,
+    normalized_schema_version: SemVer,
+    normalized_provenance_id: UUIDv7,
+) -> IngestionResult: ...
+```
+
+**Corrected normalized-only caller-supplied value boundary (supersedes the prior 2-parameter signature — corrects a gap identified in the read-only architectural audit):** `NormalizedCandle` requires its own `record_id`, `content_fingerprint`, `rule_version`, `contract_version`, `schema_version`, and `provenance_id`, each **independently caller-supplied** via required keyword-only parameters, typed via the existing `UUIDv7`/`SHA256Fingerprint`/`SemVer` annotated types. Rather than introducing a new input model (which would add an 18th file and duplicate `SourceCandleInput`'s shape), all six normalized-only values are simple required keyword-only parameters on `normalize_raw_candle` itself. **All six are caller-supplied; none is generated by this function; none is silently copied from `RawCandle`.** The normalization step may carry its own version and provenance evidence distinct from the raw-record construction step's evidence — normalization is a distinct processing step and its `NormalizedCandle` is not required to inherit its parent `RawCandle`'s version/provenance identity verbatim. No UUID generator exists in this function. No fingerprint calculator exists in this function. No automatic version default exists.
+
+Behavior: resolves `symbol`/`timeframe` via `source_mapping.resolve_internal_symbol(raw_candle.provider, raw_candle.source_symbol)` / `resolve_timeframe(raw_candle.provider, raw_candle.source_timeframe)`; on success, constructs a `NormalizedCandle` preserving `RawCandle`'s provider/source fields and candle values (OHLC, volume, volume_kind, completeness, timestamps), setting `raw_candle_id=raw_candle.record_id` (preserving lineage), `record_id=normalized_record_id`, `content_fingerprint=normalized_content_fingerprint`, `rule_version=normalized_rule_version`, `contract_version=normalized_contract_version`, `schema_version=normalized_schema_version`, `provenance_id=normalized_provenance_id`, and returns `IngestionResult(outcome=ACCEPTED, candidate_raw_candle=raw_candle, candidate_normalized_candle=normalized, existing_record_id=None, reason_codes=())`. On `UnsupportedProviderError`/`UnsupportedProviderSymbolError`/`UnsupportedProviderTimeframeError`, returns `IngestionResult(outcome=REJECTED, candidate_raw_candle=raw_candle, candidate_normalized_candle=None, existing_record_id=None, reason_codes=(the matching reason code,))` — `UNSUPPORTED_PROVIDER`, `UNSUPPORTED_PROVIDER_SYMBOL`, or `UNSUPPORTED_PROVIDER_TIMEFRAME` respectively. `normalize_raw_candle` never mutates its `raw_candle` argument. No idempotency, gap detection, persistence, POI, or BTMM work occurs in this function.
+
+### 29G. `idempotency.py` — Exact Idempotency Service (Resolves the `NEW_RECORD` Gap)
+
+**Resolution of the conceptual gap named in the task (Part 11):** `IngestionOutcome` (§29C) has no `NEW_RECORD` member. **Chosen resolution: a new, non-duplicate, non-conflicting candidate is reported as `ACCEPTED` at the idempotency stage** — not a separate `IdempotencyOutcome` enum. Reasoning: `IngestionOutcome` is deliberately a single, unified vocabulary shared across every stage of the pipeline (§28J's explicit design intent); a record that idempotency finds to be genuinely new *is* exactly what "accepted for downstream use" means at that point in the flow, so reusing `ACCEPTED` avoids a second enum that would only ever mean the same thing under a different name. Introducing `IdempotencyOutcome` would force every downstream consumer to translate between two outcome vocabularies for no behavioral gain.
+
+```python
+SourceCandleIdentity = tuple[str, str, str, str, datetime]
+```
+
+A type alias (not a new Pydantic model), representing `(provider, source_reference, source_symbol, source_timeframe, event_time_utc)` — kept as a lightweight internal comparison key, not a public contract; not exported from `market_data/__init__.py`.
+
+```python
+def evaluate_idempotency(
+    candidate_raw_candle: RawCandle,
+    candidate_normalized_candle: NormalizedCandle,
+    existing_raw_candles: Sequence[RawCandle],
+) -> IngestionResult: ...
+```
+
+Pure, stateless function: no persistence, no mutation of `existing_raw_candles` or its elements, no hidden global state, no automatic revision winner.
+
+**Exact algorithm and edge-case resolutions (Part 11):**
+- Compute the candidate's `SourceCandleIdentity`. Iterate `existing_raw_candles` in the given sequence order (no re-sorting — **stable ordering** is the input order).
+- **Empty existing set:** no identity match possible → `ACCEPTED` (new record), `candidate_normalized_candle=candidate_normalized_candle`, `existing_record_id=None`.
+- **Existing records with an identity different from the candidate identity are ignored and do not affect the decision** — they are skipped during iteration and never compared by `content_fingerprint`.
+- For each existing record sharing the candidate's identity: if `content_fingerprint` matches, it is an exact-match candidate; if it differs, it is a conflicting-match candidate.
+- **Multiple exact matches:** the **first** exact match encountered in sequence order is referenced via `existing_record_id`.
+- **Exact match and conflicting match both present for the same identity:** `CONFLICTING_REVISION` takes precedence over `EXACT_DUPLICATE` — the presence of any differing-fingerprint record for the same identity is resolved conservatively (quarantine) regardless of an exact match also being present. The conflicting record referenced is the first conflicting match encountered in sequence order.
+- **No match at all for the identity:** `ACCEPTED`.
+- **Duplicate existing-record IDs within `existing_raw_candles`:** out of scope for this function to detect or repair; it trusts `CandleReadRepository` (§29I) to supply distinct records for a given identity. Not a defended-against input.
+- **Candidate's own `record_id` appearing among `existing_raw_candles`:** no special-cased code path; the same identity+fingerprint comparison naturally classifies it (self-comparison yields `EXACT_DUPLICATE` if fingerprints match, `CONFLICTING_REVISION` if they somehow do not).
+
+Outcome-to-field population: `ACCEPTED` → `candidate_raw_candle` and `candidate_normalized_candle` both present, `existing_record_id=None`, `reason_codes=()`. `EXACT_DUPLICATE` → `candidate_raw_candle` present, `candidate_normalized_candle=None`, `existing_record_id` set to the matched record's `record_id`, `reason_codes=()`. `CONFLICTING_REVISION` → `candidate_raw_candle` present, `candidate_normalized_candle=None`, `existing_record_id` set to the conflicting record's `record_id`, `reason_codes=("CONFLICTING_REVISION_DETECTED",)` — this code is part of the single authoritative eight-code reason-code vocabulary already defined in §29C; this file uses that already-approved code and does not introduce a separate or ninth code.
+
+### 29H. `gap_observation.py` — Exact Gap Model and Function
+
+```python
+class GapClassification(StrEnum):
+    POTENTIAL_GAP = "POTENTIAL_GAP"
+```
+
+Exactly one member, per GAP-1 (§28M). No `CONFIRMED_GAP`/`EXPECTED_MARKET_CLOSURE` placeholder is added ahead of a future approved calendar decision.
+
+```python
+class GapObservation(ContractModel):
+    previous_normalized_candle_id: UUIDv7
+    current_normalized_candle_id: UUIDv7
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    previous_event_time_utc: datetime
+    current_event_time_utc: datetime
+    expected_interval: timedelta
+    observed_interval: timedelta
+    missing_interval_count: int
+    classification: GapClassification
+```
+
+```python
+def observe_potential_gap(
+    previous: NormalizedCandle,
+    current: NormalizedCandle,
+) -> GapObservation | None: ...
+```
+
+**Exact expected interval per `Timeframe` member** (calendar-agnostic elapsed time, deliberately naive around weekends/holidays per GAP-1): `M1` → 1 minute, `M5` → 5 minutes, `M15` → 15 minutes, `H1` → 1 hour, `H3` → 3 hours, `H4` → 4 hours, `D1` → 1 day, `W1` → 7 days.
+
+**Corrected validation order and missing-interval calculation (supersedes the prior truncating formula — corrects an unvalidated-remainder ambiguity identified in the read-only architectural audit).** Let `observed_interval = current.event_time_utc - previous.event_time_utc` and `expected_interval` be the exact approved `timedelta` for the mapped `Timeframe` (table above). Evaluated in this exact order:
+
+1. **Different `symbol` between `previous`/`current`:** raises `ValueError`. No `GapObservation`. A caller supplying candles from different series is a programming error that must surface immediately, not be swallowed.
+2. **Different `timeframe` between `previous`/`current`:** raises `ValueError`. No `GapObservation`.
+3. **`current.event_time_utc <= previous.event_time_utc`:** raises `ValueError`. No `GapObservation`. This covers both the strictly-out-of-order case and the same-event-time case — the function requires strictly increasing `event_time_utc`; same-instant duplicate handling is entirely `idempotency.py`'s responsibility (§29G), which runs earlier in the pipeline and is never re-implemented here.
+4. **`observed_interval == expected_interval`:** returns `None` (no gap — correct consecutive interval).
+5. **`observed_interval < expected_interval`** (and not equal, per case 4): raises `ValueError`. No `GapObservation` — an observed interval shorter than the expected interval is malformed input for this comparison, not a gap.
+6. **`observed_interval % expected_interval != timedelta(0)`** (irregular, non-integer-multiple spacing): raises `ValueError`. No `GapObservation`. This case is distinctly classified as **irregular interval alignment** — the remainder is never truncated, rounded, or silently discarded.
+7. **`observed_interval` is an exact integer multiple of `expected_interval`, greater than 1×** (i.e., passed cases 4–6): `missing_interval_count = observed_interval // expected_interval - 1`; returns a `GapObservation` with `classification=GapClassification.POTENTIAL_GAP`.
+
+**Worked examples:** 1× expected interval → no gap (case 4). 2× expected interval → `missing_interval_count = 1`. 3× expected interval → `missing_interval_count = 2`. 2.5× expected interval → `ValueError`, no observation (case 6 — not an integer multiple).
+
+Every case-7 gap in this batch is `POTENTIAL_GAP` — including gaps caused by weekends — with no special-case classification, per GAP-1; weekends and closures receive no special treatment and are indistinguishable from any other `POTENTIAL_GAP`. The function never fabricates or interpolates a candle, and never performs OHLC or volume interpolation; it only compares two already-constructed `NormalizedCandle` instances.
+
+### 29I. `ports.py` — Exact Protocol Definitions
+
+```python
+class RawCandleSink(Protocol):
+    def store_raw_candle(self, raw_candle: RawCandle) -> None: ...
+
+class NormalizedCandleSink(Protocol):
+    def store_normalized_candle(self, normalized_candle: NormalizedCandle) -> None: ...
+
+class CandleReadRepository(Protocol):
+    def find_raw_candles_by_source_identity(
+        self,
+        provider: str,
+        source_reference: str,
+        source_symbol: str,
+        source_timeframe: str,
+        event_time_utc: datetime,
+    ) -> Sequence[RawCandle]: ...
+
+class HistoricalReplaySource(Protocol):
+    def replay(self) -> Iterator[NormalizedCandle]: ...
+```
+
+**Not `@runtime_checkable`.** No code path in this batch performs an `isinstance()` check against these protocols; static structural typing via mypy is sufficient, consistent with this project's strict-typing-first style. If a future batch needs a runtime `isinstance` check, that is a separate, explicit decision, not assumed here.
+
+`CandleReadRepository` is read-only by design (no `store_*`/mutation method) — it exists purely to supply `existing_raw_candles` to `evaluate_idempotency` (§29G). **`HistoricalReplaySource` performs no wall-clock waiting, sleeping, or live-stream timing** — `replay()` yields already-available `NormalizedCandle` instances deterministically and as fast as the implementation can produce them; it never blocks to simulate real-time playback. No production implementation of any of the four protocols exists in this batch; only local, test-scoped in-memory doubles defined inside `test_ingestion_ports.py` (§29K) may implement them.
+
+### 29J. `__init__.py` — Exact Package Exports
+
+Exactly 20 public exports, grouped by source file in construction order:
+
+```python
+__all__ = [
+    "SourceCandleInput",
+    "IngestionOutcome",
+    "IngestionResult",
+    "FXCM_PROVIDER",
+    "UnsupportedProviderError",
+    "UnsupportedProviderSymbolError",
+    "UnsupportedProviderTimeframeError",
+    "resolve_internal_symbol",
+    "resolve_timeframe",
+    "build_historical_raw_candle",
+    "build_live_raw_candle",
+    "normalize_raw_candle",
+    "evaluate_idempotency",
+    "GapClassification",
+    "GapObservation",
+    "observe_potential_gap",
+    "RawCandleSink",
+    "NormalizedCandleSink",
+    "CandleReadRepository",
+    "HistoricalReplaySource",
+]
+```
+
+No private helper (`_build_raw_candle_from_source_input`, `SourceCandleIdentity`, `require_*`/`validate_*` shared helpers, etc.) is exported. Maximum export count for this batch is exactly 20 — any addition is a new, separate decision.
+
+### 29K. Exact 57 Test-Function Names (8 Files)
+
+No class-based tests, no dynamically generated tests, no `test_`-prefixed non-test helper. Parametrization is permitted within a named function (counts as one top-level function per AST). No overlap in responsibility between files.
+
+**`tests/unit/test_source_input_and_results.py` (8)** — pure model/enum unit tests, no pipeline execution:
+1. `test_source_candle_input_accepts_valid_construction`
+2. `test_source_candle_input_requires_exact_field_set`
+3. `test_source_candle_input_is_frozen`
+4. `test_source_candle_input_rejects_extra_fields`
+5. `test_source_candle_input_requires_availability_keys_present`
+6. `test_source_candle_input_accepts_both_availability_values_none`
+7. `test_source_candle_input_rejects_naive_availability_values`
+8. `test_ingestion_outcome_and_result_values_are_exact` (asserts the 5-member enum and exercises `IngestionResult`'s own outcome-field-matrix validator directly, including invalid combinations)
+
+**`tests/unit/test_source_mapping.py` (7):**
+1. `test_resolve_internal_symbol_maps_approved_fxcm_symbols`
+2. `test_resolve_timeframe_maps_approved_fxcm_timeframes`
+3. `test_resolve_internal_symbol_rejects_unsupported_provider`
+4. `test_resolve_internal_symbol_rejects_unsupported_symbol`
+5. `test_resolve_timeframe_rejects_unsupported_timeframe`
+6. `test_source_mapping_is_case_sensitive`
+7. `test_source_mapping_does_not_expose_tradingview_lookup`
+
+**`tests/unit/test_raw_candle_builder.py` (8)** — end-to-end availability-decision-matrix coverage via the real builder functions:
+1. `test_build_historical_raw_candle_accepts_complete_evidence`
+2. `test_build_live_raw_candle_accepts_complete_evidence`
+3. `test_raw_candle_builder_returns_indeterminate_for_both_availability_none`
+4. `test_raw_candle_builder_returns_rejected_for_one_availability_none`
+5. `test_raw_candle_builder_returns_rejected_for_inconsistent_availability_instant`
+6. `test_raw_candle_builder_returns_rejected_for_raw_candle_validation_failure`
+7. `test_raw_candle_builder_never_mutates_source_input`
+8. `test_raw_candle_builder_never_calls_wall_clock`
+
+**`tests/unit/test_normalization.py` (7):**
+1. `test_normalize_raw_candle_accepts_valid_raw_candle`
+2. `test_normalize_raw_candle_produces_distinct_normalized_record_id`
+3. `test_normalize_raw_candle_preserves_raw_candle_lineage`
+4. `test_normalize_raw_candle_rejects_unsupported_symbol_mapping`
+5. `test_normalize_raw_candle_rejects_unsupported_timeframe_mapping`
+6. `test_normalize_raw_candle_never_mutates_raw_candle`
+7. `test_pipeline_reuses_caller_supplied_identity_fingerprint_versions_and_provenance_without_generation` (**renamed and broadened — supersedes the prior `test_normalize_raw_candle_reuses_caller_supplied_identity_and_fingerprint`, correcting a missing-coverage finding from the read-only architectural audit**: asserts the raw builder preserves the caller-supplied raw `record_id`, raw `content_fingerprint`, raw `rule_version`, raw `contract_version`, raw `schema_version`, and raw `provenance_id`; asserts normalization preserves the caller-supplied `normalized_record_id`, `normalized_content_fingerprint`, `normalized_rule_version`, `normalized_contract_version`, `normalized_schema_version`, and `normalized_provenance_id`; and asserts no generated replacement value appears anywhere in either output. Broadens rather than removes the prior identity-and-fingerprint assertions.)
+
+**`tests/unit/test_idempotency.py` (8):**
+1. `test_evaluate_idempotency_accepts_new_record_with_empty_existing_set`
+2. `test_evaluate_idempotency_detects_exact_duplicate`
+3. `test_evaluate_idempotency_detects_conflicting_revision`
+4. `test_evaluate_idempotency_conflicting_revision_takes_precedence_over_exact_match`
+5. `test_evaluate_idempotency_ignores_different_identity_records`
+6. `test_evaluate_idempotency_preserves_stable_ordering_of_matches`
+7. `test_evaluate_idempotency_does_not_mutate_existing_records`
+8. `test_evaluate_idempotency_does_not_select_automatic_revision_winner`
+
+**`tests/unit/test_gap_observation.py` (7):**
+1. `test_observe_potential_gap_returns_none_for_correct_consecutive_interval`
+2. `test_observe_potential_gap_detects_missing_intervals`
+3. `test_observe_potential_gap_rejects_different_symbols`
+4. `test_observe_potential_gap_rejects_different_timeframes`
+5. `test_gap_observation_rejects_out_of_order_same_time_and_irregular_alignment` (**renamed — supersedes the prior `test_observe_potential_gap_rejects_out_of_order_candles`, broadened to own the full corrected validation order from §29H — correcting an unvalidated-remainder finding from the read-only architectural audit**: parametrized over exactly the required cases — `current.event_time_utc` earlier than `previous.event_time_utc`; `current.event_time_utc` equal to `previous.event_time_utc`; `observed_interval` less than `expected_interval`; a non-integer-multiple interval such as 2.5× `expected_interval` — asserting `ValueError` and no `GapObservation` in every case)
+6. `test_observe_potential_gap_computes_expected_interval_per_timeframe`
+7. `test_observe_potential_gap_never_fabricates_or_interpolates`
+
+**`tests/unit/test_ingestion_ports.py` (6):**
+1. `test_raw_candle_sink_protocol_conformance`
+2. `test_normalized_candle_sink_protocol_conformance`
+3. `test_candle_read_repository_protocol_conformance`
+4. `test_historical_replay_source_protocol_conformance`
+5. `test_candle_read_repository_has_no_mutation_method`
+6. `test_historical_replay_source_is_deterministic_and_ordered`
+
+**`tests/unit/test_historical_live_separation_and_no_synthetic_fabrication.py` (6):**
+1. `test_historical_and_live_builders_produce_identical_results_for_same_input`
+2. `test_historical_and_live_builders_do_not_share_mutable_state`
+3. `test_historical_builder_supports_deterministic_replay_ordering`
+4. `test_live_builder_uses_supplied_processing_time_only`
+5. `test_pipeline_never_fabricates_synthetic_candle_values`
+6. `test_pipeline_marks_invalid_and_indeterminate_records_as_auditable_not_discarded`
+
+`8+7+8+7+8+7+6+6 = 57`, matching §28K/§28L exactly. "No network/database/parser implementation" is not covered by a dedicated negative test — it is satisfied structurally (no such import exists anywhere in the 9 source files) and is a read-only-audit concern rather than a unit-test concern, consistent with how other explicitly-excluded scope items were handled in Batch 1B-B.
+
+### 29L. Exact Construction Order (Stages A–E)
+
+Identical staging discipline to Batch 1B-B (targeted tests + `ruff format --check` + `ruff check` + `mypy` after each stage; full stop on any failure before proceeding to the next stage). **This stop condition applies independently after each of Stages A, B, C, D, and E** — a failure at any single stage halts progress before that stage's files are considered complete, regardless of whether an earlier stage already passed; passing Stage A does not exempt Stage B (or any later stage) from its own independent stop condition, and so on through Stage E.
+
+**Stage A:** `source_input.py`, `results.py`, `test_source_input_and_results.py`. Run `pytest tests/unit/test_source_input_and_results.py -q`, `ruff format --check src/btmm_ai_scanner/market_data/source_input.py src/btmm_ai_scanner/market_data/results.py tests/unit/test_source_input_and_results.py`, `ruff check` on the same paths, `mypy src/btmm_ai_scanner/market_data/source_input.py src/btmm_ai_scanner/market_data/results.py tests/unit/test_source_input_and_results.py`.
+
+**Stage B:** `source_mapping.py`, `test_source_mapping.py`. Same command shape, scoped to these two paths.
+
+**Stage C:** `raw_candle_builder.py`, `normalization.py`, `test_raw_candle_builder.py`, `test_normalization.py`. Same command shape, scoped to these four paths.
+
+**Stage D:** `idempotency.py`, `gap_observation.py`, `test_idempotency.py`, `test_gap_observation.py`. Same command shape, scoped to these four paths.
+
+**Stage E:** `ports.py`, `__init__.py`, `test_ingestion_ports.py`, `test_historical_live_separation_and_no_synthetic_fabrication.py`. Same command shape, scoped to these four paths, plus the full-package `__all__`-export verification (§29J).
+
+After Stage E, run the full quality-gate sequence (§29M) across the whole repository, not just `market_data/`.
+
+### 29M. Baseline Policy, Quality Gates, Stop Conditions, Rollback Boundary
+
+**Baseline policy:** unchanged from the execution-captured baseline policy established in Baseline Correction 6B (§26). No commit hash is hard-coded in this document. At implementation time, the clean synchronized HEAD immediately before the first change is captured and becomes both the baseline and the rollback target; it is reported in the implementation completion report, not recorded here.
+
+**Implementation-preflight verification checklist** (must all hold before the first edit): branch `main`; working tree clean; nothing staged; `HEAD == origin/main`; Python 3.12.13; uv 0.11.30; Pydantic `>=2.13.4,<2.14` (unchanged); `uv lock --check` passes; existing full suite collects and passes exactly 221 tests; the original Batch-1B-A baseline files alone collect and pass exactly 34 tests; existing Batch 1B-B top-level test functions total exactly 132 (verified via inline AST parsing, never a temporary script file); `src/btmm_ai_scanner/market_data/` does not exist; no pending diff on `pyproject.toml`/`uv.lock`.
+
+**Final quality gates** (after Stage E, full repository scope): `uv lock --check`; `ruff format --check .`; `ruff check .`; `mypy src tests`; `pytest -q`; `pytest -q` restricted to the two original Batch-1B-A baseline test files (must still show exactly 34 passed). Strict inline AST verification (no temporary script file) must show exactly 57 new top-level test functions across the 8 new test files, and exactly `132 + 57 = 189` combined top-level test functions across all Batch 1B-B + Batch 1B-C-Batch-1 test files. Exact 17-path verification (no 18th path, no fewer than 17). The `market_data/__init__.py` export list must match §29J exactly (20 names, exact order). The final collected pytest case total (which may exceed 189 once parametrized cases are counted) is reported, not required to equal an exact pre-fixed number. **No documentation file may change during implementation. No private-reference file may change. No temporary verification file may be created** — the same disclosed Batch 1B-B `scratch_ast_check.py` deviation (§27I) must not recur; AST verification is performed inline, never via a written-then-deleted script file.
+
+**Mandatory stop conditions** (any one halts implementation immediately, before staging, with the blocker reported): any quality gate above fails; the AST-verified new-test-function count is not exactly 57; the combined total is not exactly 189; an 18th changed path appears; `pyproject.toml`/`uv.lock` show any diff; HEAD moves unexpectedly after baseline capture; any Batch 1B-A/1B-B file requires modification; any attempt to implement POI, BTMM, indicator, alert, replay-engine, backtesting, or robot logic is implied by the work; any ambiguity is discovered in this specification that cannot be resolved by re-reading §29 alone. On any stop: no `git add`, `commit`, `push`, `reset`, `clean`, or `checkout` — the diff is preserved as-is and the exact blocker is reported.
+
+**Rollback boundary:** never automatic. If separately authorized after a stop, rollback affects only the 17 paths named in §29A — never `pyproject.toml`/`uv.lock` (unmodified by this batch), never any Batch 1B-A/1B-B path, never `git reset --hard`, `git clean`, a force checkout, or any history rewrite. A targeted revert/removal of only the 17 new/modified paths is the only permitted rollback shape.
+
+### 29N. Consequences for `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`
+
+This decision group adds exactly 17 new rows to that document's master file inventory (Section 9), bringing the total from 52 to 69 — see that document's own Section 34 for the added rows. This is a deliberate departure from §28K/§33 of the scaffold-plan document, which explicitly kept the inventory untouched pending this decision group; the inventory addition itself does not constitute implementation and does not change any status field beyond `AUTHOR-APPROVED SCOPE` / `NOT YET IMPLEMENTED` / `NOT PRODUCTION-APPROVED` for each new row.
+
+**No settled Phase 1B-C Decision Group 1 decision (§28) is reopened by this section. This section defines implementation controls only; it does not itself authorize implementation.**
+
+### 29O. Author Approval Record
+
+The author explicitly approved Phase 1B-C Decision Group 2 in full, including every correction applied during the two-round read-only architectural audit and correction cycle (§29B–§29N, corrected). **No further architecture correction is required before implementation.** The final read-only architectural audit verdict was: **A. PASS — READY FOR AUTHOR APPROVAL.** The audit found **no blocking finding**. The audit found **no non-blocking finding**.
+
+This approval authorizes only the exact controlled first implementation batch named in §29A (17 paths: 9 new source files under `src/btmm_ai_scanner/market_data/`, 8 new test files under `tests/unit/`). **This approval does not authorize production use. This approval does not authorize any change outside the exact 17-path scope named in §29A. Implementation has not started.**
