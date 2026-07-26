@@ -2431,3 +2431,229 @@ Decision Group 1 (§28) and Decision Group 2 (§29) were implemented exactly as 
 ### 30E. Production and Scope Boundary (Unchanged)
 
 **This closure does not authorize production use, live trading, an indicator, a robot, provider networking, or a persistence backend.** No network adapter, persistence implementation, POI detector, BTMM detector, indicator, alert, backtester, or robot was implemented in this batch. Phase 1B-C is **closed** at the market-data-pipeline-foundation level only — it remains `NOT PRODUCTION-APPROVED`.
+
+## 31. Phase 1B-E Decision Group 1 — Reconciliation with the Completed Market-Data Foundation and Exact Implementation Controls
+
+**Status: `AUTHOR-APPROVED`, `AUTHORIZED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+This decision group does not implement any code, test, or dependency change. It exists to (1) reconcile Batch 1B-E's long-standing, policy-level-approved scope (Section 9, rows 44–50 of `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`) with the market-data pipeline foundation implemented and closed under Phase 1B-C (§28–§30), and (2) define exact implementation controls for `ingestion/requests.py`, `ingestion/results.py`, `ingestion/port.py`, `ingestion/offline_file_source.py`, and `ingestion/__init__.py`, precise enough to implement without further interpretation.
+
+### 31A. Why Reconciliation Is Needed
+
+Batch 1B-E was scoped (Section 6 Group 7, Section 9 rows 44–50) before the market-data pipeline foundation existed. At that time, "provider-neutral ingestion request/result shape" had no sibling contract to be distinguished from. Phase 1B-C-MD has since implemented and closed `market_data.SourceCandleInput` (23-field candle observation contract) and `market_data.IngestionResult` (5-outcome, 8-reason-code pipeline decision contract). Both are now real, `AUTHOR-APPROVED`, `IMPLEMENTED`, `CLOSED` artifacts. Without an explicit reconciliation, `ingestion/requests.py` and `ingestion/results.py` could easily be (mis)implemented as near-duplicates of `SourceCandleInput`/`IngestionResult`, which would violate the layering already established by Phase 1B-C and would create two competing sources of truth for the same concepts. This decision group closes that gap before any ingestion code is written.
+
+### 31B. Architectural Recommendation — Option B: Distinct Source-Adapter Control Contracts
+
+**Recommended and adopted for drafting purposes: ingestion-layer contracts remain structurally and semantically distinct from market-data-pipeline contracts.** `ingestion/` describes *how a candidate set of candle observations was acquired from a source*; `market_data/` describes *what those observations mean once acquired* (raw candle construction, normalization, idempotency, gap observation). Neither layer reaches into the other's outcome vocabulary, field set, or state machine.
+
+**Exact boundary flow:**
+
+```
+Provider or deterministic source
+    → MarketDataSourcePort.acquire(SourceAcquisitionRequest)
+    → SourceAcquisitionResult (source-level outcome + zero or more SourceCandleInput records)
+    → Phase 1B-C market-data pipeline (build_historical_raw_candle / build_live_raw_candle, normalize_raw_candle, evaluate_idempotency, observe_potential_gap)
+    → RawCandle / NormalizedCandle / market_data.IngestionResult
+```
+
+`ingestion/` never constructs a `RawCandle`, a `NormalizedCandle`, or a `market_data.IngestionResult`. It produces `SourceCandleInput` records — already-existing Phase 1B-C-MD contracts — and hands them to the market-data pipeline, which alone decides acceptance, rejection, duplication, or gaps. `ingestion/` owns exactly one question: *did the source acquisition itself succeed, and if so, what candidate observations did it hand back?* It does not own or duplicate any question the market-data pipeline already answers.
+
+**Rejected alternative (Option A — unify the request/result shapes with `SourceCandleInput`/`IngestionResult`):** rejected because it would collapse two distinct concerns (source-level acquisition success/failure vs. pipeline-level candle-observation decisions) into one contract, forcing `SourceCandleInput` to grow acquisition-only fields it does not need (e.g., an unsupported-request reason) and forcing `IngestionResult`'s closed 5-outcome/8-reason-code vocabulary to either grow source-acquisition outcomes it was never designed for or be reused inconsistently. Option A would also make it impossible to represent "the source call itself failed, before any candle was ever seen" without inventing a placeholder `SourceCandleInput`, which contradicts the field-level strictness already established for that contract.
+
+### 31C. Batch 1B-E Inventory — Preserved Exactly, Wording Corrected Across Two Passes
+
+The exact existing 7-row Batch 1B-E inventory (Section 9 rows 44–50) is preserved throughout — **no row was added, removed, renamed, or renumbered, in either the initial reconciliation draft or the subsequent audit-correction pass.** The initial reconciliation draft of this decision group preserved all 7 rows as-is and corrected only row 48's descriptive wording (below). A subsequent read-only architectural audit of that draft found the remaining dependency wording stale relative to the adopted architecture; the audit-correction pass that followed updated that wording in place, without changing any row's identity, order, or count. **The complete, current set of wording corrections against the pre-existing inventory is:**
+
+- **Row 45 (`ingestion/port.py`):** "Direct dependencies" corrected from the stale `contracts/raw_candle.py` (incompatible with §31F's `RawCandle`-free signature) to `ingestion/requests.py`, `ingestion/results.py`, `typing.Protocol`.
+- **Row 47 (`ingestion/results.py`):** "Direct dependencies" corrected from `contracts/types.py` alone to `contracts/types.py` (for `ContractModel`) **and** `market_data/source_input.py` (for `SourceCandleInput`).
+- **Row 48 (`ingestion/offline_file_source.py`):** responsibility wording corrected from an implied real-file-reading description ("Reads a fixed local file only, no network call") to the deterministic fixture-catalogue behavior adopted in §31F, and its "Direct dependencies" completed to reflect that design (§31F/§31G's full type surface — see the file-scope document's row 48 for the exact list).
+- **Section 14's Batch 1B-E summary row:** dependency wording corrected from "1B-B (contracts)" alone to "Batch 1B-B (`contracts/`) and completed Phase `1B-C-MD` (specifically `market_data/source_input.py`'s `SourceCandleInput`)," since `results.py` now carries a tuple of `SourceCandleInput`.
+
+These are wording-only corrections to existing rows. **No row was added. No row was removed. No row was renamed. No row was renumbered. Creation order (44–50) is unchanged. Batch 1B-E remains exactly 7 rows. The total master inventory remains exactly 69 rows.** This is consistent with the precedent established in Phase 1B-C Decision Group 2 (§29's corrections to Section 9 row descriptions without changing row identity or count). Full detail of every corrected cell: `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9 (rows 45, 47, 48), Section 14 (Batch 1B-E summary row), and Section 36 (which records both the initial reconciliation and the subsequent audit-correction pass as two clearly separated paragraphs).
+
+### 31D. Exact `ingestion/requests.py` Contract
+
+**Model name: `SourceAcquisitionRequest`.** A `ContractModel` (frozen, strict, matching the project-wide contract base). Exactly 4 fields, no defaults:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `provider` | `str` (nonblank, stripped) | The underlying candle-data provider the requested observations represent — e.g. `"FXCM"`. **Never** the adapter/stub concept (`OFFLINE_FILE` is not a valid example value for this field — see the Provider-Versus-Adapter Identity subsection immediately below). |
+| `source_reference` | `str` (nonblank, stripped) | A stable, source-defined reference for the data set (e.g. a fixture catalogue key, a provider feed identifier) — opaque to the port itself. |
+| `source_symbol` | `str` (nonblank, stripped) | The symbol exactly as the source names it (pre-mapping — never `InternalSymbol`). |
+| `source_timeframe` | `str` (nonblank, stripped) | The timeframe exactly as the source names it (pre-mapping — never `Timeframe`). |
+
+**Rationale for exactly these 4 fields:** they describe acquisition *intent* only — which provider, which reference, which symbol/timeframe as the source names them. This is the smallest field set that lets `MarketDataSourcePort.acquire()` be dispatched deterministically. Reusing the `provider`/`source_symbol`/`source_timeframe` names already established by `SourceCandleInput` is a deliberate naming-consistency choice (the same real-world dimension should have the same field name everywhere in the codebase) — it is not the prohibited duplication, because the request carries none of `SourceCandleInput`'s remaining 19 fields (no OHLC, no volume, no timestamps, no availability pairing, no Decimal price fields).
+
+**Explicitly prohibited fields on `SourceAcquisitionRequest`:** `open`/`high`/`low`/`close`/`volume` (or any OHLC field under any name); `event_time_utc`, `availability_time_utc`, `processing_time_utc`, `original_event_time`, `original_availability_time` (or any timestamp field under any name); `RawCandle`, `NormalizedCandle`, `IngestionResult`, `SourceCandleInput` (no nested candle/result types); any POI or BTMM field; any auto-generated identity, fingerprint, or version field; any provider-specific alias field; any retrieval-mode/source-mode discriminator (`HISTORICAL_BATCH`/`POLLING`/`STREAMING` remain not-yet-authorized per Decision Group 7 — this request shape must not smuggle one in).
+
+No defaults. No caller-optional fields. No arbitrary dict/kwargs payload.
+
+**Correction — Provider Versus Adapter Identity (resolves the audit's Finding 1).** `provider` names the real underlying candle-data provider the observations are attributed to (e.g. `"FXCM"`). It never names which `MarketDataSourcePort` *implementation* served the request. Concretely:
+
+- `OfflineFileSource` is an adapter *implementation* of `MarketDataSourcePort` — not a provider identity. It is selected by the caller choosing which `MarketDataSourcePort` object to construct/call, never by any value placed in `request.provider`.
+- A `SourceAcquisitionRequest(provider="FXCM", ...)` may legitimately be served by `OfflineFileSource` — e.g. in a test that stubs FXCM-attributed fixtures without any real FXCM network call.
+- `OfflineFileSource` must never rewrite `request.provider`, and must never rewrite `.provider` on any `SourceCandleInput` it returns. Every returned `SourceCandleInput.provider` retains exactly the provider identity the fixture author supplied (e.g. `"FXCM"`) — it is never replaced with `"OFFLINE_FILE"` merely because `OfflineFileSource` happened to serve the request.
+- No separate adapter-mode/source-mode field is introduced in this batch (consistent with §31D's existing prohibition on a retrieval-mode discriminator). Adapter selection is a caller-side concern (which `MarketDataSourcePort` object is constructed and called), entirely outside the `SourceAcquisitionRequest`/`SourceAcquisitionResult` contracts.
+
+**Correction — Exact String-Matching Policy (resolves the audit's Finding 3).** All 4 fields are strict `str` values. Leading and trailing whitespace is removed during `SourceAcquisitionRequest` construction (the shared nonblank-stripped-text validator already used throughout this codebase); the stored value must be non-empty after that stripping. Beyond whitespace-stripping, **no other normalization occurs**: matching (both `SourceAcquisitionRequest` value-equality/hashing and `OfflineFileSource`'s catalogue lookup, §31F) uses the stored values exactly, is **case-sensitive**, and applies no `.upper()`, `.lower()`, or `.casefold()` conversion. Consequently `"FXCM"` and `"fxcm"` are different values, `"XAUUSD"` and `"xauusd"` are different values, and an input of `" FXCM "` is stored as `"FXCM"` before any equality check or catalogue lookup. **This request-contract matching policy is independent of, and must not be conflated with, `market_data.source_mapping`'s FXCM symbol/timeframe resolver policy** (§29/§28: also case-sensitive and exact-match, but a separate, already-implemented mechanism operating on already-mapped values downstream of this request contract).
+
+### 31E. Exact `ingestion/results.py` Contract
+
+**Outcome enum name: `SourceAcquisitionOutcome`** (`StrEnum`), exactly 3 members, closed vocabulary, distinct from and non-overlapping with `market_data.IngestionOutcome`'s 5 members:
+
+- `SUCCEEDED` — the source adapter successfully handled the request; it may return zero or more `SourceCandleInput` records (an empty tuple is still `SUCCEEDED` — a source legitimately having nothing new to report is not a failure).
+- `UNSUPPORTED` — the adapter cannot serve this exact request at all (e.g. an unrecognized provider, source reference, source symbol, or source timeframe for that adapter).
+- `FAILED` — the adapter recognizes and supports the request's *category*, but source acquisition fails for a deterministic, source-level reason (e.g. a future networked adapter's upstream call deterministically errors). **`FAILED` is reserved for future adapters that can genuinely experience acquisition failures; it is never produced by an invalid `SourceAcquisitionRequest`,** because a malformed or internally inconsistent request already fails `SourceAcquisitionRequest` construction itself (a `ValidationError`, per §31D) — it never reaches `acquire()` in the first place, so "malformed request" is not and cannot be a `FAILED` trigger.
+
+**Result model name: `SourceAcquisitionResult`.** A `ContractModel` — **frozen, strict, extra-forbid, and default-validating**, exactly like `SourceAcquisitionRequest` and every other contract model in this codebase (no field permits an out-of-range or non-finite value where such a constraint would apply). Exactly 3 fields, in this fixed order:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `outcome` | `SourceAcquisitionOutcome` | The source-level acquisition outcome. |
+| `source_candle_inputs` | `tuple[SourceCandleInput, ...]` | Immutable tuple of candidate observations handed to the market-data pipeline. |
+| `reason_codes` | `tuple[str, ...]` | Source-level reason codes, syntax `^[A-Z][A-Z0-9_]*$` (same syntax convention as `ValidationResult`/`market_data.IngestionResult`, own closed vocabulary — §31E continues below). |
+
+**Closed source-level reason-code vocabulary — exactly 2 codes, never reused from `market_data`'s 8-code vocabulary:**
+
+- `SOURCE_REQUEST_UNSUPPORTED`
+- `SOURCE_ACQUISITION_FAILED`
+
+**Per-outcome invariant matrix, enforced by a `model_validator(mode="after")`:**
+
+| Outcome | `source_candle_inputs` | `reason_codes` |
+|---|---|---|
+| `SUCCEEDED` | may be empty or non-empty | must be empty |
+| `UNSUPPORTED` | must be empty | must equal `("SOURCE_REQUEST_UNSUPPORTED",)` |
+| `FAILED` | must be empty | must equal `("SOURCE_ACQUISITION_FAILED",)` |
+
+This makes "successful empty acquisition" (`SUCCEEDED` with an empty tuple) and "failure" (`UNSUPPORTED`/`FAILED`, always empty) structurally distinct — a caller can never confuse the two, and the model itself rejects any attempt to attach candle records to a non-`SUCCEEDED` outcome or to omit the mandated reason code from a failure outcome.
+
+**Explicitly prohibited fields on `SourceAcquisitionResult`:** `candidate_raw_candle`, `candidate_normalized_candle`, `existing_record_id` (these belong exclusively to `market_data.IngestionResult`); any duplicate/gap/normalization decision field; any POI or BTMM field; `adapter_version` or any other free-form version/config field not already justified by an approved contract (the Section 9 row-47 note mentioning "`adapter_version`, etc." is not adopted — no version-reference field is added here; if a future batch needs one, it must be separately proposed and approved).
+
+### 31F. Exact `MarketDataSourcePort` Protocol and Resolution of the `OFFLINE_FILE` Contradiction
+
+**Protocol, `ingestion/port.py`:**
+
+```python
+class MarketDataSourcePort(Protocol):
+    def acquire(self, request: SourceAcquisitionRequest) -> SourceAcquisitionResult: ...
+```
+
+- Synchronous (matches every existing port/protocol in this codebase — `market_data.ports` included; nothing in the authoritative roadmap calls for async).
+- Provider-neutral: no networking type, no file-handle type, no database/connection type, no `RawCandle`/`NormalizedCandle` type anywhere in the signature.
+- No implementation and no mutable state on the Protocol itself (matches the `market_data.ports` precedent of 4 non-`@runtime_checkable` Protocols).
+- **Not `@runtime_checkable`**, for the same reason already established for `market_data.ports`: structural conformance is verified by static typing and by direct construction in tests, not by `isinstance` checks at runtime — no justification exists here to depart from that precedent.
+- One call, one result: a single `acquire()` call returns a single `SourceAcquisitionResult`, whose `source_candle_inputs` tuple may itself hold zero, one, or many `SourceCandleInput` records. The port does not return an iterator or a stream — that shape is deferred to a `HistoricalReplaySource`-style abstraction if and when batch/streaming retrieval is separately authorized.
+
+**Resolving the `OFFLINE_FILE` contradiction — reported, not silently forced.** The existing Section 9 row 48 and the Section-14-adjacent narrative (line 772) both currently read: *"Reads a fixed local file only, no network call"* / *"reads one fixed local file, no network access, no credential."* Read literally, this describes genuine file I/O (an `open()` call against a real path). That is **incompatible** with the architecture this decision group adopts for the first implementation batch, which requires `OFFLINE_FILE`'s concrete implementation to be a **pure deterministic contract stub**:
+
+- **Class name: `OfflineFileSource`**, implementing `MarketDataSourcePort`.
+- Constructed with a caller-supplied `Mapping[SourceAcquisitionRequest, tuple[SourceCandleInput, ...]]`. **Correction — defensive-copy plus `MappingProxyType` (resolves the audit's non-blocking catalogue-mutation gap):** the constructor copies the caller's mapping into a new internal `dict`, then wraps that copy in `types.MappingProxyType` before storing it as the instance's sole catalogue reference; no separately named mutable backing dictionary is retained, and the catalogue is never exposed through any public attribute or method. This guarantees both that caller-side mutation of the original mapping after construction cannot affect behavior, and that the instance's own catalogue cannot be mutated after construction (matching the immutability discipline already established for `source_mapping.py`'s module-level registries, applied here at the instance level).
+- `acquire()` performs a dictionary lookup keyed by the exact `SourceAcquisitionRequest` value (frozen `ContractModel`s are value-hashable, and matching follows §31D's case-sensitive, no-normalization policy):
+  - **Known request mapped to a non-empty tuple:** returns `SUCCEEDED` with that exact `SourceCandleInput` tuple, unchanged and in catalogue order — the objects are reused, never regenerated.
+  - **Known request mapped to an empty tuple:** returns `SUCCEEDED` with an empty tuple (a deliberately documented empty-success fixture, distinct from "unknown").
+  - **Unknown request (absent from the catalogue):** returns `UNSUPPORTED` with `reason_codes=("SOURCE_REQUEST_UNSUPPORTED",)`.
+  - **`OfflineFileSource` emits only `SUCCEEDED` or `UNSUPPORTED` in this batch — it never emits `FAILED`.** No magic failure key, injected exception text, or artificial failure fixture is introduced to manufacture a `FAILED` result. `SOURCE_ACQUISITION_FAILED` remains defined in the general `SourceAcquisitionResult` contract (§31E) solely for future adapters capable of a genuine, deterministic source-level failure (e.g. a networked adapter); it is simply not reachable through `OfflineFileSource`.
+- **Does not call `open()`. Does not read, write, or create any file. Does not perform filesystem discovery, path resolution, CSV/JSON/JSONL/Parquet parsing, or any I/O of any kind.** It never mutates the fixture catalogue, the request, or any returned `SourceCandleInput`. Repeated calls with the same request are guaranteed to return an equal result every time.
+
+**This is a genuine, reportable contradiction against the exact existing inventory wording, not a matter of interpretation.** The resolution adopted here **narrows** the original Group 7 intent ("reads one fixed local file") to "receives caller-supplied immutable fixtures; performs no real file I/O in this first batch." The reason: committing the first `OFFLINE_FILE` implementation to real file parsing would require deciding a fixture file format (CSV vs. JSONL vs. Parquet), a discovery/path-resolution policy, and file-not-found/malformed-file error handling — none of which is scoped, approved, or necessary to prove out the port/request/result contracts. **Real file parsing is deferred to a separately proposed and approved future adapter batch** — the `OfflineFileSource` name is preserved so that a later batch can extend or replace its internals without renaming the class or the row. Per §31C, row 48's description text is corrected to state this narrowed, stub-only meaning; the row's identity, path, and count are unchanged.
+
+### 31G. Exact `ingestion/__init__.py` Exports
+
+Exactly 5 exports, in this fixed order, each annotated below with its defining file — no full `market_data` re-export, no fixture registry, no module-level mutable state, no sixth export:
+
+| # | Export | Defining file |
+|---|---|---|
+| 1 | `SourceAcquisitionRequest` | `ingestion/requests.py` |
+| 2 | `SourceAcquisitionOutcome` | `ingestion/results.py` |
+| 3 | `SourceAcquisitionResult` | `ingestion/results.py` |
+| 4 | `MarketDataSourcePort` | `ingestion/port.py` |
+| 5 | `OfflineFileSource` | `ingestion/offline_file_source.py` |
+
+```python
+__all__ = [
+    "SourceAcquisitionRequest",
+    "SourceAcquisitionOutcome",
+    "SourceAcquisitionResult",
+    "MarketDataSourcePort",
+    "OfflineFileSource",
+]
+```
+
+### 31H. Exact Test Coverage
+
+**`tests/unit/test_ingestion_port_contract.py` — exactly 8 top-level test functions:**
+
+1. `test_source_acquisition_request_accepts_valid_construction` — **owns the string-matching-policy assertions (resolves the audit's Finding 3):** in addition to valid construction, this test asserts that a padded input (e.g. `" FXCM "`) is stored stripped as `"FXCM"`; that a lowercase value (e.g. `"fxcm"`) is a distinct stored value from its uppercase form (`"FXCM"`) and therefore compares unequal; that `SourceAcquisitionRequest` instances differing only by case are unequal (and thus resolve to different `OfflineFileSource` catalogue entries); and that no `.upper()`/`.lower()`/`.casefold()` conversion is applied anywhere in construction or equality.
+2. `test_source_acquisition_request_is_frozen`
+3. `test_source_acquisition_request_rejects_extra_fields_and_candle_content`
+4. `test_source_acquisition_result_enforces_outcome_matrix`
+5. `test_source_acquisition_result_succeeded_may_carry_multiple_source_candle_inputs`
+6. `test_source_acquisition_result_distinguishes_empty_success_from_failure`
+7. `test_source_acquisition_outcome_and_reason_codes_do_not_duplicate_market_data_vocabulary`
+8. `test_market_data_source_port_protocol_conformance`
+
+**`tests/unit/test_offline_file_stub.py` — exactly 8 top-level test functions:**
+
+1. `test_offline_file_source_returns_fixture_for_known_request`
+2. `test_offline_file_source_returns_unsupported_for_unknown_request`
+3. `test_offline_file_source_is_deterministic_across_repeated_calls`
+4. `test_offline_file_source_preserves_source_candle_input_ordering`
+5. `test_offline_file_source_never_generates_replacement_values`
+6. `test_offline_file_source_never_mutates_fixtures_or_request`
+7. `test_offline_file_source_performs_no_file_or_network_access`
+8. `test_offline_file_source_never_constructs_raw_or_normalized_candles`
+
+**Total new top-level test functions: 16** (combined with the existing 189: **205**). No `test_`-prefixed non-test helper. No class-based or dynamically generated test. Parametrization, where used (e.g. within test 2 of `test_offline_file_stub.py`, covering unknown-provider/unknown-symbol/unknown-timeframe as distinct parametrized cases), replaces what would otherwise be separate top-level functions and must be called out explicitly in the implementation report, exactly as done for Phase 1B-C-MD (§30C's "60 collected, 57 top-level" precedent).
+
+**Required coverage, mapped to the above:** strict immutable construction of both contracts, including the exact string-stripping/case-sensitive-matching policy of §31D (1, 2 in file 1); structural exclusion of candle/OHLC/timestamp fields from the request and of `RawCandle`/`NormalizedCandle`/pipeline-decision fields from the result (3, 4); the empty-success-vs-failure distinction (6); non-collision with `market_data.IngestionOutcome`/reason-code vocabulary (7); Protocol shape, non-runtime-checkability, and absence of concrete state (8); deterministic, side-effect-free, non-mutating, non-generating, no-I/O behavior of `OfflineFileSource`, including that it emits only `SUCCEEDED`/`UNSUPPORTED` and never `FAILED` (all 8 in file 2).
+
+### 31I. Explicit Exclusions (Unchanged Scope Boundary)
+
+This decision group and the batch it authorizes for future implementation exclude, without exception: any FXCM REST/WebSocket adapter; any TradingView scraping or adapter; any CSV/JSON/JSONL/Parquet parsing; any filesystem discovery or path resolution; any persistence implementation; any concrete `CandleReadRepository` or `HistoricalReplaySource`; any ingestion orchestration beyond a single `acquire()` call; `RawCandle` construction, normalization, idempotency evaluation, or gap observation (these remain exclusively Phase 1B-C-MD's responsibility, invoked by a future caller *after* `ingestion/` hands back `SourceCandleInput` records); validation/eligibility orchestration; POI, market-structure, or BTMM detection; indicators; alerts; backtesting; paper trading; or robot/live-execution of any kind.
+
+### 31J. Deferred Note — Validation-Layer Overlap (Acknowledged, Not Resolved)
+
+A second, unrelated architectural overlap exists between the older, still-unimplemented `validation/` batch (Section 14's distinct "Batch 1B-C," 12 files, e.g. `validation/duplicates.py`, `validation/gaps.py`) and the now-implemented `market_data/idempotency.py`/`market_data/gap_observation.py`. Both pairs address conceptually adjacent problems (duplicate detection, gap detection) at what may turn out to be redundant layers. **This decision group explicitly does not resolve that overlap.** It is noted here only so it is not forgotten: the `validation/` batch must not be authorized for implementation until its relationship to `market_data.idempotency`/`market_data.gap_observation` is separately reconciled, in its own decision group, with its own architect recommendation. No row in the `validation/` batch's Section 9 inventory is added, removed, or reworded by this decision group.
+
+### 31K. Implementation Order (Stage A–D, For Future Use Once Approved)
+
+This order is documented now so that, once §31 is author-approved, implementation can proceed without a further planning step. No stage below is executed by this decision group.
+
+**Correction — exact test creation/execution ownership per stage (resolves the audit's Stage A/B ambiguity):**
+
+- **Stage A — Request/result contracts.** Create `requests.py`, `results.py`. Create `test_ingestion_port_contract.py` containing exactly tests 1–7 (the contract-focused subset) — **test 8 (`test_market_data_source_port_protocol_conformance`) does not exist in the file yet at the end of Stage A.** No placeholder, `xfail`, `skip`, or bare `pass` body for test 8 is created — a not-yet-written test is simply not yet present in the file, which is not a "knowingly incomplete test." Gates: `ruff format --check`, `ruff check`, `mypy`, `pytest -q` targeted at tests 1–7.
+- **Stage B — Port.** Create `port.py`. Add test 8 (`test_market_data_source_port_protocol_conformance`) to the existing `test_ingestion_port_contract.py` file, bringing it to its full, final 8 functions. Run all 8 tests in that file. Same gates.
+- **Stage C — Offline stub.** Create `offline_file_source.py`; create `test_offline_file_stub.py` containing all 8 tests at once (it has no cross-stage split — every test in this file depends only on `offline_file_source.py`, which exists by this stage). Run all 8 stub tests. Same gates.
+- **Stage D — Exports and full verification.** Create `__init__.py` with the exact §31G export list (5 exports, annotated by defining file); run the full test suite, both baseline suites, and all quality gates; verify the exact 7 changed paths and the exact 16 new top-level test functions (8 + 8, fixed at documentation time per §31H — no test is renamed, added, or removed during implementation).
+
+### 31L. Baseline, Quality Gates, and Stop Conditions (For Future Use Once Approved)
+
+**Execution-captured baseline policy applies unchanged (§26):** the baseline is the clean, synchronized `HEAD` captured immediately before the first implementation change of a future, separately authorized implementation turn — currently that would be `7286ceaac6381c06237d332f58af7660d877e499`, but the actual baseline must be re-captured fresh at the start of that turn, not assumed from this document.
+
+**Preflight checklist (future turn):** clean, synchronized `main`; current documentation commit includes this decision group; Python `3.12.13`, `uv` `0.11.30`, Pydantic `>=2.13.4,<2.14`; `uv lock --check` passes; existing full suite passes at whatever its then-current total is (281 as of this writing); existing original baseline suite passes at 34; existing combined top-level test functions at 189; no `ingestion/` path yet exists; no dependency diff pending.
+
+**Final gates (future turn):** `uv lock --check`; `ruff format --check .`; `ruff check .`; `mypy src tests`; `pytest -q` (full suite); `pytest -q` on the two baseline files. **No fixed final collected-pytest-total is mandated in advance** — only the exact 16 new top-level test functions and the exact 7 new/changed paths are mandated, consistent with the "no total until parametrization is documented" policy already used in §30C.
+
+**Mandatory stop conditions (future turn):** dirty or diverged repository; a test total that differs from what this document records at the time review begins; any dependency change; an 8th `ingestion/`-adjacent path becoming necessary; any modification to an existing, already-closed Phase 1B-B or Phase 1B-C-MD file; any documentation change attempted mid-implementation; a genuine need for real file/filesystem parsing inside `OfflineFileSource`; `SourceAcquisitionRequest`/`SourceAcquisitionResult` needing to duplicate `SourceCandleInput`/`IngestionResult` fields; the offline stub needing to generate rather than merely echo candle observations; the exact test names/counts in §31H becoming unsatisfiable; any quality-gate failure; `HEAD` changing after baseline capture; any temporary or generated file; or any newly discovered inventory-vs-recommendation conflict beyond the one already resolved in §31F. On any of these, stop and report — do not improvise a workaround.
+
+### 31M. Document Scope
+
+This decision group touches exactly 4 authoritative documents: this register (§31, including the §31C/§31D/§31E/§31F/§31G/§31H/§31K corrections applied across both the initial reconciliation draft and the subsequent audit-correction pass); `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`, updated through (1) row 45's dependency correction, (2) row 47's dependency correction, (3) row 48's deterministic-stub responsibility correction (and completed dependency list), (4) Section 14's Batch 1B-E dependency-summary correction, and (5) Section 36 (the reconciliation and audit-correction record, documenting both passes); `REPOSITORY_SCAFFOLD_PLAN.md` (a new section recording this decision group, kept consistent with every correction above); and `PROJECT_STATE.md` (a new section recording status, next controlled action, and the post-audit correction pass). **The inventory's structure itself did not change through any of this: no new documentation file is created, and no inventory row is added, removed, renamed, or renumbered anywhere.**
+
+### 31N. Author Approval Record
+
+**Author decision: `APPROVED`.** **Approval date: 2026-07-26.** The author explicitly approved Phase 1B-E Decision Group 1 exactly as documented (§31A–§31M), with no modification to any approved element. **Approved status: `AUTHOR-APPROVED`, `AUTHORIZED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+**Final audit verdict: A. PASS — READY FOR AUTHOR APPROVAL.** The final read-only architectural audit found **no blocking finding** and **no non-blocking finding**.
+
+The author approved, without modification:
+
+- **Option B — Distinct Source-Adapter Control Contracts** (§31B), including the exact boundary flow `Provider or deterministic source → MarketDataSourcePort → SourceAcquisitionResult → zero or more SourceCandleInput records → Phase 1B-C market-data pipeline → RawCandle/NormalizedCandle/market_data.IngestionResult`.
+- The exact preserved 7-row Batch 1B-E inventory scope (§31C) and its wording corrections (rows 45, 47, 48, and the Section 14 summary row) — no row added, removed, renamed, or renumbered.
+- The exact `SourceAcquisitionRequest` contract (§31D): 4 fields, no defaults, the provider-versus-adapter-identity distinction, and the exact whitespace-stripped/case-sensitive string-matching policy.
+- The exact `SourceAcquisitionOutcome`/`SourceAcquisitionResult` contracts (§31E): 3 outcomes, 3 result fields in fixed order, the frozen/strict/extra-forbid/default-validating model, the complete per-outcome invariant matrix, and the closed 2-code reason-code vocabulary.
+- The exact `MarketDataSourcePort` Protocol and `OfflineFileSource` design (§31F): the `acquire()` signature; the `MappingProxyType`-backed, defensive-copy fixture-catalogue policy; `OfflineFileSource` as a deterministic fixture-catalogue stub only, emitting only `SUCCEEDED` or `UNSUPPORTED` in this batch, with `FAILED` remaining available for future adapters and real file parsing remaining explicitly deferred.
+- The exact 5-export `__init__.py` list (§31G), the exact 16 new top-level test names and their coverage/ownership assignments (§31H), the explicit exclusions (§31I), the deferred validation-overlap note (§31J) — provider networking and the `validation/`-layer reconciliation both remain explicitly deferred — the Stage A–D implementation order (§31K), and the baseline/quality-gate/stop-condition definitions (§31L).
+
+**This approval authorizes only the exact controlled first implementation batch named in §31C (7 paths: 5 new source files under `src/btmm_ai_scanner/ingestion/`, 2 new test files under `tests/unit/`). This approval does not authorize production use. This approval does not authorize any change outside the exact 7-path scope. Implementation has not started — this remains a documentation-only approval.**
