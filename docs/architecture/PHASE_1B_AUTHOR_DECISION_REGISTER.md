@@ -2434,7 +2434,7 @@ Decision Group 1 (§28) and Decision Group 2 (§29) were implemented exactly as 
 
 ## 31. Phase 1B-E Decision Group 1 — Reconciliation with the Completed Market-Data Foundation and Exact Implementation Controls
 
-**Status: `AUTHOR-APPROVED`, `AUTHORIZED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+**Status: `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.**
 
 This decision group does not implement any code, test, or dependency change. It exists to (1) reconcile Batch 1B-E's long-standing, policy-level-approved scope (Section 9, rows 44–50 of `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`) with the market-data pipeline foundation implemented and closed under Phase 1B-C (§28–§30), and (2) define exact implementation controls for `ingestion/requests.py`, `ingestion/results.py`, `ingestion/port.py`, `ingestion/offline_file_source.py`, and `ingestion/__init__.py`, precise enough to implement without further interpretation.
 
@@ -2655,5 +2655,38 @@ The author approved, without modification:
 - The exact `SourceAcquisitionOutcome`/`SourceAcquisitionResult` contracts (§31E): 3 outcomes, 3 result fields in fixed order, the frozen/strict/extra-forbid/default-validating model, the complete per-outcome invariant matrix, and the closed 2-code reason-code vocabulary.
 - The exact `MarketDataSourcePort` Protocol and `OfflineFileSource` design (§31F): the `acquire()` signature; the `MappingProxyType`-backed, defensive-copy fixture-catalogue policy; `OfflineFileSource` as a deterministic fixture-catalogue stub only, emitting only `SUCCEEDED` or `UNSUPPORTED` in this batch, with `FAILED` remaining available for future adapters and real file parsing remaining explicitly deferred.
 - The exact 5-export `__init__.py` list (§31G), the exact 16 new top-level test names and their coverage/ownership assignments (§31H), the explicit exclusions (§31I), the deferred validation-overlap note (§31J) — provider networking and the `validation/`-layer reconciliation both remain explicitly deferred — the Stage A–D implementation order (§31K), and the baseline/quality-gate/stop-condition definitions (§31L).
+
+### 31O. Implementation Completion and Closure
+
+**Phase 1B-E Provider-Neutral Ingestion Boundary: `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.**
+
+**Implementation commit:** `0a9814eddd1cdeda59cf95dbde8a806f30800b44` — "Implement Phase 1B-E ingestion boundary". Push succeeded to `origin/main`; local `HEAD` equaled `origin/main` at this commit; the working tree was clean afterward. **Exact 7 added paths, every status `A`:** 5 new source files under `src/btmm_ai_scanner/ingestion/` (`__init__.py`, `requests.py`, `results.py`, `port.py`, `offline_file_source.py`) and 2 new test files under `tests/unit/` (`test_ingestion_port_contract.py`, `test_offline_file_stub.py`) — matching §31C's approved scope exactly, no eighth path. Insertions/deletions: 844 insertions(+), 0 deletions(-). No existing tracked file was modified. No `pyproject.toml`/`uv.lock` change. No documentation file was included in the implementation commit. No configuration or private-reference file changed.
+
+**Implemented capabilities, exactly as approved:**
+
+- **`SourceAcquisitionRequest`** (`requests.py`): exactly 4 fields (`provider`, `source_reference`, `source_symbol`, `source_timeframe`), strict/frozen/extra-forbid, no defaults, whitespace stripped at construction, case-sensitive thereafter, `provider` meaning only the underlying data provider (e.g. `"FXCM"`), no adapter-mode field, no candle field.
+- **`SourceAcquisitionOutcome`/`SourceAcquisitionResult`** (`results.py`): 3 outcomes (`SUCCEEDED`/`UNSUPPORTED`/`FAILED`); 3 result fields in fixed order (`outcome`, `source_candle_inputs`, `reason_codes`); the complete per-outcome invariant matrix enforced by a real model validator; exactly 2 closed source-level reason codes (`SOURCE_REQUEST_UNSUPPORTED`, `SOURCE_ACQUISITION_FAILED`); no duplication of `market_data.IngestionResult`'s 5-outcome/8-reason-code state machine.
+- **`MarketDataSourcePort`** (`port.py`): one synchronous `acquire(request: SourceAcquisitionRequest) -> SourceAcquisitionResult` method; provider-neutral; not `@runtime_checkable`; no state; no networking/filesystem/database/`RawCandle`/`NormalizedCandle` type anywhere in the signature.
+- **`OfflineFileSource`** (`offline_file_source.py`): a deterministic fixture-catalogue adapter implementing `MarketDataSourcePort`; constructor accepts `Mapping[SourceAcquisitionRequest, tuple[SourceCandleInput, ...]]`, defensively copied and wrapped in `MappingProxyType`; a known request returns `SUCCEEDED` (with or without records, order preserved); an unknown request returns `UNSUPPORTED`/`SOURCE_REQUEST_UNSUPPORTED`; `FAILED` is never emitted in this batch; `provider` is never rewritten to `"OFFLINE_FILE"`; no file parsing, no network call, no generated candle value, no market-data pipeline processing.
+- **`__init__.py`:** exactly 5 exports in fixed order — `SourceAcquisitionRequest`, `SourceAcquisitionOutcome`, `SourceAcquisitionResult`, `MarketDataSourcePort`, `OfflineFileSource`.
+
+**Verification record:** contract tests 8 passed; offline-source tests 8 passed; full suite 297 passed; original baseline suite 34 passed; existing top-level test functions 189; new Phase 1B-E top-level test functions 16; combined top-level test functions 205; Ruff format — passed; Ruff lint — passed; mypy — passed; `uv lock --check` — passed; no unexpected warning.
+
+**Two accepted implementation characteristics (not defects):**
+
+1. `ContractModel`'s `revalidate_instances="always"` config means a nested `SourceCandleInput` value may be re-validated into an equivalent-but-distinct Pydantic instance when wrapped in a `SourceAcquisitionResult`. Exact IDs, fingerprints, timestamps, versions, provenance, and every field value are preserved; Python object identity (`is`) is not part of the contract and is not required by any test.
+2. `MarketDataSourcePort` is intentionally not `@runtime_checkable`. Conformance is verified through its structural signature (`inspect.signature`) and through real inheritance/MRO inspection, not through `isinstance()`/`issubclass()`, which raise `TypeError` against any non-runtime-checkable Protocol regardless of actual inheritance.
+
+**Audit history (concise):**
+
+1. Decision Group 1 architecture approved (§31N).
+2. Stage A implemented `requests.py`/`results.py` and 7 contract tests.
+3. The Stage A audit found one vacuous test assertion (a literal compared to an identical literal).
+4. That assertion was removed without changing production behavior or the approved test count.
+5. A combined Stage B–D implementation added `port.py`, `offline_file_source.py`, `__init__.py`, the eighth contract test, and all 8 offline-source tests.
+6. The final combined audit verdict was **A. PASS — READY TO COMMIT**, with no blocking finding.
+7. The implementation was committed and pushed as `0a9814eddd1cdeda59cf95dbde8a806f30800b44`.
+
+**This closure does not authorize production use, live trading, an indicator, a robot, provider networking, or a persistence backend.** No FXCM/TradingView adapter, no real file parser, no persistence implementation, no POI detector, no BTMM detector, no indicator, no alert, no backtester, and no robot was implemented in this batch. Phase 1B-E is **closed** at the provider-neutral ingestion-boundary level only — it remains `NOT PRODUCTION-APPROVED`.
 
 **This approval authorizes only the exact controlled first implementation batch named in §31C (7 paths: 5 new source files under `src/btmm_ai_scanner/ingestion/`, 2 new test files under `tests/unit/`). This approval does not authorize production use. This approval does not authorize any change outside the exact 7-path scope. Implementation has not started — this remains a documentation-only approval.**
