@@ -2382,3 +2382,52 @@ This decision group adds exactly 17 new rows to that document's master file inve
 The author explicitly approved Phase 1B-C Decision Group 2 in full, including every correction applied during the two-round read-only architectural audit and correction cycle (§29B–§29N, corrected). **No further architecture correction is required before implementation.** The final read-only architectural audit verdict was: **A. PASS — READY FOR AUTHOR APPROVAL.** The audit found **no blocking finding**. The audit found **no non-blocking finding**.
 
 This approval authorizes only the exact controlled first implementation batch named in §29A (17 paths: 9 new source files under `src/btmm_ai_scanner/market_data/`, 8 new test files under `tests/unit/`). **This approval does not authorize production use. This approval does not authorize any change outside the exact 17-path scope named in §29A. Implementation has not started.**
+
+## 30. Phase 1B-C Implementation Completion and Closure
+
+**Phase 1B-C Market-Data Pipeline Foundation: `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.**
+
+Decision Group 1 (§28) and Decision Group 2 (§29) were implemented exactly as approved. Neither decision group is "not yet implemented," "awaiting implementation," "awaiting coding," or "pending implementation authorization" — both are now implemented through the controlled Phase 1B-C-MD implementation batch, and remain `AUTHOR-APPROVED` as architecture/implementation-control decisions independent of this closure record.
+
+### 30A. Implementation Record
+
+- **Implementation commit:** `d328776abb5a2c1f42e185b9bc80f0e5a371897e` — "Implement Phase 1B-C market-data pipeline foundation".
+- **Push:** succeeded to `origin/main`; local `HEAD` equals `origin/main` at this commit.
+- **Exact 17 added paths, every status `A`:** 9 new source files under `src/btmm_ai_scanner/market_data/` (`__init__.py`, `source_input.py`, `source_mapping.py`, `results.py`, `raw_candle_builder.py`, `normalization.py`, `idempotency.py`, `gap_observation.py`, `ports.py`) and 8 new test files under `tests/unit/` (`test_source_input_and_results.py`, `test_source_mapping.py`, `test_raw_candle_builder.py`, `test_normalization.py`, `test_idempotency.py`, `test_gap_observation.py`, `test_ingestion_ports.py`, `test_historical_live_separation_and_no_synthetic_fabrication.py`) — matching §29A exactly, no eighteenth path.
+- **Insertions/deletions:** 2276 insertions(+), 0 deletions(-).
+- **No existing tracked file was modified.** No `pyproject.toml`/`uv.lock` change. No documentation file included in this commit. No private-reference file changed.
+
+### 30B. Execution Baseline Record
+
+- **Execution-captured baseline:** `1a439f3a1b4b4f6189ec4c209362f5d592910160`.
+- **Execution rollback target:** `1a439f3a1b4b4f6189ec4c209362f5d592910160` (identical to the baseline, per the execution-captured baseline policy, §26).
+- **Implementation commit:** `d328776abb5a2c1f42e185b9bc80f0e5a371897e`.
+- `HEAD` remained at the execution-captured baseline throughout implementation and every subsequent audit/correction/staging review — the implementation was committed only after the controlled audit, correction, and staging-review sequence (§30D) passed in full. **Rollback is not automatic.** Any future rollback remains separately authorized and scoped only to this exact implementation commit or its 17 paths — never to `pyproject.toml`/`uv.lock`, never to any Batch 1B-A/1B-B path, never via `git reset --hard`, `git clean`, a force checkout, or history rewrite.
+
+### 30C. Final Verification Record
+
+**Verified environment:** Python `3.12.13`; `uv` `0.11.30`; Pydantic `2.13.4` (unchanged, within the approved `>=2.13.4,<2.14` range).
+
+**Pre-implementation baseline:** full suite 221 passed; original baseline suite (`test_import_smoke.py` + `test_config_precedence.py`) 34 passed; existing Batch 1B-B top-level test functions 132.
+
+**Final post-implementation verification:** full suite **281 passed**; original baseline suite **34 passed**; corrected targeted suite (`test_source_mapping.py` + `test_source_input_and_results.py`) **15 passed**; new collected test cases **60** (57 top-level functions, one parametrized ×4 replacing 1); new top-level test functions **57**; combined top-level test functions **189** (132 + 57); Ruff format — passed; Ruff lint — passed; mypy — passed; `uv lock --check` — passed; no unexpected warning.
+
+### 30D. Audit History
+
+1. Initial implementation completed inside exactly the approved 17 paths.
+2. Initial read-only architectural audit verdict: **C. CORRECTION REQUIRED BEFORE STAGING.**
+3. Three blocking findings were corrected, entirely within the approved 17-path boundary:
+   - `source_mapping.py`'s FXCM registries changed from plain mutable `dict` objects to `MappingProxyType`-backed immutable mappings.
+   - `test_source_input_and_results.py`'s naive-timestamp test coverage broadened from 2 to all 5 applicable fields (`event_time_utc`, `availability_time_utc`, `processing_time_utc`, `original_event_time`, `original_availability_time`).
+   - `test_source_input_and_results.py`'s valid-construction test extended with genuine non-UTC (UTC+02:00) canonical-normalization and original-offset-preservation coverage.
+4. Final correction audit verdict: **A. PASS — READY FOR STAGING REVIEW.**
+5. Staged-diff review verdict: **A. PASS — READY FOR COMMIT REVIEW.**
+6. No blocking or non-blocking finding remained at commit authorization.
+7. Exactly 17 files were staged (all status `A`) and committed as `d328776abb5a2c1f42e185b9bc80f0e5a371897e`.
+8. Post-commit quality gates passed in full (§30C).
+
+**No implementation-policy deviation occurred. No procedural deviation occurred** — every correction stayed inside the approved 17-path scope; no temporary or generated verification file was created at any point in the implementation, audit, correction, or staging sequence.
+
+### 30E. Production and Scope Boundary (Unchanged)
+
+**This closure does not authorize production use, live trading, an indicator, a robot, provider networking, or a persistence backend.** No network adapter, persistence implementation, POI detector, BTMM detector, indicator, alert, backtester, or robot was implemented in this batch. Phase 1B-C is **closed** at the market-data-pipeline-foundation level only — it remains `NOT PRODUCTION-APPROVED`.

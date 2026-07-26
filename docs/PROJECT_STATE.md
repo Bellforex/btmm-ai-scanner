@@ -712,7 +712,7 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 27; `PHASE_1B_EXACT_
 
 ## 39. Phase 1B-C Decision Group 2 — Exact Market-Data Pipeline Implementation Controls (Author-Approved)
 
-**Phase 1B-C Decision Group 2:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.
+**Phase 1B-C Decision Group 2:** `AUTHOR-APPROVED`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`. **Superseded for implementation status by Section 40 below** — this line described the state at Decision Group 2's approval, before the controlled `1B-C-MD` implementation batch; Decision Group 2 is now `IMPLEMENTED` (Section 40). This historical text is preserved unchanged and not rewritten.
 
 - **Author approval and final audit outcome:** the author explicitly approved Phase 1B-C Decision Group 2 in full. The final read-only architectural audit verdict was **A. PASS — READY FOR AUTHOR APPROVAL**. **Blocking findings: none. Non-blocking findings: none.** No further architecture correction is required before implementation. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §29O.
 - **Approved control totals:** exact approved implementation paths **17** (9 source files, 8 test files); approved new top-level test functions **57**; combined future top-level test functions **189** (132 existing + 57 new); approved public exports **20**; approved dependency changes **none**; inventory **69 rows** total, **17** under `1B-C-MD`.
@@ -727,3 +727,16 @@ Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` Section 27; `PHASE_1B_EXACT_
 - **No implementation for Phase 1B-C has begun. No indicator or robot code exists. No production approval exists.** Nothing was staged, committed, or pushed by this documentation task.
 
 **Next controlled action:** commit and push the approved Phase 1B-C Decision Group 2 documentation. After that, begin the exact 17-path market-data pipeline implementation using the execution-captured baseline policy.
+
+## 40. Phase 1B-C Market-Data Pipeline Foundation — Implementation Closure
+
+**Phase 1B-C:** `AUTHOR-APPROVED`. `IMPLEMENTED`. `VERIFIED`. `ARCHITECTURALLY AUDITED`. `COMMITTED`. `PUSHED`. `CLOSED`. `NOT PRODUCTION-APPROVED`.
+
+- **HEAD and origin/main:** `d328776abb5a2c1f42e185b9bc80f0e5a371897e`. **Execution-captured baseline/rollback target:** `1a439f3a1b4b4f6189ec4c209362f5d592910160`.
+- **Working tree was clean after commit.** Exactly 17 files committed (9 source, 8 test), every status `A`, 2276 insertions(+), 0 deletions(-). No existing tracked file was modified. No dependency, lockfile, or documentation file was included in the implementation commit.
+- **Verification:** 281 full tests passed; 34 original tests passed; 15 targeted corrected tests passed; 57 new top-level test functions; 189 combined top-level functions (132 existing + 57 new); 20 public exports, exact approved order, all import successfully. Ruff format/lint pass; mypy passes; `uv lock --check` passes. Dependency changes: **none**.
+- **Audit history:** initial implementation audit verdict `C. CORRECTION REQUIRED BEFORE STAGING` (three blocking findings — mutable FXCM registries, incomplete naive-timestamp coverage, missing non-UTC normalization/offset-preservation coverage — all corrected within the exact 17-path scope); final correction audit verdict `A. PASS — READY FOR STAGING REVIEW`; staged-diff review verdict `A. PASS — READY FOR COMMIT REVIEW`. No procedural deviation. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §30; `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` §35; `REPOSITORY_SCAFFOLD_PLAN.md` §20.
+- **Decision Group 1 and Decision Group 2 remain `AUTHOR-APPROVED`** and are now also implemented exactly as approved through this controlled `1B-C-MD` batch — neither is "not yet implemented," "awaiting implementation," or "pending implementation authorization."
+- **No production approval exists.** No live-trading, indicator, robot, provider-networking, or persistence-backend approval exists or is implied by this closure.
+
+**Next controlled action:** define and approve the next implementation batch that consumes the completed market-data foundation. Do not begin provider networking, persistence, POI/BTMM detection, indicator development, or robot execution until that next batch is explicitly scoped and approved.
