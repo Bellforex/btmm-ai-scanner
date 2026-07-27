@@ -3687,3 +3687,535 @@ No other defect was found. Every other approved control was audited and confirme
 **No dependency change. No `market_data` Protocol change. No production approval granted by this record.** The milestone remains `NOT PRODUCTION-APPROVED`.
 
 **Next controlled action:** define the **Structure State and Transition Foundation** — one compact architecture definition and author approval covering HH, HL, LH, LL, bullish BOS, bearish BOS, bullish CHoCH, bearish CHoCH, protected high, protected low, weak high, weak low, structure direction and state, and deterministic no-look-ahead transition ordering. These rules require their own compact architecture definition and author approval because they were explicitly deferred from `1B-H-MEASUREMENTS` (§33AA item 2; `P0G-B003`). That milestone is not started by this record.
+
+## 34. Structure State and Transition Foundation — Architecture (Author-Approved)
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** (See §34Y for the author approval record.)
+
+**Batch identifier: `1B-I-STRUCTURE`.** Title: **Structure State and Transition Foundation.** This is the milestone explicitly reserved by `1B-H-MEASUREMENTS` (§33B, §33AB item 2; `P0G-B003`). No prior document anywhere in this project defines HH/HL/LH/LL, BOS, CHoCH, or protected/weak swing rules — every rule below is newly authored in this section, not sourced from any book or knowledge-base standard. This section is one compact, accelerated architecture definition, handled as a single decision group (no per-concept approval cycles for HH/HL, BOS, CHoCH, or protected/weak swings). **This is a consolidated, documentation-only correction of the originally proposed architecture, resolving every blocking finding from the focused read-only architectural audit in one pass** (the inventory creation-order off-by-one; the conflation of source-event chronology with confirmation/availability chronology; the incomplete "2nd-vs-1st swing only" bootstrap rule; the missing unbroken-status filter on weak-level derivation; the undefined same-candle CHoCH-then-fresh-BOS chaining case; the untested duplicate canonical-fingerprint implementation; and the ambiguous compound evidence-classification wording). Nothing was implemented under the prior draft, so this is a correction, not a new milestone.
+
+### 34A. Purpose and Analysis Boundary
+
+Transforms confirmed meaningful swings and ordered `NormalizedCandle` data into a deterministic, no-look-ahead market-structure snapshot:
+
+```
+canonical ordered NormalizedCandle tuple
++ confirmed swings from MarketMeasurementAnalysis, ordered by source chronology
+→ swing relationship classification (HH/HL/LH/LL/EQUAL_HIGH/EQUAL_LOW), compared by source chronology
+→ structure bootstrap (first determinate direction, from the latest classified relationships)
+→ protected/weak swing derivation (transition-sensitive, not merely "most recent")
+→ break detection (close-based, availability-group-phased)
+→ BOS/CHoCH classification (at most one transition per candle)
+→ current structure state
+→ immutable StructureAnalysis snapshot
+```
+
+This milestone completes `P0G-B003` without inventing any unsupported trading signal. **Explicitly excluded, no threshold invented for any of them:** POI creation; order blocks; FVGs; candlestick-pattern POIs; Support/Resistance lifecycle (reclaim/invalidation); Trendline lifecycle; Equal-Level sweep lifecycle; BTMM manipulation detection; trade entries; stop loss; take profit; position sizing; visualization; alerts; backtesting metrics; broker execution; production approval.
+
+### 34B. Input Contract — Corrected: Source Chronology, Not Confirmation Order
+
+**Decision: the analyzer receives `candles: tuple[NormalizedCandle, ...]` and `confirmed_swings: tuple[ConfirmedSwing, ...]` directly (the smallest sufficient input) — not the full `MarketMeasurementAnalysis` aggregate.** Passing the whole aggregate would couple this analyzer to `displacement_observations`, `equal_level_clusters`, `support_resistance_zones`, and `trendlines` fields it never uses, and would require handling `MarketMeasurementAnalysis.symbol`/`.timeframe` being `None` for the empty case redundantly. `confirmed_swings` is exactly the one field of `MarketMeasurementAnalysis` this milestone needs; a caller who already has a `MarketMeasurementAnalysis` passes `measurements.confirmed_swings` directly — no adapter required.
+
+**Corrected canonical swing order — source chronology, not confirmation/availability chronology.** The audit found that `detect_confirmed_swings()`'s own output is ordered by pivot start index (source-event chronology): its confirmation loop processes pivots in that order, but each pivot's inner reversal search is independent and can finish in a different relative order than the pivots started in (an earlier-pivoting swing can take longer to confirm than a later-pivoting same-type swing that reverses quickly). Using confirmation time as the comparison basis for "previous same-type swing" would make relationship/bootstrap/protected-weak answers depend on *which swings happen to have confirmed so far* rather than on fixed price history — unacceptable for a deterministic, replay-stable analyzer. **The caller-provided `confirmed_swings` tuple is therefore canonically ordered by source chronology**, using the exact real `ConfirmedSwing` fields:
+
+```
+(
+    pivot_bar_index,
+    pivot_start_time_utc,
+    record_id,
+)
+```
+
+`pivot_bar_index` and `pivot_start_time_utc` both describe the same candle (the pivot's start), included together for defensive redundancy exactly as 1B-H's own multi-field keys do; `record_id` is the final tie-breaker. Unsorted source chronology raises `UnsortedSwingSequenceError`. Every structural comparison in this milestone (relationship classification, bootstrap, protected/weak "most recent" derivation, BOS/CHoCH source-swing identification) uses this source-chronology order — **never** confirmation/availability order. Availability governs only *when* an output may appear (§34C), never *what* historical swing it refers to.
+
+The analyzer processes exactly one `InternalSymbol`, one `Timeframe`, one canonically ordered candle sequence, and confirmed swings that reference candles in that sequence. Resolved:
+
+- **Mixed-symbol / mixed-timeframe rejection:** evaluated across the union of candles and swings (a swing's `symbol`/`timeframe` must match the candles' single symbol/timeframe too) — reuses `MixedSymbolAnalysisError`/`MixedTimeframeAnalysisError` from `btmm_ai_scanner.domain`, unmodified (§34P).
+- **Missing referenced candle / swing reference to an unavailable-or-future candle:** new `InvalidSwingReferenceError` — raised if any `pivot_candle_record_ids` or `confirmation_candle_id` on a supplied swing is absent from the candle tuple, or references a candle whose `availability_time_utc` is later than that swing's own `meaningful_confirmation_time_utc` (§34P).
+- **Duplicate swing ID / unsorted source chronology / non-alternating swings:** new `UnsortedSwingSequenceError` — one error covering all three: a duplicate swing `record_id`; swings not canonically ordered by `(pivot_bar_index, pivot_start_time_utc, record_id)`; two consecutive swings (by source chronology) sharing the same `swing_type` (§34P).
+- **Duplicate candle ID / tied `event_time_utc` / unsorted candles:** reuses `DuplicateCandleRecordError`/`AmbiguousEventTimeAnalysisError`/`UnsortedCandleSequenceError` from `btmm_ai_scanner.domain`, unmodified — identical validation semantics applied independently to the supplied candle tuple (this analyzer does not call `analyze_market_measurements()` itself, so it re-validates its own candle input).
+- **Empty input:** `len(candles) == 0` (implying `len(confirmed_swings) == 0`) returns the empty `StructureAnalysis` aggregate (§34S) — never an exception.
+- **Insufficient swings:** fewer than the swings bootstrap requires (§34D) is a *normal*, non-error outcome — `current_state.direction == UNDETERMINED`, not an exception.
+- **Measurement-analysis/candle-prefix mismatch:** does not apply — there is no separate `MarketMeasurementAnalysis` parameter to mismatch against, by the input-contract decision above.
+
+No hidden repository reads — the analyzer touches only its two supplied tuples.
+
+### 34C. No-Look-Ahead Policy and Availability-Group Processing Phases — Corrected
+
+Every structure output's `availability_time_utc` equals the **latest** `availability_time_utc` among every candle and confirmed swing required to establish it. Never `event_time_utc`-only release; never `processing_time_utc` substitution; never future-candle access. Source chronology (§34B) determines *what* a comparison refers to; availability determines *when* the resulting output may appear — these are two independent axes, never conflated.
+
+- **`SwingRelationship` availability:** `max(current_swing.availability_time_utc, predecessor_swing.availability_time_utc)` — since the predecessor, by source chronology, is not necessarily the swing that confirmed first (§34B), the simple "classified swing's own availability" shortcut is no longer assumed; the explicit `max()` is required.
+- **A swing whose immediately preceding same-type source-chronology swing is not present in the supplied `confirmed_swings` tuple is not yet comparable** — no relationship is emitted for it in this call (never substituted against a later or unrelated same-type swing instead). Once that predecessor appears in a subsequent, more complete call, the relationship becomes emittable using `max()` of both swings' availability. **The semantic key for `SWING_RELATIONSHIP` includes both the current swing's and the predecessor's `record_id` (§34K)** — so a relationship computed against one predecessor is a permanently distinct identity from a relationship of the same current swing against a different predecessor; a previously emitted relationship's predecessor reference therefore never changes — a later, more complete call simply emits a *different*, additional record with a different identity; it never mutates an earlier one. Source chronology itself is immutable and never revised.
+- **Bootstrap (initial direction) availability:** `max()` of the availability of the two classified relationships (one HIGH, one LOW) whose agreement completes bootstrap (§34D) — reflected only via `current_state.availability_time_utc`; bootstrap itself emits no `StructureTransition` (§34D).
+- **Protected/weak swing availability:** effective availability is always `current_state.availability_time_utc` at the point they were last updated (§34F) — transition-sensitive, not re-derived independently of transitions.
+- **BOS/CHoCH confirmation availability:** `max(break_candle.availability_time_utc, broken_swing.availability_time_utc)`.
+- **Simultaneous breaks / multiple outputs confirmed by one candle:** all share that candle's `availability_time_utc`; total order among them follows §34J exactly; at most one `StructureTransition` is ever emitted per candle (§34J).
+- **Equal availability-time ordering:** broken by the §34J key, never by insertion order.
+- **Invalidation or state-change availability:** this milestone has no invalidation/retest concept (that is POI-specific, deferred elsewhere); "state change" = a new `StructureTransition`, governed by the BOS/CHoCH availability rule above.
+- **Replay-prefix equivalence:** identical `StructureAnalysis` for the identical visible prefix — full procedure at §34O.
+
+**Corrected: exact availability-group processing phases.** Even in a single one-shot batch call, the supplied candle prefix spans many distinct `availability_time_utc` groups. The analyzer processes them internally in chronological order, one group at a time, exactly as follows — this is the algorithm's own internal procedure, not merely a caller-facing replay recommendation:
+
+1. Identify the candles available in the current availability group.
+2. Evaluate those candles' closes only against protected/weak levels that were already active **before this availability group began** — i.e., finalized at the end of the previous group. A level activated during the current group can never be broken by a candle from that same group.
+3. Emit at most one `StructureTransition` per candle within this group; CHoCH has priority over BOS (§34J).
+4. Apply the selected transition, if any, and retire its broken level.
+5. Add swings whose `meaningful_confirmation_time_utc` belongs to this group to the visible swing set.
+6. Emit newly available swing relationships, comparing by source chronology among the now-visible same-type swings (§34B).
+7. Complete bootstrap if not yet determined, or populate a missing post-transition weak/protected target if an eligible swing (by source chronology, after the relevant transition's break candle) is now visible (§34F).
+8. Produce the `CurrentStructureState` snapshot reflecting the state at the end of this group.
+
+**Consequences:** a level activated in step 4/7 of one group cannot be broken by a candle in that same group's step 2 (already evaluated against the prior group's finalized state); a swing's own confirming candle can never retroactively break the level that same confirmation creates; the earliest a newly activated level can be broken is in a strictly later availability group. No detector consumes only part of one availability group.
+
+### 34D. Swing Relationship Classification and Structure Bootstrap — Corrected: Source Chronology, Generalized Bootstrap
+
+**New closed enum `SwingRelationshipLabel`** (exactly the 6 members considered): `HIGHER_HIGH`, `LOWER_HIGH`, `EQUAL_HIGH`, `HIGHER_LOW`, `LOWER_LOW`, `EQUAL_LOW`.
+
+**Comparison basis — corrected to source chronology:** for each available `SWING_HIGH`, compare against the immediately preceding available `SWING_HIGH` **in source chronology** (§34B's `(pivot_bar_index, pivot_start_time_utc, record_id)` order) among the supplied `confirmed_swings`; symmetrically for `SWING_LOW`. "Available" means present in the supplied tuple — if the true source-chronology predecessor is not yet present, the current swing is not yet comparable (§34C) and emits no relationship this call, rather than being compared against a more distant or wrong stand-in.
+
+**Tolerance:** reuses the *value* (not the field) of 1B-H's approved Equal-Level tolerance concept — a new, independent `StructureConfiguration.swing_relationship_equal_tolerance_atr_multiplier: Decimal = Decimal("0.10")` (§34K), applied against the *current* swing's own `pivot_reference_atr` (already populated and guaranteed positive by the completed 1B-H detector — no recomputation, no second ATR implementation, no `measurements.atr` import):
+
+```
+tolerance = configuration.swing_relationship_equal_tolerance_atr_multiplier * current_swing.pivot_reference_atr
+
+current.pivot_price > predecessor.pivot_price + tolerance  → HIGHER_HIGH / HIGHER_LOW
+current.pivot_price < predecessor.pivot_price - tolerance  → LOWER_HIGH / LOWER_LOW
+otherwise                                                   → EQUAL_HIGH / EQUAL_LOW
+```
+
+`minimum_price_tick` does not participate in this comparison and is deliberately absent from `StructureConfiguration` — the comparison is already ATR-normalized (scaled by the swing's own reference volatility), so a separate absolute price-tick floor would add nothing and is not invented (§34K).
+
+Strict Decimal-exact comparison is rejected (would almost never trigger against real price data — identical reasoning to 1B-H's own Equal-Level clustering).
+
+**Equal relationships are emitted explicitly** as their own `SwingRelationship` records (not suppressed) **and** are treated as reference-only, non-progressing evidence for bootstrap and BOS/CHoCH purposes (§34D/§34F/§34H) — both of the originally-considered options apply simultaneously, not just one.
+
+**`SwingRelationship` outputs are immutable historical facts** — once emitted (identified by `(current_swing_record_id, predecessor_swing_record_id)`, §34K), never mutated; their meaning never flips (§34C).
+
+**Alternating requirement:** inherited, not re-enforced here — `ConfirmedSwing` sequences supplied to this analyzer are required to already alternate, in source-chronology order (guarded by `UnsortedSwingSequenceError`, §34B); a caller bypassing `detect_confirmed_swings()` to supply a non-alternating sequence is rejected at the input boundary, not silently tolerated inside classification.
+
+**Simultaneous high/low ambiguity:** already excluded upstream by `detect_confirmed_swings()` (a single candle can never qualify as both a swing high and swing low pivot, §33I) — inherited, not re-solved.
+
+**Superseded swing behavior:** already resolved upstream (`_supersede_same_direction_runs`, §33I) — the swings supplied here are the final, confirmed set; no additional supersession occurs in this milestone.
+
+**First available swing of each type:** no `SwingRelationship` is emitted (there is no available predecessor to compare against).
+
+**No inference from candle color** — classification only ever reads `ConfirmedSwing.pivot_price`.
+
+**Bootstrap — corrected: generalized to the latest classified relationships, not a fixed "2nd vs 1st" rule.** The original draft only defined bootstrap for exactly 4 swings ("the 2nd HIGH vs the 1st HIGH, and the 2nd LOW vs the 1st LOW"), leaving 5+-swing sequences and equal-then-later-resolving sequences undefined. Corrected rule:
+
+- **Direction becomes `BULLISH`** when the *latest classified* `SwingRelationship` of HIGH-type is `HIGHER_HIGH` **and** the *latest classified* `SwingRelationship` of LOW-type is `HIGHER_LOW`, simultaneously.
+- **Direction becomes `BEARISH`** when the *latest classified* HIGH-type relationship is `LOWER_HIGH` **and** the *latest classified* LOW-type relationship is `LOWER_LOW`, simultaneously.
+- **Direction remains `UNDETERMINED`** whenever either relationship is absent (no classifiable predecessor yet, §34D), either latest relationship is equal (`EQUAL_HIGH`/`EQUAL_LOW`, contributing no directional evidence), or the two latest relationships conflict (e.g., a higher low but a lower high — a contracting pattern).
+
+"Latest classified" always means the most recently classified relationship of that type **as of the current call** — this generalizes correctly to any swing count and any interleaving of equal or contradictory intermediate relationships, and a later relationship (once a previously missing predecessor becomes available, or once a new swing arrives) may resolve a previously equal or contradictory state without needing any special-cased "Nth vs (N-1)th" rule.
+
+This is symmetric and sequence-start-agnostic: it bootstraps correctly regardless of whether the visible sequence began with a `SWING_HIGH` or a `SWING_LOW`, since the rule only requires the *latest* relationship of each type to agree, never a fixed starting type or a fixed swing count.
+
+**Exact bootstrap behavior:**
+
+| Condition | Behavior |
+|---|---|
+| 0 swings | `UNDETERMINED`; no relationships; no transitions |
+| 1 swing | `UNDETERMINED`; no relationship emitted (first-of-type) |
+| Only 1 HIGH and 1 LOW available | `UNDETERMINED`; zero relationships possible — each is the first of its type |
+| Only one type has 2+ available swings | `UNDETERMINED`; exactly one side is classifiable, but bootstrap needs *both* sides |
+| Both sides classifiable and agree, non-equal | Resolves to `BULLISH`/`BEARISH` per the rule above |
+| Contradictory evidence (higher low, lower high, or vice versa) | `UNDETERMINED` — correct, not a defect |
+| Either latest relationship is equal | `UNDETERMINED` persists until a later non-equal relationship of that type resolves it |
+| A same-type predecessor is source-chronologically earlier but not yet confirmed/visible | the dependent swing is not yet comparable (§34D); bootstrap simply waits, using whatever *is* currently classifiable |
+| Incomplete alternating sequence | cannot occur as valid input — rejected by `UnsortedSwingSequenceError` (§34B), not a bootstrap case |
+| Simultaneous bootstrap conditions | cannot occur — the two relationships used are each tied to a distinct classified swing; tied confirmation times across distinct swings are already structurally excluded upstream |
+
+**Before bootstrap completes, `structure_direction = UNDETERMINED`.** No BOS or CHoCH is ever emitted before bootstrap completes — both require an *already-established* direction (§34G/§34H). **No separate initialization/transitional state is introduced for bootstrap** — the bootstrap moment is visible only through `current_state.direction` changing away from `UNDETERMINED`, timestamped by the `max()` of the two resolving relationships' availability (§34C); it never produces a `StructureTransition` record (those are reserved exclusively for BOS/CHoCH, which by definition require a pre-existing direction to continue or reverse).
+
+**Exact initial protected/weak assignment, immediately upon bootstrap (author decision required, previously undefined):**
+
+- **At `BULLISH` bootstrap:** `protected_low` = the LOW swing that was the *current* (classified) swing in the qualifying `HIGHER_LOW` relationship; `weak_high` = the HIGH swing that was the *current* swing in the qualifying `HIGHER_HIGH` relationship; `protected_high = None`; `weak_low = None`.
+- **At `BEARISH` bootstrap:** `protected_high` = the HIGH swing that was the *current* swing in the qualifying `LOWER_HIGH` relationship; `weak_low` = the LOW swing that was the *current* swing in the qualifying `LOWER_LOW` relationship; `protected_low = None`; `weak_high = None`.
+- Both assigned levels are, by construction, unbroken at the moment of bootstrap (bootstrap only ever considers the two most-recently-classified relationships, which reference the most recent available swings). Equal relationships never contributed to this assignment (§34D) and never create or replace a protected/weak level. One swing cannot simultaneously be active as protected and weak (protected and weak always reference opposite swing types, §34F).
+
+### 34E. Structure Direction and State — Enums and Contracts
+
+**New closed enum `StructureDirection`:** `UNDETERMINED`, `BULLISH`, `BEARISH` — exactly the 3 considered. **No separate structure-state enum is introduced** — "state" is fully captured by direction plus the active protected/weak swing IDs plus the latest transition ID; no `TRENDING`/`RANGING`/`CONSOLIDATING` or similar unapproved classification is invented.
+
+**Two immutable contracts:**
+
+- `StructureTransition` — one per confirmed BOS/CHoCH event; identity-bearing; accumulated as an **immutable ordered tuple** (`structure_transitions`), never mutated once emitted.
+- `CurrentStructureState` — **one immutable current-state snapshot** per analysis call; also identity-bearing (see §34I for why).
+
+Plus `SwingRelationship` (§34D) as a third, independent, tuple-accumulated output.
+
+### 34F. Protected and Weak Swings — Corrected: Transition-Sensitive, Symmetric Unbroken Filtering
+
+**Corrected: active levels are not defined as merely "the most recent swing."** The audit found a concrete defect in the original draft: `weak_high`/`weak_low` lacked the "unbroken" filter that `protected_high`/`protected_low` had, so after a BOS retired the active weak level, "most recent SWING_HIGH/LOW" (with no unbroken filter) could still resolve to that *same, already-broken* swing if no newer same-type swing had yet confirmed — risking a second, invalid break attempt against an already-consumed level. Corrected rule: **both protected and weak levels require unbroken status, symmetrically**, and both are **transition-sensitive** (updated only at bootstrap, BOS, or CHoCH — never merely because a newer same-type swing confirms in between).
+
+**BULLISH state:**
+
+- **`protected_low`:** established at bullish bootstrap. Updated only at a bullish BOS or a bullish CHoCH (never merely because a newer low confirms). At a bullish BOS: update to the latest available unbroken `SWING_LOW` whose source chronology falls after the previous structure transition's break candle and before this BOS's own break candle; if no eligible swing qualifies, **retain the existing `protected_low`**.
+- **`weak_high`:** established at bullish bootstrap; must always be unbroken. When broken by a bullish BOS, retire it immediately — `weak_high` becomes `None` on that transition (no automatic replacement is invented). The first newly visible unbroken `SWING_HIGH` whose source chronology occurs after the transition's break candle becomes the next `weak_high` (found either within the same batch call, if such a swing already exists in the supplied prefix, or in a later call once one appears). Once active, it is not replaced by another high until it is itself broken and retired.
+
+**BEARISH state — exact mirror:** `protected_high` updates only at bearish bootstrap, bearish BOS, or bearish CHoCH (retaining the existing value if no eligible newer high qualifies); `weak_low` must always be unbroken, is retired immediately upon being broken by a bearish BOS (becoming `None`, no automatic replacement), and the first eligible new low after the transition becomes the next `weak_low`.
+
+**General rules:**
+
+- Broken levels are retained only in immutable transition history (`StructureTransition.broken_swing_id`, §34I) — never return to current state.
+- **No BOS is possible while the corresponding weak level is `None`** — a BOS candidate is not evaluated at all until a `weak_high`/`weak_low` exists (§34H).
+- **No CHoCH is possible while the corresponding protected level is `None`** — in practice this never arises once a direction is established, since bootstrap and every subsequent transition guarantee a protected level is always assigned when its direction is active (§34D's initial assignment; §34H's CHoCH prerequisite check).
+- Equal relationships never create or replace a protected/weak level directly (§34D) — but the swing they classify remains eligible to *become* a protected/weak level through the ordinary transition-sensitive update rule above, exactly like any other swing (its `SwingRelationshipLabel` and its protected/weak eligibility are independent concerns).
+- One swing cannot simultaneously be active as protected and weak — protected and weak always reference opposite swing types, and only one `{protected, weak}` pair is active per direction (`UNDETERMINED` nulls all four).
+- **Snapshot vs. lifecycle-history semantics:** `CurrentStructureState` is a snapshot of the *active* protected/weak IDs only; the full history of how protection moved over time is recoverable from the ordered `structure_transitions` tuple, each of which records `protected_swing_id`/`weak_swing_id` exactly as they stood immediately after that transition (§34I).
+- Does wick penetration change a label? No — protected/weak status changes only via a qualifying close-based break (§34G) or via the transition-sensitive update rule above, never via a bare wick.
+
+### 34G. Break Confirmation Policy — Corrected: Two Separate Price Fields, Activation-Group Timing
+
+**Decision: A — candle close strictly beyond the swing price.** Wick-only penetration is explicitly **not** a break. This is the standard, noise-resistant convention, and it matches how 1B-H's own Support/Resistance reaction logic already gates on `candle.close` (§33N), not the wick.
+
+- **Bullish break inequality** (breaking a high-type level): `candle.close > active_level_price` (strict).
+- **Bearish break inequality** (breaking a low-type level): `candle.close < active_level_price` (strict).
+- **Equality at the level** (`close == level_price`): not a break.
+- **Gap opening beyond a level:** no special case — if `candle.close` already satisfies the strict inequality, the candle qualifies exactly like any other break, gap or not.
+- **Candle high/low beyond the level but close inside:** not a break (confirms the wick exclusion).
+- **Candle closing beyond multiple levels:** only the currently active protected/weak levels are actionable (at most one high-type + one low-type, §34F); historical, already-retired levels are never re-tested and produce no transitions; a transition references exactly one active broken level.
+- **Source break candle:** the first `NormalizedCandle`, scanning forward in canonical order, whose `close` satisfies the strict inequality against a given active level — subject to the availability-group phase rule (§34C): a level cannot be broken by a candle in the same availability group in which that level itself became active.
+- **Corrected — two separate fields, not one ambiguous `break_price`:** `StructureTransition.broken_level_price: Decimal` (the broken swing's own `pivot_price` — the level itself) and `StructureTransition.break_close_price: Decimal` (the break candle's exact `close`, recorded verbatim). These are never conflated into a single field.
+- **First qualifying break only:** yes — once a level is broken, it is permanently consumed; it can never be broken "again" and is never reopened (§34F's transition-sensitive retirement enforces this: a retired level is `None` until explicitly replaced, and the replacement is a *different* swing).
+- **Repeated closes beyond an already-broken (retired) level:** produce no further transition — there is no longer an active level there to break.
+- **Overshoot measurement:** not recorded — no invented `break_magnitude`/`overshoot` field; `broken_level_price`/`break_close_price` alone are sufficient, matching 1B-H's minimal-field philosophy.
+- **Transition timestamps:** `event_time_utc` = break candle's own `event_time_utc`; `availability_time_utc` = break candle's own `availability_time_utc` (maxed defensively against the broken swing's own availability, §34C).
+
+**POI breach rules are not reused** — this is an independently authored rule; no POI-specific lifecycle document is approved for structure use.
+
+### 34H. BOS and CHoCH Rules — Corrected: No-Replacement Retirement, Guarded CHoCH, One Transition Per Candle
+
+**Bullish BOS** (continuation, bullish structure only): prerequisites — `structure_direction == BULLISH`; an active, unbroken `weak_high` exists (§34F — if `weak_high` is `None`, no BOS candidate is evaluated at all); candle closes strictly above `weak_high.pivot_price`. Result: direction remains `BULLISH`; the broken `weak_high` is retired (`weak_high` becomes `None` on this transition — no replacement is invented at the same instant); `protected_low` updates under §34F's exact transition-sensitive rule (retained if no eligible newer low qualifies); a later, source-chronologically-eligible confirmed `SWING_HIGH` establishes the next `weak_high`. **A BOS can be emitted even when no immediate replacement `weak_high` exists** — the structure simply has no active continuation target until one appears.
+
+**Bearish BOS:** exact mirror — prerequisites `BEARISH` direction and an active unbroken `weak_low`; breaks `weak_low` (`close < weak_low.pivot_price`); direction remains `BEARISH`; `weak_low` retires to `None`; `protected_high` updates under §34F; a later eligible low establishes the next `weak_low`.
+
+**Not every swing break is BOS:** only the two currently *active* levels (`weak_high`/`weak_low` for BOS, `protected_high`/`protected_low` for CHoCH) are ever tested for a break — no other swing's price is ever evaluated at all.
+
+**Bullish CHoCH** (reversal, bearish → bullish): prerequisites — `structure_direction == BEARISH` (the *opposite* existing direction — cannot fire from `UNDETERMINED` or `BULLISH`); an active `protected_high` exists; candle closes strictly above `protected_high.pivot_price`. Result: direction becomes `BULLISH` in one atomic step (no separate transitional/pending-confirmation state, an explicit decision to keep the model minimal); the broken `protected_high` is retired; **new `protected_low`** = the latest available unbroken `SWING_LOW`, by source chronology, before the break candle; `weak_high = None`; `protected_high = None`; `weak_low = None`; a later eligible `SWING_HIGH` establishes the first `weak_high` under the new direction.
+
+**Bearish CHoCH:** exact mirror — prerequisite `BULLISH`; breaches active `protected_low` (`close < protected_low.pivot_price`); direction becomes `BEARISH`; new `protected_high` = latest available unbroken `SWING_HIGH` before the break candle; `weak_low = None`; `protected_low = None`; `weak_high = None`; a later eligible low establishes the first `weak_low`.
+
+**Guarded CHoCH — corrected, previously undefined:** if no eligible opposite-side unbroken swing exists to serve as the new protected level (e.g., no unbroken `SWING_LOW` exists at all to become `protected_low` for a bullish CHoCH — a case bootstrap's own prerequisites make extremely unlikely but not provably impossible in every edge case), **the analyzer does not emit an impossible partial CHoCH**: the candidate is treated as analytically unsupported under this closed rule, the prior direction and state are kept unchanged, and no `StructureTransition` is emitted for that candle's would-be CHoCH. No additional public lifecycle state is created for this case — it is simply "no transition this candle."
+
+**First transition after `UNDETERMINED`:** impossible by construction — bootstrap (§34D) never itself emits a `StructureTransition`; the first transition in any analysis necessarily occurs strictly after bootstrap has already set a non-`UNDETERMINED` direction.
+
+**BOS/CHoCH are mutually exclusive for a single break** — structurally guaranteed: a given price level is *either* the active weak level (same-direction continuation) *or* the active protected level (opposite-direction reversal) for the current direction, never both (§34F's exclusivity).
+
+**Corrected — one transition per candle, no same-candle chaining (§34J):** at most one `StructureTransition` is ever emitted per candle. If a candle qualifies for CHoCH, CHoCH is emitted and **BOS is not re-evaluated for that candle at all** — not even under the newly flipped direction, even if the same close would otherwise qualify as a fresh BOS once the new weak level is assigned. The new direction and any newly assigned levels apply starting with the next candle. This replaces the original draft's undefined "CHoCH-then-revalidate-BOS-under-new-state" language, which left open whether a same-candle chained BOS could follow a CHoCH.
+
+**Repeated-break suppression:** per §34G (first-qualifying-break-only, retirement without automatic replacement).
+
+### 34I. Snapshot and Transition-History Contracts — Corrected Fields
+
+```python
+class StructureTransition(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    transition_type: StructureTransitionType   # BULLISH_BOS | BEARISH_BOS | BULLISH_CHOCH | BEARISH_CHOCH
+    direction_before: StructureDirection
+    direction_after: StructureDirection
+    broken_swing_id: UUIDv7
+    broken_level_price: Decimal    # the broken swing's own pivot_price
+    break_close_price: Decimal     # the break candle's exact close (verbatim)
+    protected_swing_id: UUIDv7         # active protected swing immediately after this transition — always defined (§34H's guarded-CHoCH rule prevents emission otherwise)
+    weak_swing_id: UUIDv7 | None       # active weak swing immediately after this transition — None immediately after a BOS/CHoCH retires it with no eligible replacement yet (§34H)
+    break_candle_id: UUIDv7
+    event_time_utc: datetime           # the break candle's own event_time_utc
+    availability_time_utc: datetime
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+```
+
+**Corrected: `broken_level_price`/`break_close_price` replace the original single, ambiguous `break_price` field (§34G).** `weak_swing_id` is now nullable — the original draft's "always well-defined" claim was invalidated by §34F/§34H's corrected no-automatic-replacement retirement rule; `protected_swing_id` remains non-optional (§34H's guarded-CHoCH rule ensures a CHoCH is never emitted unless its new protected level is defined, and BOS never nulls the protected level).
+
+**New closed enum `StructureTransitionType`:** `BULLISH_BOS`, `BEARISH_BOS`, `BULLISH_CHOCH`, `BEARISH_CHOCH` — exactly 4 members, no `PENDING`/transitional state (§34H).
+
+```python
+class CurrentStructureState(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol | None
+    timeframe: Timeframe | None
+    direction: StructureDirection
+    active_protected_high_swing_id: UUIDv7 | None
+    active_protected_low_swing_id: UUIDv7 | None
+    active_weak_high_swing_id: UUIDv7 | None
+    active_weak_low_swing_id: UUIDv7 | None
+    latest_transition_id: UUIDv7 | None
+    availability_time_utc: datetime
+    analyzed_swing_count: int
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+```
+
+**`CurrentStructureState` does have its own identity/fingerprint** (§34K) — for the same reason every other derived output in this codebase does, and so batch/replay equivalence tests can directly assert `record_id` stability across growing prefixes (§34O).
+
+`current_state` is `None` only for fully empty input (§34S); for any non-empty candle input it is always a real, identity-bearing `CurrentStructureState`, even when `direction == UNDETERMINED` and all four active-swing-ID fields are `None` — `symbol`/`timeframe` alone are sufficient context to mint its singleton identity (§34K).
+
+### 34J. Transition Ordering — Corrected: One Transition Per Candle, No Chaining
+
+Exact deterministic total order for every relationship/transition confirmed at the same `availability_time_utc`:
+
+```
+(
+    availability_time_utc,
+    break_candle_event_time_utc,
+    transition_priority,          # 0 = CHoCH (reversal), 1 = BOS (continuation)
+    direction_after.value,
+    source_swing_pivot_bar_index,
+    str(source_swing_record_id),
+    str(transition_record_id),    # absolute final tie-breaker
+)
+```
+
+**Corrected policy — adopted verbatim from the audit's recommended safe policy:** at most one `StructureTransition` is emitted per candle. CHoCH has priority over BOS. If a candle qualifies for CHoCH, CHoCH is emitted and BOS is **not** re-evaluated or emitted for that same candle under the newly flipped direction — every same-candle CHoCH-then-BOS chaining rule from the original draft is removed. The new direction and any newly assigned levels apply to subsequent candles only. At most two *candidate* transitions can ever arise from one candle in the first place (one high-side + one low-side, since only one high-type and one low-type level are ever active simultaneously, §34F) — when both candidates arise from the same candle, CHoCH is selected and the BOS candidate is discarded entirely, never emitted as a second transition. No candle ever emits multiple BOS transitions for multiple crossed historical levels — only the one active broken level is ever referenced (§34G).
+
+`SwingRelationship` classification and break/transition evaluation are independent record types with no shared mutable state between them — relationship classification (a pure comparison, §34D) always completes before break evaluation within the availability-group phase order (§34C, steps 2–6); this is a two-phase processing order, not an ordering conflict.
+
+No output order ever depends on dictionary or set iteration order — implementation uses plain lists sorted by the exact key above.
+
+### 34K. Identity, Fingerprint, Evidence, and Configuration — Corrected: Semantic Keys, Tested Equivalence, Unambiguous Evidence
+
+**The `DerivedOutputIdentityProvider` Protocol and `DerivedOutputType` enum are reused from `btmm_ai_scanner.domain`, structurally unmodified in shape.** `DerivedOutputType` gains exactly 3 new members (the one modified existing path in this milestone, `domain/enums.py`): `SWING_RELATIONSHIP`, `STRUCTURE_TRANSITION`, `CURRENT_STRUCTURE_STATE`. A caller may pass the *same* identity-provider instance to both `analyze_market_measurements()` and `analyze_structure_state()`; each analyzer's own identity resolver checks collisions only within its own call, identical in scope to 1B-H's own already-approved precedent ("the analyzer invokes `identify()` exactly once per emitted output record").
+
+**The canonical fingerprint/identity-resolution *implementation*** (`_canonicalize`, `_compute_content_fingerprint`, `_IdentityResolver`, the generic `_finalize` helper) **is deliberately duplicated locally in `structure/analyzer.py`, not imported from `domain/analyzer.py`.** These are module-private (leading-underscore) helpers in an already-closed, already-audited milestone; importing them across packages would create an undocumented dependency on another milestone's private internals with no compatibility guarantee, and modifying `domain/analyzer.py` to publicize/extract them would reopen closed, audited code for a purely mechanical reason. The duplication is small (~40 lines), behaviorally identical, and explicitly disclosed here as a documented **maintenance risk**: the two implementations must be kept in sync by hand if either is ever changed. **Corrected — this duplication is now a tested guarantee, not an unverified assumption:** a dedicated test, `test_structure_fingerprint_serializer_matches_market_measurement_serializer` (§34R), feeds representative `Decimal`, enum, `UUIDv7`, timezone-aware `datetime`, `SemVer`, tuple, `None`, `bool`, `int`, and `str` values through both `structure/analyzer.py`'s and `domain/analyzer.py`'s private canonicalization functions and asserts byte-identical canonical output and identical resulting fingerprints for equivalent inputs. Neither implementation imports the other merely to make this test pass — both remain fully independent; the test only verifies they agree.
+
+**Exact semantic keys, corrected** (all elements stringified per 1B-H's canonical rule):
+
+```
+SWING_RELATIONSHIP:      (symbol.value, timeframe.value, str(current_swing_record_id), str(predecessor_swing_record_id), rule_version)
+STRUCTURE_TRANSITION:    (symbol.value, timeframe.value, transition_type.value, str(broken_swing_id), rule_version)
+CURRENT_STRUCTURE_STATE: (symbol.value, timeframe.value, rule_version)
+```
+
+**`SWING_RELATIONSHIP`'s key is corrected to include both the current swing's and the predecessor's `record_id`.** The original key (current swing's ID alone) could not distinguish "H3 vs H1" from a later-recomputed "H3 vs H2" once a slow-confirming, source-earlier H2 became visible — the audit found this could force an already-emitted relationship's *meaning* to flip, not merely grow, violating replay stability. With the predecessor folded into the key, "H3 vs H1" and "H3 vs H2" are permanently distinct identities: a previously emitted relationship never changes predecessor (§34C); a more complete later call simply emits an *additional*, differently-identified record, never mutating the earlier one. `STRUCTURE_TRANSITION`'s key needs only `broken_swing_id` — §34G's first-qualifying-break-only rule guarantees a given swing is broken at most once, ever, making it a naturally permanent, unique key component (`transition_type.value` is included for defensive redundancy). **`CURRENT_STRUCTURE_STATE`'s key drops the redundant `"CURRENT"` literal from the original draft** — `output_type` is already mixed into the identity payload ahead of the semantic-key tuple (verified against this project's own identity-provider mechanics), so no other output type could ever collide on the same `(symbol, timeframe, rule_version)` tuple; the literal was unnecessary. This key is a **singleton** per `(symbol, timeframe, rule_version)` — one stable `record_id` forever, its `content_fingerprint` changing as the visible prefix grows, exactly mirroring 1B-H's "record_id stable, content changes" pattern for `EqualLevelCluster`/`SupportResistanceZone`.
+
+Identity is stable across repeated batch calls, stable across replay of the same prefix, independent of call order and dictionary ordering, and collision-checked via the reused `DerivedIdentityCollisionError` (§34N). Fingerprint represents complete public snapshot content excluding only `record_id`/`content_fingerprint`, using the identical canonical serialization rules as 1B-H (tested for equivalence, above). No random identity generation anywhere.
+
+**Evidence and versioning — corrected: unambiguous, single stored value.** `EvidenceClassification` was verified directly against `contracts/provenance_record.py`: `AUTHOR_APPROVED` (`"AUTHOR-APPROVED"`) is a real, distinct, selectable member of the *same* enum as `ENGINEERING_PROVISIONAL` — not merely a document-level status label. The original draft's compound "AUTHOR-APPROVED/ENGINEERING-PROVISIONAL" phrasing did not state which single value is actually stored, which the audit flagged as genuinely ambiguous given `AUTHOR_APPROVED` is a real, selectable alternative. **Two separate, non-overlapping axes are defined:**
+
+- **Document decision-status** (this register's own vocabulary — `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, and, once the author explicitly approves this corrected architecture, `AUTHOR-APPROVED`) describes whether a *decision* has been sanctioned. This status is never itself stored in any `ContractModel`'s `evidence_classification` field.
+- **Output evidence value** — every emitted `SwingRelationship`, `StructureTransition`, and `CurrentStructureState` stores exactly `EvidenceClassification.ENGINEERING_PROVISIONAL` — never `AUTHOR_APPROVED`, `BOOK_SOURCED`, `EMPIRICALLY_CALIBRATED`, `OUT_OF_SAMPLE_VALIDATED`, `PRODUCTION_APPROVED`, or any other member, and never a compound/dual value. Reason: these HH/HL/LH/LL/BOS/CHoCH/protected/weak rules are newly authored deterministic engineering rules — not book-sourced (no book or knowledge-base source defines them, confirmed by the `P0G-B003` deferral text in three independent sources), not empirically calibrated, not out-of-sample validated, and not production-approved. This holds regardless of whether the author has separately approved the *decision* to adopt each rule — decision-approval and evidence-quality are orthogonal. Rule manifests may separately describe mixed provenance narratively; every `ContractModel` output field nonetheless holds exactly one enum member.
+
+**One immutable `StructureConfiguration(ContractModel)`:**
+
+```python
+class StructureConfiguration(ContractModel):
+    swing_relationship_equal_tolerance_atr_multiplier: Decimal = Decimal("0.10")
+    rule_version: SemVer = SemVer.parse("1.0.0")
+    contract_version: SemVer = SemVer.parse("0.1.0")
+    schema_version: SemVer = SemVer.parse("0.1.0")
+    evidence_classification: EvidenceClassification = EvidenceClassification.ENGINEERING_PROVISIONAL
+```
+
+Every field has a default — `StructureConfiguration()` constructs with zero required arguments (unlike `MarketMeasurementConfiguration`, which requires `minimum_price_tick`). **`minimum_price_tick` is deliberately absent, explicitly justified:** this milestone invents no price-scale-dependent threshold beyond the one reused, ATR-normalized tolerance value (§34D); the break-confirmation rule (§34G) is a pure strict-inequality comparison against exact swing prices, requiring no tunable tolerance and no tick-scale floor at all. `swing_relationship_equal_tolerance_atr_multiplier` is the *only* numeric threshold in the entire milestone, copied verbatim from 1B-H's approved `equal_level_tolerance_atr_multiplier` (same conceptual test — "are these two price points effectively equal") — no new threshold is invented, no ATR period is duplicated, no Wilder recurrence is redefined, and `MarketMeasurementConfiguration` is not referenced or composed with. Configuration validation remains deterministic and `Decimal`-only wherever numeric (a field validator requires the tolerance multiplier `> 0`, raising standard Pydantic `ValidationError`).
+
+### 34L. Public API and Error Vocabulary
+
+```python
+def analyze_structure_state(
+    candles: tuple[NormalizedCandle, ...],
+    confirmed_swings: tuple[ConfirmedSwing, ...],
+    configuration: StructureConfiguration,
+    identity_provider: DerivedOutputIdentityProvider,
+) -> StructureAnalysis: ...
+```
+
+One synchronous entry point — no separate public analyzer for BOS or CHoCH.
+
+- **Empty input** (`len(candles) == 0`): returns the empty `StructureAnalysis` (§34M) — never an exception.
+- **Insufficient structure** (too few swings for bootstrap, or resolving to `UNDETERMINED` due to equal/contradictory/not-yet-comparable evidence): a normal, non-error outcome — full `StructureAnalysis` with `current_state.direction == UNDETERMINED`, whatever `swing_relationships` are classifiable, and `structure_transitions == ()`.
+- **Mixed input:** raises the appropriate error from §34N.
+- **Ordering requirements:** candles canonically pre-sorted `(event_time_utc, record_id)` (`UnsortedCandleSequenceError`, reused); swings canonically ordered by **source chronology** `(pivot_bar_index, pivot_start_time_utc, record_id)` and alternating (`UnsortedSwingSequenceError`, new, corrected from the original confirmation-time-based ordering — §34B).
+- **Identity-provider failure behavior:** any exception the caller's `identity_provider.identify()` raises propagates unmodified — no catching or wrapping, identical to 1B-H's behavior.
+- **Configuration validation:** `StructureConfiguration` is a frozen Pydantic model with its own field validator (`swing_relationship_equal_tolerance_atr_multiplier` must be `> 0`), raising standard Pydantic `ValidationError` — `InvalidStructureConfigurationError` (§34N) is reserved specifically for the defensive instrument-metadata guard, not for configuration-field validation (identical split to 1B-H's `ValidationError` vs. `InvalidMarketMeasurementConfigurationError`).
+- **Deterministic output ordering:** `swing_relationships` ordered by the classified swing's source chronology; `structure_transitions` ordered by the full §34J key.
+
+### 34M. Aggregate Result
+
+```python
+class StructureAnalysis(ContractModel):
+    symbol: InternalSymbol | None
+    timeframe: Timeframe | None
+    analyzed_candle_count: int
+    analyzed_swing_count: int
+    swing_relationships: tuple[SwingRelationship, ...]
+    structure_transitions: tuple[StructureTransition, ...]
+    current_state: CurrentStructureState | None
+```
+
+Exactly 7 fields, in this exact order. No POI, BTMM, entry, Support/Resistance-lifecycle, or Trendline-lifecycle field anywhere. For empty input: `symbol=None, timeframe=None, analyzed_candle_count=0, analyzed_swing_count=0, swing_relationships=(), structure_transitions=(), current_state=None` — never an exception.
+
+### 34N. Error Vocabulary
+
+**Reused unmodified from `btmm_ai_scanner.domain`** (identical semantics, same validation applied to this analyzer's own candle/identity input): `MixedSymbolAnalysisError`, `MixedTimeframeAnalysisError`, `UnsortedCandleSequenceError`, `DuplicateCandleRecordError`, `AmbiguousEventTimeAnalysisError`, `DerivedIdentityCollisionError` (6).
+
+**New, defined in `structure/analyzer.py`** (3):
+
+- `InvalidSwingReferenceError(ValueError)` — a supplied swing references a candle `record_id` absent from the candle tuple, or references a candle whose `availability_time_utc` is later than that swing's own `meaningful_confirmation_time_utc`.
+- `UnsortedSwingSequenceError(ValueError)` — supplied swings are not canonically ordered by source chronology `(pivot_bar_index, pivot_start_time_utc, record_id)`, contain a duplicate `record_id`, or contain two consecutive entries (by source chronology) sharing the same `swing_type`.
+- `InvalidStructureConfigurationError(ValueError)` — defensive guard: a candle or swing carries a null `symbol`/`timeframe` (reachable only via `.model_construct()`, bypassing Pydantic's required-field validation). **Genuinely reachable and tested from the first implementation pass** — unlike 1B-H's original `InvalidMarketMeasurementConfigurationError`, which the final audit found declared but never raised, this milestone wires its analogous guard in from day one.
+
+Total: **9 errors** (6 reused + 3 new). No public error is declared without a genuinely reachable, tested trigger.
+
+### 34O. Replay Equivalence Procedure — Corrected
+
+For each replay availability group:
+
+1. Append the complete candle group to the visible candle prefix.
+2. Recompute `MarketMeasurementAnalysis` for that visible prefix (existing `analyze_market_measurements()` call) to obtain the matching `confirmed_swings`.
+3. Call `analyze_structure_state(candles=visible_prefix, confirmed_swings=measurements.confirmed_swings, configuration, identity_provider)`.
+4. Compare against a direct one-shot batch call of `analyze_structure_state()` over the identical candle prefix and the identical confirmed-swings tuple (obtained via a direct `analyze_market_measurements()` call over that same prefix) — every identity/fingerprint/content field must match exactly.
+5. No future swing or candle influences the result, by construction — only the visible prefix is ever supplied.
+6. **Unchanged transitions retain their `record_id` and their content** — a `StructureTransition`'s fields are all permanently fixed the instant it is confirmed (§34G/§34H); recomputing against a larger prefix that still contains it reproduces it identically.
+7. `current_state`'s `record_id` never changes (singleton per §34K); its `content_fingerprint` changes only when its public content changes (a new confirmed swing that neither breaks an active level, nor completes bootstrap, nor supplies a missing post-transition replacement level, must not change the fingerprint).
+8. **A `SwingRelationship` computed against one predecessor is never superseded in place** — if a more complete prefix reveals a source-chronologically-earlier predecessor, the analyzer emits an *additional*, differently-identified relationship (§34K); the originally emitted relationship (identified by its own current-swing/predecessor pair) is reproduced identically, unchanged, at every larger prefix that still contains that same pair.
+9. Same-candle transition selection (§34J's CHoCH-priority, at-most-one-per-candle rule) is stable across repeated calls — the same candle always selects the same transition (if any), never a different one and never both.
+10. A level activated within one availability group is never broken by a candle from that same group, in either batch or replay mode (§34C) — confirmed identically regardless of whether the group was ingested incrementally (replay) or was already present in a one-shot batch call.
+
+No detector consumes only part of one availability group.
+
+### 34P. Dependency-Direction and Package Placement
+
+**New top-level package `src/btmm_ai_scanner/structure/`** — not `domain/`. `REPOSITORY_SCAFFOLD_PLAN.md` §3's own `domain/` documentation explicitly states "Must not contain: HH/HL/LH/LL/BOS/CHoCH (formally deferred, `P0G-B003`)"; placing this milestone's content there would contradict that standing restriction. A new package is the only non-contradictory location, exactly mirroring how `measurements/`/`domain/` themselves were brand-new packages for `1B-H-MEASUREMENTS`. Allowed dependency direction: `domain`, `measurements`, `contracts`, `config` — read-only, no new dependency on `market_data`'s pipeline/repository/replay modules (a caller may compose this analyzer's input with `market_data.InMemoryHistoricalReplaySource`'s output at its own discretion, exactly as 1B-H already does, §34O). `market_data/ports.py`'s 4 existing Protocols are untouched.
+
+### 34Q. Exact File Scope — 16 Changed Paths (7 New Source, 8 New Test, 1 Modified) — Corrected Creation Order
+
+**Corrected: creation order is 98–112, not 99–113.** Creation order is 0-indexed throughout this project's inventory (row 0 = `.gitignore`); the true highest existing creation-order value after `1B-H-MEASUREMENTS` is **97** (`tests/unit/test_domain_exports.py`, verified directly against the master Section 9 table), giving a pre-existing row *count* of 98 (97 + 1) — the original draft correctly used "98" as the count but incorrectly continued the new range from "98" as if it were the last *used* value, rather than from 97. The corrected range below continues from 97.
+
+**7 new source files** (all under the new `structure/` package):
+
+| Creation order | Path |
+|---|---|
+| 98 | `src/btmm_ai_scanner/structure/__init__.py` |
+| 99 | `src/btmm_ai_scanner/structure/enums.py` |
+| 100 | `src/btmm_ai_scanner/structure/configuration.py` |
+| 101 | `src/btmm_ai_scanner/structure/relationships.py` |
+| 102 | `src/btmm_ai_scanner/structure/transitions.py` |
+| 103 | `src/btmm_ai_scanner/structure/current_state.py` |
+| 104 | `src/btmm_ai_scanner/structure/analyzer.py` |
+
+**8 new test files:**
+
+| Creation order | Path |
+|---|---|
+| 105 | `tests/unit/test_structure_configuration.py` |
+| 106 | `tests/unit/test_swing_relationships.py` |
+| 107 | `tests/unit/test_structure_bootstrap.py` |
+| 108 | `tests/unit/test_protected_weak_swings.py` |
+| 109 | `tests/unit/test_break_and_transitions.py` |
+| 110 | `tests/unit/test_structure_analyzer_api.py` |
+| 111 | `tests/unit/test_structure_batch_replay_equivalence.py` |
+| 112 | `tests/unit/test_structure_exports.py` |
+
+**1 modified existing path (no new row, no renumbering — annotated in place exactly like `1B-G-REPLAY`'s `market_data/__init__.py` row 66):** `src/btmm_ai_scanner/domain/enums.py` (row 82) — `DerivedOutputType` gains exactly 3 new members, appended after the existing 5; no existing member renamed, removed, or reordered.
+
+**Total: 16 changed paths** (7 new source + 8 new test + 1 modified existing). Source/test split 7/8. New/modified split 15/1. Creation order 98–112 (15 values, 112 − 98 + 1 = 15, correct), bringing the master inventory from 98 rows (creation order 0–97) to 113 rows (creation order 0–112). No path may be introduced silently during implementation — this is the complete, exhaustive list.
+
+`relationships.py` owns `SwingRelationship` + swing-relationship-candidate + `detect_swing_relationships()`. `transitions.py` owns `StructureTransition`, `StructureTransitionType` usage, break-scanning, BOS/CHoCH classification, and protected/weak derivation (§34F/§34G/§34H) — the largest file. `current_state.py` owns `CurrentStructureState`. `analyzer.py` owns the error vocabulary, the locally-duplicated identity/fingerprint helpers (§34K), the `StructureAnalysis` aggregate, and `analyze_structure_state()`. `enums.py` owns `StructureDirection`, `SwingRelationshipLabel`, `StructureTransitionType` (this package's own vocabulary — separate from `domain/enums.py`, which only gains the 3 new `DerivedOutputType` members).
+
+### 34R. Exact Test Coverage — 60 New Top-Level Test Functions — Corrected
+
+| File | Count | Test names |
+|---|---|---|
+| `test_structure_configuration.py` | 5 | `test_structure_configuration_default_values_match_approved_standards`, `test_structure_configuration_is_frozen_and_immutable`, `test_structure_configuration_rejects_non_positive_tolerance_multiplier`, `test_structure_configuration_evidence_classification_is_engineering_provisional`, `test_structure_configuration_constructs_with_no_required_arguments` |
+| `test_swing_relationships.py` | 8 | `test_swing_relationship_confirms_higher_high`, `test_swing_relationship_confirms_lower_high`, `test_swing_relationship_confirms_higher_low`, `test_swing_relationship_confirms_lower_low`, `test_swing_relationship_confirms_equal_high_within_tolerance`, `test_swing_relationship_confirms_equal_low_within_tolerance`, `test_swing_relationships_use_source_chronology_not_confirmation_order`, `test_swing_relationship_waits_for_unavailable_source_predecessor` |
+| `test_structure_bootstrap.py` | 8 | `test_structure_bootstrap_remains_undetermined_with_zero_swings`, `test_structure_bootstrap_remains_undetermined_with_one_swing`, `test_structure_bootstrap_remains_undetermined_with_two_swings`, `test_structure_bootstrap_remains_undetermined_with_three_swings`, `test_structure_bootstrap_establishes_bullish_direction`, `test_structure_bootstrap_establishes_bearish_direction`, `test_structure_bootstrap_remains_undetermined_on_contradictory_evidence`, `test_bootstrap_uses_latest_non_equal_relationships` |
+| `test_protected_weak_swings.py` | 6 | `test_protected_low_and_weak_high_active_in_bullish_structure`, `test_protected_high_and_weak_low_active_in_bearish_structure`, `test_protected_and_weak_fields_all_none_when_undetermined`, `test_protected_swing_is_mutually_exclusive_with_weak_swing_type`, `test_weak_levels_require_unbroken_swings`, `test_equal_relationship_label_does_not_block_protected_or_weak_assignment` |
+| `test_break_and_transitions.py` | 12 | `test_bullish_break_requires_close_strictly_beyond_level`, `test_wick_beyond_level_without_close_does_not_break`, `test_close_exactly_at_level_does_not_break`, `test_bullish_bos_breaks_active_weak_high_and_continues_direction`, `test_bearish_bos_breaks_active_weak_low_and_continues_direction`, `test_bullish_choch_breaks_active_protected_high_and_reverses_direction`, `test_bearish_choch_breaks_active_protected_low_and_reverses_direction`, `test_bos_and_choch_are_mutually_exclusive_for_the_same_break`, `test_repeated_close_beyond_already_broken_level_emits_no_second_transition`, `test_broken_weak_level_cannot_emit_repeated_bos`, `test_level_cannot_break_in_activation_availability_group`, `test_choch_priority_prevents_same_candle_bos` |
+| `test_structure_analyzer_api.py` | 10 | `test_analyze_structure_state_returns_empty_aggregate_for_empty_input`, `test_analyze_structure_state_rejects_mixed_symbol_input`, `test_analyze_structure_state_rejects_mixed_timeframe_input`, `test_analyze_structure_state_rejects_unsorted_candles`, `test_analyze_structure_state_rejects_unsorted_swings`, `test_analyze_structure_state_rejects_duplicate_swing_record_id`, `test_structure_outputs_use_engineering_provisional_evidence`, `test_analyze_structure_state_rejects_swing_referencing_missing_candle`, `test_analyze_structure_state_rejects_missing_instrument_metadata`, `test_analyze_structure_state_is_deterministic_across_repeated_calls` |
+| `test_structure_batch_replay_equivalence.py` | 6 | `test_batch_and_replay_produce_identical_structure_transitions_for_the_same_prefix`, `test_batch_and_replay_produce_identical_current_state_for_the_same_prefix`, `test_unchanged_structure_transitions_retain_the_same_record_id_across_growing_prefixes`, `test_current_state_record_id_is_stable_across_growing_prefixes`, `test_current_state_fingerprint_changes_only_when_public_content_changes`, `test_structure_fingerprint_serializer_matches_market_measurement_serializer` |
+| `test_structure_exports.py` | 5 | `test_structure_exports_import_successfully`, `test_structure_exports_exact_structure_owned_surface`, `test_structure_contracts_expose_no_poi_or_btmm_fields`, `test_structure_transitions_never_include_a_transitional_pending_state`, `test_structure_package_never_imports_poi_or_btmm_modules` |
+
+**Total: 60 new top-level test functions** (5+8+8+6+12+10+6+5, unchanged distribution). Combined with the existing 320: **380**. No test class; no generated test; no helper function beginning with `test_`; no `skip`/`xfail`; no vacuous assertion — each test exercises the named behavior directly, matching every prior milestone's discipline in this project. Every rule corrected by this audit-response pass now has a named test: source-chronology comparison basis, waiting for an unavailable predecessor, latest-relationship bootstrap generalization, unbroken-status filtering on weak levels, no-repeat-break on a retired weak level, no break within a level's own activation availability group, CHoCH-priority same-candle exclusivity, cross-package fingerprint-serializer equivalence, single-value `ENGINEERING_PROVISIONAL` evidence, and the corrected structure-owned-only export surface.
+
+### 34S. Public Exports — Corrected: `structure/__init__.py`, Exactly 12 Structure-Owned Names
+
+```
+1.  StructureDirection
+2.  SwingRelationshipLabel
+3.  StructureTransitionType
+4.  SwingRelationship
+5.  StructureTransition
+6.  CurrentStructureState
+7.  StructureAnalysis
+8.  StructureConfiguration
+9.  InvalidSwingReferenceError
+10. UnsortedSwingSequenceError
+11. InvalidStructureConfigurationError
+12. analyze_structure_state
+```
+
+**Corrected from 19 to 12 — no `btmm_ai_scanner.domain` re-exports.** The original draft re-exported the 6 reused error classes plus `DerivedOutputIdentityProvider` from `structure/__init__.py` for "one-stop-import" ergonomics; the audit found this justification weak, since a caller integrating both milestones already imports `btmm_ai_scanner.domain` for `ConfirmedSwing`/`MarketMeasurementConfiguration` regardless. **Callers import the 6 reused errors and `DerivedOutputIdentityProvider` directly from `btmm_ai_scanner.domain`**, where they are already public. Not exported: internal candidate objects, the locally-duplicated canonical-fingerprint/identity-resolver helpers, break-scanning helpers, test fixtures — identical discipline to `domain/__init__.py`.
+
+### 34T. Performance and Determinism
+
+Deterministic; canonical ordered inputs (source chronology for comparisons, availability for exposure timing, §34B/§34C); stable total transition ordering (§34J); no hidden cache; no global state; no parallelism; no thread requirement; no wall clock; relationship classification is a single pass per swing type over the available same-type swings; break/transition detection is a single forward scan over availability groups maintaining the current active levels — O(candles + swings) per batch call, not quadratic. Repeated-prefix replay analysis across a complete session may be provisionally O(n²) in total (recomputing both `MarketMeasurementAnalysis` and `StructureAnalysis` from scratch at every availability group), documented as acceptable and non-production, identical to 1B-H's own accepted precedent (§33X).
+
+### 34U. Explicit Exclusions
+
+POI creation; order blocks; FVGs; candlestick POIs; Equal-Level sweep lifecycle; Support/Resistance lifecycle; Trendline lifecycle; BTMM manipulation; entry signals; stop loss; take profit; risk sizing; TradingView rendering; Telegram alerts; news; backtesting statistics; strategy scoring; paper trading; broker connectivity; MT5/MT4; AI inference; production approval.
+
+### 34V. Baseline, Quality Gates, and Stop Conditions
+
+**Execution baseline / current HEAD and `origin/main`:** `0dc694ad33ee8e1707ea9e2614506da43b37aebb`. Python `3.12.13`; `uv` `0.11.30`; Pydantic `2.13.4`. Full pytest-collected tests: `398`. Original baseline suite: `34 passed`. Existing top-level test functions: `320`. Existing `measurements`/`domain` exports: `33`. Inventory: `98` rows. No dependency change expected.
+
+Future implementation must pass, unmodified in procedure from every prior milestone: `uv lock --check`; `uv run ruff format --check .`; `uv run ruff check .`; `uv run mypy src tests`; `uv run pytest -q` (expect `458` = `398` + `60`, or an exact, explained parametrize-driven discrepancy exactly as documented for every prior milestone); `uv run pytest -q tests/test_import_smoke.py tests/test_config_precedence.py` (expect `34 passed`).
+
+Mandatory stop conditions (unchanged from every prior milestone's discipline): stop and report if any quality gate fails and cannot be fixed by a genuine, disclosed correction; stop if the approved 16-path scope would need to grow; stop if a 17th path, an 8th source file, a 9th test file, or a 61st test function is discovered necessary mid-implementation — report and request a scope amendment rather than silently expanding.
+
+### 34W. Author Decisions Required — Corrected
+
+Every numbered item below requires an explicit author decision before implementation may begin — none is implemented, committed, or authorized by this section alone:
+
+1. The identifier `1B-I-STRUCTURE` and title "Structure State and Transition Foundation."
+2. The input contract: `candles` + `confirmed_swings` directly, not the full `MarketMeasurementAnalysis` (§34B).
+3. **Corrected:** the swing input is canonically ordered by **source chronology** `(pivot_bar_index, pivot_start_time_utc, record_id)`, decoupled from availability/confirmation ordering, which governs only output exposure timing (§34B/§34C).
+4. The 6-member `SwingRelationshipLabel` enum, the source-chronology same-type-predecessor comparison basis, and the reused-value `0.10` ATR-multiplier tolerance (§34D).
+5. **Corrected:** the generalized bootstrap rule — the *latest classified* HIGH and LOW relationships must agree, non-equal — replacing the original fixed "2nd vs 1st" rule, plus the exact initial protected/weak assignment upon bootstrap (§34D).
+6. No separate initialization/transitional state for bootstrap, and no separate transitional state for CHoCH; the guarded-CHoCH no-op when no eligible opposite protected candidate exists (§34D/§34H).
+7. The 3-member `StructureDirection` enum and no separate structure-state enum (§34E).
+8. **Corrected:** the transition-sensitive, symmetric unbroken-filtered protected/weak derivation rule — updated only at bootstrap/BOS/CHoCH, never merely because a newer swing confirms, and never pointing at an already-retired swing (§34F).
+9. Close-based break confirmation only; wick-only penetration is never a break; the two separate `broken_level_price`/`break_close_price` fields (§34G).
+10. **Corrected:** the exact bullish/bearish BOS and CHoCH prerequisite/effect rules, including no-automatic-replacement retirement of the broken weak level (§34H).
+11. **Corrected:** the exact `StructureTransition`/`CurrentStructureState` contracts and field lists, including `weak_swing_id`'s nullability and `CurrentStructureState` carrying its own identity/fingerprint (§34I).
+12. **Corrected:** the exact transition-ordering key and the one-transition-per-candle, CHoCH-priority, no-chaining policy (§34J).
+13. Reuse of `DerivedOutputIdentityProvider`/`DerivedOutputType` (3 new members added to `domain/enums.py`), the deliberate local duplication of the canonical-fingerprint/identity-resolver implementation with its documented maintenance risk, and the required cross-package equivalence test (§34K).
+14. **Corrected:** the exact semantic keys per output type, including `SWING_RELATIONSHIP`'s corrected (current, predecessor) key and `CURRENT_STRUCTURE_STATE`'s simplified key (§34K).
+15. **Corrected:** the unambiguous evidence-classification policy — every output stores exactly `ENGINEERING_PROVISIONAL`, distinct from the register's own document-level approval-status vocabulary — and the one reused (not newly invented) `0.10` tolerance value as the only numeric threshold, with `minimum_price_tick`'s absence explicitly justified (§34K).
+16. The exact `analyze_structure_state()` signature and behavior table (§34L).
+17. The exact 7-field `StructureAnalysis` aggregate and field order (§34M).
+18. The exact 9-error vocabulary — 6 reused unmodified, 3 new, each with a genuinely reachable trigger (§34N).
+19. **Corrected:** the replay-equivalence procedure, including relationship non-supersession and activation-group break timing (§34O).
+20. The new `structure/` top-level package (not `domain/`) and its dependency direction (§34P).
+21. **Corrected:** the exact 16-path file scope with creation order **98–112** (not 99–113) — 7 new source, 8 new test, 1 modified existing (§34Q).
+22. **Corrected:** the exact 60 new top-level test names, counts, and per-file distribution, including the 10 tests added for this correction pass (§34R).
+23. **Corrected:** the exact 12-name `structure/__init__.py` export list and order, with no `domain` re-exports (§34S).
+24. The performance/determinism policy, including the accepted provisional O(n²) full-session replay cost (§34T).
+25. The explicit exclusion list (§34U).
+
+### 34X. Status and Next Action
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** All 61 items above are approved without modification — see §34Y.
+
+### 34Y. Author Approval Record
+
+**Author decision: `APPROVED`.** The author explicitly approved the corrected `1B-I-STRUCTURE` Structure State and Transition Foundation architecture exactly as documented (§34A–§34X), with no modification to any corrected element. **Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+**Exact approved scope:** 16 total affected paths (15 new, 1 modified); 7 new source files; 8 new test files; 1 modified existing source file (`src/btmm_ai_scanner/domain/enums.py`, +3 `DerivedOutputType` members); 60 new top-level test functions (380 combined with the existing 320); 12 structure-owned public exports, no `domain` re-exports; inventory 98 → 113 under batch tag `1B-I-STRUCTURE`, creation order 98–112; no dependency change; no existing `market_data` Protocol modification.
+
+The author approved, without modification, all 61 items listed in the approval message: the identifier and title (1–2); the input boundary and source-chronology/availability separation (3–7); the swing relationship model and its ATR-normalized tolerance, with no new ATR calculation or minimum-price-tick rule (8–11); the generalized latest-relationship bootstrap rule and its exact bullish/bearish initial protected/weak assignments (12–18); the transition-sensitive, symmetrically unbroken-filtered protected/weak lifecycle, including exclusivity and the equal-relationship non-interference rule (19–25); the phased availability-group processing order and its no-retroactive-break consequence (26–29); the strict close-based break policy with separate `broken_level_price`/`break_close_price` fields (30–37); the exact bullish/bearish BOS and CHoCH prerequisite/effect rules, including no-automatic-replacement retirement and the guarded no-impossible-partial-CHoCH rule (38–42); the one-transition-per-candle, CHoCH-priority, no-chaining policy (43–46); the immutable-fact/stable-snapshot semantics for all three output types and the corrected current-state semantic key (47–49); reuse of `DerivedOutputIdentityProvider`/`DerivedOutputType`, the disclosed local duplication of the canonical serializer with its required byte-equivalence test (50–53); the unambiguous `ENGINEERING_PROVISIONAL`-only evidence policy, distinct from document-level approval-status vocabulary (54–55); the exact public API signature (56); the exact 12-name export surface with no `domain` re-exports (57–58); the exact eight test files, 60-name test plan, and 5+8+8+6+12+10+6+5 distribution, including the 12 named required-coverage areas (59–60); and the complete exclusion list (61).
+
+**This approval authorizes exactly one complete implementation cycle** covering all 16 approved paths at once (no per-file decision groups), followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use. Implementation has not started — this remains a documentation-only approval.**
+
+**Next action:** commit and push this documentation-only author approval, then implement all 16 approved paths in one complete controlled cycle, followed by one final architectural audit, at most one correction cycle for a genuine defect, one implementation commit, and one compact closure commit.
