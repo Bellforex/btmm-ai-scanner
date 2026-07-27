@@ -1,0 +1,40 @@
+from enum import StrEnum
+
+
+class SwingType(StrEnum):
+    SWING_HIGH = "SWING_HIGH"
+    SWING_LOW = "SWING_LOW"
+
+
+class DisplacementDirection(StrEnum):
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+
+
+class DisplacementClassification(StrEnum):
+    NORMAL = "NORMAL"
+    FAST = "FAST"
+    VERY_FAST = "VERY_FAST"
+
+
+class EqualLevelType(StrEnum):
+    EQUAL_HIGH = "EQUAL_HIGH"
+    EQUAL_LOW = "EQUAL_LOW"
+
+
+class SupportResistanceType(StrEnum):
+    SUPPORT = "SUPPORT"
+    RESISTANCE = "RESISTANCE"
+
+
+class TrendlineOrientation(StrEnum):
+    BULLISH_TRENDLINE = "BULLISH_TRENDLINE"
+    BEARISH_TRENDLINE = "BEARISH_TRENDLINE"
+
+
+class DerivedOutputType(StrEnum):
+    CONFIRMED_SWING = "CONFIRMED_SWING"
+    DISPLACEMENT_OBSERVATION = "DISPLACEMENT_OBSERVATION"
+    EQUAL_LEVEL_CLUSTER = "EQUAL_LEVEL_CLUSTER"
+    SUPPORT_RESISTANCE_ZONE = "SUPPORT_RESISTANCE_ZONE"
+    TRENDLINE = "TRENDLINE"
