@@ -2691,7 +2691,7 @@ The author approved, without modification:
 
 ## 32. Historical Repository and Replay Foundation — Architecture and Exact Implementation Controls
 
-**Status: `AUTHOR-APPROVED`, `AUTHORIZED FOR ONE COMPLETE CONTROLLED IMPLEMENTATION CYCLE`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+**Status: `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.** (See §32P for the implementation, audit, and closure record.)
 
 This decision group defines one compact, accelerated milestone: a deterministic, in-memory, non-production persistence and replay foundation that consumes the completed market-data (Phase 1B-C-MD) and ingestion (Phase 1B-E) contracts. It fulfills the exact deferred promise already recorded in `REPOSITORY_SCAFFOLD_PLAN.md` (line 539): *"Storage/replay boundary is interfaces-only in the first batch (`RawCandleSink`, `NormalizedCandleSink`, `CandleReadRepository`, `HistoricalReplaySource`), with in-memory test doubles — no database, queue, or cloud storage."* This milestone builds exactly those in-memory test doubles — nothing more. It does not create the master scaffold's separate `replay/` top-level package (`REPOSITORY_SCAFFOLD_PLAN.md` §3: *"Historical replay engine — re-runs the pipeline against pinned raw data and pinned rule/schema versions"* — explicitly "Directory only" through Phase 1B, still absent from near-term scope). That fuller, versioned replay engine remains a separate, later, explicitly deferred decision.
 
@@ -2995,3 +2995,19 @@ The author approved, without modification, every corrected architectural decisio
 - The exact replay ordering key (§32H), the exact export list and order (§32J), and the exact 31 test names and counts (§32K).
 
 **This approval authorizes exactly one complete implementation cycle** covering all 8 approved paths at once (no per-file decision groups), followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use. Implementation has not started — this remains a documentation-only approval.**
+
+### 32P. Implementation, Final Audit, and Closure Record
+
+**Status: `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.**
+
+**Approval commit:** `0d133fa070f66ceff60016d18cbc531bfff3f0af`. **Implementation commit:** `5a1d8f30ee0eb67d27417fda9fb7407d9a5e8a85`. **Commit message:** "Implement 1B-G-REPLAY foundation". **Push:** succeeded to `origin/main`.
+
+**Implemented scope:** exactly 8 committed paths — 3 new source files (`raw_candle_repository.py`, `normalized_candle_repository.py`, `historical_replay.py`), 1 modified existing file (`market_data/__init__.py`, append-only, 20 → 25 exports, existing 20 unchanged and in order), 4 new test files. Source/test split 4/4. No ninth path. No dependency or lockfile change. No `market_data/ports.py` change — all 4 existing Protocols remain byte-for-byte unchanged.
+
+**Final architectural audit verdict: `B. PASS WITH NON-BLOCKING FINDINGS — READY TO COMMIT`.** One non-blocking finding: `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md`'s Section 9 summary sentence still described Batch `1B-G-REPLAY` as `ARCHITECT-RECOMMENDED, AUTHOR-DECISION REQUIRED`, a wording staleness left over from before the Phase A author approval — corrected as part of this closure pass (Section 9's per-row statuses were already correctly `AUTHOR-APPROVED` throughout; only the batch-level summary sentence lagged). No blocking finding. Every architectural control audited exactly as designed: the three-axis repository-membership distinction (§32C); the exact 5-case duplicate/revision policy and closed 2-exception vocabulary (§32D/§32E/§32I); timezone-aware range-query normalization including `start == end`, `start > end`, naive rejection, and aware non-UTC acceptance (§32D/§32E); atomic `advance_next_availability_group()` replay advancement with no partial-group exposure (§32F); the exact replay ordering key and its subordination of `event_time_utc`/`processing_time_utc` to `availability_time_utc` (§32G/§32H); stateless `replay()` Protocol compatibility (§32F); immutable snapshot semantics; exact Protocol conformance for all 3 classes (§32A); the exact 25-name export list and order (§32J); and the exact 31 new top-level test functions across 4 files, each meaningfully exercising its named behavior with no vacuous or tautological assertion (§32K).
+
+**Verification results:** full suite `328 passed` (297 existing + 31 new); original baseline suite `34 passed`; combined `tests/unit/` top-level test-function count `236` (205 existing + 31 new, confirmed by direct AST parse — the higher pytest-collected count reflects pre-existing `@pytest.mark.parametrize` expansion in unrelated files, not a change to the approved top-level-function boundary); `market_data` public exports `25` (20 existing + 5 new, exact order); `uv lock --check` passes; `ruff format --check .` passes; `ruff check .` passes; `mypy src tests` passes with no issues.
+
+**No dependency change. No Protocol change. No production approval granted by this record.**
+
+**Next controlled action:** begin one combined **Market Structure and Measurement Foundation** milestone — covering meaningful swings, structure transitions, displacement, equal highs/lows, support/resistance, trendlines, and liquidity references — before POI and BTMM detection work begins. That milestone is not started by this record.
