@@ -2689,4 +2689,309 @@ The author approved, without modification:
 
 **This closure does not authorize production use, live trading, an indicator, a robot, provider networking, or a persistence backend.** No FXCM/TradingView adapter, no real file parser, no persistence implementation, no POI detector, no BTMM detector, no indicator, no alert, no backtester, and no robot was implemented in this batch. Phase 1B-E is **closed** at the provider-neutral ingestion-boundary level only — it remains `NOT PRODUCTION-APPROVED`.
 
-**This approval authorizes only the exact controlled first implementation batch named in §31C (7 paths: 5 new source files under `src/btmm_ai_scanner/ingestion/`, 2 new test files under `tests/unit/`). This approval does not authorize production use. This approval does not authorize any change outside the exact 7-path scope. Implementation has not started — this remains a documentation-only approval.**
+## 32. Historical Repository and Replay Foundation — Architecture and Exact Implementation Controls
+
+**Status: `AUTHOR-APPROVED`, `AUTHORIZED FOR ONE COMPLETE CONTROLLED IMPLEMENTATION CYCLE`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+This decision group defines one compact, accelerated milestone: a deterministic, in-memory, non-production persistence and replay foundation that consumes the completed market-data (Phase 1B-C-MD) and ingestion (Phase 1B-E) contracts. It fulfills the exact deferred promise already recorded in `REPOSITORY_SCAFFOLD_PLAN.md` (line 539): *"Storage/replay boundary is interfaces-only in the first batch (`RawCandleSink`, `NormalizedCandleSink`, `CandleReadRepository`, `HistoricalReplaySource`), with in-memory test doubles — no database, queue, or cloud storage."* This milestone builds exactly those in-memory test doubles — nothing more. It does not create the master scaffold's separate `replay/` top-level package (`REPOSITORY_SCAFFOLD_PLAN.md` §3: *"Historical replay engine — re-runs the pipeline against pinned raw data and pinned rule/schema versions"* — explicitly "Directory only" through Phase 1B, still absent from near-term scope). That fuller, versioned replay engine remains a separate, later, explicitly deferred decision.
+
+### 32A. Existing Protocol Compatibility Audit — No Protocol Modification Required
+
+The exact current signatures in `src/btmm_ai_scanner/market_data/ports.py`:
+
+```python
+class RawCandleSink(Protocol):
+    def store_raw_candle(self, raw_candle: RawCandle) -> None: ...
+
+class NormalizedCandleSink(Protocol):
+    def store_normalized_candle(self, normalized_candle: NormalizedCandle) -> None: ...
+
+class CandleReadRepository(Protocol):
+    def find_raw_candles_by_source_identity(
+        self, provider: str, source_reference: str, source_symbol: str,
+        source_timeframe: str, event_time_utc: datetime,
+    ) -> Sequence[RawCandle]: ...
+
+class HistoricalReplaySource(Protocol):
+    def replay(self) -> Iterator[NormalizedCandle]: ...
+```
+
+**Findings:**
+
+- `CandleReadRepository` is typed for `RawCandle` only (its method returns `Sequence[RawCandle]`) — it cannot be satisfied by a `NormalizedCandle` repository. Its query is an **exact single-instant match** (`event_time_utc: datetime`, not a range) keyed by the full source identity. **This is deliberate, not a defect**: `Sequence[RawCandle]` (already plural) confirms the original author anticipated multiple `RawCandle` records sharing one source-identity-and-event-time — exactly the "conflicting revisions must remain observable" requirement this milestone must satisfy.
+- `HistoricalReplaySource.replay()` is a bare, zero-parameter method returning a plain `Iterator[NormalizedCandle]` — no cursor, no reset, no initialize-from-query parameter, no async.
+- All 4 are `typing.Protocol`s, structural, not `@runtime_checkable`.
+
+**Sufficiency result: sufficient, no Protocol extension required.** A Python `Protocol` defines a minimum structural interface, not a maximum — a concrete class may implement a Protocol exactly while exposing additional public methods that are not themselves part of any Protocol. This milestone's concrete classes (§32D–§32F) implement all 4 existing Protocols exactly as defined above, byte-for-byte unchanged, and separately expose richer range-query and cursor-based replay capability as their own additional public methods. **`src/btmm_ai_scanner/market_data/ports.py` is not modified by this milestone.**
+
+### 32B. Exact File Scope — 8 Changed Paths (7 New, 1 Modified)
+
+| # | Path | Status | Purpose |
+|---|---|---|---|
+| 1 | `src/btmm_ai_scanner/market_data/raw_candle_repository.py` | New | `InMemoryRawCandleRepository`, `RecordIdentityConflictError`, `InvalidTimeRangeError` |
+| 2 | `src/btmm_ai_scanner/market_data/normalized_candle_repository.py` | New | `InMemoryNormalizedCandleRepository` |
+| 3 | `src/btmm_ai_scanner/market_data/historical_replay.py` | New | `InMemoryHistoricalReplaySource` |
+| 4 | `src/btmm_ai_scanner/market_data/__init__.py` | **Modified** | Append 5 new exports |
+| 5 | `tests/unit/test_raw_candle_repository.py` | New | 8 tests |
+| 6 | `tests/unit/test_normalized_candle_repository.py` | New | 8 tests |
+| 7 | `tests/unit/test_historical_replay.py` | New | 8 tests |
+| 8 | `tests/unit/test_no_look_ahead.py` | New | 7 tests |
+
+**5 source paths (4 new + 1 modified), 4 test paths — 8 total changed paths.** This is below the 6–10-source/4–7-test guidance range on the source side; per the instruction ("guidance, not permission to invent unnecessary files"), no additional file is invented merely to fill the range. All new files live inside the already-approved `market_data/` package — no new top-level package is created. `RecordIdentityConflictError`/`InvalidTimeRangeError` are defined once in `raw_candle_repository.py` and imported from there wherever needed — no `repository_errors.py` file is created, preserving the exact 8-path scope.
+
+**Existing-file modification, explicitly identified and justified:** `market_data/__init__.py` currently exports exactly 20 names (Phase 1B-C-MD, register §29J). This milestone appends exactly 5 new names to the end of the existing `__all__` list — **the existing 20 names and their order are completely unchanged; no name is removed, renamed, or reordered.** Justification: `market_data/__init__.py` is the package's single established public-import surface; the 5 new symbols are new capabilities of the same package (they directly implement `market_data.ports` Protocols and consume `market_data`'s own `RawCandle`/`NormalizedCandle`), so appending to the same list is the minimal, most consistent choice — matching the same append-only-at-the-end discipline already used for the reason-code/row corrections in Phase 1B-E's own documentation passes. No other existing tracked file is modified.
+
+### 32C. Repository Membership — Three Separate Axes (Correction)
+
+**Correction — repository membership does not imply analytical validity or eligibility.** The prior draft's claim that "invalid/indeterminate records" are "structurally impossible" in repository storage conflated two genuinely distinct axes with a third, unrelated one. This milestone documents all three explicitly:
+
+- **A. Structural contract validity.** `RawCandle` and `NormalizedCandle` are self-validating `ContractModel`s — a constructed instance always satisfies its own field-level and cross-field invariants (OHLC consistency, timestamp ordering, etc.). This is guaranteed by Pydantic construction itself; no instance of either contract can exist in a structurally-invalid state.
+- **B. Ingestion construction gating.** The closed `market_data.IngestionResult` outcome matrix (register §29C) prevents a `REJECTED`/`INDETERMINATE` pipeline outcome from ever carrying a `candidate_raw_candle`/`candidate_normalized_candle` through the normal pipeline path (`raw_candle_builder.py`/`normalization.py`). This blocks *that specific pathway* into a repository — it does not, by itself, mean every possible route to repository membership is gated this way.
+- **C. Analytical validity and eligibility.** `contracts/validation_result.py` defines a **wholly separate** contract family — `ValidationResult`, `ValidationStatus` (`VALID`/`INVALID`/`INDETERMINATE`), `AnalyticalEligibility` (`ELIGIBLE`/`INELIGIBLE`/`UNDETERMINED`) — linked to a candle only through `subject_record_id`. **It is not embedded in `RawCandle` or `NormalizedCandle`, and it is not part of `market_data.IngestionResult`.**
+
+**Consequently:** `InMemoryRawCandleRepository`/`InMemoryNormalizedCandleRepository` do not receive, store, infer, or enforce `ValidationStatus`, `AnalyticalEligibility`, analytical invalidity, analytical indeterminacy, or detector eligibility — their `store_raw_candle`/`store_normalized_candle` methods have no parameter for any of this. Therefore:
+
+- Repositories store whatever structurally-valid (axis A) candle contract a caller supplies to them.
+- Repository membership does **not** imply analytical validity (axis C).
+- Repository membership does **not** imply analytical eligibility (axis C).
+- Ingestion outcome (axis B) remains separate from repository membership — axis B governs whether the *normal pipeline path* produces a candidate at all; it says nothing about a caller directly supplying a structurally-valid candle obtained by other legitimate means.
+- Any future validation/eligibility repository, join, or query against `ValidationResult` remains explicitly deferred and out of scope for this milestone.
+
+### 32D. `InMemoryRawCandleRepository` — Exact Design
+
+Implements `RawCandleSink` and `CandleReadRepository` exactly as defined in §32A, plus additional non-Protocol public methods:
+
+```python
+class RecordIdentityConflictError(ValueError): ...
+class InvalidTimeRangeError(ValueError): ...
+
+class InMemoryRawCandleRepository:
+    def store_raw_candle(self, raw_candle: RawCandle) -> None: ...
+
+    def find_raw_candles_by_source_identity(
+        self, provider: str, source_reference: str, source_symbol: str,
+        source_timeframe: str, event_time_utc: datetime,
+    ) -> Sequence[RawCandle]: ...
+
+    def find_raw_candles_by_source_identity_and_event_time_range(
+        self, provider: str, source_reference: str, source_symbol: str,
+        source_timeframe: str,
+        start_time_utc: datetime | None, end_time_utc: datetime | None,
+    ) -> tuple[RawCandle, ...]: ...
+
+    def all_raw_candles(self) -> tuple[RawCandle, ...]: ...
+```
+
+`RecordIdentityConflictError` and `InvalidTimeRangeError` (§32I) are defined in this module — the compact shared repository exception vocabulary — and imported from here by `normalized_candle_repository.py`. No `repository_errors.py` is created; this does not add a ninth path.
+
+- **Identity/storage key:** `record_id` (the `RawCandle`'s own `UUIDv7`) — a private `dict[UUID, RawCandle]`, never exposed directly. `record_id` is the repository's *storage*-identity key; it does not replace, and is not compared against, the established five-field `SourceCandleIdentity` (`provider`, `source_reference`, `source_symbol`, `source_timeframe`, `event_time_utc`, `market_data/idempotency.py`) used for idempotency classification.
+- **Exact duplicate/revision policy (all 5 cases, per register §32 audit):**
+  1. **Same `record_id`, identical complete record** → idempotent no-op; the existing stored record remains; no second entry; no exception.
+  2. **Same `record_id`, different complete record** → never overwrite; raises `RecordIdentityConflictError`; the repository remains unchanged. This can only arise from a caller programming error, since `record_id` is a globally unique `UUIDv7` minted once per construction.
+  3. **Different `record_id`, same five-field source identity, same `content_fingerprint`** — the existing `EXACT_DUPLICATE` classification (`market_data.evaluate_idempotency`): both records are stored, both are returned by matching queries, deterministic ordering is preserved, neither is silently collapsed.
+  4. **Different `record_id`, same five-field source identity, different `content_fingerprint`** — the existing `CONFLICTING_REVISION` classification: both records are stored, both are returned, **no automatic winner is chosen**.
+  5. **Different `record_id`, different source identity** — stored independently; no duplicate/revision relationship is inferred.
+  The repository does not re-run idempotency logic itself — it stores exactly what a caller (who already ran `market_data.evaluate_idempotency`, typically using a prior call to `find_raw_candles_by_source_identity` as that function's `existing_raw_candles` argument) hands it.
+- **Repository membership:** see §32C — structurally-valid candles only; no claim about analytical validity/eligibility.
+- **Range query semantics** (`find_raw_candles_by_source_identity_and_event_time_range`):
+  - `start_time_utc`/`end_time_utc` are `datetime | None`. `None` on either side means **unbounded** on that side.
+  - Any timezone-aware `datetime` is accepted on either bound and is normalized to UTC internally using the established `require_aware_datetime`/`to_utc` conventions (`contracts/raw_candle.py`) — an aware, non-UTC-offset datetime is accepted and normalized; it is **not** an error.
+  - A **naive** `start_time_utc` or `end_time_utc` raises `InvalidTimeRangeError`.
+  - Both bounds provided and `start < end`: half-open `[start, end)` — start inclusive, end exclusive.
+  - Both bounds provided and `start == end`: a **valid** query, returning an empty tuple (not an error).
+  - Both bounds provided and `start > end`: raises `InvalidTimeRangeError`.
+  - No matching records for an otherwise-valid query: returns an empty tuple.
+- **Query ordering:** all multi-result queries return a `tuple`, stable-sorted by `(event_time_utc, record_id)` ascending.
+- **Mutation isolation:** every query method constructs and returns a fresh `tuple` each call; repository state is never exposed or mutated by a query.
+- **No database, no filesystem, no network.**
+
+### 32E. `InMemoryNormalizedCandleRepository` — Exact Design
+
+Implements `NormalizedCandleSink` exactly. **Does not implement `CandleReadRepository`** — that Protocol is `RawCandle`-typed and cannot be satisfied by a class whose queries return `NormalizedCandle` (a genuine, discovered structural mismatch, not an oversight — see §32A). It exposes its own read API instead, importing `RecordIdentityConflictError`/`InvalidTimeRangeError` from `raw_candle_repository.py`:
+
+```python
+class InMemoryNormalizedCandleRepository:
+    def store_normalized_candle(self, normalized_candle: NormalizedCandle) -> None: ...
+
+    def find_by_symbol_timeframe_range(
+        self, symbol: InternalSymbol, timeframe: Timeframe,
+        start_time_utc: datetime | None, end_time_utc: datetime | None,
+    ) -> tuple[NormalizedCandle, ...]: ...
+
+    def all_normalized_candles(self) -> tuple[NormalizedCandle, ...]: ...
+```
+
+Same identity key (`record_id`), same five-case exact-duplicate/revision policy, same `RecordIdentityConflictError`/`InvalidTimeRangeError` vocabulary, same `None`-is-unbounded/naive-rejects/half-open/`start==end`-empty/`start>end`-raises range semantics, same `(event_time_utc, record_id)` query ordering, same mutation isolation, and the same §32C repository-membership policy (structurally-valid candles only; no analytical-validity/eligibility claim) as §32D. No synthetic candle, no interpolation, no session/calendar assumption, no automatic gap repair.
+
+### 32F. `InMemoryHistoricalReplaySource` — Exact Design
+
+Implements `HistoricalReplaySource` exactly, plus an atomic availability-group cursor API (no single-candle `advance_one` method exists):
+
+```python
+class InMemoryHistoricalReplaySource:
+    def __init__(self, candles: Iterable[NormalizedCandle]) -> None: ...
+
+    def replay(self) -> Iterator[NormalizedCandle]: ...
+
+    @property
+    def position(self) -> int: ...
+
+    @property
+    def is_exhausted(self) -> bool: ...
+
+    def advance_next_availability_group(self) -> tuple[NormalizedCandle, ...]: ...
+
+    def reset(self) -> None: ...
+```
+
+- **Replay data boundary:** the constructor accepts a caller-supplied `Iterable[NormalizedCandle]` — the caller runs its own repository query first (e.g. `InMemoryNormalizedCandleRepository.find_by_symbol_timeframe_range(...)`) and hands the result to the replay source. The replay source itself never queries a repository directly and never constructs a `RawCandle`, performs normalization, or evaluates idempotency — it is purely a deterministic sequencer over an already-resolved set of `NormalizedCandle` records.
+- **Snapshot, not live-view:** the constructor defensively copies and sorts the supplied candles once, into an immutable `tuple[NormalizedCandle, ...]`, at construction time, using the ordering key in §32H. Later writes to the source repository never retroactively appear in an already-constructed replay source — this is what guarantees no future-candle exposure and identical repeated runs.
+- **Cursor representation:** a private integer `_position` — the number of candles already consumed (not the number of groups consumed) — indexing the next unconsumed candle in the immutable snapshot, exposed read-only via `.position`.
+- **Atomic availability-group advancement — `advance_next_availability_group()`:**
+  - Identifies the next not-yet-consumed `availability_time_utc` instant in the snapshot.
+  - Returns **every** `NormalizedCandle` sharing that exact instant, together, as one immutable `tuple`, in the stable order defined by §32H's ordering key (with `availability_time_utc` constant across the group, ordering proceeds by the tuple's remaining fields).
+  - Advances `.position` by `len(returned_group)` — the whole group is consumed atomically; no partial group is ever exposed.
+  - Returns an empty tuple `()` at end-of-stream — **no exception is raised.**
+  - Never creates artificial causal ordering among candles that became available at the same instant.
+- **End-of-stream:** `.is_exhausted` is `True` once `.position == len(snapshot)`; `advance_next_availability_group()` returns `()` — no exception, no leaked future record.
+- **Reset:** `.reset()` sets `.position` back to `0`. An empty replay begins exhausted (`.is_exhausted` is `True` immediately after construction with no candles). The underlying snapshot tuple is immutable and sorted exactly once at construction, so `.reset()` followed by re-advancing reproduces the identical availability-group sequence every time.
+- **`replay()` — Protocol compatibility, no Protocol change:** returns a fresh, stateless `iter()` over the complete immutable snapshot; it does **not** read or mutate `.position`/the stateful cursor. Repeated `replay()` calls always return the same complete deterministic sequence, regardless of any prior `advance_next_availability_group()`/`reset()` activity. `HistoricalReplaySource.replay() -> Iterator[NormalizedCandle]` is preserved unchanged — no Protocol extension is required. `replay()` exists for Protocol compatibility and full deterministic iteration; **availability-sensitive detector progression must consume `advance_next_availability_group()`, not individual `replay()` iterator elements, whenever simultaneous availability can affect a causal decision.**
+- **Empty replay:** constructing with an empty iterable is valid; `.is_exhausted` is `True` immediately; `advance_next_availability_group()` returns `()` immediately; `replay()` yields nothing.
+- **Synchronous only** — matches `HistoricalReplaySource`'s own `Iterator` (not `AsyncIterator`) return type; no async method anywhere.
+- **No wall-clock dependency, no `datetime.now()`/`datetime.utcnow()` anywhere.**
+- **Thread-safety scope:** implementations are **not thread-safe**; intended for deterministic single-threaded tests and historical analysis only; no locks; no background tasks; concurrent read/write behavior is unsupported; production concurrency is explicitly deferred.
+- **Snapshot/object-identity policy:** none of `InMemoryRawCandleRepository`, `InMemoryNormalizedCandleRepository`, or `InMemoryHistoricalReplaySource` are `ContractModel` (Pydantic) subclasses — they are ordinary Python classes. `ContractModel`'s `revalidate_instances="always"` behavior therefore does not apply to or define these classes' internal mechanics; candle objects are held directly in plain `dict`/`tuple` structures. Nonetheless, **Python object identity (`is`) is not part of the public contract** — exact field-value preservation (IDs, fingerprints, timestamps, versions, provenance) is what is guaranteed, and tests verify equality, not identity, so the internal mechanics remain free to change. No internal list, dict, or mutable catalogue is ever exposed publicly.
+
+### 32G. Replay Visibility and Look-Ahead Protection Policy
+
+**Governing timestamp: `availability_time_utc`, never `event_time_utc` alone and never `processing_time_utc`.** A candle must never be exposed by replay before the instant a real system would have known about it — that instant is `availability_time_utc`, not the candle's own market event time (`event_time_utc`) and not the pipeline's internal processing timestamp (`processing_time_utc`, which records when *this system* finished processing the candle, not when it was legitimately knowable).
+
+**Unavailable-availability policy (timestamp contract validity only — not to be confused with §32C's analytical-eligibility axis):** `SourceCandleInput.availability_time_utc` may be unavailable (`datetime | None`) upstream, at the acquisition stage. `RawCandle.availability_time_utc` and `NormalizedCandle.availability_time_utc` are both **non-nullable** `datetime` fields, and both contracts' own cross-field validators require `availability_time_utc > event_time_utc` unconditionally (`contracts/raw_candle.py`, `contracts/normalized_candle.py`). The closed Phase 1B-C-MD ingestion matrix (register §29B/§29E) guarantees that an unavailable or inconsistent availability pair at the `SourceCandleInput` stage produces `IngestionResult.outcome == INDETERMINATE` or `REJECTED` — **never** a `candidate_raw_candle` or `candidate_normalized_candle` — through the approved pipeline path. Historical replay therefore accepts only `NormalizedCandle` records with valid availability; **no replay-time substitution, inference, or processing-time fallback exists, and no replay-initialization exception is required for a state (`None` availability on a `NormalizedCandle`) that cannot exist in the contract.** This is a statement about timestamp *contract* validity (axis A/B of §32C) — it says nothing about, and must not be confused with, analytical validity or eligibility (axis C of §32C), which remains a separate, unaddressed concern.
+
+**Equal-availability tie-breaking:** when two or more `NormalizedCandle` records share the exact same `availability_time_utc`, `advance_next_availability_group()` (§32F) returns all of them together, in the exact stable order defined by §32H's ordering key — never arbitrarily, never by insertion order into the constructor's input iterable, and never split across two separate advancement calls.
+
+### 32H. Replay Ordering Key (Exact Tuple)
+
+**Replay visibility ordering** (governs both the immutable snapshot's overall order and the internal order within one `advance_next_availability_group()` release):
+
+```
+(availability_time_utc, event_time_utc, symbol.value, timeframe.value, provider, source_reference, record_id)
+```
+
+Every field exists on `NormalizedCandle` and is comparable: `availability_time_utc`/`event_time_utc` are `datetime`; `symbol.value`/`timeframe.value` are `str` (via the `StrEnum` `InternalSymbol`/`Timeframe`); `provider`/`source_reference` are `str`; `record_id` is a `UUID` (Python `UUID` implements `__lt__`/`__gt__`). The key is total, deterministic, and independent of insertion order. `availability_time_utc` is primary (replay is availability-driven — see §32G); `event_time_utc` is the natural secondary chronological tie-break and can never expose a candle before its availability instant (processing_time_utc never controls visibility at all — it does not appear in this tuple); within one availability group (constant `availability_time_utc`), stable order is determined entirely by the remaining fields. `record_id` (`UUIDv7`, globally unique, immutable, never regenerated) is the absolute final tie-breaker.
+
+**`source_symbol`/`source_timeframe` are deliberately omitted** as additional tie-breakers: `source_reference` is already the stable logical series identifier (by established convention, unique per provider), so `provider`+`source_reference` alone already fully disambiguates the originating series, and `record_id` guarantees a total final ordering regardless — adding the raw source-level symbol/timeframe strings would be redundant.
+
+**Repository query ordering** (governs the order `InMemoryRawCandleRepository`/`InMemoryNormalizedCandleRepository` return multi-record query results — a distinct, simpler concept from replay visibility, with no availability-grouping semantics):
+
+```
+(event_time_utc, record_id)
+```
+
+Natural chronological read order, tie-broken by the same stable final `record_id` key.
+
+### 32I. Exact Exception Vocabulary — 2 Classes
+
+Exactly two new public exception classes, both `ValueError` subclasses (so existing `except ValueError` handling still works), both defined in `market_data/raw_candle_repository.py` (the designated owner of this compact, shared repository exception vocabulary) and imported from there by `normalized_candle_repository.py`:
+
+- **`RecordIdentityConflictError`** — means only: the same `record_id` is already stored, and the incoming complete candle record differs from the stored record; no overwrite occurred.
+- **`InvalidTimeRangeError`** — means: `start_time_utc` is later than `end_time_utc`; **or** a supplied `start_time_utc`/`end_time_utc` is naive. **Not** raised for an aware datetime merely because its offset is not UTC — such a value is accepted and normalized.
+
+"Replay initialization with unreplayable availability" requires no exception: per §32G, a `NormalizedCandle` with unavailable availability cannot exist, so this case is structurally inapplicable rather than unresolved. "End of stream" is not an exception either case — `advance_next_availability_group()` returns `()`.
+
+### 32J. Public Exports — 5 New Names
+
+Exactly 5 new names, appended to the end of `market_data/__init__.py`'s existing 20-name `__all__` (order preserved, nothing removed, no sixth new name):
+
+| # | Export | Defining file |
+|---|---|---|
+| 21 | `RecordIdentityConflictError` | `market_data/raw_candle_repository.py` |
+| 22 | `InvalidTimeRangeError` | `market_data/raw_candle_repository.py` |
+| 23 | `InMemoryRawCandleRepository` | `market_data/raw_candle_repository.py` |
+| 24 | `InMemoryNormalizedCandleRepository` | `market_data/normalized_candle_repository.py` |
+| 25 | `InMemoryHistoricalReplaySource` | `market_data/historical_replay.py` |
+
+No cursor-state field, no private helper, and no unrelated `ingestion` symbol is exported. **Future `market_data` export total: 25** (20 existing + 5 new).
+
+### 32K. Exact Test Coverage — 31 New Top-Level Test Functions
+
+**`tests/unit/test_raw_candle_repository.py` — 8:**
+
+1. `test_in_memory_raw_candle_repository_stores_and_finds_by_source_identity`
+2. `test_in_memory_raw_candle_repository_preserves_conflicting_revisions` — owns cases 3 (`EXACT_DUPLICATE`: different `record_id`, same identity, same fingerprint) and 4 (`CONFLICTING_REVISION`: different `record_id`, same identity, different fingerprint); both remain stored and query-visible.
+3. `test_in_memory_raw_candle_repository_rejects_silent_overwrite_of_differing_content` — owns case 1 (same `record_id` + identical content → no-op) and case 2 (same `record_id` + different content → `RecordIdentityConflictError`, repository unchanged).
+4. `test_in_memory_raw_candle_repository_range_query_boundary_is_half_open` — owns start-inclusive, end-exclusive, `start == end` → empty tuple, and omitted (`None`) bounds → unbounded on that side.
+5. `test_in_memory_raw_candle_repository_rejects_invalid_time_range_inputs` — owns `start > end` → `InvalidTimeRangeError`; naive `start` raises; naive `end` raises; aware non-UTC-offset bounds are accepted and normalized (not an error).
+6. `test_in_memory_raw_candle_repository_returns_stable_deterministic_ordering`
+7. `test_in_memory_raw_candle_repository_query_results_do_not_mutate_stored_state`
+8. `test_in_memory_raw_candle_repository_implements_sink_and_read_protocols`
+
+**`tests/unit/test_normalized_candle_repository.py` — 8** (identical ownership divisions, normalized equivalents):
+
+1. `test_in_memory_normalized_candle_repository_stores_and_queries_by_symbol_and_timeframe`
+2. `test_in_memory_normalized_candle_repository_preserves_conflicting_revisions`
+3. `test_in_memory_normalized_candle_repository_rejects_silent_overwrite_of_differing_content`
+4. `test_in_memory_normalized_candle_repository_range_query_boundary_is_half_open`
+5. `test_in_memory_normalized_candle_repository_rejects_invalid_time_range_inputs`
+6. `test_in_memory_normalized_candle_repository_returns_stable_deterministic_ordering`
+7. `test_in_memory_normalized_candle_repository_query_results_do_not_mutate_stored_state`
+8. `test_in_memory_normalized_candle_repository_implements_sink_protocol_only`
+
+**`tests/unit/test_historical_replay.py` — 8:**
+
+1. `test_historical_replay_source_orders_by_availability_then_event_time_then_identity`
+2. `test_historical_replay_source_advance_next_availability_group_releases_simultaneous_candles_together` — owns: equal-availability records return in one tuple; no partial group exposure; `.position` advances by group length; deterministic order inside the group.
+3. `test_historical_replay_source_advance_next_availability_group_returns_empty_tuple_at_end`
+4. `test_historical_replay_source_replay_reproduces_the_same_sequence_on_repeated_calls`
+5. `test_historical_replay_source_reset_reproduces_the_exact_sequence`
+6. `test_historical_replay_source_handles_empty_replay_deterministically`
+7. `test_historical_replay_source_implements_protocol_and_exposes_no_extra_state`
+8. `test_market_data_repository_and_replay_exports_import_successfully` — owns: existing 20 exports unchanged; exactly 5 appended exports; future total 25; exact new export order (§32J).
+
+**`tests/unit/test_no_look_ahead.py` — 7:**
+
+1. `test_replay_never_exposes_a_candle_before_its_availability_time`
+2. `test_replay_exposes_a_candle_exactly_at_its_availability_time`
+3. `test_replay_releases_equal_availability_candles_in_stable_tie_broken_order` — verifies atomic grouped release via `advance_next_availability_group()`, not merely adjacent single-candle ordering.
+4. `test_event_time_alone_cannot_expose_a_candle_before_availability`
+5. `test_processing_time_utc_does_not_control_historical_visibility`
+6. `test_end_of_stream_never_leaks_a_future_record`
+7. `test_source_cannot_receive_a_normalized_candle_with_unavailable_availability_time`
+
+**Total new: 31** (8 + 8 + 8 + 7). No helper begins with `test_`. No test class. No dynamically generated test. No vacuous literal-to-identical-literal assertion. **Combined with the existing 205: 236.**
+
+### 32L. Explicit Exclusions
+
+SQLite, PostgreSQL, Redis, any cloud database; filesystem persistence; CSV/JSON/Parquet loading; FXCM REST/WebSocket; TradingView scraping; live streaming; session/calendar modeling; market-holiday logic; synthetic candles; interpolation; automatic gap repair; revision-winner selection; POI detection; market-structure detection; BTMM detection; indicators; alerts; Telegram; backtesting metrics; strategy evaluation; paper trading; MT5/MT4 execution; AI inference.
+
+### 32M. Baseline, Quality Gates, and Stop Conditions
+
+**Execution-captured baseline policy applies unchanged (§26):** the baseline is the clean, synchronized `HEAD` captured immediately before the first implementation change of a future, separately authorized implementation turn — currently `c673e66ef942b319006aeff9b8ac775712c5f86a`, re-captured fresh at that turn's start.
+
+**Preflight (future turn):** clean, synchronized `main`; Python `3.12.13`, `uv` `0.11.30`, Pydantic `>=2.13.4,<2.14`; `uv lock --check` passes; existing full suite 297 passed; existing original suite 34 passed; existing combined top-level tests 205; no repository/replay implementation path yet exists; no dependency diff.
+
+**Final gates:** `uv lock --check`; `ruff format --check .`; `ruff check .`; `mypy src tests`; `pytest -q` (full suite); `pytest -q` on the two baseline files. Exact 8 changed paths (7 new + 1 modified); exact 5 new exports; exact 31 new top-level test functions; exact 236 combined total.
+
+**Mandatory stop conditions:** dirty/diverged repository; a test total differing from this document's record at review time; any dependency change; an existing file other than `market_data/__init__.py` needing modification; a genuine Protocol extension becoming necessary; a 9th path becoming necessary (including a `repository_errors.py` file — the two exceptions stay in `raw_candle_repository.py`); any documentation change mid-implementation; a real database/filesystem/network dependency becoming necessary; the exact test names/counts becoming unsatisfiable; any quality-gate failure; `HEAD` changing after baseline capture; any temporary file. On any of these, stop and report.
+
+### 32N. Document Scope
+
+Exactly 4 authoritative documents: this register (§32); `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` (7 new inventory rows under a new batch tag, plus a note on `market_data/__init__.py`'s existing row); `REPOSITORY_SCAFFOLD_PLAN.md` (a new section recording this milestone); `PROJECT_STATE.md` (a new section recording status and next controlled action). No new documentation file is created.
+
+### 32O. Author Approval Record
+
+**Author decision: `APPROVED`.** The author explicitly approved the corrected Historical Repository and Replay Foundation architecture exactly as documented (§32A–§32N), with no modification to any corrected element. **Approved status: `AUTHOR-APPROVED`, `AUTHORIZED FOR ONE COMPLETE CONTROLLED IMPLEMENTATION CYCLE`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+**Exact approved scope:** 8 implementation paths (4 new source files, 4 new test files, 1 existing file modified — `market_data/__init__.py`); 31 new top-level test functions (8 + 8 + 8 + 7); 5 new public exports (20 → 25 total for `market_data`); inventory 69 → 76 rows under batch tag `1B-G-REPLAY`; no dependency change; no Protocol modification.
+
+The author approved, without modification, every corrected architectural decision:
+
+- Repository membership is separated from analytical validity/eligibility (§32C) — the three-axis distinction (structural contract validity, ingestion-outcome construction gating, analytical validity/eligibility via `ValidationResult`/`ValidationStatus`/`AnalyticalEligibility`) is adopted exactly as documented.
+- The exact 5-case duplicate/revision policy (§32D) and the closed 2-exception vocabulary — `RecordIdentityConflictError`, `InvalidTimeRangeError` (§32I), both defined in `raw_candle_repository.py`.
+- Timezone-aware range-query normalization: `None`-is-unbounded, half-open `[start, end)`, `start == end` valid-empty, `start > end` raises, naive raises, aware non-UTC accepted and normalized (§32D/§32E).
+- Atomic availability-group replay advancement via `advance_next_availability_group()` (§32F) — no single-candle `advance_one()` exists.
+- `replay()`'s stateless Protocol-compatibility (§32F) — unchanged `HistoricalReplaySource` Protocol, no extension.
+- Snapshot semantics (§32F) and the explicit non-thread-safe scope (§32F).
+- The exact replay ordering key (§32H), the exact export list and order (§32J), and the exact 31 test names and counts (§32K).
+
+**This approval authorizes exactly one complete implementation cycle** covering all 8 approved paths at once (no per-file decision groups), followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use. Implementation has not started — this remains a documentation-only approval.**
