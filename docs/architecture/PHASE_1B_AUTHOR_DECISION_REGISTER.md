@@ -3010,4 +3010,657 @@ The author approved, without modification, every corrected architectural decisio
 
 **No dependency change. No Protocol change. No production approval granted by this record.**
 
-**Next controlled action:** begin one combined **Market Structure and Measurement Foundation** milestone — covering meaningful swings, structure transitions, displacement, equal highs/lows, support/resistance, trendlines, and liquidity references — before POI and BTMM detection work begins. That milestone is not started by this record.
+**Next controlled action:** begin one combined **Market Measurements and Reference Structures Foundation** milestone — covering meaningful swings, displacement, equal-level clusters, and support/resistance/trendline reference structures — before POI and BTMM detection work begins, and before any future structure-state/transition milestone. That milestone is not started by this record.
+
+## 33. Market Measurements and Reference Structures Foundation — Architecture and Exact Implementation Controls (Corrected)
+
+**Status: `AUTHOR-APPROVED`, `AUTHORIZED FOR ONE COMPLETE CONTROLLED IMPLEMENTATION CYCLE`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** (See §33AB for the author approval record.)
+
+**Batch identifier: `1B-H-MEASUREMENTS`.** This section is a consolidated, documentation-only correction of the originally proposed `1B-H-STRUCTURE` architecture, resolving every blocking finding from the focused architectural audit in one pass. Nothing was implemented or committed under the prior identifier, so this is a rename plus correction, not a new milestone. This decision group defines one compact, accelerated milestone: a deterministic, versioned, no-look-ahead analytical foundation that transforms ordered `NormalizedCandle` sequences into candle/leg measurements and confirmed reference structures required by later structure-state, POI, and BTMM detectors. It consumes the completed market-data (`1B-C-MD`) and replay (`1B-G-REPLAY`) foundations and reuses their contracts unmodified.
+
+### 33A. Purpose and Analysis Boundary
+
+```
+ordered NormalizedCandle sequence
+  -> candle/leg measurements (Total Range, Body, Wicks, Wilder ATR(14), size/context ratios)
+  -> confirmed meaningful swings
+  -> displacement observations
+  -> equal-level clusters
+  -> support/resistance reference zones
+  -> confirmed trendlines
+  -> one immutable MarketMeasurementAnalysis snapshot
+```
+
+This milestone supplies **prerequisites** for future structure, POI, and BTMM engines. It does **not** implement the market-structure transition engine itself, and does **not** perform: market-structure state, HH/HL/LH/LL, Break of Structure, Change of Character, protected/weak swings, POI creation, order-block/FVG/candlestick-pattern creation, BTMM lifecycle detection, trade-signal creation, entry/stop-loss calculation, visualization, alerts, backtesting metrics, or execution.
+
+### 33B. Authoritative Source Audit — What Is and Is Not Approved
+
+Read directly, in full: `knowledge/MEASUREMENT_STANDARDS.md` (1,872 lines), `knowledge/AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`, `knowledge/market_structure/MARKET_ANALYSIS_COVERAGE_MATRIX.md`, `knowledge/btmm/BTMM_STATE_MACHINE.md`, and the implemented `contracts/normalized_candle.py`, `contracts/validation_result.py`, `contracts/provenance_record.py`, `contracts/rule_version_manifest.py`, `config/enums.py`.
+
+**Approved standards this milestone reuses exactly, without modification:** Candle Measurement Standard V1 (Ambiguity 1); Small Candle and Recent Market Context Standard V1 (Ambiguity 2); Volume, Momentum, and Price-Activity Proxy Standard V1 (Ambiguity 3); Market Speed and Displacement Standard V1 — Provisional (Ambiguity 7); Meaningful Swing High and Swing Low Detection Standard V1 — Provisional (Ambiguity 10); Bullish and Bearish Trendline Detection and Validation Standard V1 — Provisional (Ambiguity 11); Support and Resistance Detection and Validation Standard V1 — Provisional (Ambiguity 12); Equal Highs and Equal Lows Tolerance and Drawing Standard V1 — Provisional (Ambiguity 5); POI Reaction Strength Standard V1 — Provisional (Ambiguity 9, reused generically for Support/Resistance origin-reaction gating only, never for any POI).
+
+**Explicitly NOT approved and therefore NOT implemented — reserved for a later, separate `Structure State and Transition Foundation` milestone:** Higher High, Higher Low, Lower High, Lower Low, Break of Structure (BOS), Change of Character (CHoCH), protected high/low, weak high/low, and market-structure direction/state generally. `knowledge/market_structure/MARKET_ANALYSIS_COVERAGE_MATRIX.md`'s own governing rule states neither BOS nor CHoCH is adopted as a project rule unless the book defines it (it does not) or the author explicitly approves adding it. `REPOSITORY_SCAFFOLD_PLAN.md`'s `domain/` directory documentation already formally excludes them (`P0G-B003`). **This correction reserves, but does not create any inventory row for, that future milestone.** No threshold for these concepts is invented here.
+
+Also explicitly deferred: automated Equal High/Low or Trendline "specialized lifecycle" (sweep, final invalidation, retest, reclaim, false break, role reversal, expiration — `P0G-B004`/`P0G-B005`); the full Ambiguity-15 POI Boundary Breach/Reclaim/Invalidation state machine (scoped to bounded directional POIs, shared machinery for later POI work).
+
+### 33C. Three Resolved Sub-Decisions Required Before Implementation
+
+1. **Wilder ATR(14) computation method** — fully specified in §33L, labeled `ENGINEERING-PROVISIONAL`, `AUTHOR-DECISION REQUIRED`.
+2. **Minimum Price Tick** — a single required, caller-supplied `Decimal` scoped to the one symbol under analysis (§33M), no invented default.
+3. **Deterministic non-overlapping Equal-Level cluster-formation algorithm** — fully specified step-by-step in §33I, labeled `ENGINEERING-PROVISIONAL`, `AUTHOR-DECISION REQUIRED`. None of the three is described as book-proven or empirically validated.
+
+### 33D. Processing Model and Ordering Policy (Corrected — Policy A)
+
+**Pure batch analysis over an immutable tuple.** `analyze_market_measurements()` accepts a complete `tuple[NormalizedCandle, ...]` for exactly one `InternalSymbol` and one `Timeframe`. **The analyzer requires canonically pre-sorted input and never silently sorts or normalizes it.** Canonical candle order:
+
+```
+(event_time_utc, record_id)
+```
+
+If the supplied tuple is not already in this exact order, `UnsortedCandleSequenceError` is raised. **No claim of insertion-order independence is made anywhere in this milestone** — the correct, single claim is: *deterministic output for the same valid, canonically ordered input*. Input order is a caller contract, not something the analyzer discovers or repairs.
+
+**`event_time_utc` values must be strictly increasing.** Two distinct candle records (different `record_id`) sharing the same `event_time_utc` are ambiguous for bar-index arithmetic (pivot windows, ATR sequencing, trendline anchor spacing all assume exactly one candle per instant) and are rejected with `AmbiguousEventTimeAnalysisError` — this is a real, previously-unaddressed case, since `market_data`'s own repository/replay layer legitimately preserves `EXACT_DUPLICATE`/`CONFLICTING_REVISION` pairs sharing one `event_time_utc` (per the 1B-G-REPLAY 5-case duplicate/revision policy). The analyzer does not choose between such candidates — revision selection and eligibility filtering remain an explicit upstream caller responsibility, never performed inside this milestone.
+
+**Replay integration requires no new engine and no new code path.** A caller consuming `InMemoryHistoricalReplaySource.advance_next_availability_group()` appends each returned group atomically to the visible canonical prefix and re-invokes `analyze_market_measurements()` on the longer prefix. Because there is exactly one deterministic engine, batch and replay results are identical **for the same visible candle prefix** — this is not a claim of equality *between* different prefixes (see §33E). The accepted O(n²)-across-a-full-replay-session cost (each checkpoint re-analyzes its full prefix) remains an explicit, documented, non-production tradeoff — an incremental-state optimization is a separate, future improvement, not built here.
+
+### 33E. Snapshot Semantics (Corrected)
+
+`MarketMeasurementAnalysis` is **a current analytical snapshot for exactly the supplied candle prefix** — never an append-only event stream, a lifecycle history, or a revision ledger. No public lifecycle-rewriting or event-history contract is implemented in this milestone.
+
+Across growing prefixes:
+- an output may newly appear once its confirming candle(s) become available;
+- a snapshot object's content may change where the approved algorithm legitimately grows it (e.g. an `EqualLevelCluster` gaining a member);
+- an output whose **semantic key** is unchanged retains the same `record_id` (§33H);
+- changed complete content always produces a different `content_fingerprint` (§33H);
+- no historical event log or supersession chain is claimed or exposed;
+- **batch/replay equivalence means equality for the same visible candle prefix — not equality between different prefixes.**
+
+### 33F. No-Look-Ahead Policy
+
+`output.availability_time_utc` = the latest `availability_time_utc` among all candles required to confirm that output. No result exists before its confirmation candle becomes available. No event-time-only release. No processing-time substitution. No future candle access.
+
+| Output | `availability_time_utc` source |
+|---|---|
+| `ConfirmedSwing` | `meaningful_confirmation_time_utc` |
+| `DisplacementObservation` | the candidate candle's own `availability_time_utc` |
+| `EqualLevelCluster` | `confirmation_time_utc` (the latest member swing's own `meaningful_confirmation_time_utc`) |
+| `SupportResistanceZone` | `confirmation_time_utc` (the confirming touch's candle availability) |
+| `Trendline` | `confirmation_time_utc` (the third qualifying touch's candle availability) |
+
+Multiple outputs confirmed at the same instant are released together in the analyzer's one deterministic pass, in the aggregate's fixed field order (§33K); no output is ever exposed via a partial mid-instant state.
+
+### 33G. Analytical Eligibility Boundary (Corrected — Explicit)
+
+`NormalizedCandle` structural validity does **not** imply `AnalyticalEligibility.ELIGIBLE`. `ValidationResult`/`ValidationStatus`/`AnalyticalEligibility` (`contracts/validation_result.py`) are a wholly separate contract family. `analyze_market_measurements()` receives only `candles: tuple[NormalizedCandle, ...]` — it never receives, inspects, or infers `ValidationStatus` or `AnalyticalEligibility`. The analyzer processes exactly the structurally-valid candles the caller supplies; **the caller is responsible for any eligibility gating and for revision selection among conflicting candles before calling this analyzer.** Repository membership (per `1B-G-REPLAY`'s own §32C three-axis distinction) does not imply analytical eligibility here either. A future validation-join/orchestration layer that combines `NormalizedCandle` with `ValidationResult` remains explicitly deferred and out of this milestone's scope.
+
+### 33H. Output Identity, Fingerprint, and Versioning Policy (Corrected)
+
+No random UUID generation anywhere in this milestone's code. The originally proposed stateful `next_record_id()`/`next_content_fingerprint()` provider is **removed** — a stateful, call-order-dependent generator cannot guarantee identity stability across the different numbers/orders of calls that a one-shot batch analysis versus an incrementally-built replay session would make before reaching the same final prefix.
+
+**Replacement: a pure, content-addressed identity provider.**
+
+```python
+class DerivedOutputType(StrEnum):
+    CONFIRMED_SWING = "CONFIRMED_SWING"
+    DISPLACEMENT_OBSERVATION = "DISPLACEMENT_OBSERVATION"
+    EQUAL_LEVEL_CLUSTER = "EQUAL_LEVEL_CLUSTER"
+    SUPPORT_RESISTANCE_ZONE = "SUPPORT_RESISTANCE_ZONE"
+    TRENDLINE = "TRENDLINE"
+
+class DerivedOutputIdentityProvider(Protocol):
+    def identify(
+        self, *, output_type: DerivedOutputType, semantic_key: tuple[str, ...]
+    ) -> UUID: ...
+```
+
+**Contract:** synchronous; referentially stable — the same `(output_type, semantic_key)` pair must return the same `UUIDv7`, regardless of call count or call order; repeated batch runs reproduce identities; growing-prefix replay preserves identities for every output whose semantic key is unchanged; no random generation occurs inside the analyzer itself — the caller's provider is solely responsible for deterministic minting (e.g. a canonical-hash-derived UUIDv7, or a caller-maintained idempotent lookup). Every `semantic_key` tuple element is a `str` — UUID components use the canonical lowercase-hyphenated form, `SemVer` components use its canonical string form. If a provider returns the same `UUIDv7` for two different semantic keys within one `analyze_market_measurements()` call, the analyzer raises `DerivedIdentityCollisionError`. Semantic keys, exactly, per output type:
+
+```
+CONFIRMED_SWING:
+    (symbol.value, timeframe.value, swing_type.value,
+     source_candle_id, confirmation_candle_id, rule_version)
+
+DISPLACEMENT_OBSERVATION:
+    (symbol.value, timeframe.value, source_candle_id, rule_version)
+
+EQUAL_LEVEL_CLUSTER:
+    (symbol.value, timeframe.value, cluster_type.value,
+     first_seed_swing_id, second_seed_swing_id, rule_version)
+
+SUPPORT_RESISTANCE_ZONE:
+    (symbol.value, timeframe.value, zone_type.value,
+     origin_swing_id, confirmation_candle_id, rule_version)
+
+TRENDLINE:
+    (symbol.value, timeframe.value, orientation.value,
+     first_anchor_swing_id, second_anchor_swing_id,
+     confirmation_candle_id, rule_version)
+```
+
+Note deliberately: a semantic key never includes mutable fields (e.g. `EqualLevelCluster`'s later-joining members beyond the two seeds) — this is precisely what lets `record_id` stay stable while `content_fingerprint` changes as a snapshot object legitimately grows (§33E).
+
+**Content fingerprint (corrected — analyzer-computed, not caller-supplied).** `content_fingerprint` is computed by the analyzer itself: SHA-256 of the canonical complete public output content, excluding only `record_id` and `content_fingerprint`. Canonical representation: fixed contract field order; enums as `.value`; UUIDs as canonical lowercase-hyphenated strings; `Decimal` as `format(value.normalize(), "f")` with negative zero normalized to `"0"`; `datetime` converted to UTC, ISO-8601 with microseconds and trailing `Z`; `SemVer` as its canonical string; tuples as ordered JSON arrays; `None` as `null`; `bool` as JSON `true`/`false`; integers as decimal integers; UTF-8 JSON; no extra whitespace; separators exactly `(",", ":")`; no unordered mappings anywhere in public analytical content. The fingerprint includes every public content field — evidence classification, rule/contract/schema version, and the complete current snapshot content — so: identical complete content always produces the same fingerprint; any changed member tuple, measurement, confirmation field, or version produces a different fingerprint; `record_id` may remain stable while `content_fingerprint` changes for an evolving snapshot object sharing the same semantic key. **No caller-provided opaque value is ever claimed to prove content integrity — the fingerprint's meaning is exactly this specified canonical hash, nothing else.**
+
+`provenance_id: UUIDv7` on every output remains a caller-supplied pointer to an external `ProvenanceRecord`, mirroring `RawCandle`/`NormalizedCandle`'s own convention — no `ProvenanceRecord`/`RuleVersionManifest` instance is constructed by this milestone's code.
+
+### 33I. Meaningful Swing Contracts (`domain/swings.py`) — Corrected
+
+Reuses the Meaningful Swing High and Swing Low Detection Standard V1 — Provisional exactly. `SwingStrength`/`STRONG_SWING` are **removed entirely** from this milestone — the standard's own "materially breached" qualifier for `STRONG_SWING` has no numeric definition anywhere in the approved standards, and per the principle "do not expose a strength enum value whose required rule is knowingly absent," this milestone emits only fully-approved-rule swings, with no strength classification at all. `STRONG_SWING` remains a candidate for a future milestone once "materially breached" is itself resolved as its own tracked author decision.
+
+```python
+class SwingType(StrEnum):
+    SWING_HIGH = "SWING_HIGH"
+    SWING_LOW = "SWING_LOW"
+
+class ConfirmedSwing(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    swing_type: SwingType
+    pivot_price: Decimal
+    pivot_bar_index: int
+    pivot_candle_record_ids: tuple[UUIDv7, ...]
+    pivot_start_time_utc: datetime
+    pivot_end_time_utc: datetime
+    local_confirmation_time_utc: datetime
+    meaningful_confirmation_time_utc: datetime
+    confirmation_candle_id: UUIDv7
+    pivot_reference_atr: Decimal
+    pivot_tie_tolerance: Decimal
+    reversal_threshold: Decimal
+    reversal_excursion: Decimal
+    availability_time_utc: datetime
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+```
+
+`source_candle_id` (the semantic-key component) is `pivot_candle_record_ids[0]` — the plateau's first/opening candle, a stable deterministic single-id reference. Only confirmed swings are emitted (no `FORMING`/`LOCAL_SWING_CANDIDATE`/`SUPERSEDED` records; superseded-candidate audit-trail persistence remains a documented future enhancement).
+
+**Explicit boundary rules (previously undocumented, now stated):** the first two candles of any supplied prefix can never be pivot candidates (no room for the required 2-candle left side); the final two candles of any supplied prefix can never yet be locally confirmed (no room for the required 2-candle right side) — both are structural consequences of the five-candle local pivot window, re-evaluated identically on every longer prefix. **Simultaneous high-and-low qualification:** if one candle's window makes it simultaneously the qualifying local extreme for both a swing high and a swing low, **neither is emitted** — this ambiguous case is excluded rather than arbitrarily resolved by candle color, body, or later price action, preserving the mandatory alternating Swing High/Swing Low sequence.
+
+### 33J. Displacement Contracts (`domain/displacement.py`) — Corrected
+
+Reuses only the single-candle-level portion of the Market Speed and Displacement Standard V1 — Provisional (§2). The shared leg-measurement primitives it and Support/Resistance's origin-reaction gating both need remain in `measurements/legs.py` (§6–§7 of the same standard), avoiding duplication.
+
+```python
+class DisplacementDirection(StrEnum):
+    BULLISH = "BULLISH"
+    BEARISH = "BEARISH"
+
+class DisplacementClassification(StrEnum):
+    NORMAL = "NORMAL"
+    FAST = "FAST"
+    VERY_FAST = "VERY_FAST"
+
+class DisplacementObservation(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    candle_record_id: UUIDv7
+    event_time_utc: datetime
+    availability_time_utc: datetime
+    total_range: Decimal
+    range_speed_ratio: Decimal
+    direction: DisplacementDirection
+    classification: DisplacementClassification
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+```
+
+`direction` is `BULLISH` when `close >= open`, else `BEARISH` — a deterministic tie-break for the doji boundary, not an invented threshold. `source_candle_id` (semantic key) = `candle_record_id`. **Zero-total-range candles are safe by construction:** `range_speed_ratio = 0` and `classification = NORMAL` always — no division by zero. No observation is emitted before the 20-candle preceding baseline exists (candle-level `range_speed_ratio` uses the median-range baseline, not ATR, so it is independent of the ATR warm-up window in §33L). An observation is never labeled "institutional" — only `NORMAL`/`FAST`/`VERY_FAST`.
+
+### 33K. Equal-Level Cluster Contracts (`domain/equal_levels.py`) — Corrected, Liquidity Merged In
+
+Reuses the Equal Highs and Equal Lows Tolerance and Drawing Standard V1 — Provisional (§4 tolerance, §5/§6 boundaries) exactly, plus the fully-specified deterministic cluster-formation algorithm below. **The separate `LiquidityReference` contract is removed** — as originally specified it duplicated `EqualLevelCluster` with zero new information (`liquidity_side` is a pure function of `cluster_type`; `reference_price` duplicated an existing boundary). Liquidity expectation is now exposed as computed properties on `EqualLevelCluster` itself.
+
+```python
+class EqualLevelType(StrEnum):
+    EQUAL_HIGH = "EQUAL_HIGH"
+    EQUAL_LOW = "EQUAL_LOW"
+
+class EqualLevelCluster(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    cluster_type: EqualLevelType
+    component_swing_record_ids: tuple[UUIDv7, ...]
+    cluster_spread: Decimal
+    equality_tolerance: Decimal
+    reference_atr: Decimal
+    zone_bottom: Decimal
+    zone_top: Decimal
+    representative_price: Decimal
+    confirmation_time_utc: datetime
+    availability_time_utc: datetime
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+
+    @property
+    def liquidity_side(self) -> str: ...   # "ABOVE_PRICE" for EQUAL_HIGH, "BELOW_PRICE" for EQUAL_LOW
+    @property
+    def reference_price(self) -> Decimal: ...  # == representative_price
+```
+
+**Exact deterministic non-overlapping cluster-formation algorithm** (`ENGINEERING-PROVISIONAL`, `AUTHOR-DECISION REQUIRED` — a grouping procedure, not a new numeric threshold; the approved Equality Tolerance formula is reused unmodified):
+
+Process confirmed swings separately by type (`HIGH` swings only ever cluster with `HIGH` swings; `LOW` only with `LOW`), in canonical `(event_time_utc, record_id)` order:
+
+1. Select the earliest unconsumed same-type swing as the seed.
+2. Select the next unconsumed same-type swing.
+3. A cluster requires at least two swings; the first two form a cluster only if their full prospective price spread satisfies the approved Equality Tolerance formula.
+4. Once a cluster exists, scan later same-type swings in order. For each candidate: `prospective_spread = max(current member prices, candidate price) − min(current member prices, candidate price)`.
+5. Add the candidate only when `prospective_spread ≤ equality_tolerance` (the running spread over the **entire current member set**, not merely the newest pair).
+6. On the first failing candidate: close the current cluster; the failing candidate becomes the seed of the next candidate cluster.
+7. **A swing belongs to at most one cluster; no overlapping clusters; no retroactive reuse of the last member of an already-closed cluster.**
+8. At the end of the supplied prefix: emit the active cluster only if it has ≥ 2 members; a lone open seed emits nothing.
+9. `representative_price = (zone_bottom + zone_top) / Decimal(2)`; `zone_bottom` = minimum member price; `zone_top` = maximum member price; `component_swing_record_ids` preserve chronological order.
+
+**Worked transitive-chain example** (A within tolerance of B; B within tolerance of C; A *not* within tolerance of C): result is cluster `{A, B}` (closed and emitted), and C begins the next candidate cluster — B is never reused, and no overlapping `{B, C}` cluster is ever formed.
+
+**Prefix-growth stability:** an *active* (not-yet-closed) end-of-prefix cluster may gain members in a later, longer-prefix snapshot re-analysis — its semantic ID stays stable (keyed by its first two seed swings), its `content_fingerprint` changes as membership changes (§33H). **A closed cluster is never reopened, regardless of what a longer prefix later reveals** — this is what preserves non-repainting.
+
+Semantic-key components: `first_seed_swing_id`/`second_seed_swing_id` = the two swings that originally formed the cluster (its first two members, permanently fixed even if later members join). `NOT_EQUAL` candidates (spread beyond tolerance, or a lone seed) are never emitted.
+
+### 33L. Wilder ATR(14) Gap-Fill — Fully Specified (`measurements/atr.py`)
+
+**`ENGINEERING-PROVISIONAL`, `AUTHOR-DECISION REQUIRED`.** `period = 14`, fixed.
+
+```
+True Range:
+  TR[0] = high[0] - low[0]
+  TR[i] = max(high[i] - low[i],
+              abs(high[i] - close[i-1]),
+              abs(low[i]  - close[i-1]))   for i > 0
+
+Warm-up:
+  ATR is unavailable for indices 0 through 12.
+  First ATR is available at index 13 (seed):
+    ATR[13] = sum(TR[0:14]) / Decimal(14)
+
+Recurrence, for i >= 14:
+  ATR[i] = (ATR[i-1] * Decimal(13) + TR[i]) / Decimal(14)
+```
+
+`Decimal` only, no `float` conversion at any step; no quantization; no manual rounding; finite values only; `ATR = 0` is permitted where every seed range is genuinely zero. No detector consumes a `pivot_reference_atr`/`creator_reference_atr`/`anchor_reference_atr` value before index 13 exists for the relevant candle — this cascades as a real, now-explicit minimum-history floor (15 candles: 1 previous-close reference + 14 True Range values) into every ATR-consuming detector (swings, support/resistance, trendlines). Displacement's `range_speed_ratio` does **not** depend on ATR (median-baseline only, §33J) and is unaffected by this floor. This method is recorded as provisional — not empirically validated, not production-approved.
+
+### 33M. Configuration and Threshold Provenance (`domain/configuration.py`) — Corrected
+
+```python
+class MarketMeasurementConfiguration(ContractModel):
+    minimum_price_tick: Decimal
+
+    atr_period: int = 14
+    range_context_window: int = 20
+
+    pivot_tie_tolerance_atr_multiplier: Decimal = Decimal("0.02")
+    meaningful_reversal_atr_multiplier: Decimal = Decimal("0.50")
+
+    equal_level_tolerance_atr_multiplier: Decimal = Decimal("0.10")
+
+    trendline_min_anchor_spacing_bars: int = 5
+    trendline_horizontal_atr_multiplier: Decimal = Decimal("0.02")
+    trendline_too_steep_atr_multiplier: Decimal = Decimal("0.35")
+    trendline_touch_tolerance_atr_multiplier: Decimal = Decimal("0.10")
+    trendline_pierce_tolerance_atr_multiplier: Decimal = Decimal("0.20")
+
+    support_resistance_zone_depth_atr_multiplier: Decimal = Decimal("0.10")
+    support_resistance_touch_tolerance_atr_multiplier: Decimal = Decimal("0.05")
+    support_resistance_pierce_tolerance_atr_multiplier: Decimal = Decimal("0.15")
+
+    displacement_fast_ratio: Decimal = Decimal("1.50")
+    displacement_very_fast_ratio: Decimal = Decimal("2.00")
+
+    reaction_window_bars: int = 5
+    reaction_standard_atr_ratio: Decimal = Decimal("0.75")
+    reaction_standard_zone_clearance_ratio: Decimal = Decimal("1.00")
+    reaction_standard_directional_efficiency: Decimal = Decimal("0.50")
+    reaction_standard_directional_candle_share: Decimal = Decimal("0.60")
+    reaction_strong_atr_ratio: Decimal = Decimal("1.25")
+    reaction_strong_zone_clearance_ratio: Decimal = Decimal("1.50")
+    reaction_strong_directional_efficiency: Decimal = Decimal("0.60")
+    reaction_strong_directional_candle_share: Decimal = Decimal("0.67")
+
+    leg_fast_normalized_speed_per_bar: Decimal = Decimal("0.50")
+    leg_fast_directional_efficiency: Decimal = Decimal("0.60")
+    leg_fast_directional_candle_share: Decimal = Decimal("0.67")
+    leg_strong_fast_normalized_speed_per_bar: Decimal = Decimal("0.75")
+    leg_strong_fast_directional_efficiency: Decimal = Decimal("0.75")
+    leg_strong_fast_directional_candle_share: Decimal = Decimal("0.80")
+
+    rule_version: SemVer = SemVer.parse("1.0.0")
+    contract_version: SemVer = SemVer.parse("0.1.0")
+    schema_version: SemVer = SemVer.parse("0.1.0")
+    evidence_classification: EvidenceClassification = EvidenceClassification.ENGINEERING_PROVISIONAL
+```
+
+**`minimum_price_tick` is corrected to a single required `Decimal` field** (replacing the original three per-symbol fields) — since the analyzer already hard-rejects mixed-symbol input, one tick value scoped to the single symbol under analysis is sufficient and simpler; no default, must be strictly greater than zero, finite, `Decimal` only, no broker-precision inference, no `float`, not timeframe-specific. The caller supplies the correct tick for whichever of XAUUSD/EURUSD/GBPUSD is being analyzed in that call. This configuration shape requires explicit author confirmation but is not itself a market threshold. Every multiplier value is copied verbatim from its cited `MEASUREMENT_STANDARDS.md` section (§33I–§33K, §33L cite the exact section per contract/gap-fill). `strong_swing_atr_multiplier` and all `equal_level_strong_atr_multiplier`/`equal_level_standard_atr_multiplier` fields are removed along with the strength classifications they fed (§33I, §33K). `Decimal` throughout, no `float`. Threshold classification for every field: `AUTHOR-APPROVED`, `ENGINEERING-PROVISIONAL` — none is claimed `EMPIRICALLY-CALIBRATED`, `OUT-OF-SAMPLE-VALIDATED`, or `PRODUCTION-APPROVED`.
+
+### 33N. Support and Resistance Contracts (`domain/support_resistance.py`) — Corrected, Confirmed-Only
+
+Reuses the Support and Resistance Detection and Validation Standard V1 — Provisional exactly for origin eligibility, fixed creator-based boundaries, origin-reaction gating (reusing the POI Reaction Strength Standard's formulas generically against the zone's own boundaries, never against any POI), and distinct-touch confirmation. **Corrected scope: this milestone emits only fully confirmed immutable reference zones — no `DRAFT`, `STRONG`, or `*_BREAK_CANDIDATE` status is ever publicly exposed.** `SUPPORT_BREAK_CANDIDATE`/`RESISTANCE_BREAK_CANDIDATE` is the literal entry point into the still-deferred Ambiguity-15 lifecycle; emitting it with no path to ever resolve what follows would be a dangling signal. Internal candidate tracking (DRAFT-equivalent working state) may exist privately during detection but is never exported or emitted.
+
+```python
+class SupportResistanceType(StrEnum):
+    SUPPORT = "SUPPORT"
+    RESISTANCE = "RESISTANCE"
+
+class SupportResistanceZone(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    zone_type: SupportResistanceType
+    origin_swing_record_id: UUIDv7
+    creator_reference_atr: Decimal
+    zone_depth: Decimal
+    zone_top: Decimal
+    zone_bottom: Decimal
+    qualifying_touch_swing_record_ids: tuple[UUIDv7, ...]
+    confirmation_candle_id: UUIDv7
+    confirmation_time_utc: datetime
+    availability_time_utc: datetime
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+```
+
+A zone is emitted only once it reaches the standard's `CONFIRMED_SUPPORT`/`CONFIRMED_RESISTANCE` threshold (origin + at least one additional distinct qualifying touch, `qualifying_touch_swing_record_ids` therefore always has ≥ 1 entry); `confirmation_candle_id` is the confirming touch's candle. A zone whose origin reaction is only `WEAK_REACTION` is never created. Touch *count* beyond the minimum (informally "strong") remains fully recoverable by a downstream consumer from `len(qualifying_touch_swing_record_ids)` — no separate strength status is needed or exposed. A zone is a bounded price representation (`zone_top`/`zone_bottom`), never a single price; one contract covers both Support and Resistance via `zone_type`. A confirmed zone's public content never mutates because of later touches within this milestone — later touches, break candidates, reclaim, invalidation, and the full Ambiguity-15 lifecycle all remain deferred to a future Lifecycle Foundation milestone.
+
+### 33O. Trendline Contracts (`domain/trendlines.py`) — Corrected, Confirmed-Only
+
+Reuses the Bullish and Bearish Trendline Detection and Validation Standard V1 — Provisional exactly for anchor eligibility, ≥5-bar spacing, the slope equation, Normalized-Slope steepness rejection, inter-anchor integrity, and touch/pierce tolerances. **Corrected scope: emits only a fully confirmed trendline reference — no `DRAFT`, `STRONG`, `BREAK_CANDIDATE`, `BROKEN`, or `INVALIDATED` status is ever publicly exposed.** Break and lifecycle detection remain deferred (Trendlines were already explicitly excluded from Ambiguity-15's scope). `TrendlineSlopeClassification` is also removed — since only `VALID_SLOPE` anchor pairs ever reach a confirmed trendline, a single-value-forever public enum added no information.
+
+```python
+class TrendlineOrientation(StrEnum):
+    BULLISH_TRENDLINE = "BULLISH_TRENDLINE"
+    BEARISH_TRENDLINE = "BEARISH_TRENDLINE"
+
+class Trendline(ContractModel):
+    record_id: UUIDv7
+    content_fingerprint: SHA256Fingerprint
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    orientation: TrendlineOrientation
+    anchor_1_swing_record_id: UUIDv7
+    anchor_2_swing_record_id: UUIDv7
+    anchor_1_price: Decimal
+    anchor_2_price: Decimal
+    anchor_1_bar_index: int
+    anchor_2_bar_index: int
+    raw_slope: Decimal
+    anchor_reference_atr: Decimal
+    normalized_slope: Decimal
+    qualifying_touch_swing_record_ids: tuple[UUIDv7, ...]
+    confirmation_candle_id: UUIDv7
+    confirmation_time_utc: datetime
+    availability_time_utc: datetime
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+    evidence_classification: EvidenceClassification
+    provenance_id: UUIDv7
+```
+
+A `Trendline` is emitted only once a third distinct qualifying touch confirms it (`qualifying_touch_swing_record_ids` always has ≥ 1 entry — the touches beyond the two anchors); `confirmation_candle_id` is the third touch's candle. **Slope units, made explicit (previously implicit only in the formula):** `raw_slope` is **price per candle-index step** — never price per unit time. The x-coordinate is the candle's zero-based sequence index in the analyzed canonical input, not a timestamp:
+
+```
+raw_slope = (anchor_2_price - anchor_1_price)
+            / Decimal(anchor_2_bar_index - anchor_1_bar_index)
+```
+
+The denominator is always strictly positive (the ≥5-bar minimum-spacing rule structurally prevents zero/negative distance — no division-by-zero risk). `Decimal` throughout, no `float`. Multiple competing candidate trendlines are preserved independently, deterministically ordered by `(anchor_1_bar_index, anchor_2_bar_index, anchor_1_swing_record_id)`; none is ever ranked "best," merged, or silently dropped. Trendlines remain reference structures, never bounded POIs.
+
+### 33P. Public API and Error Vocabulary (`domain/analyzer.py`) — Corrected, Renamed
+
+```python
+def analyze_market_measurements(
+    candles: tuple[NormalizedCandle, ...],
+    configuration: MarketMeasurementConfiguration,
+    identity_provider: DerivedOutputIdentityProvider,
+) -> MarketMeasurementAnalysis: ...
+```
+
+Exactly 7 `ValueError` subclasses, defined once in `domain/analyzer.py`:
+
+1. `MixedSymbolAnalysisError` — mixed-symbol input.
+2. `MixedTimeframeAnalysisError` — mixed-timeframe input.
+3. `UnsortedCandleSequenceError` — input not in canonical `(event_time_utc, record_id)` order (§33D).
+4. `DuplicateCandleRecordError` — any repeated `record_id` in the input.
+5. `AmbiguousEventTimeAnalysisError` — two distinct records sharing one `event_time_utc` (§33D, new).
+6. `InvalidMarketMeasurementConfigurationError` — invalid/missing configuration (defense-in-depth; structurally guarded by required fields).
+7. `DerivedIdentityCollisionError` — identity provider returns one `UUIDv7` for two different semantic keys in one call (§33H, new).
+
+Behavior: empty tuple → a valid empty `MarketMeasurementAnalysis` (`symbol = None`, `timeframe = None`, `analyzed_candle_count = 0`, every output tuple empty), never an exception; insufficient history for any one output family → that family's tuple is empty, others populate normally; "unsupported analytical condition" is never a generic exception — each standard's own closed-vocabulary rejection is handled by simply not emitting a record.
+
+### 33Q. Aggregate Result (`domain/analyzer.py`) — Corrected Field Order
+
+```python
+class MarketMeasurementAnalysis(ContractModel):
+    symbol: InternalSymbol | None
+    timeframe: Timeframe | None
+    analyzed_candle_count: int
+    confirmed_swings: tuple[ConfirmedSwing, ...]
+    displacement_observations: tuple[DisplacementObservation, ...]
+    equal_level_clusters: tuple[EqualLevelCluster, ...]
+    support_resistance_zones: tuple[SupportResistanceZone, ...]
+    trendlines: tuple[Trendline, ...]
+```
+
+`liquidity_references` is removed (§33K). No POI, BTMM, or structure-transition field exists anywhere in this contract or any of its members.
+
+### 33R. Batch/Replay Equivalence Procedure (New, Fully Specified)
+
+For each replay availability group: (1) append the full group atomically to the visible canonical prefix; (2) call `analyze_market_measurements()` on that prefix; (3) independently call direct batch analysis on the identical prefix, using the same deterministic `DerivedOutputIdentityProvider`; (4) compare the complete `MarketMeasurementAnalysis` values — they must be equal; (5) verify every unchanged semantic key retains its `record_id`; (6) verify every changed complete content changes its `content_fingerprint`; (7) verify no future candle affected the result; (8) verify a permutation *inside* one availability group cannot occur, since the visible prefix is always canonical by `event_time_utc` (§33D) regardless of the group's internal delivery order from the replay source.
+
+### 33S. Protocol and Replay Integration Audit
+
+No modification to any existing `market_data` Protocol — `RawCandleSink`, `NormalizedCandleSink`, `CandleReadRepository`, `HistoricalReplaySource` are untouched. This milestone consumes `NormalizedCandle` directly from `contracts/normalized_candle.py`, never from `market_data`. The one new Protocol, `DerivedOutputIdentityProvider`, is local to `domain/analyzer.py`; it is intentionally not `@runtime_checkable`, matching every other Protocol in this codebase, and conformance is verified structurally, never via `isinstance()`/`issubclass()`.
+
+### 33T. Dependency-Direction Correction to `REPOSITORY_SCAFFOLD_PLAN.md`
+
+Unchanged from the original proposal: `measurements/` depends on `contracts`, `config` only; `domain/` depends on `measurements`, `contracts`, `config` only — correcting a Phase-1A drafting gap that predates the `market_data`/`contracts` package split. No other directory's documented dependency direction is touched.
+
+### 33U. Exact File Scope — 22 New Paths, 0 Modified (Renamed, Same Count)
+
+**13 new source paths** (unchanged filenames; corrected contents per §33H–§33Q):
+
+| # | Path | Contents |
+|---|---|---|
+| 1 | `src/btmm_ai_scanner/measurements/__init__.py` | Package marker, 10 exports |
+| 2 | `src/btmm_ai_scanner/measurements/candle_metrics.py` | Total Range, Body, wick shares, close positions, size ratio, range context ratio |
+| 3 | `src/btmm_ai_scanner/measurements/atr.py` | Wilder ATR(14), fully specified (§33L) |
+| 4 | `src/btmm_ai_scanner/measurements/legs.py` | Shared leg-measurement primitives, FAST/STRONG_FAST/SLOW_OR_UNCLEAR classification |
+| 5 | `src/btmm_ai_scanner/domain/__init__.py` | Package marker, 23 exports (§33W) |
+| 6 | `src/btmm_ai_scanner/domain/configuration.py` | `MarketMeasurementConfiguration` (§33M) |
+| 7 | `src/btmm_ai_scanner/domain/enums.py` | `SwingType`, `DisplacementDirection`, `DisplacementClassification`, `EqualLevelType`, `SupportResistanceType`, `TrendlineOrientation`, `DerivedOutputType` |
+| 8 | `src/btmm_ai_scanner/domain/swings.py` | `ConfirmedSwing` + detection (§33I) |
+| 9 | `src/btmm_ai_scanner/domain/displacement.py` | `DisplacementObservation` + detection (§33J) |
+| 10 | `src/btmm_ai_scanner/domain/equal_levels.py` | `EqualLevelCluster` (liquidity properties merged in) + detection (§33K) |
+| 11 | `src/btmm_ai_scanner/domain/support_resistance.py` | `SupportResistanceZone` + detection (§33N) |
+| 12 | `src/btmm_ai_scanner/domain/trendlines.py` | `Trendline` + detection (§33O) |
+| 13 | `src/btmm_ai_scanner/domain/analyzer.py` | `DerivedOutputIdentityProvider`, 7 exceptions, `MarketMeasurementAnalysis`, `analyze_market_measurements` (§33H, §33P–§33Q) |
+
+**9 new test paths (§33V), one renamed relative to the original proposal:** `tests/unit/test_market_structure_configuration.py` → `tests/unit/test_market_measurement_configuration.py`; the remaining 8 filenames are unchanged. **0 modified existing paths.** Creation order 76–97, unchanged.
+
+### 33V. Exact Test Coverage — 70 New Top-Level Test Functions (Corrected)
+
+**`tests/unit/test_market_measurement_configuration.py` — 6:**
+1. `test_market_measurement_configuration_default_values_match_approved_standards`
+2. `test_market_measurement_configuration_is_frozen_and_immutable`
+3. `test_market_measurement_configuration_requires_minimum_price_tick_with_no_default`
+4. `test_market_measurement_configuration_rejects_non_positive_minimum_price_tick`
+5. `test_market_measurement_configuration_rejects_non_positive_atr_period`
+6. `test_market_measurement_configuration_rejects_non_positive_range_context_window`
+
+**`tests/unit/test_confirmed_swings.py` — 10:**
+1. `test_confirmed_swing_detection_confirms_swing_high_after_meaningful_reversal`
+2. `test_confirmed_swing_detection_confirms_swing_low_after_meaningful_reversal`
+3. `test_confirmed_swing_detection_handles_adjacent_pivot_plateau_as_one_swing`
+4. `test_confirmed_swing_detection_supersedes_unconfirmed_candidate_with_more_extreme_price`
+5. `test_confirmed_swing_detection_never_exposes_a_swing_before_meaningful_confirmation_time`
+6. `test_confirmed_swing_detection_alternates_swing_high_and_swing_low`
+7. `test_confirmed_swing_detection_excludes_first_and_last_two_candles_from_pivot_eligibility`
+8. `test_confirmed_swing_detection_emits_neither_direction_for_simultaneous_high_and_low_qualification`
+9. `test_confirmed_swing_detection_derives_pivot_reference_atr_from_wilder_seed_and_recurrence`
+10. `test_confirmed_swing_detection_returns_empty_tuple_when_atr_is_not_yet_available`
+
+**`tests/unit/test_displacement.py` — 6:**
+1. `test_displacement_detection_classifies_normal_range_speed`
+2. `test_displacement_detection_classifies_fast_range_speed`
+3. `test_displacement_detection_classifies_very_fast_range_speed`
+4. `test_displacement_detection_excludes_candidate_candle_from_its_own_baseline`
+5. `test_displacement_detection_classifies_zero_range_candle_as_normal_without_division_error`
+6. `test_displacement_detection_assigns_bullish_or_bearish_direction`
+
+**`tests/unit/test_equal_levels.py` — 9:**
+1. `test_equal_level_cluster_confirms_equal_highs_within_tolerance`
+2. `test_equal_level_cluster_confirms_equal_lows_within_tolerance`
+3. `test_equal_level_cluster_rejects_spread_beyond_tolerance`
+4. `test_equal_level_cluster_resolves_transitive_chain_without_forming_an_invalid_cluster`
+5. `test_equal_level_cluster_prevents_swing_reuse_across_clusters`
+6. `test_equal_level_cluster_requires_distinct_confirmed_meaningful_swings`
+7. `test_equal_level_cluster_growth_retains_record_id_and_changes_content_fingerprint`
+8. `test_equal_level_cluster_liquidity_side_is_a_computed_property_not_a_separate_object`
+9. `test_equal_level_cluster_representative_price_is_the_zone_midpoint`
+
+**`tests/unit/test_support_resistance.py` — 10:**
+1. `test_support_resistance_zone_boundaries_derive_from_origin_swing_and_horizontal_depth`
+2. `test_support_zone_confirms_after_second_distinct_qualifying_touch`
+3. `test_resistance_zone_confirms_after_second_distinct_qualifying_touch`
+4. `test_support_resistance_zone_rejects_origin_with_only_weak_reaction`
+5. `test_support_resistance_zone_requires_opposite_swing_between_same_type_touches`
+6. `test_support_resistance_zone_never_emits_draft_or_break_candidate_status`
+7. `test_support_resistance_zone_boundaries_never_move_after_creation`
+8. `test_support_resistance_zone_preserves_multiple_independent_candidates`
+9. `test_support_resistance_zone_touch_count_is_recoverable_from_qualifying_touch_ids`
+10. `test_support_resistance_zone_semantic_identity_is_stable_across_growing_prefixes`
+
+**`tests/unit/test_trendlines.py` — 10:**
+1. `test_trendline_requires_two_confirmed_meaningful_swing_anchors`
+2. `test_trendline_rejects_anchors_within_pivot_tie_tolerance_as_horizontal_candidate`
+3. `test_trendline_rejects_anchors_closer_than_minimum_bar_spacing`
+4. `test_trendline_classifies_valid_slope`
+5. `test_trendline_rejects_too_steep_slope`
+6. `test_trendline_rejects_anchor_pair_on_pierce_tolerance_violation`
+7. `test_trendline_confirms_after_third_qualifying_touch`
+8. `test_trendline_preserves_multiple_competing_candidates_without_ranking`
+9. `test_trendline_slope_is_price_per_candle_index_not_price_per_time`
+10. `test_trendline_never_emits_draft_or_break_candidate_status`
+
+**`tests/unit/test_analyzer_api.py` — 8:**
+1. `test_analyze_market_measurements_rejects_mixed_symbol_input`
+2. `test_analyze_market_measurements_rejects_mixed_timeframe_input`
+3. `test_analyze_market_measurements_rejects_unsorted_input`
+4. `test_analyze_market_measurements_rejects_duplicate_record_id_input`
+5. `test_analyze_market_measurements_rejects_ambiguous_tied_event_time_input`
+6. `test_analyze_market_measurements_rejects_missing_instrument_metadata`
+7. `test_analyze_market_measurements_returns_empty_aggregate_for_empty_input`
+8. `test_analyze_market_measurements_is_deterministic_across_repeated_calls`
+
+**`tests/unit/test_batch_replay_equivalence.py` — 6:**
+1. `test_batch_and_replay_produce_identical_confirmed_swings_for_the_same_prefix`
+2. `test_batch_and_replay_produce_identical_trendlines_for_the_same_prefix`
+3. `test_batch_and_replay_produce_identical_support_resistance_zones_for_the_same_prefix`
+4. `test_unchanged_semantic_keys_retain_the_same_record_id_across_growing_prefixes`
+5. `test_replay_group_ingestion_processes_simultaneous_availability_candles_together`
+6. `test_identity_provider_raises_on_semantic_key_collision_within_one_call`
+
+**`tests/unit/test_domain_exports.py` — 5:**
+1. `test_measurements_and_domain_exports_import_successfully`
+2. `test_domain_exports_exact_23_names_and_order`
+3. `test_measurements_exports_exact_names_and_order`
+4. `test_domain_contracts_expose_no_poi_btmm_or_structure_transition_fields`
+5. `test_domain_aggregate_field_order_matches_approved_contract`
+
+**Total new: 70** (6+10+6+9+10+10+8+6+5, unchanged distribution). No test classes, no generated tests, no helper beginning with `test_`, no skip/xfail, no vacuous assertion. **Combined with the existing 236: 306** (unchanged). Coverage mapping note: several closely related required-behaviors are verified together within one richer test rather than one-test-per-bullet (e.g. ATR seed **and** recurrence in `test_confirmed_swing_detection_derives_pivot_reference_atr_from_wilder_seed_and_recurrence`); "call-order independence" and "same content produces the same fingerprint" are verified as direct corollaries of `test_analyze_market_measurements_is_deterministic_across_repeated_calls` rather than by separate dedicated tests; the analytical-eligibility boundary (§33G) is a documentation-verified structural guarantee (the analyzer's signature has no `ValidationResult` parameter at all), not something a runtime test can meaningfully assert against.
+
+### 33W. Public Exports — Corrected
+
+**`measurements/__init__.py` — unchanged, 10 names:** `total_range`, `body`, `body_efficiency`, `upper_wick`, `lower_wick`, `bullish_close_position`, `bearish_close_position`, `median_total_range`, `range_speed_ratio`, `compute_atr_series`.
+
+**`domain/__init__.py` — corrected, exactly 23 names, in this order:**
+1. `SwingType`
+2. `DisplacementDirection`
+3. `DisplacementClassification`
+4. `EqualLevelType`
+5. `SupportResistanceType`
+6. `TrendlineOrientation`
+7. `DerivedOutputType`
+8. `ConfirmedSwing`
+9. `DisplacementObservation`
+10. `EqualLevelCluster`
+11. `SupportResistanceZone`
+12. `Trendline`
+13. `MarketMeasurementAnalysis`
+14. `MarketMeasurementConfiguration`
+15. `MixedSymbolAnalysisError`
+16. `MixedTimeframeAnalysisError`
+17. `UnsortedCandleSequenceError`
+18. `DuplicateCandleRecordError`
+19. `AmbiguousEventTimeAnalysisError`
+20. `InvalidMarketMeasurementConfigurationError`
+21. `DerivedIdentityCollisionError`
+22. `DerivedOutputIdentityProvider`
+23. `analyze_market_measurements`
+
+**Total new public exports across both packages: 33** (10 + 23). Removed relative to the original proposal: `SwingStrength` (§33I), `LiquidityReference`/`LiquiditySide`/`LiquidityReferenceStatus` (§33K), `EqualLevelClusterStrength`/`EqualLevelClusterStatus` (§33K), `SupportResistanceZoneStatus` (§33N), `TrendlineSlopeClassification`/`TrendlineStatus` (§33O) — none of these is exported merely to preserve the former count; each removal is a documented, motivated narrowing. No mutable registry, internal candidate, canonical-serialization helper, hash helper, internal analyzer, lifecycle placeholder, or private helper function is exported by either package.
+
+### 33X. Performance and Determinism
+
+Deterministic results for the same canonically-ordered input (never "insertion-order independent" — §33D); stable total ordering via `(event_time_utc, record_id)` and, for Trendlines, `(anchor_1_bar_index, anchor_2_bar_index, anchor_1_swing_record_id)`; no global cache; no hidden parallelism; no thread requirement. ATR/median-range computation is a single linear pass per call; swing/cluster/zone/trendline detection are each linear-to-`n-log-n` in the number of confirmed swings, never quadratic in candle count for a single batch call. The accepted O(n²)-across-a-replay-session cost (§33D) remains a deliberate, non-premature-optimization tradeoff, separate from correctness.
+
+### 33Y. Explicit Exclusions
+
+POI creation; order blocks; FVGs; engulfing/hammer/star POIs; BTMM lifecycle; manipulation detection; trade entries; stop loss; take profit; position sizing; chart drawing; TradingView integration; Telegram; news; AI inference; backtesting performance metrics; paper trading; broker connectivity; MT5/MT4 execution; market-structure state, HH/HL/LH/LL, BOS, CHoCH, protected/weak swings — reserved for a future, separate `Structure State and Transition Foundation` milestone once an approved standard exists (`P0G-B003`); automated Equal High/Low or Trendline specialized lifecycle (`P0G-B004`/`P0G-B005`); the full Ambiguity-15 reclaim/invalidation state machine; `DRAFT`/`STRONG`/`*_BREAK_CANDIDATE` public statuses for Support/Resistance and Trendline (§33N/§33O); production approval.
+
+### 33Z. Baseline, Quality Gates, and Stop Conditions
+
+**Preflight (future implementation turn):** clean, synchronized `main` at `9ce3efb7fce65fbaa0fa96be427db04da5d20503`; Python `3.12.13`, `uv` `0.11.30`, Pydantic `2.13.4`; `uv lock --check` passes; existing full suite 328 passed; existing original suite 34 passed; existing combined top-level tests 236; no `measurements`/`domain` path yet exists; no dependency diff.
+
+**Final gates:** `uv lock --check`; `ruff format --check .`; `ruff check .`; `mypy src tests`; `pytest -q` (full suite, expected 306 + any parametrized-collection difference explained exactly as in prior closures); `pytest -q` on the two baseline files (34 passed). Exact 22 changed paths (13 source + 9 test, 0 modified); exact 70 new top-level test functions; exact 33 new public exports across the 2 new packages.
+
+**Mandatory stop conditions:** dirty/diverged repository; a test total differing from this document's record at review time; any dependency change; any existing file modification; a genuine `market_data` Protocol extension becoming necessary; a numeric threshold not traceable to a cited `MEASUREMENT_STANDARDS.md` section or to §33C's three explicitly-labeled gap-fills; any BOS/CHoCH/HH/HL/LH/LL implementation attempt; a stateful call-order-dependent identity mechanism reappearing; an uncanonicalized fingerprint reappearing; `HEAD` changing after baseline capture; any temporary file. On any of these, stop and report.
+
+### 33AA. Author Decisions Still Required
+
+1. Approve milestone rename to `1B-H-MEASUREMENTS` / "Market Measurements and Reference Structures Foundation."
+2. Confirm BOS/CHoCH and protected/weak structure-state deferral (`P0G-B003`) and the reservation of a future `Structure State and Transition Foundation` milestone.
+3. Approve the pure semantic-key `DerivedOutputIdentityProvider.identify()` contract (§33H).
+4. Approve the canonical complete-content fingerprint scheme (§33H).
+5. Approve snapshot semantics (§33E) — current-prefix snapshot, not an event stream.
+6. Approve strict canonically pre-sorted, strictly-increasing-`event_time_utc` input, with `AmbiguousEventTimeAnalysisError` for ties (§33D).
+7. Approve Wilder ATR(14), fully specified, as `ENGINEERING-PROVISIONAL` (§33L).
+8. Approve the single required positive `Decimal` `minimum_price_tick` configuration shape (§33M).
+9. Approve the deterministic non-overlapping Equal-Level clustering algorithm (§33K).
+10. Approve removal of the separate `LiquidityReference` contract in favor of computed properties (§33K).
+11. Approve Support/Resistance confirmed-only narrowing — no `DRAFT`/`STRONG`/`*_BREAK_CANDIDATE` (§33N).
+12. Approve Trendline confirmed-only narrowing — no `DRAFT`/`STRONG`/`BREAK_CANDIDATE` (§33O).
+13. Approve removal of `STRONG_SWING`/`SwingStrength` (§33I).
+
+**Status: `AUTHOR-APPROVED`, `AUTHORIZED FOR ONE COMPLETE CONTROLLED IMPLEMENTATION CYCLE`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** All 13 items above are approved without modification — see §33AB.
+
+### 33AB. Author Approval Record
+
+**Author decision: `APPROVED`.** The author explicitly approved the corrected `1B-H-MEASUREMENTS` Market Measurements and Reference Structures Foundation architecture exactly as documented (§33A–§33AA), with no modification to any corrected element. **Approved status: `AUTHOR-APPROVED`, `AUTHORIZED FOR ONE COMPLETE CONTROLLED IMPLEMENTATION CYCLE`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+**Exact approved scope:** 22 implementation paths (13 source files, 9 test files, 0 modified); 70 new top-level test functions (306 combined with the existing 236); 33 combined public exports (10 `measurements/` + 23 `domain/`); inventory 76 → 98 under batch tag `1B-H-MEASUREMENTS`; no dependency change; no existing `market_data` Protocol modification.
+
+The author approved, without modification, all 13 items listed in §33AA: (1) the rename to `1B-H-MEASUREMENTS`; (2) deferral of BOS, CHoCH, HH/HL/LH/LL, protected/weak swings, and structure direction/state to a future `Structure State and Transition Foundation` (`P0G-B003`); (3) strict canonical pre-sorted input; (4) strictly increasing `event_time_utc`; (5) `AmbiguousEventTimeAnalysisError` for tied event times; (6) snapshot semantics for `MarketMeasurementAnalysis`; (7) the pure semantic-key `DerivedOutputIdentityProvider.identify()` contract, returning `UUIDv7`; (8) analyzer-owned canonical SHA-256 `content_fingerprint`; (9) Wilder ATR(14) as `AUTHOR-APPROVED`/`ENGINEERING-PROVISIONAL`; (10) the single required positive `Decimal` `minimum_price_tick`; (11) the deterministic non-overlapping Equal-Level clustering algorithm; (12) removal of `STRONG_SWING`/`SwingStrength`; (13) removal of the separate `LiquidityReference` contract; plus confirmed-only Support/Resistance and Trendline outputs, and caller responsibility for analytical-eligibility gating and revision selection.
+
+**This approval authorizes exactly one complete implementation cycle** covering all 22 approved paths at once (no per-file decision groups), followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use. Implementation has not started as of this record — this remains a documentation-only approval.**
+
+**Next action:** commit and push this documentation-only author approval, then implement all 22 approved paths in one complete controlled cycle, followed by one final architectural audit, at most one correction cycle for a genuine defect, one implementation commit, and one compact closure commit.
