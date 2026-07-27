@@ -5,8 +5,12 @@ from btmm_ai_scanner.market_data.gap_observation import (
     GapObservation,
     observe_potential_gap,
 )
+from btmm_ai_scanner.market_data.historical_replay import InMemoryHistoricalReplaySource
 from btmm_ai_scanner.market_data.idempotency import evaluate_idempotency
 from btmm_ai_scanner.market_data.normalization import normalize_raw_candle
+from btmm_ai_scanner.market_data.normalized_candle_repository import (
+    InMemoryNormalizedCandleRepository,
+)
 from btmm_ai_scanner.market_data.ports import (
     CandleReadRepository,
     HistoricalReplaySource,
@@ -16,6 +20,11 @@ from btmm_ai_scanner.market_data.ports import (
 from btmm_ai_scanner.market_data.raw_candle_builder import (
     build_historical_raw_candle,
     build_live_raw_candle,
+)
+from btmm_ai_scanner.market_data.raw_candle_repository import (
+    InMemoryRawCandleRepository,
+    InvalidTimeRangeError,
+    RecordIdentityConflictError,
 )
 from btmm_ai_scanner.market_data.results import IngestionOutcome, IngestionResult
 from btmm_ai_scanner.market_data.source_input import SourceCandleInput
@@ -49,4 +58,9 @@ __all__ = [  # noqa: RUF022 -- order is an approved contract, not alphabetical
     "NormalizedCandleSink",
     "CandleReadRepository",
     "HistoricalReplaySource",
+    "RecordIdentityConflictError",
+    "InvalidTimeRangeError",
+    "InMemoryRawCandleRepository",
+    "InMemoryNormalizedCandleRepository",
+    "InMemoryHistoricalReplaySource",
 ]
