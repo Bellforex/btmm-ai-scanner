@@ -4242,3 +4242,814 @@ No other defect was found. Every other approved control was audited and confirme
 **Next controlled action:** define the **POI Detection Foundation**, using the completed measurement and structure foundations. This next architecture definition should cover, without implementing yet: POI candidate identity; POI type taxonomy; order-block candidates; fair-value-gap candidates; support/resistance POI references; trendline POI references where approved; equal-level liquidity references; candlestick-pattern POIs; structural context requirements; strong-timeframe precedence; POI overlap and merge rules; POI confirmation; POI validity; POI breach; POI reclaim; POI invalidation; POI availability time; no-look-ahead behavior; deterministic identity and fingerprinting; and historical replay equivalence. That milestone must not yet include BTMM manipulation lifecycle, entry signals, stop loss, take profit, position sizing, visualization, Telegram alerts, broker execution, AI inference, or production approval. That milestone is not started by this record.
 
 **Next action:** commit and push this documentation-only author approval, then implement all 16 approved paths in one complete controlled cycle, followed by one final architectural audit, at most one correction cycle for a genuine defect, one implementation commit, and one compact closure commit.
+
+## 35. POI Detection and Lifecycle Foundation — Architecture (Author-Approved)
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** (See §35AP for the author approval record.) This is a single, compact, accelerated architecture definition for `1B-J-POI`, handled as one decision group (no per-POI-family approval cycles), per the completed and closed `1B-H-MEASUREMENTS` (§33) and `1B-I-STRUCTURE` (§34) foundations. This section was corrected in one consolidated documentation-only correction pass following a focused read-only architectural audit; the author has since approved the corrected architecture in full (§35AP). Nothing in this section is implemented, staged, committed, or pushed by this section.
+
+### 35A. Milestone Identity, Scope Honesty, and Title
+
+**Batch identifier: `1B-J-POI`.**
+
+**Title decision:** the two candidate titles offered were "POI Detection Foundation" (A) and "POI Detection and Lifecycle Foundation" (B). **This architecture selects B.** The already-approved `POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` standard (Ambiguity 15) and the already-approved `POI_FRESHNESS_AND_AGE_STANDARD.md` (`P0G-B006`/`P0G-B007`) together define a complete, deterministic, publicly-observable state machine — `CLOSE_BREACH_CANDIDATE` → `RECLAIM_CONFIRMED`/`GENUINE_INVALIDATION_CONFIRMED` → `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED`/`RECLAIM_WITHOUT_DISPLACEMENT`/`RECLAIM_FAILED` → `FALSE_INVALIDATION_CONFIRMED`, plus repeated-tap counting and `FRESH`/`INTERACTED` freshness tracking — that this milestone implements and exposes as public `PoiLifecycleTransition` records and `CurrentPoiState` fields for **exactly 18 of the 32 implementable POI specifications** (10 volume + 6 price-action + Support + Resistance; the 2 Equal-Level and 12 Period-Level types are permanently `NOT_APPLICABLE`, §35D/§35V). **Corrected by the focused audit:** earlier drafts of this section stated this count as "32" or "30" in four places — both were arithmetic errors; the correct figure, 18, is derived as `32 implementable − 2 equal-level reference types − 12 period-level types = 18`, and not coincidentally matches the already-approved "18 propagated POIs" figure from the Phase 0G lifecycle work. Even at the corrected, smaller figure of 18, calling this milestone "Detection" only would still misdescribe its actual public behavior — 18 types with a full public breach/reclaim/invalidation state machine remains substantial. Title: **POI Detection and Lifecycle Foundation.**
+
+**Initial status (historical — superseded by author approval, §35AP):** `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`. **Current status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+**What this milestone completes:** it is the first milestone to consume `1B-H-MEASUREMENTS` (`ConfirmedSwing`, `DisplacementObservation`, `EqualLevelCluster`, `SupportResistanceZone`, `Trendline`, `analyze_market_measurements()`), transforming its outputs plus raw `NormalizedCandle` sequences into POI candidates, confirmed POI observations, lifecycle transitions, and a current POI state snapshot per symbol/timeframe. **Corrected by the focused audit (Part 5): `1B-I-STRUCTURE`'s outputs (`StructureAnalysis`, `SwingRelationship`, `StructureTransition`, `CurrentStructureState`) are not consumed by this milestone at all** — no implementable POI type's approved rule requires them (§35S); they remain available for direct use and for a possible later milestone that identifies a genuine need.
+
+### 35B. Primary Domain Boundary and Concept Separation
+
+**Corrected by the focused audit (Part 5 — Option B adopted): `StructureAnalysis` is removed from the primary boundary and from every public input.** The audit found that no detector for any of the 32 implementable types uses `StructureAnalysis` for candidacy, confirmation, or lifecycle gating anywhere in §35J-§35R — its only described effect was a structural consistency check, making it a required input with no deterministic effect (a design smell). Structural context (`StructureDirection`/`SwingRelationship`/`StructureTransition`/`CurrentStructureState`) may be added in a **later milestone**, and only for the specific POI types whose approved rule is found to genuinely require it — never as a blanket, always-required input carried "just in case."
+
+**Exact deterministic boundary:**
+
+```
+multi-timeframe canonical NormalizedCandle inputs
+  + MarketMeasurementAnalysis inputs (per timeframe)
+  -> source-family POI candidates (per detector family, §35J-§35R)
+  -> POI confirmation (§35T)
+  -> cross-family and cross-timeframe normalization (shared PoiObservation contract, §35E)
+  -> overlap/merge handling (§35X)
+  -> strong-timeframe precedence handling (§35I)
+  -> immutable/current-snapshot PoiObservation records (§35E)
+  -> PoiLifecycleTransition records, for the 18 lifecycle-eligible types only (§35V)
+  -> current CurrentPoiState snapshot per confirmed POI instance (§35Z)
+  -> PoiAnalysis aggregate (§35Z)
+```
+
+**Five structurally separate concepts, never conflated (per `docs/PROJECT_SCOPE.md` §7, unmodified by this milestone):**
+
+1. **POI detection/confirmation** — did a candidate satisfy its own approved formation/candle-geometry rule; a public `PoiObservation` exists at all only once this passes (this milestone; candidate/confirmation model, §35T; there is no separate public "validity" axis, §35U).
+2. **POI lifecycle status** — is the confirmed POI currently `FRESH`/`INTERACTED`, and has it been breached/reclaimed/invalidated (this milestone, for **exactly 18** of the 32 implementable specifications — 10 volume + 6 price-action + Support + Resistance; the remaining 14 — 2 equal-level + 12 period-level — are permanently `PoiLifecycleStatus = NOT_APPLICABLE`, §35D/§35V).
+3. **BTMM-pattern validity** — the 10-gate BTMM state machine (`knowledge/btmm/BTMM_STATE_MACHINE.md`) is explicitly out of scope for this milestone; a `PoiObservation`/`CurrentPoiState` never carries a BTMM field.
+4. **Entry validity** — stop loss, take profit, position sizing, entry confirmation: out of scope.
+5. **Trade outcome** — profitability, win/loss, risk-to-reward: out of scope.
+
+**A confirmed, `FRESH` `PoiObservation` implies none of:** a valid BTMM manipulation setup; a valid trade entry; a profitable outcome; production readiness. Every one of these remains a separate, later, unimplemented concept.
+
+### 35C. Exact 36-POI Coverage and Implementability Gate
+
+**Total approved POI specifications in the book: 36** (10 volume-based, 6 price-action, 20 structural), verified against `knowledge/POI_COVERAGE_MATRIX.md` and `knowledge/POI_MASTER_CATALOG.md` — every row has a corresponding `knowledge/poi_rules/` file and every file has a corresponding row; no orphan and no omission.
+
+**Readiness gate outcome (Part 36): Option A selected** — implement every fully deterministic specification in one milestone; keep the 4 genuinely non-deterministic specifications documented, excluded from the public `PoiType` enum, and explicitly deferred. **32 of 36 IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL; 4 of 36 DEFERRED; 0 of 36 BLOCKED.** Every one of the 32 implementable specifications required at least one already-completed, already-author-approved engineering gap-fill (candle-size ratios, small-candle ratios, tolerance formulas, availability timing, zone-source decisions) — none is "book-exact" without that prior approved work, so none is tagged plain `IMPLEMENTABLE`; all 32 are tagged `IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL`, and the gap-fills are already-approved (Ambiguities 1-15, RECON-D1-D5, GROUP3-D1-D9), not newly invented here.
+
+**Full 36-row matrix.** Shared formulas are referenced by name rather than repeated in every cell (full formulas are quoted in full, once, in the family subsections §35J-§35R and in `knowledge/MEASUREMENT_STANDARDS.md`). Legend: **CGI** = `CONDITIONAL_GENERIC_INHERITANCE` (Group 2, RECON-D1/D2/D3/D5), **DGI** = `DIRECT_GENERIC_INHERITANCE` (Group 1), **G3** = Group 3 completed candlestick (GROUP3-D1-D9), **EXCL-EH/L** = excluded by design (`P0G-B004` Option B), **EXCL-TL** = excluded by design (`P0G-B005` Option B), **N/A** = not applicable (single price point, no zone). **Corrected by the focused audit: a new explicit "Lifecycle" column replaces the ambiguous per-row group labels for applicability purposes — every row is now unambiguously `FULL` or `NOT_APPLICABLE`** (the CGI/DGI/G3/EXCL labels are retained alongside, in the "Provenance" column, purely to preserve traceability to which approved decision supplies each row's formulas).
+
+| # | POI | Family | `PoiType` member | Dir. | Zone/level source | Confirmation/availability | Lifecycle | Provenance | Evidence | Readiness | Owner module |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Buy Order Block | VOLUME (Option B proxy, §35Q) | `BUY_ORDER_BLOCK` | Bullish | Full range of smaller (first) candle | `order_block_available_time` = displacement candle close (RECON-D1) | **FULL** | CGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/order_blocks.py` |
+| 2 | Sell Order Block | VOLUME (Option B proxy) | `SELL_ORDER_BLOCK` | Bearish | Full range of smaller (first) candle | Same as #1, mirrored | **FULL** | CGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/order_blocks.py` |
+| 3 | Buy Fair Value Gap | VOLUME (Option B proxy) | `BUY_FAIR_VALUE_GAP` | Bullish | 1st-candle-high to 3rd-candle-low | `fvg_available_time` = 3rd candle close (RECON-D5); rejected if gap no longer valid at that close | **FULL** | CGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/fair_value_gaps.py` |
+| 4 | Sell Fair Value Gap | VOLUME (Option B proxy) | `SELL_FAIR_VALUE_GAP` | Bearish | 3rd-candle-high to 1st-candle-low | Same as #3, mirrored | **FULL** | CGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/fair_value_gaps.py` |
+| 5 | Buy-to-Sell Candle | VOLUME (Option B proxy) | `BUY_TO_SELL_CANDLE` | Bearish | Candidate candle full range | `reversal_confirmation_time` = confirmed post-candidate reversal close within 3-bar window | **FULL** | DGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/reversal_candles.py` |
+| 6 | Sell-to-Buy Candle | VOLUME (Option B proxy) | `SELL_TO_BUY_CANDLE` | Bullish | Candidate candle full range | Same as #5, mirrored | **FULL** | DGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/reversal_candles.py` |
+| 7 | Base Rally | VOLUME (Option B proxy) | `BASE_RALLY` | Bullish | Base High to Base Low (2-6 candles) | `base_available_time` = departure candle close (RECON-D2) | **FULL** | CGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/bases.py` |
+| 8 | Base Drop | VOLUME (Option B proxy) | `BASE_DROP` | Bearish | Base High to Base Low (2-6 candles) | Same as #7, mirrored | **FULL** | CGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/bases.py` |
+| 9 | Bullish Pressure Wick | VOLUME (Option B proxy) | `BULLISH_PRESSURE_WICK` | Bullish | `MIN(Open,Close)` to Candle Low (wick only) | Own candle close (CANDIDATE -> CONFIRMED) | **FULL** | DGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/pressure_wicks.py` |
+| 10 | Bearish Pressure Wick | VOLUME (Option B proxy) | `BEARISH_PRESSURE_WICK` | Bearish | Candle High to `MAX(Open,Close)` (wick only) | Same as #9, mirrored | **FULL** | DGI | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/pressure_wicks.py` |
+| 11 | Bullish Engulfing | PRICE_ACTION | `BULLISH_ENGULFING` | Bullish | First (engulfed, smaller, bearish) candle's full range | `engulfing_poi_available_time` = engulfing candle close (GROUP3-D2) | **FULL** | G3 | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/engulfing.py` |
+| 12 | Bearish Engulfing | PRICE_ACTION | `BEARISH_ENGULFING` | Bearish | First (engulfed, smaller, bullish) candle's full range | Same as #11, mirrored | **FULL** | G3 | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/engulfing.py` |
+| 13 | Hammer | PRICE_ACTION | `HAMMER` | Bullish | `MIN(Open,Close)` to Candle Low (rejection wick only, GROUP3-D5) | Own candle close (GROUP3-D6) | **FULL** | G3 | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/single_candle_reversals.py` |
+| 14 | Shooting Star | PRICE_ACTION | `SHOOTING_STAR` | Bearish | Candle High to `MAX(Open,Close)` (rejection wick only) | Own candle close | **FULL** | G3 | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/single_candle_reversals.py` |
+| 15 | Morning Star | PRICE_ACTION | `MORNING_STAR` | Bullish | Middle doji candle's full range (GROUP3-D8) | 3rd candle close (GROUP3-D9) | **FULL** | G3 | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/three_candle_stars.py` |
+| 16 | Evening Star | PRICE_ACTION | `EVENING_STAR` | Bearish | Middle doji candle's full range | 3rd candle close | **FULL** | G3 | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/three_candle_stars.py` |
+| 17 | Bullish Trendline | STRUCTURAL | *(none)* | Bullish | **No finite zone geometry approved — line only** | N/A | N/A | EXCL-TL | N/A | **DEFERRED** | *(none — reference only)* |
+| 18 | Bearish Trendline | STRUCTURAL | *(none)* | Bearish | **No finite zone geometry approved — line only** | N/A | N/A | EXCL-TL | N/A | **DEFERRED** | *(none — reference only)* |
+| 19 | Support | STRUCTURAL | `SUPPORT_ZONE` | Bullish | Inherited unmodified from `domain.SupportResistanceZone` (`zone_top`/`zone_bottom`) | Inherited `availability_time_utc` | **FULL** | CGI (RECON-D4) | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/reference_zones.py` |
+| 20 | Resistance | STRUCTURAL | `RESISTANCE_ZONE` | Bearish | Inherited unmodified from `domain.SupportResistanceZone` | Inherited `availability_time_utc` | **FULL** | CGI (RECON-D4) | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/reference_zones.py` |
+| 21 | Equal Highs | STRUCTURAL | `EQUAL_HIGHS_LIQUIDITY` | Bearish (liquidity above) | Inherited unmodified from `domain.EqualLevelCluster` | Inherited `availability_time_utc` | **NOT_APPLICABLE — liquidity reference only, never breached/reclaimed/invalidated** | EXCL-EH/L | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL (detection only) | `poi/reference_zones.py` |
+| 22 | Equal Lows | STRUCTURAL | `EQUAL_LOWS_LIQUIDITY` | Bullish (liquidity below) | Inherited unmodified from `domain.EqualLevelCluster` | Inherited `availability_time_utc` | **NOT_APPLICABLE** — same as #21 | EXCL-EH/L | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL (detection only) | `poi/reference_zones.py` |
+| 23 | Swing High | STRUCTURAL | *(none)* | Bearish | Single price point — already fully represented by `domain.ConfirmedSwing` | N/A | N/A | N/A | N/A | **DEFERRED — not duplicated** | *(none — use `domain.ConfirmedSwing` directly)* |
+| 24 | Swing Low | STRUCTURAL | *(none)* | Bullish | Single price point — already fully represented by `domain.ConfirmedSwing` | N/A | N/A | N/A | N/A | **DEFERRED — not duplicated** | *(none — use `domain.ConfirmedSwing` directly)* |
+| 25 | Previous Day High | STRUCTURAL | `PREVIOUS_DAY_HIGH` | Bearish | Zero-height point zone (UTC calendar-day max, §35R) | Period close, UTC half-open `[00:00:00, next-day 00:00:00)` | **NOT_APPLICABLE — deterministic reference level, no candidate to reject** | N/A (`rejection_criterion_status = NOT_APPLICABLE`) | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 26 | Previous Day Low | STRUCTURAL | `PREVIOUS_DAY_LOW` | Bullish | Zero-height point zone (UTC calendar-day min) | Same as #25 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 27 | Previous Week High | STRUCTURAL | `PREVIOUS_WEEK_HIGH` | Bearish | Zero-height point zone (ISO week max) | Period close, ISO week `[Mon 00:00:00 UTC, next Mon 00:00:00 UTC)` | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 28 | Previous Week Low | STRUCTURAL | `PREVIOUS_WEEK_LOW` | Bullish | Zero-height point zone (ISO week min) | Same as #27 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 29 | Previous Month High | STRUCTURAL | `PREVIOUS_MONTH_HIGH` | Bearish | Zero-height point zone (calendar-month max) | Period close, UTC calendar month `[1st 00:00:00, 1st-of-next-month 00:00:00)` | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 30 | Previous Month Low | STRUCTURAL | `PREVIOUS_MONTH_LOW` | Bullish | Zero-height point zone (calendar-month min) | Same as #29 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 31 | Current Day High | STRUCTURAL | `CURRENT_DAY_HIGH` | Bearish | Zero-height point zone (running max, current UTC day, content-evolving snapshot, §35E/§35R) | Updates on every new visible candle within the window; stable identity, changing fingerprint | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 32 | Current Day Low | STRUCTURAL | `CURRENT_DAY_LOW` | Bullish | Zero-height point zone (running min, current UTC day) | Same as #31 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 33 | Current Week High | STRUCTURAL | `CURRENT_WEEK_HIGH` | Bearish | Zero-height point zone (running max, current ISO week) | Same as #31 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 34 | Current Week Low | STRUCTURAL | `CURRENT_WEEK_LOW` | Bullish | Zero-height point zone (running min, current ISO week) | Same as #31 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 35 | Current Month High | STRUCTURAL | `CURRENT_MONTH_HIGH` | Bearish | Zero-height point zone (running max, current calendar month) | Same as #31 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+| 36 | Current Month Low | STRUCTURAL | `CURRENT_MONTH_LOW` | Bullish | Zero-height point zone (running min, current calendar month) | Same as #31 | **NOT_APPLICABLE** | N/A | ENGINEERING_PROVISIONAL | IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL | `poi/period_levels.py` |
+
+**Totals: 32 IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL (10 volume + 6 price-action + 2 structural reference-zone + 2 structural equal-level [detection-only] + 12 structural period-level); 4 DEFERRED (2 Trendline, 2 Swing High/Low); 0 BLOCKED.** No two distinct approved POI specifications were merged into one row to reduce the count; rows 1-36 map 1:1 to the book's 36 specifications. No row claims full implementability beyond its own genuinely complete deterministic rule set.
+
+**Corrected lifecycle-applicability totals (the focused audit's principal finding): exactly 18 of the 32 implementable types are `FULL` (lifecycle-eligible); exactly 14 are `NOT_APPLICABLE`.** `32 implementable − 2 equal-level reference types (rows 21-22) − 12 period-level types (rows 25-36) = 18 lifecycle-eligible types` — rows 1-16 (all 10 volume + all 6 price-action) plus rows 19-20 (Support, Resistance) = 18. Earlier drafts of this section stated "30" (32−2, omitting the 12 period-level subtraction) or "32" in four locations (§35A, §35B, §35D, §35V) — all four are corrected to 18 by this pass. For the 14 `NOT_APPLICABLE` types: `PoiLifecycleStatus` is fixed at `NOT_APPLICABLE` for the entire lifetime of every such observation; no `PoiLifecycleTransition` is ever emitted; no breach, reclaim, mitigation, or invalidation state machine ever runs against them (§35P for Equal Highs/Lows; §35R for the 12 period levels).
+
+**Why Trendline is deferred, not implemented (Part 17):** `bullish_trendline.md`/`bearish_trendline.md` state explicitly: "a trendline is a single diagonal price level at each bar... not a two-sided zone." Only Touch/Pierce Tolerance *bands* around the moving line are quantified — never a static `zone_top`/`zone_bottom` pair. Inventing a finite zone (e.g., "band width = tolerance") would be an unapproved rule invention, not a reuse of an existing standard. Per Part 17's explicit instruction, this specification is marked deferred rather than inventing a geometry. `TRENDLINE_BREAK_CANDIDATE` and the generic bounded-POI lifecycle standard are both explicitly excluded from Trendlines by the author-approved `P0G-B005` Option B deferral — a POI-typed wrapper would falsely imply lifecycle applicability that the source specification itself prohibits.
+
+**Why Swing High/Swing Low are deferred, not duplicated (Part 3):** both files state explicitly: "a Swing High is a single price level (Pivot Price), not a zone." `domain.ConfirmedSwing` (1B-H-MEASUREMENTS) already is the canonical, immutable, identity-bearing, fingerprinted representation of this exact fact — `swing_type`, `pivot_price`, `pivot_bar_index`, `availability_time_utc`, `evidence_classification` are all already present. Wrapping it in a `SwingHighPoi`/`SwingLowPoi` contract would create a second, parallel identity for the same underlying fact — a duplicate contract this milestone's own Part 3 instruction ("Do not design duplicate contracts where an existing immutable output already provides the required fact") explicitly prohibits. Callers needing "Swing High/Swing Low as a POI" use `domain.ConfirmedSwing` directly; no `PoiType.SWING_HIGH`/`SWING_LOW` member is created.
+
+### 35D. Taxonomy — `PoiFamily`, `PoiDirection`, `PoiType`, and Separated Status Axes
+
+**`PoiFamily`** (`StrEnum`, 3 members, matching the book's own three official categories): `VOLUME`, `PRICE_ACTION`, `STRUCTURAL`.
+
+**`PoiDirection`** (`StrEnum`, 2 members): `BULLISH`, `BEARISH`. **No `NEUTRAL`/`CONTEXTUAL` member is created** — every one of the 32 implementable specifications has an explicit, unconditional book-stated direction (verified row-by-row in §35C); none is genuinely direction-ambiguous. (Equal Highs is bearish-context/liquidity-above; Equal Lows is bullish-context/liquidity-below — both have a fixed, single direction per the book, not a contextual one.)
+
+**`PoiType`** (`StrEnum`, exactly 32 members, one per implementable row in §35C — `BUY_ORDER_BLOCK`, `SELL_ORDER_BLOCK`, `BUY_FAIR_VALUE_GAP`, `SELL_FAIR_VALUE_GAP`, `BUY_TO_SELL_CANDLE`, `SELL_TO_BUY_CANDLE`, `BASE_RALLY`, `BASE_DROP`, `BULLISH_PRESSURE_WICK`, `BEARISH_PRESSURE_WICK`, `BULLISH_ENGULFING`, `BEARISH_ENGULFING`, `HAMMER`, `SHOOTING_STAR`, `MORNING_STAR`, `EVENING_STAR`, `SUPPORT_ZONE`, `RESISTANCE_ZONE`, `EQUAL_HIGHS_LIQUIDITY`, `EQUAL_LOWS_LIQUIDITY`, `PREVIOUS_DAY_HIGH`, `PREVIOUS_DAY_LOW`, `PREVIOUS_WEEK_HIGH`, `PREVIOUS_WEEK_LOW`, `PREVIOUS_MONTH_HIGH`, `PREVIOUS_MONTH_LOW`, `CURRENT_DAY_HIGH`, `CURRENT_DAY_LOW`, `CURRENT_WEEK_HIGH`, `CURRENT_WEEK_LOW`, `CURRENT_MONTH_HIGH`, `CURRENT_MONTH_LOW`). **No placeholder member is created for Trendline, Swing High, or Swing Low** — deferred specifications are absent from the public enum entirely, per Part 7's explicit instruction.
+
+**Three separated axes, never conflated into one enum (per Part 7's explicit instruction). Corrected by the focused audit: a fourth, originally-proposed axis (`PoiValidityStatus`) is removed entirely — see §35U.**
+
+1. **`PoiFamily`/`PoiType`** — what the source detector produced (fixed at candidate time, never changes).
+2. **`PoiLifecycleStatus`** (§35V) — the 10-state generic breach/reclaim/invalidation vocabulary, applicable only to **exactly 18** of the 32 implementable POIs marked lifecycle-eligible in §35C (`32 − 2 equal-level − 12 period-level = 18`; the other 14 are `NOT_APPLICABLE` permanently).
+3. **Strength classification** — reused verbatim from each family's own already-approved standard (e.g., `STANDARD`/`STRONG` for Order Block/Base/Pressure Wick/Engulfing-adjacent-thresholds/Hammer-ShootingStar; `STRONG`/`STANDARD`/`NOT_EQUAL` for Equal Highs/Lows) — **not** merged into `PoiType` or `PoiLifecycleStatus`. Strength is exposed as a separate field on `PoiObservation`, typed per-family where the source standard already defines its own tier enum, or as a shared `PoiStrengthTier` (`STANDARD`, `STRONG`) `StrEnum` reused across every family whose approved standard uses exactly this two-tier shape (Order Block, Base, Pressure Wick, Buy-to-Sell/Sell-to-Buy, Hammer/Shooting Star "Strong Shape"). Equal Highs/Lows keep their own three-tier `STRONG`/`STANDARD`/`NOT_EQUAL` (reused from `domain.EqualLevelCluster`, not redefined).
+
+**Why `PoiValidityStatus` is removed (Part 6 of the focused audit):** the original 2-member enum (`FORMING`/`CONFIRMED`) conflated a pre-confirmation *candidate* concept (`FORMING`) with an ongoing *validity* concept. Since internal candidates are never exported (§35T) and no public `PoiObservation` exists before confirmation, `FORMING` was never emitted by any detector, meaning every produced record's `validity_status` was always exactly `CONFIRMED` — a public field carrying zero information. Removing it entirely (rather than keeping a single-value enum) is the honest correction; existence of a public `PoiObservation` **is** the confirmation signal, with no separate field needed.
+
+**Detected source type vs. normalized POI type:** identical for this milestone — every `PoiType` member corresponds to exactly one detector algorithm and one book specification; there is no separate "raw detector label" that gets normalized into a different public type.
+
+**Timeframe strength is not part of any enum** — it is a computed, deterministic ordering key over the existing `Timeframe` enum (§35I), never a `PoiType`/`PoiFamily` value.
+
+### 35E. Core POI Observation Contract
+
+**Corrected by the focused audit (Parts 5, 6, 15): 2 fields removed from the originally-proposed 25-field contract — `validity_status` (Part 6, `PoiValidityStatus` removed entirely, §35D/§35U) and `source_structure_record_ids` (Part 5, `StructureAnalysis` removed from the public input, §35B/§35H — this field existed only to carry structure-source IDs that no detector ever populated). The corrected contract has exactly 23 fields.**
+
+**One frozen public `PoiObservation(ContractModel)`**, exact field order:
+
+```
+record_id: UUIDv7
+content_fingerprint: SHA256Fingerprint
+symbol: InternalSymbol
+source_timeframe: Timeframe
+effective_timeframe: Timeframe
+family: PoiFamily
+poi_type: PoiType
+direction: PoiDirection
+zone_top: Decimal
+zone_bottom: Decimal
+representative_price: Decimal | None
+strength_tier: PoiStrengthTier | None
+source_candle_record_ids: tuple[UUIDv7, ...]
+source_measurement_record_ids: tuple[UUIDv7, ...]
+merged_source_poi_record_ids: tuple[UUIDv7, ...]
+candidate_event_time_utc: datetime
+confirmation_time_utc: datetime
+availability_time_utc: datetime
+rule_version: SemVer
+contract_version: SemVer
+schema_version: SemVer
+evidence_classification: EvidenceClassification
+provenance_id: UUIDv7
+```
+
+**Field-by-field resolution:**
+
+- **`zone_top`/`zone_bottom`:** mandatory on every `PoiObservation`, including the 12 period-level and 2 equal-level types. For the 12 single-price-point period levels, `zone_top = zone_bottom = representative_price` (a degenerate, zero-height point zone, §35X's exact point-zone rules) — this is the narrow, justified exception in Part 8's "`representative_price`, if justified" clause: a period level genuinely has no second boundary, and forcing a fake non-zero zone would misrepresent the source specification. `Zone Height = 0` for these 12 only; every interaction/reaction formula that divides by Zone Height (POI Zone Interaction Standard, POI Reaction Strength Standard) is **not** applied to these 12 — they are exposed as reference levels only, consistent with §35C's classification.
+- **`representative_price`:** `None` for every bounded-zone POI (rows 1-22 in §35C); set for the 12 period-level rows (25-36).
+- **`source_timeframe`/`effective_timeframe`:** distinct fields — `source_timeframe` is the timeframe the detector actually ran on; `effective_timeframe` is the timeframe assigned after strong-timeframe precedence/merge resolution (§35I/§35X). For an un-merged, non-suppressed observation the two are always equal.
+- **Multiple source candles:** yes (`source_candle_record_ids`, an ordered tuple) — e.g. Base Rally/Drop reference 2-6 base candles plus the departure candle; FVG references exactly 3.
+- **Multiple source measurements:** yes (`source_measurement_record_ids`) — Support/Resistance/Equal-Highs/Equal-Lows reference the originating `domain.SupportResistanceZone`/`domain.EqualLevelCluster` record.
+- **No source-structure-facts field:** removed (see correction note above); structural context may be added in a later milestone, and only for the specific POI types whose approved rule is found to genuinely require it (§35B).
+- **Multiple merged child POIs:** yes (`merged_source_poi_record_ids`, §35X) — empty for an un-merged observation.
+- **No separate validity field:** removed (see correction note above); a `PoiObservation`'s mere existence is the confirmation signal (§35T/§35U).
+- **Immutability, with one disclosed exception:** every tuple field is an immutable `tuple[...]`, never a `list`; no mutable internal candidate object is ever exposed as a field value (candidates are `NamedTuple`s, finalized into `PoiObservation` exactly like every prior milestone's `_finalize` pattern, §35G). **`PoiObservation` instances are frozen Python objects for all 32 implementable types without exception** — no field is ever mutated in place on an existing object. However, for **exactly 6 types** — `CURRENT_DAY_HIGH`, `CURRENT_DAY_LOW`, `CURRENT_WEEK_HIGH`, `CURRENT_WEEK_LOW`, `CURRENT_MONTH_HIGH`, `CURRENT_MONTH_LOW` — the semantically "same" period-window observation is **recomputed as a new frozen snapshot** (same `record_id`, per its stable §35F semantic key; different `zone_top`/`zone_bottom`/`representative_price`/`source_candle_record_ids`/`availability_time_utc`/`content_fingerprint`) every time a new visible candle extends the running high/low. This is the **one disclosed exception** to "content never changes after confirmation" among the 32 implementable types — every other type's `PoiObservation` content is fixed forever once confirmed. §35R specifies this exactly; §35F confirms identity stability across recomputation.
+
+### 35F. Candidate Identity — Exact Semantic Keys
+
+Identity is reused structurally unmodified from `DerivedOutputIdentityProvider.identify(output_type, semantic_key) -> UUIDv7` (`domain`, 1B-H). Three new `DerivedOutputType` members are required (§35K below is a forward reference; the exact members are `POI_OBSERVATION`, `POI_LIFECYCLE_TRANSITION`, `CURRENT_POI_STATE`), appended to `domain/enums.py` exactly as `1B-I-STRUCTURE` appended its own 3 members — **the only modified existing source path in this milestone.**
+
+**Identity depends on immutable source semantics only — never on lifecycle status, later touches, current validity, mutable strength, call count, or detection order.** Exact semantic keys per family:
+
+- **Fair Value Gap** (`BUY_FAIR_VALUE_GAP`/`SELL_FAIR_VALUE_GAP`): `(symbol.value, timeframe.value, poi_type.value, str(candle_1_record_id), str(candle_2_record_id), str(candle_3_record_id), rule_version)`.
+- **Order Block** (`BUY_ORDER_BLOCK`/`SELL_ORDER_BLOCK`): `(symbol.value, timeframe.value, poi_type.value, str(origin_candle_record_id), str(displacement_candle_record_id), rule_version)`.
+- **Buy-to-Sell/Sell-to-Buy Candle:** `(symbol.value, timeframe.value, poi_type.value, str(candidate_candle_record_id), rule_version)`.
+- **Base Rally/Base Drop:** `(symbol.value, timeframe.value, poi_type.value, str(departure_candle_record_id), tuple(str(id) for id in sorted_base_candle_record_ids), rule_version)`.
+- **Pressure Wick:** `(symbol.value, timeframe.value, poi_type.value, str(candle_record_id), rule_version)`.
+- **Engulfing:** `(symbol.value, timeframe.value, poi_type.value, str(engulfed_candle_record_id), str(engulfing_candle_record_id), rule_version)`.
+- **Hammer/Shooting Star:** `(symbol.value, timeframe.value, poi_type.value, str(candle_record_id), rule_version)`.
+- **Morning/Evening Star:** `(symbol.value, timeframe.value, poi_type.value, str(candle_1_record_id), str(doji_candle_record_id), str(candle_3_record_id), rule_version)`.
+- **Support/Resistance reference:** `(symbol.value, timeframe.value, poi_type.value, str(origin_support_resistance_zone_record_id), rule_version)` — a pure reference key onto the already-identity-bearing `domain.SupportResistanceZone.record_id`; never re-derives its own boundary identity.
+- **Equal Highs/Equal Lows reference:** `(symbol.value, timeframe.value, poi_type.value, str(origin_equal_level_cluster_record_id), rule_version)` — same reference-only pattern onto `domain.EqualLevelCluster.record_id`.
+- **Period Level (12 variants):** `(symbol.value, timeframe.value, poi_type.value, period_start_time_utc.isoformat(), rule_version)` — `period_start_time_utc` is the deterministic calendar-window start (§35Q/§35AN item on the calendar-boundary gap-fill), making one period level per calendar window per symbol/timeframe a stable, non-duplicating identity; a "current" period level's identity does **not** change as new candles extend the window (only its `content_fingerprint` changes, §35G) — it becomes the "previous" period level's identity only at rollover, which creates a **new** record with a **new** `period_start_time_utc`, never a mutation of the prior one.
+
+**`PoiLifecycleTransition` semantic key:** `(symbol.value, timeframe.value, poi_type.value, str(origin_poi_record_id), transition_type.value, str(triggering_candle_record_id), rule_version)` — mirroring `1B-I-STRUCTURE`'s `STRUCTURE_TRANSITION` pattern (one record per distinct triggering event, never mutated retroactively).
+
+**`CurrentPoiState` semantic key:** `(symbol.value, timeframe.value, poi_type.value, str(origin_poi_record_id), rule_version)` — one stable singleton identity per confirmed POI instance (mirroring `CURRENT_STRUCTURE_STATE`'s singleton-per-scope pattern), whose *content* (lifecycle status, freshness, tap count, age fields) changes over time while `record_id` stays fixed.
+
+**No random IDs anywhere.** `DerivedOutputIdentityProvider` is reused structurally unmodified; no new Protocol is introduced.
+
+### 35G. Content Fingerprint Strategy
+
+**Chosen approach: C — duplicate again, with a required exact cross-package equivalence test, matching the precedent already twice-approved and twice-implemented (`1B-H-MEASUREMENTS`'s original `_canonicalize`/`_compute_content_fingerprint`, and `1B-I-STRUCTURE`'s independent, tested-byte-identical duplicate of the same algorithm).** Options A (extract one shared internal utility, retrofitting `domain/analyzer.py` and `structure/analyzer.py` within this milestone's approved path scope) and B (import `structure`'s or `domain`'s private helper directly) were both rejected for the same reason already recorded and accepted twice in this project: `domain/analyzer.py`'s `_canonicalize`/`_compute_content_fingerprint` and `_IdentityResolver`/`_finalize` machinery are private, non-exported implementation details of an already-closed, already-production-adjacent-tested milestone; reopening or importing them privately would either violate `1B-H`/`1B-I`'s own closure (Option A) or create an undisclosed cross-package private dependency with no compile-time contract (Option B). Option C's cost — a third, disclosed, tested-equivalent copy — is small (a handful of private functions, ~60 lines) and the disclosed maintenance risk is identical in kind to `1B-I-STRUCTURE`'s own accepted precedent.
+
+**Path implication:** `poi/analyzer.py` locally re-implements `_canonicalize`/`_compute_content_fingerprint`/`_IdentityResolver`/`_finalize`, byte-identical in algorithm to `domain/analyzer.py`'s and `structure/analyzer.py`'s. A new required test, `test_poi_fingerprint_serializer_matches_domain_and_structure_serializers`, directly exercises all three modules' private `_canonicalize`/`_compute_content_fingerprint` functions against one shared sample-fields dictionary and asserts byte-for-byte equality across all three (extending `1B-I-STRUCTURE`'s two-way equivalence test to a three-way check).
+
+**Fingerprint scope:** every public field on `PoiObservation`/`PoiLifecycleTransition`/`CurrentPoiState` except `record_id` and `content_fingerprint` itself — identical rule to every prior milestone. A lifecycle transition (e.g., `FRESH` -> `INTERACTED`, or a new `poi_lifecycle_status`) changes `CurrentPoiState.content_fingerprint` while `CurrentPoiState.record_id` remains fixed (§35F), mirroring `CurrentStructureState`'s already-proven pattern.
+
+### 35H. Input Model and Validation
+
+**Chosen form: B — immutable tuples of per-timeframe input bundles.** Rejected: (A) a `Mapping[Timeframe, ...]` — a plain dict input would be harder to validate deterministically for duplicate/missing timeframes and does not match this project's consistent `tuple[ContractModel, ...]`-only input convention; (C) one timeframe per call with separate cross-timeframe aggregation — this would push the entire cross-timeframe overlap/precedence problem (§35I/§35X) onto every caller, duplicating logic the analyzer itself must own to be deterministic; (D) rejected as unnecessary — B is already minimal and immutable.
+
+**Corrected by the focused audit (Part 5 — Option B adopted): `structure_analysis` is removed from `PoiTimeframeInput` entirely.** No detector for any of the 32 implementable types used it for any gating purpose; its sole described effect was a consistency check, making it a required input with no deterministic effect. Structural context may be added in a later milestone, and only for specific POI types whose approved rule is found to genuinely require it — never as a standing, always-required field.
+
+**Exact input contract**, a new `PoiTimeframeInput(NamedTuple)` (a caller-assembled input bundle, not a produced output, matching the existing distinction between `NamedTuple` candidates/inputs and `ContractModel` outputs used throughout `domain`/`structure`):
+
+```
+symbol: InternalSymbol
+timeframe: Timeframe
+candles: tuple[NormalizedCandle, ...]
+market_measurements: MarketMeasurementAnalysis
+```
+
+**Public API signature:** `analyze_pois(timeframe_inputs: tuple[PoiTimeframeInput, ...], configuration: PoiConfiguration, identity_provider: DerivedOutputIdentityProvider) -> PoiAnalysis` (§35AA).
+
+**Exact validation, in order, each with its own typed error (§35AB):**
+
+1. **Mixed symbol** across `timeframe_inputs` — `MixedSymbolAnalysisError` reused unmodified from `domain`.
+2. **Duplicate timeframe bundle** — two entries with the same `timeframe` — new `DuplicatePoiTimeframeInputError`.
+3. **Unsupported timeframe** — a `timeframe_inputs` entry whose `timeframe` is not one of the 8 existing `Timeframe` members is structurally impossible (Pydantic/enum-typed field), so no runtime check is needed beyond type validity; no new error is required for this case.
+4. **Unsorted timeframe bundles** — `timeframe_inputs` must be supplied in a fixed canonical order (ascending `Timeframe` strength per §35I's total order) — new `UnsortedPoiTimeframeInputError` on violation; the analyzer never silently reorders.
+5. **Missing candle prefix / measurement-candle mismatch** — for each `PoiTimeframeInput`, `market_measurements.analyzed_candle_count` must equal `len(candles)`, and `market_measurements.symbol` (when non-`None`) must equal the bundle's `symbol` — new `InputPrefixMismatchError` on any violation. This is a structural consistency check only; it does **not** re-run `analyze_market_measurements()` — the caller remains responsible for having produced consistent inputs, exactly as `structure`'s own `analyze_structure_state()` never re-derives `confirmed_swings` from `candles` itself. (Structure-candle/structure-measurement mismatch checks are removed along with the `structure_analysis` field.)
+6. **Missing source record** — a detector-internal reference to a candle/measurement record ID not present in the supplied bundle — new `MissingSourceRecordError`.
+7. **Duplicate source IDs** — duplicate `record_id` within one bundle's `candles` — reuses `DuplicateCandleRecordError` unmodified from `domain`.
+8. **Tied availability groups** — reuses the existing no-look-ahead availability-group event-ordering discipline (§35AD); not a separate validation error, a processing-order guarantee.
+9. **Future measurement output** — structurally prevented by check 5 (the measurement aggregate's own `analyzed_candle_count` cannot exceed the supplied candle count) plus the existing `availability_time_utc` no-look-ahead discipline inherited from that source aggregate.
+
+**No hidden repository reads:** `analyze_pois()` never calls `market_data`, never reads a repository, never performs I/O — pure function over its three supplied arguments, identical discipline to `analyze_market_measurements()`/`analyze_structure_state()`.
+
+### 35I. Timeframe Policy and Strong-Timeframe Precedence
+
+**Authoritative source, read directly (per Part 12's explicit instruction), not summarized:** `docs/PROJECT_SCOPE.md` §3's timeframe-role table —
+
+| Role | Timeframes | Purpose |
+|---|---|---|
+| Strong POI analysis | H3, H4, D1, W1 | Highest-quality Order Blocks, FVGs, liquidity/pressure wicks, Morning/Evening Stars, trendlines, previous/current high-low levels |
+| Market-structure breakdown | H1, M15 | Swing highs/lows, structure/trend framework |
+| BTMM formation and execution | M15, M5, M1 | BTMM formation/execution (out of scope for this milestone) |
+
+**H3/H6/H8/H12:** grepped project-wide with zero occurrences (confirmed by the Final Phase 0G audit); the existing `Timeframe` enum already has exactly 8 members (`M1`, `M5`, `M15`, `H1`, `H3`, `H4`, `D1`, `W1`) — **no new `Timeframe` member is required**; H6/H8/H12 do not exist anywhere in this project and are not introduced here.
+
+**Approved strong POI timeframes (this milestone): H3, H4, D1, W1.** **Approved weak/formation timeframes: M1, M5, M15, H1** (H1/M15 additionally used for market-structure breakdown, per the table). **P0G-B014 (documented, unresolved, disposition B — a documentation-consistency gap, not a trading-rule conflict):** several individual POI files (Order Block, Engulfing, Base Rally/Drop) state their own strength ranking as "Weekly > Daily > 4H > 1H > 15-minute," which includes H1 and M15 — timeframes the official table does not list under "Strong POI analysis." **This architecture does not silently pick a side of P0G-B014.** It defines the precedence *algorithm* (below) over the full `Timeframe` domain (all 8 members participate in the total order, so an H1/M15 Order Block is still comparable, just weighted lower than H3/H4/D1/W1) and flags the exact numeric strength-weight assignment for H1/M15 relative to H3 as an explicit author decision (§35AN) rather than resolving P0G-B014's prose inconsistency by fiat.
+
+**Total timeframe-strength order (deterministic, `PoiConfiguration`-defined, §35AG):** `_TIMEFRAME_STRENGTH_RANK: dict[Timeframe, int]` — a fixed mapping, `W1=8, D1=7, H4=6, H3=5, H1=4, M15=3, M5=2, M1=1` (strictly by calendar duration, matching the book's own explicit "higher timeframe = stronger" principle uniformly, and consistent with both the official table's H3/H4/D1/W1 "strong" grouping and the individual-file H1/M15 inclusion — since M1 < M5 < M15 < H1 < H3 < H4 < D1 < W1 is the only order consistent with calendar duration and is not itself part of the disputed P0G-B014 prose). **Never uses human-readable timeframe strings for ordering** — always this explicit integer rank mapping.
+
+**Corrected by the focused audit (Part 12): P0G-B014/duration-rank separation stated explicitly, and the unused `strong_poi_timeframes` configuration field is removed (§35AG).** The audit found `strong_poi_timeframes = {H3,H4,D1,W1}` was declared in `PoiConfiguration` but never consulted by any described algorithm — §35I's merge-precedence rule and §35X's merge test both use only `_TIMEFRAME_STRENGTH_RANK`, never a "strong" set-membership check. This field is removed entirely; no replacement unused field is introduced. To be explicit about what remains and what P0G-B014 still leaves open:
+
+- `_TIMEFRAME_STRENGTH_RANK` **is not a resolution of `P0G-B014`.** It is a pure calendar-duration ordering, undisputed by any source, used **solely** to select a deterministic parent among observations that are *already* merge-eligible (same `poi_type`, same `symbol`/direction, overlapping zones, §35X) — it never determines merge eligibility itself.
+- This ranking **never labels H1 or M15 as a "strong POI timeframe."** That disputed classification (whether the individual POI files' own "Weekly > Daily > 4H > 1H > 15-minute" language should count H1/M15 among "strong" timeframes, contradicting `PROJECT_SCOPE.md`'s official table) remains `P0G-B014`, explicitly unresolved, and is not touched by this milestone's merge algorithm.
+- **No POI is suppressed, hidden, or invalidated by timeframe rank alone** — rank affects only which observation becomes the parent when a merge already independently qualifies; a lower-ranked, non-overlapping observation on a "weak" timeframe is never discarded, deprioritized, or treated as lifecycle-relevant differently because of its timeframe.
+- Period-level types (rows 25-36, §35C) may participate in this precedence mechanism only when: `PoiType` matches exactly (e.g., two `CURRENT_DAY_HIGH` observations from different source timeframes — though period levels are typically symbol-scoped rather than timeframe-scoped in practice, the mechanism is defined generally); source timeframes differ; and the exact point-zone overlap rule (§35X) passes for their zero-height zones.
+
+**Precedence algorithm (Part 26):** when two `PoiObservation`s of the **same `poi_type`, same `symbol`, and overlapping zones** (§35X) exist on different timeframes, the stronger-timeframe observation **merges the weaker one as a child** (§35X) rather than replacing, suppressing, or leaving both fully independently observable — `effective_timeframe` on the resulting merged observation is set to the stronger timeframe, and the weaker-timeframe original remains separately queryable via `merged_source_poi_record_ids` (never deleted, never silently hidden). Same-family, cross-`poi_type` overlap (e.g., an FVG overlapping an Order Block) is handled by the separate, non-precedence overlap-only path (§35X) — precedence ranking applies only to same-`poi_type` timeframe conflicts. **Equal-strength ties** (impossible under the current 1-8 strict integer rank, since every `Timeframe` member maps to a distinct integer) are structurally excluded; no tie-break rule is needed.
+
+### 35J. Fair Value Gap Architecture
+
+**Strict three-candle rule (reused verbatim, no invention):** Buy FVG requires `low(candle 3) > high(candle 1)`, zone = `[high(candle 1), low(candle 3)]`; Sell FVG requires `high(candle 3) < low(candle 1)`, zone = `[high(candle 3), low(candle 1)]`. Wick-inclusive on both edges (no wick/body distinction for FVG geometry itself). **No minimum-size threshold** — RECON-D3 explicitly resolved this as "no override; a geometrically valid FVG can be as narrow as one price tick," reusing the generic Contact/Overshoot Tolerance formulas unmodified. **Displacement requirement:** the middle (2nd) candle must satisfy the reused Small-Candle-Standard comparison against the largest of the 3 preceding confirmed candles (`Pre-Displacement Maximum Range`); `Displacement Expansion Ratio = displacement Total Range / Pre-Displacement Maximum Range`; optional `STANDARD FAST`/`STRONG FAST` speed tiers layer on top of, never replace, the mandatory strict gap geometry. **No structure-context requirement** is stated beyond "formed within a directional (non-choppy) price movement" — no BOS/CHoCH/StructureTransition gate is invented, and no structure input exists in this milestone to invent one from (§35S). **Availability = `fvg_available_time = third_candle_close_time`** (RECON-D5); a candidate is rejected outright (no `PoiObservation` created at all) if the strict gap geometry no longer holds at that close. **Immediate/partial/complete mitigation:** not separate FVG-specific concepts — measured via the shared POI Zone Interaction Standard's penetration ratios (§35T) plus the shared breach/reclaim lifecycle (§35V); no FVG-specific mitigation formula is invented. **Overlap with Order Block:** handled generically by §35X, no FVG-specific override. **Multi-timeframe precedence:** §35I, no FVG-specific override. **Identity/fingerprint:** §35F/§35G.
+
+### 35K. Order Block Architecture
+
+**Two-candle structure, reused verbatim:** smaller (origin) candle followed by a displacement candle with `Size Ratio (Total Range) >= 2.0` (standard) `/ >= 3.0` (strong) versus the origin candle, using the project's Candle Measurement Standard V1 (`Total Range = High - Low`, no ATR normalization, no body-only measurement). **Zone = full high-to-low range of the origin (smaller, first) candle**, wick-inclusive. **No "origin vs. middle of an existing move" automated gate is implemented** — this location distinction is stated qualitatively only in the book (a warning: "must be located at the beginning/origin... not randomly in the middle") with **no numeric or structural rule anywhere in the approved knowledge base to detect it automatically** (verified: neither the Order Block file nor the Volume/Momentum Proxy Standard defines one). Inventing a BOS/CHoCH-based "is this the origin" gate here would be an unapproved rule addition, not a reuse of an approved standard — this is an explicit, disclosed limitation (§35AN), not a silent omission; no structure input exists in this milestone to attach as evidence either (§35S). **Required displacement, structure context:** none beyond the size-ratio rule; **no BOS is required** (verified verbatim across both Order Block files: "does not require BOS (undefined in this project and not invoked here)"). **Base-formation interaction:** none — Order Block and Base Rally/Drop remain independently detected patterns; a candle sequence satisfying both is exposed as two separate `PoiObservation`s (deduplication is not invented; §35X's overlap/merge algorithm may later relate them geometrically, but detection itself never suppresses one because the other also matched). **Availability = `order_block_available_time = qualifying_displacement_candle_close_time`** (RECON-D1) — not backdated to the origin candle's close, does not require a first return to the zone, does not require entry confirmation. **First return, mitigation, breach, reclaim, invalidation:** the shared generic lifecycle (§35V), gated from `order_block_available_time` onward. **Overlap with FVG/Support-Resistance:** §35X, no Order-Block-specific override. **Identity/fingerprint:** §35F/§35G.
+
+### 35L. Candlestick-Pattern POIs
+
+**Bullish/Bearish Engulfing (GROUP3-D1/D2, author-approved final):** two-candle pattern; engulfing candle `Size Ratio >= 2.0` (standard) `/ >= 3.0` (strong) versus the engulfed candle (Small-Candle-Standard comparison); engulfing candle must close in its own direction. **Zone = complete high-to-low range of the first, smaller, opposite-direction (engulfed) candle** — the engulfing (second, larger) candle is confirmation/displacement evidence only, never part of the boundary. **Availability = engulfing candle's own close** (`engulfing_poi_available_time = qualifying_engulfing_candle_close_time`); rejected outright (no `PoiObservation`) if the second candle fails any mandatory condition. **"Middle of an existing move" is likewise not an automated gate** — same disclosed limitation as Order Block's "origin," for the same reason (qualitative-only in the book, no numeric rule exists); no structure input exists in this milestone to attach as context (§35S).
+
+**Hammer/Shooting Star (GROUP3-D3/D4/D5/D6, author-approved final):** single-candle. Standard Hammer: `Lower Wick Share >= 0.60`, `Body Efficiency <= 0.30`, `Upper Wick Share <= 0.10`; Strong Shape: `Rejection Wick Share >= 0.70`, `Body Efficiency <= 0.20`, `Opposite Wick Share <= 0.05` (Shooting Star mirrors on the upper wick). **POI role (GROUP3-D4): bounded directional POI** (not signal-only) — pattern validity, signal validity, POI lifecycle validity, and entry validity remain four separate concepts; may coexist with a Pressure Wick label on the same candle without precedence. **Zone (GROUP3-D5): rejection wick only** — Hammer `zone_top = MIN(Open,Close)`, `zone_bottom = Candle Low`; Shooting Star `zone_top = Candle High`, `zone_bottom = MAX(Open,Close)`; the candle body is pattern evidence, never zone content. **Availability (GROUP3-D6) = the candle's own close** — the book's "wait for a confirmation candle before entering" language is entry-timing observation only and does **not** gate POI lifecycle availability. **No context/trend requirement is defined** beyond "around a support/resistance zone" (qualitative, not gating).
+
+**Morning/Evening Star (GROUP3-D7/D8/D9, author-approved final):** three-candle. Middle-candle threshold: `middle_candle_body_efficiency = |Middle Close - Middle Open| / (Middle High - Middle Low)`, invalid when the denominator `<= 0`; Standard Doji `<= 0.10`, Strong Doji `<= 0.05`. Final (third) candle `Size Ratio` vs. the middle doji "ideally >= 2.0-3.0" (not a hard mandatory gate beyond the doji threshold itself — the book's "ideally" is retained as descriptive strength evidence, not a pass/fail rule). **Zone (GROUP3-D8) = complete high-to-low range of the qualifying middle Doji only** — candles 1 and 3 excluded from the boundary; candle 3 is pattern-confirmation evidence only. **Availability (GROUP3-D9) = third candle's own close.** Recommended timeframe (book, descriptive only, no gate): 2H/3H/4H and above.
+
+### 35M. Reversal-Candle and Base-Formation POIs
+
+**Buy-to-Sell / Sell-to-Buy Candle:** single candidate candle; `STANDARD` requires `Candidate Size Ratio >= 2.00`, `Body Efficiency >= 0.60`, directional Close Position `>= 0.70` (vs. the largest of the 3 immediately preceding confirmed candles); `STRONG` requires `>= 3.00` / `>= 0.70` / `>= 0.80` plus a qualifying opposite-direction reversal within the post-candidate window. **Zone = candidate candle's full high-to-low range**, fixed permanently after reversal confirmation — never refined/shrunk/recentered by later price action. **Confirmation:** exactly the next 3 confirmed candles are evaluated for a qualifying opposite-direction close beyond `Candidate Midpoint` (`STANDARD`) or beyond the candidate's own extreme (`STRONG`), with `Continuation Close Tolerance = MAX(2 x Minimum Price Tick, 0.10 x Candidate Reference ATR)` gating a `REJECTED_DIRECTIONAL_CONTINUATION` outcome; the window is never extended beyond 3 candles — a candidate that fails to reverse within 3 candles produces no `PoiObservation` at all (`REJECTED_INSUFFICIENT_REVERSAL`). **Availability = `reversal_confirmation_time`** — never backdated to the candidate candle's original time. **Required preceding trend context** ("existing uptrend"/"existing downtrend") is stated explicitly stronger than most other families but its full quantitative definition is explicitly unresolved in the book/standards; **not automated in this milestone** — same disclosed limitation as §35K/§35L, flagged in §35AN, not silently invented via HH/HL/BOS/CHoCH (explicitly prohibited by the source files themselves: "not defined using HH, HL, BOS, CHoCH, a moving average, or any other invented structure rule").
+
+**Base Rally / Base Drop:** 2-6 consecutive confirmed candles; every base candle's Total Range `<= 0.50x` (standard) `/ <= 0.3333x` (strong) the departure candle's Total Range; `Base Height <= 0.75x ATR(14)` **and** `<= 0.60x` departure candle's Total Range; `Base Midpoint Drift <= 0.25x Base Height`; per-consecutive-pair `Overlap Ratio >= 0.50`; departure candle `Size Ratio >= 2.0`/`3.0` versus the largest base candle, closing beyond the full base range in the expected direction. **Zone = `[Base Low, Base High]`** across all 2-6 base candles. **Availability = `base_available_time = qualifying_departure_candle_close_time`** (RECON-D2) — not the first base candle, not the last base candle, not a future first return. Strength tiers: `COMPACT_BASE` / `STRONG_BASE` / `INVALID_BASE` (any mandatory condition failing produces no `PoiObservation`).
+
+**Bullish/Bearish Pressure Wick:** single candle; Bullish requires `Lower Wick Share >= 0.40`, `Body Efficiency >= 0.25`, `Lower Wick >= 2x Upper Wick`, `Bullish Close Position >= 0.60` (Bearish mirrors on the upper wick); `STRONG` requires `>= 0.50`/`>= 0.30`/`>= 3x`/`>= 0.70`/`Range Context Ratio >= 1.25`. **Zone = rejection wick only** — Bullish `[Candle Low, MIN(Open,Close)]`, Bearish `[MAX(Open,Close), Candle High]`; candle colour never determines direction. **Availability = the candle's own close** (`CANDIDATE` before close, `CONFIRMED` after); no separate `_available_time` variable beyond the candle's own confirmation. **Timeframe:** H3/H4/D1/W1 receive contextual priority only (not a numerical score, per the already-approved resolution) — a candle failing the mandatory formation conditions stays invalid regardless of timeframe.
+
+**Volume/momentum evidence, uniformly across every family in this section — corrected placement (Part 10 of the focused audit):** every detector **computes internally** the reused Volume/Momentum Proxy Standard fields (`relative_size_ratio`, `range_context_ratio`, `body_efficiency`, `directional_close_position`) to evaluate each family's own mandatory candidate/confirmation thresholds (the exact ratios quoted above) — these four fields are **never stored on `PoiObservation`, never exported, never part of any semantic identity key, and never part of any public content fingerprint** (§35Q resolves the placement ambiguity the audit found: earlier drafts said these fields were "computed and stored" with placement deferred to §35Q, but §35Q never specified one — this is now corrected to state explicitly that they are internal-only). No minimum threshold beyond the ones already quoted above is invented; tick volume, where `NormalizedCandle.volume`/`volume_kind` is non-`UNKNOWN`, is likewise computed internally as `relative_tick_volume`/`tick_volume_status` and is never gating, never stored, never exported.
+
+### 35N. Support/Resistance Reference POIs
+
+**No re-detection of Support/Resistance.** `poi/reference_zones.py` consumes `domain.SupportResistanceZone` (produced by the already-implemented, already-closed `analyze_market_measurements()`) directly and unmodified — `zone_top`, `zone_bottom`, `zone_type`, `confirmation_time_utc`, `availability_time_utc`, `evidence_classification` are all inherited byte-for-byte from the source `SupportResistanceZone` record; no new boundary computation, no new confirmation rule, no new availability rule is invented. **`SupportResistanceType.SUPPORT` maps to `PoiDirection.BULLISH`; `SupportResistanceType.RESISTANCE` maps to `PoiDirection.BEARISH`** — a fixed, unconditional mapping (no neutral/contextual case, matching §35D's direction-enum decision). **Every confirmed `SupportResistanceZone` becomes exactly one `PoiObservation`** — no additional structural-context gate is layered on top (the source zone's own `origin_swing_record_id`/reaction-strength gating, already enforced by `1B-H-MEASUREMENTS`, is sufficient; adding a second, POI-level gate would silently duplicate or contradict an already-closed milestone's own approved rule). **POI-specific confirmation = inherited, not re-derived.** **Identity relation to source zone:** the `PoiObservation`'s own identity is a pure reference key onto `origin_support_resistance_zone_record_id` (§35F) — a later touch of the source zone changes the source zone's own `content_fingerprint` (per `1B-H`'s existing rules) and, downstream, this `PoiObservation`'s content fingerprint changes to match, while both record IDs stay fixed. **Breach/reclaim/invalidation:** inherited generic lifecycle (§35V), RECON-D4's coexistence rule preserved exactly — `SUPPORT_BREAK_CANDIDATE`/`RESISTANCE_BREAK_CANDIDATE` (the family-specific, `Horizontal Pierce Tolerance`-based deeper breach observation, already defined on the source `SupportResistanceZone` concept) remains a separate, non-aliased, parallel signal alongside the generic `CLOSE_BREACH_CANDIDATE` (`Overshoot Tolerance`-based); **only `CLOSE_BREACH_CANDIDATE` drives the shared Reclaim/Displacement/Invalidation state machine** (§35V) — this milestone does not re-derive or duplicate `SUPPORT_BREAK_CANDIDATE`/`RESISTANCE_BREAK_CANDIDATE` itself (those remain `domain`-level facts on `SupportResistanceZone`); `poi/reference_zones.py` only consumes the source zone's already-existing fields plus applies the shared `CLOSE_BREACH_CANDIDATE`-onward lifecycle on top. **Overlap with OB/FVG:** §35X, no Support/Resistance-specific override. **Strong-timeframe precedence:** §35I, no override.
+
+### 35O. Trendline Reference POIs — Deferred
+
+**No Trendline `PoiType` is created; no Trendline-derived `PoiObservation` is ever produced by this milestone.** Per §35C's deferral rationale: the approved Trendline standard defines a line (`Line Price(t) = Anchor 1 Price + Raw Slope x (t - Anchor 1 Bar Index)`) plus Touch/Pierce Tolerance *bands* around that moving line, never a static, finite `[zone_top, zone_bottom]` pair suitable for this milestone's `PoiObservation` contract. Constructing one (e.g., "zone = tolerance band around today's line price") would be a new, unapproved geometry rule, not a reuse of `bullish_trendline.md`/`bearish_trendline.md`'s own approved content, and would also contradict the author-approved `P0G-B005` Option B deferral (which explicitly excludes Trendlines from the shared bounded-POI lifecycle). **This milestone does not resolve `P0G-B005`.** A future, separate, narrowly-scoped architecture task — mirroring how Ambiguity 15 was resolved for bounded zones — remains the correct place to define Trendline-touch-as-POI zone geometry and a specialized Trendline lifecycle, if the author ever approves Option A there. Until then, `domain.Trendline` (1B-H) remains directly queryable by any caller wanting trendline information; no wrapper is created here.
+
+### 35P. Equal-Level Liquidity References
+
+**No re-detection.** `poi/reference_zones.py` consumes `domain.EqualLevelCluster` directly and unmodified — `zone_top`, `zone_bottom`, `cluster_type`, strength tier, `availability_time_utc` are inherited byte-for-byte. **`EqualLevelType.EQUAL_HIGH` maps to `PoiDirection.BEARISH` (buy-side liquidity rests above, a bearish liquidity-grab trigger); `EqualLevelType.EQUAL_LOW` maps to `PoiDirection.BULLISH`** (mirroring the book's own explicit framing). **The cluster itself becomes the `PoiObservation`** — not only a sweep/rejection event (no sweep-detection logic is invented; that is exactly the still-open `P0G-B004` specialized lifecycle this milestone does not resolve). **Lifecycle: detection-only, by design, per `P0G-B004` Option B** (already author-approved) — `PoiLifecycleStatus` for `EQUAL_HIGHS_LIQUIDITY`/`EQUAL_LOWS_LIQUIDITY` observations is fixed at a single value, `NOT_APPLICABLE`, for the observation's entire lifetime; **no `CLOSE_BREACH_CANDIDATE`, `RECLAIM_CONFIRMED`, or `GENUINE_INVALIDATION_CONFIRMED` event is ever emitted for these two types** — the shared bounded-POI lifecycle standard is explicitly prohibited from silent application here, exactly as `equal_highs.md`/`equal_lows.md` themselves state. **This milestone does not implement the BTMM manipulation lifecycle** (sweep-then-reverse-vs-break-and-continue interpretation) anywhere for Equal Highs/Lows or otherwise. **Availability/identity:** §35F/§35G, reference-key pattern identical to §35N.
+
+### 35Q. Volume-Based POI Data Availability Finding
+
+**No volume-data specification is blocking. Corrected by the focused audit (Part 10): Option B is explicitly selected for all 10 VOLUME-family `PoiType` values.** Per Part 5 of the original audit's own option set (A = genuine volume-derived POI; B = rename/reclassify as a price-action/displacement proxy; C = defer; D = block), **Option B is the correct, explicit choice** — `PoiFamily.VOLUME` is preserved as the book's own official taxonomy label (Chapter 1's "Volume-Based POI" category), but detection for all 10 types uses approved price-action, displacement, size-ratio, range-context, body-efficiency, and directional-close-position proxies, never a claim of measured real/traded volume.
+
+`NormalizedCandle.volume: Decimal | None` and `volume_kind: CandleVolumeKind` (`TICK`/`TRADE`/`UNKNOWN`) already exist in the implemented candle contract (1B-B), with `volume` mandatory only when `volume_kind` is `TICK`/`TRADE` and freely `None` under `UNKNOWN` — this already matches the approved Volume/Momentum Proxy Standard's own governing rule exactly: **tick volume is secondary-only evidence, never a mandatory POI-validity requirement, and missing tick volume must never invalidate a POI.** Every one of the 10 volume-based POI specifications is fully detectable using **price-action proxies alone** — real/tick volume is never required, and `UNKNOWN` volume remains fully acceptable whenever the approved price-action proxy rule is otherwise complete.
+
+**Per-specification finding (all 10, Option B):** required field = `NormalizedCandle.volume`/`volume_kind`, read-only, optional, never gating; tick vs. real volume = FXCM tick volume when `volume_kind = TICK` (the project's single approved data source, per `PROJECT_SCOPE.md`), never blended with any other provider's volume; normalization = `relative_tick_volume` (median of the previous 20 confirmed candles, current excluded), reported as `SUPPORTS`/`NEUTRAL`/`CONTRADICTS`/`MISSING`; threshold = none set (matches the approved standard's own explicit "no minimum thresholds... have been set yet"); timeframe = per-family, §35J-§35M; availability = per-family; evidence = `ENGINEERING_PROVISIONAL`; implementation readiness = **not reduced** by volume-data limitations — **this finding does not reduce the 32-POI implementable count.** No candle-range substitute is invented in place of true volume; the price-action proxies already are the approved primary standard, not a substitute for a missing one.
+
+**Corrected field-placement note (resolving the dangling cross-reference the audit found):** the four price-action proxy fields (`relative_size_ratio`, `range_context_ratio`, `body_efficiency`, `directional_close_position`) and the two tick-volume fields (`relative_tick_volume`, `tick_volume_status`) are **computed internally by each detector, used only to evaluate that family's own mandatory candidate/confirmation thresholds, and are never stored on `PoiObservation`, never exported, never part of any semantic identity key, and never part of any public content fingerprint** (§35E's exact 23-field list contains none of them; §35M's cross-reference to this section is now resolved rather than dangling).
+
+### 35R. Period-Level POIs — the 12 Previous/Current Calendar-Window High/Low Levels
+
+**Mechanically well-defined, genuinely new (no existing implemented output computes these today).** Each of the 12 is the running (Current variants) or final (Previous variants) high or low of a fixed calendar window (day/week/month) over confirmed candles for one symbol/timeframe. **Zone: single price point** (`representative_price`, `zone_top = zone_bottom = representative_price`, a zero-height point zone — exact overlap/containment rules in §35X). **No lifecycle** — the `rejection_criterion_status = NOT_APPLICABLE` rule (already author-approved, `P0G-B013A`) applies verbatim: "every valid completed or active period necessarily has a high and a low — there is no candidate to reject," so `PoiLifecycleStatus` is fixed at `NOT_APPLICABLE` permanently for all 12, identical in kind to Equal Highs/Lows' fixed lifecycle value (§35P) but for a structurally different reason (a deterministic reference level, not an excluded liquidity concept). A public `PoiObservation` exists for a period level as soon as its window contains at least one candle (§35T/§35U — existence is the confirmation signal; there is no separate validity axis). **Sweep-vs-break prediction is explicitly not automated** (the book leaves this contextual; no formula exists to invent) — this milestone exposes the level only, never a predicted sweep/break outcome.
+
+**Corrected by the focused audit (Parts 7, 8): the calendar-window boundary gap is resolved with one exact, `ENGINEERING-PROVISIONAL`, `AUTHOR-DECISION-REQUIRED` UTC policy — no longer an unresolved gap-fill.**
+
+**Exact period-window policy (UTC only; no broker-local timezone; no DST adjustment; no hidden session calendar):**
+
+| Period | Window (half-open) |
+|---|---|
+| Day | `[00:00:00 UTC, next day 00:00:00 UTC)` |
+| Week | ISO week: `[Monday 00:00:00 UTC, next Monday 00:00:00 UTC)` |
+| Month | Calendar month: `[1st of month 00:00:00 UTC, 1st of next month 00:00:00 UTC)` |
+
+**Exact rules:**
+- `event_time_utc` (not `availability_time_utc`, not processing time) determines which window a candle belongs to.
+- Weekends and holidays are not special-cased — they simply contain no candles; a period with zero candles emits no level at all (no empty-window `PoiObservation`).
+- **"Current period"** means the non-empty window containing the latest visible candle.
+- **"Previous period"** means the most recent **earlier, non-empty, completed** window — previous-period resolution skips empty weekend/holiday windows automatically, since it is defined over non-empty windows only, not over every calendar window mechanically.
+- A previous-period level becomes available (its `PoiObservation` is confirmed and emitted) only once a later, non-empty period begins — i.e., once the previous window is known to be closed because visible data exists in a subsequent window.
+- A current-period level's `zone_top`/`zone_bottom`/`representative_price` update whenever a new visible candle extends the running high/low within that still-open window (§35E's disclosed content-evolving-snapshot exception, exactly 6 of the 12 types: `CURRENT_DAY_HIGH/LOW`, `CURRENT_WEEK_HIGH/LOW`, `CURRENT_MONTH_HIGH/LOW`).
+- No incomplete/future candle is ever used — only confirmed, already-visible candles.
+- All windows are computed identically under batch and replay (§35AE) — purely a function of `event_time_utc`, never of when the analysis happens to run.
+- **Previous-period types (`PREVIOUS_DAY/WEEK/MONTH_HIGH/LOW`) are fixed historical observations once their period closes** — unlike the 6 "Current" types, once a period is confirmed as "previous" (a later non-empty period has begun), its content never changes again.
+
+**Exact semantic identity (§35F, corrected):** `(symbol.value, timeframe.value, poi_type.value, period_start_time_utc.isoformat(), period_end_time_utc.isoformat(), rule_version)` — including both the exact period start **and** end boundary in the key, not only the start, removing any ambiguity about which exact window an identity refers to. For the 6 "Current" types, this identity remains stable throughout the entire open window (the period has not closed, so `period_end_time_utc` is the window's fixed, predetermined boundary, not a moving value) while `content_fingerprint` changes as new extremes appear (§35E/§35G); at rollover, the window closes and becomes eligible for `PREVIOUS_*` treatment as an entirely new record with its own new `period_start_time_utc`/`period_end_time_utc` — never a mutation of the "current" record's identity.
+
+**Explicit labeling (per Part 8's instruction):** this period-window policy is **`ENGINEERING-PROVISIONAL`** — it is a reasonable, deterministic, fully-specified default, not merely a placeholder, but it is **not** described as broker-session-calibrated (FXCM's actual server-day/rollover convention may differ from UTC midnight) and **not** production-approved. **Author-approved (§35AP, item 9):** the author has explicitly ratified this exact policy exactly as documented; `poi/period_levels.py` may now be implemented against it.
+
+### 35S. Structural Context Requirements — Corrected: `StructureAnalysis` Removed from This Milestone Entirely
+
+**Corrected by the focused audit (Part 5, Option B): `StructureAnalysis` is not part of this milestone's public input at all.** The original draft accepted `StructureAnalysis` as a mandatory `PoiTimeframeInput` field while simultaneously stating no detector uses it for any gating purpose — a required input with no deterministic effect. Rather than retain an unused mandatory field, an unused optional field, or a "forward-compatible" placeholder, **the field is removed outright** (§35B/§35E/§35H). This section is retained to record why, not to describe an active input.
+
+**Mandatory structural context: none, for any of the 32 implementable POI types, beyond each family's own candle-geometry rule.** Verified per family in §35J-§35R: no implementable POI specification anywhere in the approved knowledge base makes `StructureDirection`, `SwingRelationship`, `StructureTransition`, `CurrentStructureState`, protected/weak levels, BOS, or CHoCH a *mandatory gate*. This is not an oversight — it is the book's and every already-approved standard's own consistent position (verified verbatim, repeatedly: "not defined using HH, HL, BOS, CHoCH... or any other invented structure rule"; "does not require BOS (undefined in this project and not invoked here)").
+
+**No optional/non-gating structure field either.** The original draft's `PoiObservation.source_structure_record_ids` (intended to let a caller attach `StructureTransition`/`SwingRelationship` record IDs as non-gating evidence) is removed along with the input itself (§35E) — an always-empty field serving no current purpose is not retained "for forward compatibility."
+
+**Prohibited contradictory context:** not applicable — with no structural input at all, there is no "contradictory structure" case to define or reject.
+
+**A future BOS/CHoCH is never treated as confirmation for an earlier POI:** structurally guaranteed even more strongly than before — with `StructureAnalysis` absent from the public input entirely, there is no code path through which any structure fact, past or future, could influence any detector's candidacy or confirmation.
+
+**Structure context in a later milestone:** may be added when an approved POI rule is found to genuinely require it — as a scoped, per-type-documented field added deliberately for that rule, never as a standing, always-required, unused input. This milestone's own explicit exclusions (§35AL) record this as future, not current, work.
+
+**Same-availability-group behavior and no-look-ahead gating:** governed uniformly by §35AD, not per-family; unaffected by the removal of `StructureAnalysis`, since no-look-ahead discipline here concerns candle/measurement availability only.
+
+### 35T. POI Confirmation
+
+**Two separated concepts, never conflated (corrected by the focused audit, Part 6 — a third, originally-proposed "validity" concept is removed):** source-candidate existence (a detector's own internal `*Candidate` `NamedTuple`, **private and unexported**) -> confirmed `PoiObservation` (emitted **only** once the family's exact confirmation rule passes; its mere existence is the confirmation signal, §35F) -> POI lifecycle (§35V, for the 18 lifecycle-eligible types).
+
+**Exact confirmation rule per family** — already fully specified in §35J-§35R; summarized once here for the general pattern: **`availability_time_utc = MAX(availability among every source fact required for confirmation)`**, identical discipline to `1B-H`/`1B-I`. Same-candle candidate+confirmation applies to single-candle families (Pressure Wick, Hammer, Shooting Star); next-candle/multi-candle confirmation applies to multi-candle families (FVG's 3rd candle, Engulfing's 2nd candle, Morning/Evening Star's 3rd candle, Order Block's displacement candle, Base's departure candle, Buy-to-Sell/Sell-to-Buy's 3-bar reversal window). **Structure-transition confirmation and displacement confirmation** are never used as a POI's own confirmation gate (§35S — `StructureAnalysis` is not part of this milestone's input at all) — displacement *is* the candidate-forming event for FVG/OB/Base/reversal-candle families (it is intrinsic to the family's own formation rule, not a separate external confirmation source). **Return-to-zone confirmation** is never required for initial POI confirmation for any of the 32 types (verified per family) — a "first return" only matters later, for lifecycle interaction/reaction measurement (§35V), never for the POI's own existence. **Confirmation cancellation / candidate that never confirms:** every family's candidate rule is a strict pass/fail evaluated once, at its own defined confirmation instant — a candidate failing any mandatory condition produces **no** `PoiObservation` at all (never a cancelled/rejected public record; internal candidates are never exported, per Part 21's explicit instruction).
+
+### 35U. POI Validity — Removed Entirely (Tombstone Section)
+
+**No public "validity" contract or field of any kind exists in the corrected architecture — this section is retained only as a tombstone recording the removal, replacing the originally-proposed "POI Validity" content.** The audit found the original 2-member `PoiValidityStatus` (`FORMING`/`CONFIRMED`) conflated a pre-confirmation *candidate* concept with an ongoing *validity* concept — since `FORMING` was never emitted by any detector, every produced record's `validity_status` was always exactly `CONFIRMED`, a field carrying zero information. **Corrected model (§35T):** an internal candidate is private and unexported; a confirmed `PoiObservation` is emitted only after the exact confirmation rule passes; there is no intermediate public state and no public field recording "confirmed-ness," because existence of the record **is** that fact. This is a genuine simplification, not merely a disclosed one — `PoiObservation` has exactly 23 fields (§35E), none of which is a validity/confirmation-status field. No `PoiValidityStatus` enum, no `validity_status` field, and no export of either exists anywhere in this corrected architecture (§35D/§35E/§35Z/§35AJ).
+
+**What a confirmed `PoiObservation` implies none of:** currently untouched (§35V's `freshness_status` is the separate, correct field for that); currently tradeable; an active BTMM setup; entry readiness (§35B). **What remains correctly resolved without a validity field:** untouched zone = `freshness_status = FRESH` (§35V, a lifecycle field); first/multiple touches = `PoiLifecycleTransition`/tap-count records (§35V, for the 18 lifecycle-eligible types only); partial/full mitigation = **not defined**, per the already-approved `POI_FRESHNESS_AND_AGE_STANDARD.md`'s own explicit scope limit ("It does not define partial mitigation, full mitigation... those remain unresolved and out of scope") — this milestone does not invent one either; structural contradiction = not applicable (§35S, no structural input exists to contradict); age/expiry = descriptive only (§35W); timeframe precedence = affects `effective_timeframe`/merge only (§35I/§35X); merged POI = a merged `PoiObservation` exists at all only because its own family rule independently confirmed — merging never creates or upgrades a candidate; source-output invalidity = a reference `PoiObservation` (Support/Resistance/Equal-Highs/Equal-Lows) whose source `SupportResistanceZone`/`EqualLevelCluster` is later invalidated is unaffected in its own existence (the source's own lifecycle is inherited separately, §35N/§35P) — there is no `PoiObservation`-level validity field to update either way.
+
+### 35V. Breach, Reclaim, and Invalidation
+
+**Reused verbatim, in full, from the already-approved `knowledge/poi_lifecycle/POI_BOUNDARY_BREACH_RECLAIM_INVALIDATION.md` (Ambiguity 15) — no new formula is invented; this milestone is the first to actually *implement* this already-approved standard in code.** Exact reused formulas:
+
+```
+Zone Height = Zone Top - Zone Bottom
+Contact Tolerance   = MAX(2 x Minimum Price Tick, MIN(0.05 x ATR(14), 0.10 x Zone Height))
+Overshoot Tolerance = MAX(2 x Minimum Price Tick, MIN(0.10 x ATR(14), 0.25 x Zone Height))
+```
+
+**`PoiLifecycleStatus` (`StrEnum`) — corrected applicability: exactly 18 of the 32 implementable types are lifecycle-eligible (`32 − 2 equal-level − 12 period-level = 18`; §35C/§35D), never "30."** The 10 real states — `NO_BREACH`, `CLOSE_BREACH_CANDIDATE`, `RECLAIM_PENDING`, `RECLAIM_CONFIRMED`, `DISPLACEMENT_PENDING`, `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED`, `RECLAIM_WITHOUT_DISPLACEMENT`, `RECLAIM_FAILED`, `FALSE_INVALIDATION_CONFIRMED`, `GENUINE_INVALIDATION_CONFIRMED` — apply only to the 18: all 10 volume + all 6 price-action + Support + Resistance. An 11th value, `NOT_APPLICABLE`, is permanently fixed for the remaining 14 (Equal Highs, Equal Lows, and all 12 period-level types, §35P/§35R) — none of these 14 ever transitions through any of the 10 real states.
+
+**Corrected restatement of the reclaim-window boundary (Part 13 of the focused audit — this nuance was previously inherited only by reference, now stated explicitly):** the confirmed **breach candle itself is never counted as reclaim-window bar 1.** The first confirmed candle *strictly after* the breach candle is reclaim-window bar 1; the reclaim window contains exactly the next 3 eligible confirmed candles, ordered by canonical event chronology and gated by availability (no same-candle breach-and-reclaim is possible by construction, since bar 1 is defined as a distinct, later candle). If no reclaim occurs within those exact 3 candles, the Sustained Breach / Genuine Invalidation rule below applies. These breach/reclaim/displacement rules apply **only** to the 18 lifecycle-eligible types — they are never applied to Equal Highs/Lows or any period-level observation.
+
+**Exact bullish/bearish inequalities (close-only; a wick alone never confirms breach):**
+
+| Direction | `CLOSE_BREACH_CANDIDATE` condition |
+|---|---|
+| Bullish | `Zone Bottom - Candle Close > Overshoot Tolerance` |
+| Bearish | `Candle Close - Zone Top > Overshoot Tolerance` |
+
+**Reclaim (exactly the next 3 confirmed candles):** Bullish `Reclaim Close >= Zone Bottom + Contact Tolerance`; Bearish `Reclaim Close <= Zone Top - Contact Tolerance`. **Displacement-after-reclaim (exactly the next 3 confirmed candles after reclaim):** at least one close beyond `Zone Top + Contact Tolerance` (bullish) / `Zone Bottom - Contact Tolerance` (bearish), **and** the reclaim-to-displacement leg classified `FAST`/`STRONG_FAST` (reusing the Market Speed Standard's `Leg Bar Count`/`Net Directional Distance`/`Normalized Speed Per Bar`/`Directional Efficiency`/`Directional Candle Share` unmodified). **False Invalidation = the complete sequence** `CLOSE_BREACH_CANDIDATE -> RECLAIM_CONFIRMED (<=3 bars) -> DISPLACEMENT_AFTER_RECLAIM_CONFIRMED (<=3 bars after reclaim)`; `false_invalidation_confirmation_time = displacement_after_reclaim_confirmation_time`, never backdated. **Sustained Breach (required for Genuine Invalidation):** at least 2 of the 3 reclaim-window closes remain beyond the far boundary by more than that candle's own (freshly-computed) Overshoot Tolerance, **and** reclaim-window bar 3 itself qualifies, **and** no `RECLAIM_CONFIRMED` occurred. **Genuine Invalidation = final, non-reactivatable** (verified verbatim: "`INVALIDATED -> ACTIVE` is not allowed for the same POI instance... a later reaction... requires a new POI record, a new POI ID"); `genuine_invalidation_confirmation_time` = reclaim-window bar 3's close time; sets `CurrentPoiState.poi_lifecycle_status = GENUINE_INVALIDATION_CONFIRMED` permanently for that instance. **Failed Reclaim:** a new qualifying breach before displacement confirms starts a **new**, independently-evaluated `boundary_breach_event_id` and reclaim window; Genuine Invalidation is never declared from the first new breach candle alone.
+
+**Forbidden transitions (reused verbatim):** `GENUINE_INVALIDATION_CONFIRMED -> FALSE_INVALIDATION_CONFIRMED` and the reverse, for the same `boundary_breach_event_id`.
+
+**Repeated Tap:** one tap = one distinct interaction event (continuous multi-candle interactions count once); a later interaction becomes a **new** tap only after a qualifying exit-then-re-entry sequence (exact separation condition reused verbatim, §35V's source standard). Classification: `1 -> INITIAL_TAP`, `2 -> REPEATED_TAP`, `>=3 -> MULTIPLE_REPEATED_TAPS` — **evidence only, no automatic degradation** (reused verbatim: "a second tap automatically weakens the POI... automatically invalidates... automatically strengthens... automatically determines freshness... automatically determines entry validity" are all explicitly *not* assumed). Repeated-touch degradation itself remains `P0G-B008`, an unresolved empirical-calibration item explicitly out of scope for this milestone (§35AL).
+
+**`PoiLifecycleTransition(ContractModel)`** — one immutable record per state-machine event (mirroring `StructureTransition`'s accumulating-tuple pattern), exact field order: `record_id`, `content_fingerprint`, `symbol`, `timeframe`, `poi_record_id`, `transition_type: PoiLifecycleTransitionType` (the 9 non-`NO_BREACH`/`NOT_APPLICABLE` event names above), `triggering_candle_record_id`, `event_time_utc`, `availability_time_utc`, `rule_version`, `contract_version`, `schema_version`, `evidence_classification`, `provenance_id`.
+
+**Freshness/age (reused verbatim from the already-approved `POI_FRESHNESS_AND_AGE_STANDARD.md`, a deliberately minimal, observational-only model):** `freshness_status: FRESH | INTERACTED` (2 members only — no `PARTIALLY_MITIGATED`/`FULLY_MITIGATED`, per that standard's own explicit scope limit); `FRESH -> INTERACTED` is permanent, one-directional, triggered by `qualifying_interaction_time > poi_availability_time` (strict inequality; the availability/confirmation candle itself excluded even if it touches the zone; `NEAR_MISS` never qualifies). Descriptive age fields only, on `CurrentPoiState`: `age_start_time_utc = poi_availability_time_utc`, `age_in_confirmed_bars`, `elapsed_time_since_availability` — `automatic_age_expiration = DISABLED` always; age never causes weakening, expiration, invalidation, or strength reduction (§35W).
+
+### 35W. Expiry
+
+**No expiry threshold is invented. `EXPIRED` is absent from every public enum in this milestone** (`PoiLifecycleStatus`, §35V — the only lifecycle-adjacent public enum, since `PoiValidityStatus` was removed entirely, §35D/§35U) — per Part 24's explicit instruction ("If expiry is unresolved, exclude EXPIRED from the public lifecycle enum"). The already-approved `POI_FRESHNESS_AND_AGE_STANDARD.md` resolves `P0G-B007` only as far as "track age descriptively, never derive automatic expiration from it" (`automatic_age_expiration = DISABLED`, exact quote, §35V) — no candle-count, elapsed-time, or POI-family-specific expiration threshold exists anywhere in the approved knowledge base for any POI. A future, separate, explicit author decision and empirical calibration pass remains required before any expiry rule may be added; this milestone does not anticipate or half-implement one.
+
+### 35X. Overlap and Merge
+
+**Same-symbol and same-direction required** for any overlap/merge consideration — a bullish and a bearish observation are never merged regardless of geometric overlap (a documented worked example below shows they may still be reported as overlapping *zones*, but never merged). **Same-timeframe vs. cross-timeframe:** both considered — same-timeframe overlap uses the algorithm below directly; cross-timeframe overlap additionally triggers strong-timeframe precedence (§35I) when the `poi_type` also matches. **Same-family vs. cross-family:** overlap is evaluated across **all** `PoiType` values within the same `symbol`/direction/timeframe scope, not restricted to one family — an FVG legitimately overlaps an Order Block (both volume-family, different types) exactly as readily as it might overlap a Support zone (structural family); family is descriptive metadata on `PoiObservation`, never a filter on the overlap algorithm itself.
+
+**Exact geometric overlap test — corrected by the focused audit (Part 9): the strict interval rule below applies only between two genuine, non-zero-height intervals. Zero-height point zones (all 12 period levels, §35R) require their own explicit rule, given separately below, since the strict inequality alone incorrectly excludes a point lying exactly inside another interval.**
+
+**A. Two non-zero-height intervals:** `[top_a, bottom_a]` and `[top_b, bottom_b]`, both with `top > bottom`, overlap when `min(top_a, top_b) > max(bottom_a, bottom_b)` (strict; boundary-touching alone, i.e. `min(top_a,top_b) == max(bottom_a,bottom_b)`, is recorded as `BOUNDARY_TOUCHING`, a distinct, non-overlapping classification — never silently treated as overlap). **Containment** (`bottom_a <= bottom_b and top_a >= top_b`, one zone's range entirely encloses the other's) is a distinct sub-classification of overlap, `CONTAINS`/`CONTAINED_BY`.
+
+**B. A point zone (`zone_top == zone_bottom == P`) against a non-zero-height interval `[bottom, top]`:** the point **overlaps** the interval when `bottom <= P <= top` — **inclusive of both boundaries**, deliberately not the strict inequality used between two non-zero-height intervals (Part 9's explicit correction: "strict interval intersection normally excludes a point unless explicitly handled"). A point lying inside or exactly on either boundary of the interval is `CONTAINED_BY` that interval; a non-zero-height interval can never be `CONTAINS`-classified by a point (a point cannot enclose a wider range).
+
+**C. Two point zones**, `P_a` and `P_b`: they overlap **only when `P_a == P_b`** exactly (no tolerance is added — each point is already each family's own approved, exact price). Two distinct prices, however close, do not overlap and are not `BOUNDARY_TOUCHING` (that classification applies only to non-zero-height intervals meeting at a shared edge, not to two distinct points).
+
+**Tolerance:** none added to the raw zone boundaries themselves for any of the three overlap cases above (the boundaries are already each family's own approved, tolerance-inclusive geometry, §35J-§35R) — overlap is a pure geometric test on the stored `zone_top`/`zone_bottom` values, not a re-tolerance-adjusted one.
+
+**Mitigation/fill concepts (partial fill, full fill, immediate mitigation) do not apply to period-level point zones** — their `PoiLifecycleStatus` is permanently `NOT_APPLICABLE` (§35R/§35V), so no interaction/reaction/mitigation formula that assumes a non-zero Zone Height is ever evaluated against them.
+
+**Merge eligibility (all required):** same `symbol`; same `PoiDirection`; overlapping or containing zones (per the test above); different `PoiObservation.record_id`s (a POI is never merged with itself). **Merge is *cross-timeframe-triggered only* in this milestone** — same-`poi_type` cross-timeframe overlap always merges (§35I); cross-`poi_type` or same-timeframe overlap is **reported but never merged** (`PoiObservation.merged_source_poi_record_ids` stays empty; the overlap fact itself is exposed via a separate, read-only `PoiOverlapRelationship` observation — see below). **Merge prohibition:** an already-`GENUINE_INVALIDATION_CONFIRMED` observation is never merged as a parent (it may remain listed as an overlapping/contained child fact only); a `FORMING` observation is never merged (§35U notes none are ever emitted, so this is vacuously satisfied in V1).
+
+**Representative boundaries after merge:** the merged (parent, stronger-timeframe) observation's own `zone_top`/`zone_bottom` are used unmodified — merging never recomputes, averages, or widens a boundary; the weaker-timeframe child's boundaries remain independently readable on its own, separately-identified `PoiObservation` record (never deleted). **Effective timeframe:** set to the stronger (parent) timeframe on the merge-result relationship; each individual `PoiObservation.effective_timeframe` field is set only on the record that was actually merged-into-as-a-child (its `effective_timeframe` becomes the parent's timeframe while its own `source_timeframe` stays unchanged) — the parent's own `effective_timeframe` always equals its `source_timeframe`.
+
+**Parent and child identities:** both remain independently resolvable `record_id`s; the child's `PoiObservation` is never deleted or hidden; `merged_source_poi_record_ids` on the parent lists every merged child's `record_id`. **Content fingerprint changes:** the parent's `content_fingerprint` changes when `merged_source_poi_record_ids` changes (it is a public field, §35G); the child's own `content_fingerprint` is unaffected by being merged into a parent (merging is recorded only on the parent side). **Whether merged source POIs remain separately observable:** yes, always — `PoiAnalysis.poi_observations` (§35Z) includes every confirmed observation, merged-into or not; merging never removes an entry from the aggregate. **Whether one source POI may belong to more than one merged parent:** **no** — a child is merged into at most one parent (the single strongest-timeframe same-`poi_type` overlapping observation); if multiple same-timeframe-strength candidates could theoretically both qualify as parent (structurally impossible under §35I's strict distinct-integer-rank total order), the earliest-`availability_time_utc` one wins deterministically — no transitive ambiguity is possible because merge parenthood is a function of a strict total order (timeframe rank, then availability time, then `record_id`), not a graph relation.
+
+**`PoiOverlapRelationship`** — a new, small, immutable read-only observation (not itself identity-bearing beyond a deterministic derived key) recording every non-merge overlap/containment fact (cross-family or same-timeframe): `symbol`, `direction`, `poi_a_record_id`, `poi_b_record_id` (canonically ordered, `poi_a_record_id < poi_b_record_id` as strings, so `A overlaps B` and `B overlaps A` are the same fact, never double-recorded), `relationship_type: PoiOverlapRelationshipType` (`OVERLAPPING`, `CONTAINS`, `CONTAINED_BY`, `BOUNDARY_TOUCHING`), `overlap_top`, `overlap_bottom` (the intersection range), `evaluated_at_time_utc`.
+
+**Worked examples (no transitive ambiguity):**
+1. **A overlaps B; B overlaps C; A does not overlap C** — three independent pairwise `PoiOverlapRelationship` facts (`A-B: OVERLAPPING`, `B-C: OVERLAPPING`); no `A-C` record is created, and no transitive "A overlaps C" is ever inferred — overlap is evaluated strictly pairwise over the exact stored geometry, never propagated through an intermediate.
+2. **Strong timeframe contains weak timeframe (same `poi_type`)** — merge triggers (§35I); the D1 parent's `merged_source_poi_record_ids` includes the M15 child's `record_id`; both remain independently queryable.
+3. **Bullish and bearish zones overlap** — `PoiOverlapRelationship` is **not** created (same-symbol-and-direction is a mandatory precondition for the relationship, not only for merge) — a bullish/bearish geometric overlap is a legitimate, common market fact (e.g., an Order Block and an opposing Engulfing at a reversal point) but is deliberately not tracked as a "relationship" in this milestone, to avoid implying any interaction meaning beyond raw geometry; both observations remain independently queryable and their own `zone_top`/`zone_bottom` are directly comparable by any caller who wants this fact.
+4. **FVG overlaps Order Block** — `PoiOverlapRelationship(relationship_type=OVERLAPPING)`, cross-family, cross-`poi_type`, same-timeframe or cross-timeframe (if cross-timeframe and different `poi_type`, no merge, relationship only).
+5. **Support overlaps Order Block** — identical treatment to example 4.
+
+### 35Y. Single-Region and Limit Rules
+
+**No visualization-driven analytical limit is implemented.** Any pre-existing "one POI region per timeframe" or "N-POI limit per timeframe" language in the book is a **downstream display/selection concern, never an analytical one** — per Part 27's explicit instruction ("Do not silently discard valid POIs merely because a future chart renderer has a box limit"). `PoiAnalysis` (§35Z) preserves every confirmed, non-superseded `PoiObservation` with no maximum count, no per-timeframe cap, and no silent replacement of an older POI by a newer one of the same type unless the two are geometrically overlapping and generate an actual merge (§35X) — a non-overlapping second Order Block on the same timeframe is simply a second, independent `PoiObservation`, never deleted, replaced, or capped. Any future display-layer limit belongs to a not-yet-designed visualization milestone (explicitly excluded, §35AL), not to this analytical layer.
+
+### 35Z. Output Model
+
+**Four contracts, not five — `MergedPoi` is folded into `PoiObservation` itself (via `merged_source_poi_record_ids`, §35X) rather than being a separate contract,** since a "merged POI" is not a structurally distinct kind of fact — it is exactly a `PoiObservation` whose `merged_source_poi_record_ids` happens to be non-empty; a fifth contract would duplicate every field `PoiObservation` already has.
+
+1. **`PoiObservation`** — §35E.
+2. **`PoiLifecycleTransition`** — §35V.
+3. **`PoiOverlapRelationship`** — §35X.
+4. **`CurrentPoiState`** — one immutable current-snapshot record per confirmed POI instance (mirroring `CurrentStructureState`'s per-scope singleton pattern, but per-*POI-instance* here, not per-symbol/timeframe globally, since a POI package must track many simultaneously-active POIs, not one global direction): exact field order — **corrected: `validity_status` removed (§35D/§35T, `PoiValidityStatus` removed entirely); every field below reflects the corrected 21-field contract** —
+
+```
+record_id: UUIDv7
+content_fingerprint: SHA256Fingerprint
+symbol: InternalSymbol
+timeframe: Timeframe
+poi_record_id: UUIDv7
+poi_type: PoiType
+direction: PoiDirection
+poi_lifecycle_status: PoiLifecycleStatus
+freshness_status: PoiFreshnessStatus
+tap_count: int
+tap_classification: PoiTapClassification | None
+age_start_time_utc: datetime
+age_in_confirmed_bars: int
+elapsed_time_since_availability: timedelta
+latest_lifecycle_transition_id: UUIDv7 | None
+availability_time_utc: datetime
+rule_version: SemVer
+contract_version: SemVer
+schema_version: SemVer
+evidence_classification: EvidenceClassification
+provenance_id: UUIDv7
+```
+
+**`PoiAnalysis`** aggregate, exact field order:
+
+```
+symbol: InternalSymbol | None
+analyzed_timeframes: tuple[Timeframe, ...]
+analyzed_candle_count_by_timeframe: tuple[int, ...]
+poi_observations: tuple[PoiObservation, ...]
+poi_lifecycle_transitions: tuple[PoiLifecycleTransition, ...]
+poi_overlap_relationships: tuple[PoiOverlapRelationship, ...]
+current_poi_states: tuple[CurrentPoiState, ...]
+```
+
+**No field anywhere in any of these five types for:** BTMM pattern, entry, stop loss, take profit, position sizing, trade outcome, signal confidence, or AI score — verified absent by construction (every field above is enumerated exhaustively; none references any excluded concept, §35AL).
+
+### 35AA. Public API
+
+**One exact synchronous entry point, no separate analyzer per POI family** (per Part 29's explicit instruction):
+
+```python
+def analyze_pois(
+    timeframe_inputs: tuple[PoiTimeframeInput, ...],
+    configuration: PoiConfiguration,
+    identity_provider: DerivedOutputIdentityProvider,
+) -> PoiAnalysis:
+    ...
+```
+
+**Empty behavior:** `timeframe_inputs == ()` returns `PoiAnalysis(symbol=None, analyzed_timeframes=(), analyzed_candle_count_by_timeframe=(), poi_observations=(), poi_lifecycle_transitions=(), poi_overlap_relationships=(), current_poi_states=())` — identical empty-aggregate discipline to `analyze_market_measurements()`/`analyze_structure_state()`. **Unsupported-spec behavior:** a `PoiConfiguration` may disable individual `PoiType` members (§35AG); a disabled type is simply never detected — no error, no placeholder observation. **Deterministic ordering:** §35AF. **Errors:** §35AB. **Identity-failure behavior:** `DerivedIdentityCollisionError` reused unmodified from `domain`, raised by the shared `_IdentityResolver` (§35G) exactly as in every prior milestone.
+
+### 35AB. Error Vocabulary
+
+**Compact, typed, `ValueError`-based, reusing existing errors wherever semantics genuinely match (4 reused unmodified from `domain`; 6 new; 10 total):**
+
+| Error | Reused/New | Trigger |
+|---|---|---|
+| `MixedSymbolAnalysisError` | Reused (`domain`) | Mixed `symbol` across `timeframe_inputs` |
+| `DuplicateCandleRecordError` | Reused (`domain`) | Duplicate candle `record_id` within one bundle |
+| `UnsortedCandleSequenceError` | Reused (`domain`) | A bundle's own `candles` not canonically sorted |
+| `DerivedIdentityCollisionError` | Reused (`domain`) | Identity provider returns one ID for two semantic keys |
+| `InvalidStructureConfigurationError`-equivalent -> new `InvalidPoiConfigurationError` | New | Non-positive/invalid `PoiConfiguration` field |
+| `DuplicatePoiTimeframeInputError` | New | Two `timeframe_inputs` entries share one `Timeframe` |
+| `UnsortedPoiTimeframeInputError` | New | `timeframe_inputs` not in ascending timeframe-strength order |
+| `InputPrefixMismatchError` | New | A bundle's `MarketMeasurementAnalysis.analyzed_candle_count`/`symbol` disagrees with its own `candles` (narrowed by the focused audit — the `structure_analysis` mismatch case no longer exists, §35H) |
+| `MissingSourceRecordError` | New | A detector references a candle/measurement `record_id` absent from the supplied bundle |
+| `ImpossiblePoiLifecycleTransitionError` | New | An internal state-machine invariant violation (e.g., a forbidden transition, §35V) is reached — a defensive, internal-consistency guard, not expected to be caller-triggerable given the validated inputs |
+
+**No internal implementation exception is ever exposed publicly** (matching every prior milestone's discipline) — no `*Candidate` construction error, no private helper's `AssertionError`, no merge-graph internal error leaks past `analyze_pois()`'s boundary.
+
+### 35AC. Evidence Classification
+
+**Exactly one `EvidenceClassification` value per public output: `ENGINEERING_PROVISIONAL`**, uniformly across `PoiObservation`, `PoiLifecycleTransition`, `PoiOverlapRelationship`, and `CurrentPoiState` — identical policy to `1B-H`/`1B-I`. **Never `AUTHOR_APPROVED`** (a real, distinct, separately-selectable member of the same enum, verified against `contracts/provenance_record.py` — reused, not redefined) — the underlying *rules* this milestone implements are themselves author-approved (Ambiguities 1-15, RECON-D1-D5, GROUP3-D1-D9, the Freshness/Age standard), but that document-level approval status is a wholly separate axis from the per-record `evidence_classification` field, which describes the record's own calibration/validation state, not whether its governing rule was approved. **Never a compound string.** No `BOOK_SOURCED`/`BOOK_SUPPORTED_UNDERLYING_CONCEPT`/`AUTHOR_ADDED_PROJECT_TERMINOLOGY`/`EMPIRICALLY_CALIBRATED`/`OUT_OF_SAMPLE_VALIDATED`/`PRODUCTION_APPROVED` value is ever emitted by this milestone — every one of those remains either a document-level provenance label (used in prose, in `knowledge/`, never in a `ContractModel` field) or a genuinely future state this milestone has not reached.
+
+### 35AD. No-Look-Ahead
+
+**Exact availability per event, all consistent with the single rule `availability_time_utc = MAX(availability among every required source fact)`, never event-time-only, never processing-time, never a future fact:**
+
+- **Candidate/confirmation:** the family-specific instant defined in §35J-§35R (e.g., FVG's 3rd-candle close, Order Block's displacement-candle close) — never the origin/first-candle time.
+- **Merge:** the later of the parent's own availability and the child's own availability (a merge relationship cannot be exposed before both sides individually exist).
+- **Strong-timeframe precedence:** evaluated only among observations whose own `availability_time_utc` has already passed at evaluation time — a higher-timeframe candle is never consulted before its own actual close/availability, exactly as `structure`'s merged event-timeline walk already guarantees for candle/swing/relationship events; this milestone's per-timeframe merged walk (§35AE) extends the identical `(timestamp, kind)`-sorted discipline across `PoiTimeframeInput` bundles.
+- **First touch, breach, reclaim, invalidation:** each event's own `availability_time_utc` per §35V's exact formulas — a breach can never be "discovered" using a candle that has not yet closed, and reclaim/displacement windows are evaluated only over already-available confirmed candles.
+- **Current-state snapshot:** `CurrentPoiState.availability_time_utc` = the latest of the originating POI's own availability and its most recent lifecycle transition's availability — identical pattern to `CurrentStructureState`.
+
+**Multi-timeframe discipline (explicit, per Part 32):** a higher-timeframe candle/POI is never used before its own actual availability, regardless of a lower-timeframe candle's event time being numerically later on the clock but the higher-timeframe candle not yet having closed; an incomplete (still-forming) candle is never treated as a completed POI source for any family (every family's own confirmation rule already requires a *confirmed*, i.e. closed, candle, §35T); no replay availability group is ever partially processed (§35AE). **Same-availability-group phase ordering:** within one merged event-timeline pass, per timestamp, the exact order is (1) candle-close-triggered lifecycle evaluation against pre-existing `CurrentPoiState` only (breach/reclaim/displacement checks use state as of the *start* of that timestamp, mirroring `structure`'s own candle-before-swing-visibility ordering), (2) new-candidate detection/confirmation events, (3) merge/overlap re-evaluation, (4) `CurrentPoiState` finalization for that timestamp — guaranteeing a POI activated at a given timestamp cannot be breached by a candle sharing that same timestamp, identical in spirit to `structure`'s proven activation-group-immunity invariant.
+
+### 35AE. Replay Equivalence Procedure
+
+**Multi-timeframe extension of the already-proven `1B-H`/`1B-I` batch/replay equivalence pattern**, for each global availability group (across all supplied timeframes simultaneously, per Part 33):
+
+1. Append all newly-available candles, across every timeframe, atomically for that availability instant.
+2. Recompute (or accept caller-supplied, already-recomputed) `MarketMeasurementAnalysis` for each affected timeframe's growing prefix.
+3. Re-invoke `analyze_pois()` on the identical visible `PoiTimeframeInput` state (all timeframes' bundles, each reflecting exactly the candles/measurements available as of that instant — corrected: no `StructureAnalysis` recomputation step, since it is no longer part of the input, §35B/§35H).
+4. Compare against an independent, one-shot, direct-batch `analyze_pois()` call over the complete final state — must be identical for the same final visible prefix.
+5. Verify stable source-`PoiObservation` identities across growing prefixes (§35F) — an unchanged POI's `record_id` must not change as later, unrelated candles/POIs are appended, including the 6 content-evolving "Current" period-level types (§35E/§35R — identity stable, content and fingerprint change).
+6. Verify stable `PoiLifecycleTransition` identities (§35F) across growing prefixes.
+7. Verify `CurrentPoiState.content_fingerprint` changes only when its own public content changes (record_id stable, fingerprint reflecting only real content change) — mirroring `1B-I`'s proven test pattern.
+8. Verify merge output (`merged_source_poi_record_ids`, §35X) is identical between batch and replay for the same final prefix.
+9. Verify strong-timeframe precedence (§35I) is stable — a merge decision made at an earlier prefix is never silently reversed by later data (once a child is merged into a parent, it stays merged into that same parent for the remainder of the analyzed history — a `record_id`-referenced, one-time relationship, not a rolling re-evaluation).
+10. Verify no future input affected the result — the standard no-look-ahead replay-equivalence check already proven twice in this project.
+
+**Accepted provisional complexity:** repeated-prefix, full-session, multi-timeframe replay is provisionally superlinear (each `analyze_pois()` call re-scans every timeframe's full visible prefix), explicitly documented as acceptable and non-production, identical in kind to `1B-H`/`1B-I`'s own accepted precedent (§35AK).
+
+### 35AF. Deterministic Ordering
+
+**Total order, no dependency on dictionary/set/file-discovery/detector-registration order (all fields explicit, never implicit iteration order):**
+
+- **Source `PoiObservation`s** (within `PoiAnalysis.poi_observations`): `(availability_time_utc, source_timeframe.value, family.value, poi_type.value, direction.value, zone_bottom, zone_top, str(record_id))`.
+- **`PoiLifecycleTransition`s:** `(availability_time_utc, event_time_utc, transition_type.value, str(poi_record_id), str(record_id))`.
+- **`PoiOverlapRelationship`s:** `(evaluated_at_time_utc, str(poi_a_record_id), str(poi_b_record_id))`.
+- **`CurrentPoiState`s:** `(symbol.value, timeframe.value, poi_type.value, str(poi_record_id))`.
+
+### 35AG. Configuration
+
+**One immutable `PoiConfiguration(ContractModel)`, constructing with exactly one required field (`minimum_price_tick`, matching `MarketMeasurementConfiguration`'s own precedent), every other field defaulted to the exact already-approved value it reuses. Corrected by the focused audit (Part 11): `strong_poi_timeframes` is removed — no described algorithm ever consulted it (§35I's merge-precedence and §35X's merge test both use only the numeric `_TIMEFRAME_STRENGTH_RANK`); no replacement unused field is introduced.**
+
+```
+minimum_price_tick: Decimal
+
+enabled_poi_types: frozenset[PoiType] = frozenset(<all 32 implementable members>)
+supported_symbols: frozenset[InternalSymbol] = frozenset({XAUUSD, EURUSD, GBPUSD})
+
+order_block_size_ratio_standard: Decimal = Decimal("2.0")
+order_block_size_ratio_strong: Decimal = Decimal("3.0")
+small_candle_ratio_standard: Decimal = Decimal("0.50")
+small_candle_ratio_strong: Decimal = Decimal("0.3333")
+
+base_min_candles: int = 2
+base_max_candles: int = 6
+base_height_atr_multiplier: Decimal = Decimal("0.75")
+base_height_departure_multiplier: Decimal = Decimal("0.60")
+base_midpoint_drift_ratio: Decimal = Decimal("0.25")
+base_overlap_ratio_minimum: Decimal = Decimal("0.50")
+
+pressure_wick_share_standard: Decimal = Decimal("0.40")
+pressure_wick_body_efficiency_standard: Decimal = Decimal("0.25")
+pressure_wick_dominance_standard: Decimal = Decimal("2.0")
+pressure_wick_close_position_standard: Decimal = Decimal("0.60")
+pressure_wick_share_strong: Decimal = Decimal("0.50")
+pressure_wick_body_efficiency_strong: Decimal = Decimal("0.30")
+pressure_wick_dominance_strong: Decimal = Decimal("3.0")
+pressure_wick_close_position_strong: Decimal = Decimal("0.70")
+pressure_wick_range_context_strong: Decimal = Decimal("1.25")
+
+hammer_shooting_star_wick_share_standard: Decimal = Decimal("0.60")
+hammer_shooting_star_body_efficiency_standard: Decimal = Decimal("0.30")
+hammer_shooting_star_opposite_wick_standard: Decimal = Decimal("0.10")
+hammer_shooting_star_wick_share_strong: Decimal = Decimal("0.70")
+hammer_shooting_star_body_efficiency_strong: Decimal = Decimal("0.20")
+hammer_shooting_star_opposite_wick_strong: Decimal = Decimal("0.05")
+
+doji_body_efficiency_standard: Decimal = Decimal("0.10")
+doji_body_efficiency_strong: Decimal = Decimal("0.05")
+
+reversal_candidate_size_ratio_standard: Decimal = Decimal("2.0")
+reversal_candidate_size_ratio_strong: Decimal = Decimal("3.0")
+reversal_body_efficiency_standard: Decimal = Decimal("0.60")
+reversal_body_efficiency_strong: Decimal = Decimal("0.70")
+reversal_close_position_standard: Decimal = Decimal("0.70")
+reversal_close_position_strong: Decimal = Decimal("0.80")
+
+zone_contact_tolerance_atr_multiplier: Decimal = Decimal("0.05")
+zone_contact_tolerance_zone_height_multiplier: Decimal = Decimal("0.10")
+zone_overshoot_tolerance_atr_multiplier: Decimal = Decimal("0.10")
+zone_overshoot_tolerance_zone_height_multiplier: Decimal = Decimal("0.25")
+
+reclaim_window_bars: int = 3
+displacement_window_bars: int = 3
+
+rule_version: SemVer = SemVer.parse("1.0.0")
+contract_version: SemVer = SemVer.parse("0.1.0")
+schema_version: SemVer = SemVer.parse("0.1.0")
+evidence_classification: EvidenceClassification = EvidenceClassification.ENGINEERING_PROVISIONAL
+```
+
+**No duplication of ATR, market-data validation, structure configuration, or measurement configuration** — `PoiConfiguration` carries only POI-specific thresholds; `ATR(14)` itself is read from the caller-supplied `MarketMeasurementAnalysis`'s already-computed values (via `measurements.compute_atr_series`, reused, never recomputed independently), and structural validity (mixed symbol/timeframe/unsorted candles) is validated once per bundle exactly as `domain`/`structure` already validate their own inputs — `poi/analyzer.py` performs its *own* additional cross-bundle checks (§35H) but never re-derives ATR or re-validates a single bundle's internal candle ordering a second time beyond what `analyze_market_measurements()`/`analyze_structure_state()` already guarantee for a well-formed input.
+
+**No default silently enables a deferred/unsupported POI type:** `enabled_poi_types`'s default `frozenset` contains exactly the 32 implementable `PoiType` members (§35C) — since no Trendline/Swing-High/Swing-Low `PoiType` member exists at all (§35D), there is no way to even attempt enabling a deferred type; `enabled_poi_types` may only ever be a subset of the 32.
+
+### 35AH. Exact File Scope
+
+**18 new source files, 1 modified existing source file, 16 new test files — 35 total changed paths (34 new + 1 modified).** Source/test split 18/16. New/modified split 34/1. This exceeds the 10-18 source-path guidance ceiling by exactly 0 (18, at the top of the range) and the 8-14 test-path guidance by 2 (16) — justified, disclosed, and not arbitrary: 32 implementable `PoiType` members across 10 genuinely distinct detector algorithms is roughly 3x either prior milestone's POI-adjacent scope, and one dedicated test file per detector family (plus 5 cross-cutting files: configuration, lifecycle/freshness, overlap/merge/precedence, analyzer API, replay equivalence, exports) is the minimum honest split that avoids one monolithic test file covering unrelated families.
+
+**18 new source files** (new top-level package `poi/`):
+
+| Creation order | Path |
+|---|---|
+| 113 | `src/btmm_ai_scanner/poi/__init__.py` |
+| 114 | `src/btmm_ai_scanner/poi/enums.py` |
+| 115 | `src/btmm_ai_scanner/poi/configuration.py` |
+| 116 | `src/btmm_ai_scanner/poi/observation.py` |
+| 117 | `src/btmm_ai_scanner/poi/lifecycle.py` |
+| 118 | `src/btmm_ai_scanner/poi/current_state.py` |
+| 119 | `src/btmm_ai_scanner/poi/order_blocks.py` |
+| 120 | `src/btmm_ai_scanner/poi/fair_value_gaps.py` |
+| 121 | `src/btmm_ai_scanner/poi/reversal_candles.py` |
+| 122 | `src/btmm_ai_scanner/poi/bases.py` |
+| 123 | `src/btmm_ai_scanner/poi/pressure_wicks.py` |
+| 124 | `src/btmm_ai_scanner/poi/engulfing.py` |
+| 125 | `src/btmm_ai_scanner/poi/single_candle_reversals.py` |
+| 126 | `src/btmm_ai_scanner/poi/three_candle_stars.py` |
+| 127 | `src/btmm_ai_scanner/poi/reference_zones.py` |
+| 128 | `src/btmm_ai_scanner/poi/period_levels.py` |
+| 129 | `src/btmm_ai_scanner/poi/overlap.py` |
+| 130 | `src/btmm_ai_scanner/poi/analyzer.py` |
+
+**1 modified existing path (no new row, annotated in place, identical in kind to `1B-I-STRUCTURE`'s own row-82 annotation):** `src/btmm_ai_scanner/domain/enums.py` — `DerivedOutputType` gains exactly 3 new members (`POI_OBSERVATION`, `POI_LIFECYCLE_TRANSITION`, `CURRENT_POI_STATE`), appended after the existing 8; no existing member renamed, removed, or reordered.
+
+**16 new test files (corrected per-file distribution, Part 17 of the focused audit — same 16 files, same 120 total, redistributed to accommodate every newly-required test):**
+
+| Creation order | Path | Test count |
+|---|---|---|
+| 131 | `tests/unit/test_poi_configuration.py` | 7 |
+| 132 | `tests/unit/test_order_blocks.py` | 8 |
+| 133 | `tests/unit/test_fair_value_gaps.py` | 8 |
+| 134 | `tests/unit/test_reversal_candles.py` | 8 |
+| 135 | `tests/unit/test_bases.py` | 8 |
+| 136 | `tests/unit/test_pressure_wicks.py` | 6 |
+| 137 | `tests/unit/test_engulfing.py` | 5 |
+| 138 | `tests/unit/test_single_candle_reversals.py` | 5 |
+| 139 | `tests/unit/test_three_candle_stars.py` | 5 |
+| 140 | `tests/unit/test_reference_zones.py` | 7 |
+| 141 | `tests/unit/test_period_levels.py` | 8 |
+| 142 | `tests/unit/test_poi_lifecycle_and_freshness.py` | 14 |
+| 143 | `tests/unit/test_poi_overlap_merge_and_precedence.py` | 9 |
+| 144 | `tests/unit/test_poi_analyzer_api.py` | 11 |
+| 145 | `tests/unit/test_poi_batch_replay_equivalence.py` | 6 |
+| 146 | `tests/unit/test_poi_exports.py` | 5 |
+
+**Total: 35 changed paths.** Creation order 113-146 (34 new-row values, 146-113+1 = 34, correct), bringing the master inventory from 113 rows (creation order 0-112) to 147 rows (creation order 0-146).
+
+**Corrected path-split terminology (Part 3 of the focused audit — both exact splits stated explicitly, never conflated):**
+
+- **NEW-PATH SPLIT:** 18 new source paths / 16 new test paths (34 new paths total).
+- **AFFECTED-PATH SPLIT:** 19 source paths (18 new + 1 modified `domain/enums.py`) / 16 test paths (35 affected paths total).
+
+"18/16" is never used alone to describe the complete affected-path source/test split — it describes only the new-path split; the affected-path split is always 19/16.
+
+**Dependency direction — corrected (Part 5, `structure` removed):** `poi/` depends on `domain` (`ConfirmedSwing`, `SwingType`, `DisplacementObservation`, `EqualLevelCluster`, `SupportResistanceZone`, `Trendline`, `MarketMeasurementAnalysis`, `DerivedOutputType`, `DerivedOutputIdentityProvider`, 4 reused errors), `measurements` (`compute_atr_series` and candle-metric helpers, reused unmodified), `contracts`, `config` — does **not** depend on `structure` (removed entirely from this milestone, §35B/§35S) and does **not** depend on `market_data`'s pipeline/repository/replay modules directly (a caller may compose `poi/` with `market_data.InMemoryHistoricalReplaySource` at its own discretion, exactly as `domain` already does).
+
+### 35AI. Exact Test Coverage — 120 New Top-Level Test Functions
+
+**Total: 120 new top-level test functions across 16 files (7+8+8+8+8+6+5+5+5+7+8+14+9+11+6+5). Combined with the existing 380: 500.** Corrected per Part 17 of the focused audit — every removed/obsolete test (mandatory `StructureAnalysis` consistency, `PoiValidityStatus`/`FORMING`, unused `strong_poi_timeframes` behavior, the inaccurate 24-export-count assumption) is replaced with named coverage for a genuinely required behavior; several bullish/bearish-mirror test pairs are consolidated into one combined-assertion test to make room without exceeding 120 or adding a 17th file.
+
+| File | Count | Test names |
+|---|---|---|
+| `test_poi_configuration.py` | 7 | `test_poi_configuration_default_values_match_approved_standards`, `test_poi_configuration_is_frozen_and_immutable`, `test_poi_configuration_rejects_non_positive_thresholds`, `test_poi_configuration_evidence_classification_is_engineering_provisional`, `test_poi_configuration_has_no_strong_poi_timeframes_field`, `test_volume_family_poi_types_use_option_b_price_action_proxies`, `test_proxy_metrics_are_computed_internally_and_never_exposed_publicly` |
+| `test_order_blocks.py` | 8 | `test_buy_order_block_candidate_requires_size_ratio_at_least_two`, `test_buy_order_block_zone_uses_full_range_of_smaller_candle`, `test_buy_order_block_availability_equals_displacement_candle_close`, `test_buy_order_block_strong_classification_requires_size_ratio_at_least_three`, `test_sell_order_block_candidate_requires_size_ratio_at_least_two`, `test_sell_order_block_zone_uses_full_range_of_smaller_candle`, `test_sell_order_block_availability_equals_displacement_candle_close`, `test_sell_order_block_strong_classification_requires_size_ratio_at_least_three` |
+| `test_fair_value_gaps.py` | 8 | `test_buy_fair_value_gap_requires_strict_three_candle_gap_geometry`, `test_buy_fair_value_gap_zone_spans_first_candle_high_to_third_candle_low`, `test_buy_fair_value_gap_availability_equals_third_candle_close`, `test_buy_fair_value_gap_rejected_if_gap_closes_before_third_candle`, `test_sell_fair_value_gap_requires_strict_three_candle_gap_geometry`, `test_sell_fair_value_gap_zone_spans_third_candle_high_to_first_candle_low`, `test_sell_fair_value_gap_availability_equals_third_candle_close`, `test_sell_fair_value_gap_rejected_if_gap_closes_before_third_candle` |
+| `test_reversal_candles.py` | 8 | `test_buy_to_sell_candidate_requires_size_ratio_body_efficiency_and_close_position`, `test_buy_to_sell_zone_uses_candidate_candle_full_range`, `test_buy_to_sell_confirms_within_three_bar_reversal_window`, `test_buy_to_sell_availability_equals_reversal_confirmation_time`, `test_sell_to_buy_candidate_requires_size_ratio_body_efficiency_and_close_position`, `test_sell_to_buy_zone_uses_candidate_candle_full_range`, `test_sell_to_buy_confirms_within_three_bar_reversal_window`, `test_sell_to_buy_availability_equals_reversal_confirmation_time` |
+| `test_bases.py` | 8 | `test_base_rally_requires_two_to_six_compact_base_candles`, `test_base_rally_zone_spans_base_low_to_base_high`, `test_base_rally_departure_candle_requires_size_ratio_at_least_two`, `test_base_rally_availability_equals_departure_candle_close`, `test_base_drop_requires_two_to_six_compact_base_candles`, `test_base_drop_zone_spans_base_low_to_base_high`, `test_base_drop_departure_candle_requires_size_ratio_at_least_two`, `test_base_drop_availability_equals_departure_candle_close` |
+| `test_pressure_wicks.py` | 6 | `test_bullish_pressure_wick_requires_lower_wick_share_and_close_position`, `test_bullish_pressure_wick_zone_uses_lower_rejection_wick_only`, `test_bearish_pressure_wick_requires_upper_wick_share_and_close_position`, `test_bearish_pressure_wick_zone_uses_upper_rejection_wick_only`, `test_pressure_wick_strong_classification_requires_higher_thresholds_for_both_directions`, `test_pressure_wick_confirms_on_own_candle_close_for_both_directions` |
+| `test_engulfing.py` | 5 | `test_bullish_engulfing_requires_size_ratio_at_least_two`, `test_bullish_engulfing_zone_uses_engulfed_candle_full_range`, `test_bearish_engulfing_requires_size_ratio_at_least_two`, `test_bearish_engulfing_zone_uses_engulfed_candle_full_range`, `test_engulfing_availability_equals_engulfing_candle_close_for_both_directions` |
+| `test_single_candle_reversals.py` | 5 | `test_hammer_requires_lower_wick_share_body_efficiency_and_opposite_wick_thresholds`, `test_hammer_zone_uses_rejection_wick_only`, `test_shooting_star_requires_upper_wick_share_body_efficiency_and_opposite_wick_thresholds`, `test_shooting_star_zone_uses_rejection_wick_only`, `test_hammer_and_shooting_star_confirm_on_own_candle_close` |
+| `test_three_candle_stars.py` | 5 | `test_morning_star_requires_doji_body_efficiency_threshold`, `test_morning_star_zone_uses_middle_doji_candle_full_range`, `test_evening_star_requires_doji_body_efficiency_threshold`, `test_evening_star_zone_uses_middle_doji_candle_full_range`, `test_morning_and_evening_star_availability_equals_third_candle_close` |
+| `test_reference_zones.py` | 7 | `test_support_poi_inherits_zone_boundaries_from_support_resistance_zone`, `test_resistance_poi_inherits_zone_boundaries_from_support_resistance_zone`, `test_support_break_candidate_and_close_breach_candidate_coexist_independently`, `test_equal_highs_and_equal_lows_poi_inherit_zone_boundaries_from_equal_level_cluster`, `test_equal_highs_and_equal_lows_never_emit_lifecycle_transitions`, `test_support_and_resistance_map_to_bullish_and_bearish_direction_respectively`, `test_equal_highs_and_equal_lows_map_to_bearish_and_bullish_direction_respectively` |
+| `test_period_levels.py` | 8 | `test_period_level_windows_use_exact_utc_calendar_day_week_and_month_boundaries`, `test_previous_period_skips_empty_weekend_and_holiday_windows`, `test_previous_period_level_content_is_fixed_after_period_closes`, `test_current_period_level_fingerprint_changes_as_new_extreme_appears`, `test_current_day_high_and_low_track_running_extreme_within_the_window`, `test_period_level_lifecycle_status_is_fixed_at_not_applicable`, `test_period_level_identity_is_stable_across_a_growing_window_and_rollover_creates_a_new_record`, `test_all_twelve_period_level_types_are_covered` |
+| `test_poi_lifecycle_and_freshness.py` | 14 | `test_close_breach_candidate_requires_close_strictly_beyond_overshoot_tolerance`, `test_wick_beyond_far_boundary_without_close_does_not_confirm_breach`, `test_reclaim_window_excludes_the_breach_candle_and_confirms_within_three_bars`, `test_reclaim_not_confirmed_within_three_bars_allows_genuine_invalidation`, `test_displacement_after_reclaim_requires_fast_or_strong_fast_leg`, `test_reclaim_without_displacement_is_not_false_invalidation`, `test_false_invalidation_requires_the_complete_three_event_sequence`, `test_sustained_breach_requires_two_of_three_reclaim_window_closes_beyond_tolerance`, `test_genuine_invalidation_is_final_and_never_reactivated`, `test_failed_reclaim_starts_a_new_independent_breach_event`, `test_repeated_tap_classification_counts_distinct_interactions`, `test_repeated_tap_does_not_automatically_degrade_the_poi`, `test_freshness_transitions_from_fresh_to_interacted_after_qualifying_touch`, `test_poi_age_fields_are_descriptive_only_and_never_expire_the_poi` |
+| `test_poi_overlap_merge_and_precedence.py` | 9 | `test_overlapping_zones_are_detected_via_strict_interval_intersection`, `test_boundary_touching_zones_are_not_classified_as_overlapping`, `test_containment_is_classified_separately_from_overlap`, `test_point_poi_overlaps_interval_when_price_is_inside_or_on_boundary`, `test_distinct_point_pois_do_not_overlap`, `test_same_poi_type_cross_timeframe_overlap_merges_into_the_stronger_timeframe`, `test_cross_poi_type_or_opposing_direction_overlap_is_reported_but_never_merged`, `test_merged_child_poi_remains_independently_observable`, `test_overlap_relationships_are_not_transitively_inferred` |
+| `test_poi_analyzer_api.py` | 11 | `test_analyze_pois_returns_empty_aggregate_for_empty_input`, `test_analyze_pois_rejects_mixed_symbol_input`, `test_analyze_pois_rejects_duplicate_or_unsorted_timeframe_input`, `test_analyze_pois_rejects_measurement_candle_count_mismatch`, `test_poi_timeframe_input_has_no_structure_analysis_field`, `test_analyze_pois_rejects_missing_source_record`, `test_unconfirmed_candidate_is_not_exposed_as_poi_observation`, `test_public_poi_observation_exists_only_after_confirmation`, `test_poi_outputs_use_engineering_provisional_evidence`, `test_analyze_pois_disabled_poi_type_is_never_detected`, `test_analyze_pois_is_deterministic_across_repeated_calls` |
+| `test_poi_batch_replay_equivalence.py` | 6 | `test_batch_and_replay_produce_identical_poi_observations_for_the_same_prefix`, `test_batch_and_replay_produce_identical_lifecycle_transitions_for_the_same_prefix`, `test_unchanged_poi_observations_retain_the_same_record_id_across_growing_prefixes`, `test_current_poi_state_fingerprint_changes_only_when_public_content_changes`, `test_merge_decisions_are_stable_across_growing_prefixes`, `test_poi_fingerprint_serializer_matches_domain_and_structure_serializers` |
+| `test_poi_exports.py` | 5 | `test_poi_exports_import_successfully`, `test_poi_exports_exact_twenty_three_name_surface`, `test_poi_contracts_expose_no_btmm_entry_trade_or_structure_source_fields`, `test_poi_type_enum_contains_no_deferred_or_placeholder_members`, `test_poi_package_never_imports_btmm_or_execution_modules` |
+
+No test class; no generated test; no helper function beginning with `test_`; no `skip`/`xfail`; no vacuous assertion. **Mandatory coverage confirmed present, including every item added by the focused audit's correction:** each implementable `PoiType` (candidate/zone/availability), FVG strict geometry, Order Block source candle, no mandatory structural-context gate (documented, not silently assumed), approved candlestick patterns, Support/Resistance reference, Equal-Level detection-only (no lifecycle), no Trendline defer-vs-implement test needed (Trendline has no `PoiType` at all, verified via `test_poi_type_enum_contains_no_deferred_or_placeholder_members`), volume-family explicit Option B proxy usage, proxy metrics internal-only, `StructureAnalysis` absence from `PoiTimeframeInput`, unconfirmed candidate never public, public observation exists only after confirmation, exact UTC day/ISO-week/UTC-month period boundaries, weekend/holiday empty-period skipping, current-period stable identity and changing fingerprint, previous-period fixed content, zero-height point-inside-interval overlap (boundary-inclusive), distinct point zones never overlapping, no lifecycle transitions for period levels, no lifecycle transitions for equal levels, breach candle excluded from the reclaim-window count, exact three-bar reclaim window, invalidation finality, `strong_poi_timeframes` absence, exact corrected 23-name export surface, no structure-source-id field anywhere, candidate/confirmation availability, strong-timeframe precedence, overlap, containment, transitive-non-inference, opposing-direction non-relationship, breach/reclaim/invalidation/false-invalidation/sustained-breach, repeated tap, stable identity, changed-content fingerprint, merged identity, replay equivalence, static BTMM/entry/trade/structure-source absence.
+
+### 35AJ. Public Exports — Corrected Recount: 23, Not 24
+
+**The focused audit found the original 24-export claim's own category arithmetic (10 enums + 6 contracts/configuration + 6 errors + 1 API = 23) never actually summed to 24 — the discrepancy was `PoiTimeframeInput`, an input bundle miscategorized outside all four named categories. Corrected by (a) removing `PoiValidityStatus` (§35D/§35T — `PoiValidityStatus` no longer exists at all) and (b) explicitly classifying `PoiTimeframeInput` as part of the public API surface (a caller must import it to construct a valid call to `analyze_pois()`, even though it is a `NamedTuple`, not a `ContractModel`). Recounted from the exact ordered list below, category by category:**
+
+```
+ 1. PoiFamily                                — enum
+ 2. PoiDirection                              — enum
+ 3. PoiType                                   — enum
+ 4. PoiStrengthTier                           — enum
+ 5. PoiLifecycleStatus                        — enum
+ 6. PoiLifecycleTransitionType                — enum
+ 7. PoiFreshnessStatus                        — enum
+ 8. PoiTapClassification                      — enum
+ 9. PoiOverlapRelationshipType                — enum
+10. PoiObservation                            — contract
+11. PoiLifecycleTransition                    — contract
+12. PoiOverlapRelationship                    — contract
+13. CurrentPoiState                           — contract
+14. PoiAnalysis                                — contract
+15. PoiConfiguration                          — configuration
+16. PoiTimeframeInput                         — API (required to call analyze_pois())
+17. InvalidPoiConfigurationError              — error
+18. DuplicatePoiTimeframeInputError           — error
+19. UnsortedPoiTimeframeInputError            — error
+20. InputPrefixMismatchError                  — error
+21. MissingSourceRecordError                  — error
+22. ImpossiblePoiLifecycleTransitionError     — error
+23. analyze_pois                              — API
+```
+
+**Category totals, verified: 9 enums + 5 contracts + 1 configuration + 6 errors + 2 API = 23. No duplicated number, no omitted item.** This corrected total of **23** (not 24, not 22, not 25) is used consistently across all four documentation files.
+
+**No `domain`/`structure`/`market_data` re-exports** (the 4 reused errors and `DerivedOutputIdentityProvider` are imported directly from `btmm_ai_scanner.domain` by callers, identical discipline to `structure/__init__.py`'s own precedent — and `structure` is not a dependency of this milestone at all, §35AH). **Not exported:** internal `*Candidate` `NamedTuple`s, the locally-duplicated canonical-fingerprint/identity-resolver helpers, per-family detector functions (only the single `analyze_pois()` entry point is public, per Part 29), merge-graph helpers, serializer helpers, test fixtures, and the removed `PoiValidityStatus`.
+
+### 35AK. Complexity and Performance
+
+Deterministic; per-timeframe candidate detection is a single forward linear scan per detector family (`O(candles)` per family per timeframe, not quadratic); overlap detection across `N` simultaneously-active observations is `O(N log N)` via interval sorting (Part 40's guidance), not `O(N^2)`; merge resolution is a single pass over sorted, pre-ranked candidates; no hidden cache; no global state; no wall clock; no concurrency requirement. Repeated-prefix, full-session, multi-timeframe replay analysis (§35AE) may be provisionally superlinear across a complete session (recomputing `PoiAnalysis` from scratch at every global availability group, across every timeframe), documented as accepted and non-production, identical in kind to `1B-H`/`1B-I`'s own twice-accepted precedent.
+
+### 35AL. Explicit Exclusions
+
+BTMM manipulation lifecycle (the 5-state/6-stage/10-gate state machine, `knowledge/btmm/BTMM_STATE_MACHINE.md`); accumulation/distribution session model; entry signals; stop loss; take profit; risk sizing; trade management; signal confidence; visualization; TradingView rendering; Telegram alerts; news filtering; backtesting statistics; paper trading; broker connectivity; MT5/MT4; AI inference; model training; production approval. Also explicitly excluded from *this* milestone specifically (deferred to a future, separate, narrowly-scoped task, not silently invented here): Trendline-as-POI zone geometry and specialized lifecycle (`P0G-B005`); Equal-High/Low SWEPT/BROKEN sweep lifecycle (`P0G-B004`, beyond the already-approved detection-only exposure); POI freshness/mitigation depth beyond the already-approved observational-only `FRESH`/`INTERACTED` model; POI expiration by age; repeated-tap statistical degradation (`P0G-B008`); the Order-Block/Engulfing "origin vs. middle of an existing move" automated structural gate; empirical calibration and out-of-sample validation of every threshold reused in this milestone.
+
+### 35AM. Baseline, Quality Gates, and Stop Conditions
+
+**Execution baseline / current HEAD and `origin/main`:** `a66225c52fb12ca0bca7761922a6b3bfdb48524c`. Python `3.12.13`; `uv` `0.11.30`; Pydantic `2.13.4`. Full pytest-collected tests: `458`. Original baseline suite: `34 passed`. Existing top-level test functions: `380`. Existing `poi`-adjacent exports: none (no `poi/` package exists). Inventory: `113` rows. No dependency change expected.
+
+Future implementation must pass, unmodified in procedure from every prior milestone: `uv lock --check`; `uv run ruff format --check .`; `uv run ruff check .`; `uv run mypy src tests`; `uv run pytest -q` (expect `578` = `458` + `120`, or an exact, explained parametrize-driven discrepancy exactly as documented for every prior milestone); `uv run pytest -q tests/test_import_smoke.py tests/test_config_precedence.py` (expect `34 passed`).
+
+Mandatory stop conditions (unchanged from every prior milestone's discipline): stop and report if any quality gate fails and cannot be fixed by a genuine, disclosed correction; stop if the approved 35-path scope would need to grow; stop if a 19th source file, a 17th test file, or a 121st test function is discovered necessary mid-implementation — report and request a scope amendment rather than silently expanding.
+
+### 35AN. Author Decisions Required — Corrected
+
+**Corrected by the consolidated correction pass following the focused architectural audit.** Every numbered item below requires an explicit author decision before implementation may begin — none is implemented, committed, or authorized by this section alone. Items marked **(new)** were added by the correction pass; all others are carried over, corrected where the audit found an error.
+
+1. The identifier `1B-J-POI` and title "POI Detection and Lifecycle Foundation" (§35A) — corrected justification: exactly 18, not 32 or 30, implementable types are lifecycle-eligible.
+2. The primary domain boundary — **corrected: `StructureAnalysis` removed entirely from the boundary and from every public input** (§35B).
+3. The 32-implementable/4-deferred/0-blocked readiness gate outcome, and specifically the two deferral rationales — Trendline (no approved zone geometry) and Swing High/Low (duplicate of an existing contract) (§35C).
+4. **The corrected lifecycle-eligibility split: exactly 18 `FULL` (10 volume + 6 price-action + Support + Resistance) and exactly 14 `NOT_APPLICABLE` (Equal Highs, Equal Lows, all 12 period-level types)** (§35C/§35D/§35V) — **(new)**, replacing every prior "30" or "32" lifecycle-eligible count.
+5. The `PoiFamily`/`PoiDirection`/`PoiType` taxonomy, including the decision to create no `NEUTRAL` direction member and no placeholder `PoiType` member for any deferred specification (§35D) — now three separated axes, not four (`PoiValidityStatus` removed).
+6. **Removal of `PoiValidityStatus` and `validity_status` entirely; the corrected candidate/confirmation model (internal, unexported candidates; a `PoiObservation`'s existence is itself the confirmation signal)** (§35D/§35T) — **(new)**.
+7. The exact, corrected 23-field `PoiObservation` contract and field order (2 fields removed: `validity_status`, `source_structure_record_ids`), including the `representative_price`/zero-height-point-zone treatment for the 12 period levels and the disclosed content-evolving-snapshot exception for the 6 "Current" period-level types (§35E).
+8. The exact per-family semantic keys (corrected for period levels to include both period start and end in the key) and the reuse of `DerivedOutputIdentityProvider` with 3 new `DerivedOutputType` members (§35F).
+9. The chosen fingerprint strategy — Option C, a third disclosed duplicate implementation with a required three-way cross-package equivalence test (§35G).
+10. The input model (Option B, per-timeframe input tuples) — **corrected: `structure_analysis` field removed from `PoiTimeframeInput`; structure-related validation checks removed** — and the exact validation/error list (§35H).
+11. The timeframe-strength total order, **the explicit statement that this order is not a resolution of `P0G-B014` and never labels H1/M15 as strong/weak**, and the removal of the unused `strong_poi_timeframes` configuration field (§35I) — **(new: removal + explicit P0G-B014 separation)**.
+12. The FVG architecture, including no minimum-width threshold (RECON-D3 reused) and no structural-context gate (§35J).
+13. The Order Block architecture, including the explicit, disclosed absence of an automated "origin vs. middle" gate (§35K).
+14. The candlestick-pattern architecture for Engulfing/Hammer/Shooting-Star/Morning-Star/Evening-Star, reusing GROUP3-D1 through GROUP3-D9 exactly (§35L).
+15. The Buy-to-Sell/Sell-to-Buy and Base Rally/Drop and Pressure Wick architecture, **with explicit Option B (price-action/displacement proxy) labeling for all 10 volume-family types, and internal-only, never-exported placement for the four proxy metric fields** (§35M) — **(new: Option B label + internal-only placement, resolving a previously dangling cross-reference)**.
+16. The Support/Resistance reference-POI architecture — pure reference onto `domain.SupportResistanceZone`, no re-detection, RECON-D4's coexistence rule preserved, `PoiLifecycleStatus = FULL` (§35N).
+17. The Trendline deferral itself (§35O) — a decision, not merely a finding.
+18. The Equal-Level reference architecture — explicitly a **liquidity-reference POI**, not an entry signal, detection-only, `PoiLifecycleStatus = NOT_APPLICABLE` permanently, no sweep lifecycle invented, no implication of BTMM manipulation validity (§35P) — **(new: explicit liquidity-reference/non-entry-signal clarification)**.
+19. The volume-data finding and explicit Option B selection — no volume-based POI is blocked by missing real/tick volume; price-action proxies are primary evidence throughout (§35Q).
+20. **The exact, fully-specified UTC period-window policy** — day `[00:00, next-day 00:00)`, ISO week `[Mon 00:00, next-Mon 00:00)`, calendar month `[1st 00:00, next-1st 00:00)`, all UTC, no DST, no broker-local timezone, weekend/holiday windows simply empty, previous-period resolution skips empty windows, current-period content evolves under a stable identity — **(new, replacing the prior unresolved calendar-window gap)**, labeled `ENGINEERING-PROVISIONAL`, not broker-session-calibrated, not production-approved, **now author-approved (§35AP, item 9)** (§35R).
+21. The explicit non-gating (indeed, total absence) of any structural input for every implementable POI type (§35S) — corrected from "optional, non-gating" to "removed entirely."
+22. The confirmation model and its corrected two-way separation from candidate existence (no third "validity" axis) (§35T).
+23. The exact zero-height point-zone overlap/containment rules — a point overlaps an interval when `bottom <= P <= top` (boundary-inclusive); two points overlap only when exactly equal; mitigation/fill concepts never apply to point zones (§35X) — **(new)**.
+24. The exact breach/reclaim/displacement/false-invalidation/sustained-breach/genuine-invalidation/failed-reclaim/repeated-tap rules, reused verbatim from the already-approved Ambiguity 15 standard (with the breach-candle-excluded-from-reclaim-window-count nuance now explicitly restated), plus the already-approved observational-only freshness/age model, applicable to exactly 18 types (§35V).
+25. The decision to exclude `EXPIRED` from every public enum pending a future, separate expiration-model decision (§35W).
+26. The exact overlap/merge/precedence algorithm, including the three-case overlap test (non-zero/non-zero, point/interval, point/point), the decision that cross-`poi_type` and same-timeframe overlap is reported (`PoiOverlapRelationship`) but never merged, and that bullish/bearish overlapping zones never create a relationship at all (§35X).
+27. The decision that single-region/limit rules are display-layer concerns, never analytical ones, in this milestone (§35Y).
+28. The four-contract output model (`PoiObservation`, `PoiLifecycleTransition`, `PoiOverlapRelationship`, `CurrentPoiState`) plus the `PoiAnalysis` aggregate and exact field orders, with no `MergedPoi` fifth contract, and the corrected 21-field `CurrentPoiState` (§35Z).
+29. The exact `analyze_pois()` public API signature and behavior table, with `structure_analysis` removed (§35AA).
+30. The exact 10-error vocabulary — 4 reused unmodified, 6 new, with `InputPrefixMismatchError`'s scope narrowed to measurement-only mismatch (§35AB).
+31. The single-value `ENGINEERING_PROVISIONAL` evidence policy (§35AC).
+32. The exact no-look-ahead availability rules and same-availability-group phase ordering (§35AD).
+33. The multi-timeframe replay-equivalence procedure, with the `StructureAnalysis` recomputation step removed (§35AE).
+34. The exact deterministic ordering keys for all four output types (§35AF).
+35. The exact `PoiConfiguration` fields — **corrected: `strong_poi_timeframes` removed**, every remaining field reusing an already-approved numeric value, none newly invented (§35AG).
+36. The exact 35-path file scope with creation order 113-146, **with both the new-path split (18 source/16 test) and the affected-path split (19 source/16 test) stated explicitly and never conflated**, and the corrected `structure`-free dependency direction (§35AH).
+37. The exact, redistributed 120 new top-level test names, counts, and per-file distribution (7+8+8+8+8+6+5+5+5+7+8+14+9+11+6+5) (§35AI).
+38. **The exact, recounted 23-name `poi/__init__.py` export list and order (corrected from the internally-inconsistent original claim of 24), with no `domain`/`structure` re-exports** (§35AJ).
+39. The performance/determinism policy, including the accepted provisional superlinear full-session multi-timeframe replay cost (§35AK).
+40. The explicit exclusion list, including the items deferred from this milestone specifically (not merely the standing project-wide exclusions) (§35AL).
+
+### 35AO. Status and Next Action
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** All 40 items listed in §35AN are approved without modification — see §35AP. **Every blocking and precision finding from the focused architectural audit was resolved in one consolidated documentation-only correction pass:** the lifecycle-eligible count is corrected to 18 everywhere; `StructureAnalysis` is removed from the public input; `PoiValidityStatus` is removed entirely; the UTC period-window policy is fully specified; zero-height point-zone overlap rules are exact; the dangling volume-proxy field-placement cross-reference is resolved; the unused `strong_poi_timeframes` field is removed; the public export count is corrected to 23; the reclaim-window bar-1 exclusion is restated explicitly; the 120-test plan is redistributed to cover every new requirement while remaining at exactly 120 tests across 16 files.
+
+### 35AP. Author Approval Record
+
+**Author decision: `APPROVED`.** The author explicitly approved the corrected `1B-J-POI` POI Detection and Lifecycle Foundation architecture exactly as documented (§35A–§35AO), with no modification to any corrected element. **Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+**Exact approved scope:** 35 total affected paths (34 new, 1 modified); 18 new source files; 16 new test files; 1 modified existing source file (`src/btmm_ai_scanner/domain/enums.py`, +3 `DerivedOutputType` members); new-path split 18 source/16 test; affected-path split 19 source/16 test; 120 new top-level test functions (500 combined with the existing 380); 23 public `poi/__init__.py` exports; inventory 113 → 147 under batch tag `1B-J-POI`, creation order 113–146; no dependency change; no lockfile change; no existing `market_data`/`domain` Protocol modification.
+
+The author approved, without modification, all 27 numbered decision groups listed in the approval message: milestone identity and title (1); specification readiness — 32 implementable/4 deferred/0 blocked, with the exact four deferred specifications and no placeholder created for any of them (2); the exact 32-member implementable set (3); the exact 18 `FULL`/14 `NOT_APPLICABLE` lifecycle-applicability split (4); the corrected input boundary with `StructureAnalysis` entirely absent (5); the candidate/confirmation model with no intermediate public state (6); the complete removal of `PoiValidityStatus`/`validity_status` (7); the explicit Option B volume-family policy with internal-only proxy metrics (8); the exact UTC day/ISO-week/calendar-month period-window policy (9); the current-period stable-identity, content-evolving snapshot model as the sole disclosed immutability exception (10); the exact point-zone geometry and overlap/containment rules (11); the exact FVG policy (12); the exact Order Block policy, including the disclosed absence of an automated origin-versus-middle gate (13); the exact six-pattern candlestick POI policy (14); the exact Support/Resistance reference policy (15); the exact Equal-Level liquidity-reference policy (16); the exact `Timeframe` set and duration-rank merge-precedence policy, explicitly separate from `P0G-B014`, with `strong_poi_timeframes` removed (17); the exact overlap/merge algorithm with no transitive graph closure (18); the exact breach/reclaim/invalidation lifecycle for the 18 eligible types, including the breach-candle-excluded-from-reclaim-count rule (19); the exact no-look-ahead availability-group processing order (20); the exact identity/fingerprint strategy, including the mandatory three-way equivalence test (21); the uniform `ENGINEERING_PROVISIONAL` evidence policy (22); the exact corrected 23-field `PoiObservation` and `CurrentPoiState` contracts (23); the exact corrected 23-name export list (24); the exact corrected 120-test plan and per-file distribution (25); the exact 35-path file scope with creation order 113–146 (26); and the complete exclusion list (27).
+
+**This approval authorizes exactly one complete implementation cycle** covering all 35 approved paths at once (no per-file decision groups), followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use. Implementation has not started — this remains a documentation-only approval.**

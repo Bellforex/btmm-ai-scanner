@@ -1174,3 +1174,67 @@ Creation order 98–112 continues sequentially from the highest existing value (
 Full suite **458 passed**; original baseline suite **34 passed**; new top-level test functions **60** (5+8+8+6+12+10+6+5 across the 8 new files, exact approved distribution); existing top-level test functions **320**; combined top-level test functions **380**; full pytest-collected test total **458** (398 existing + 60 new — no parametrize used by any of the 8 new files); public structure-owned exports **12**, exact approved order; `uv lock --check` passes; `ruff format --check .` passes; `ruff check .` passes; `mypy src tests` passes with no issues across 89 source files. All 15 rows above (98–112), row 82's annotation, the Section 14 summary row, and this section's status line are updated to record this closure. **No row was added, removed, renamed, or renumbered by this closure.** The master inventory remains exactly 113 rows; Batch `1B-I-STRUCTURE` remains exactly 15 rows (7 source, 8 test); creation order 98–112 is unchanged.
 
 This closure does not authorize production use, live trading, POI detection, BTMM detection, an indicator, a robot, provider networking, or a persistence backend. **Next controlled action:** define the **POI Detection Foundation** — POI candidate identity, POI type taxonomy, order-block candidates, fair-value-gap candidates, support/resistance and trendline POI references, equal-level liquidity references, candlestick-pattern POIs, structural-context requirements, strong-timeframe precedence, overlap/merge rules, confirmation, validity, breach, reclaim, invalidation, availability time, no-look-ahead behavior, and deterministic identity/fingerprinting/replay equivalence — using the completed measurement and structure foundations. This next milestone must not yet include BTMM manipulation lifecycle, entry signals, stop loss, take profit, position sizing, visualization, Telegram alerts, broker execution, AI inference, or production approval. Not started by this closure.
+
+## 40. POI Detection and Lifecycle Foundation — Proposed Inventory Addition (Author-Approved)
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §35 (as corrected by the focused architectural audit and one consolidated correction pass, and now author-approved in full — register §35AP). **This section records the exact approved inventory addition for `1B-J-POI` — POI Detection and Lifecycle Foundation** (the title includes "Lifecycle" because the milestone implements the already-approved POI Boundary Breach/Reclaim/Invalidation standard and the already-approved Freshness/Age standard as public `PoiLifecycleTransition` records and `CurrentPoiState` fields for **exactly 18** of the 36 POI specifications, not detection alone — corrected from an original miscount of "30"/"32"). **Every decision in this section is now author-approved (register §35AP); implementation has not yet begun.**
+
+**This section proposes exactly 34 new rows to the master file inventory (Section 9),** under the next unused batch letter, `1B-J-POI`, following `1B-H-MEASUREMENTS` and `1B-I-STRUCTURE`. **The inventory would grow from 113 rows to 147 rows.** No existing row (1 through 113) would be modified, removed, renamed, or renumbered — **except** row 82 (`domain/enums.py`), whose "Prohibited content"/"Blocking unresolved decision" cells would gain a second, narrow, author-approved-if-approved exception (3 new `DerivedOutputType` routing members: `POI_OBSERVATION`, `POI_LIFECYCLE_TRANSITION`, `CURRENT_POI_STATE`) for this milestone; the row's path, batch tag, creation order (82), and status would remain completely unchanged — a wording-only annotation, not a reclassification, identical in kind to the annotation already recorded for `1B-I-STRUCTURE`.
+
+**36-POI coverage and implementability gate (register §35C):** 36 of 36 approved book POI specifications audited; **32 IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL, 4 DEFERRED (Bullish/Bearish Trendline — no approved finite zone geometry exists; Swing High/Swing Low — already fully represented by the existing, closed `domain.ConfirmedSwing` contract, not duplicated), 0 BLOCKED.** **Of the 32 implementable types, exactly 18 are lifecycle-eligible (`FULL`) and exactly 14 are permanently `PoiLifecycleStatus = NOT_APPLICABLE`** — the 18 are the 10 volume + 6 price-action types plus Support and Resistance; the 14 are Equal Highs, Equal Lows, and all 12 Previous/Current period-level types (corrected by the focused audit — earlier drafts miscounted this as 30 or 32). No volume-based POI is blocked by missing real/tick volume data — every one of the 10 volume-based specifications is fully detectable via already-approved price-action proxies (`relative_size_ratio`, `range_context_ratio`, `body_efficiency`, `directional_close_position`, **explicitly Option B**, per register §35Q), with `NormalizedCandle.volume`/`volume_kind` (already implemented, 1B-B) available as strictly secondary, non-mandatory evidence when present — these four proxy fields are computed internally only and are never stored on `PoiObservation` or exported.
+
+**The 18 proposed new source rows, by path (`poi/` — a new top-level package, not previously reserved):**
+
+| Creation order | Path |
+|---|---|
+| 113 | `src/btmm_ai_scanner/poi/__init__.py` |
+| 114 | `src/btmm_ai_scanner/poi/enums.py` |
+| 115 | `src/btmm_ai_scanner/poi/configuration.py` |
+| 116 | `src/btmm_ai_scanner/poi/observation.py` |
+| 117 | `src/btmm_ai_scanner/poi/lifecycle.py` |
+| 118 | `src/btmm_ai_scanner/poi/current_state.py` |
+| 119 | `src/btmm_ai_scanner/poi/order_blocks.py` |
+| 120 | `src/btmm_ai_scanner/poi/fair_value_gaps.py` |
+| 121 | `src/btmm_ai_scanner/poi/reversal_candles.py` |
+| 122 | `src/btmm_ai_scanner/poi/bases.py` |
+| 123 | `src/btmm_ai_scanner/poi/pressure_wicks.py` |
+| 124 | `src/btmm_ai_scanner/poi/engulfing.py` |
+| 125 | `src/btmm_ai_scanner/poi/single_candle_reversals.py` |
+| 126 | `src/btmm_ai_scanner/poi/three_candle_stars.py` |
+| 127 | `src/btmm_ai_scanner/poi/reference_zones.py` |
+| 128 | `src/btmm_ai_scanner/poi/period_levels.py` |
+| 129 | `src/btmm_ai_scanner/poi/overlap.py` |
+| 130 | `src/btmm_ai_scanner/poi/analyzer.py` |
+
+**The 16 proposed new test rows, by path (corrected per-file counts, register §35AI):**
+
+| Creation order | Path | Test count |
+|---|---|---|
+| 131 | `tests/unit/test_poi_configuration.py` | 7 |
+| 132 | `tests/unit/test_order_blocks.py` | 8 |
+| 133 | `tests/unit/test_fair_value_gaps.py` | 8 |
+| 134 | `tests/unit/test_reversal_candles.py` | 8 |
+| 135 | `tests/unit/test_bases.py` | 8 |
+| 136 | `tests/unit/test_pressure_wicks.py` | 6 |
+| 137 | `tests/unit/test_engulfing.py` | 5 |
+| 138 | `tests/unit/test_single_candle_reversals.py` | 5 |
+| 139 | `tests/unit/test_three_candle_stars.py` | 5 |
+| 140 | `tests/unit/test_reference_zones.py` | 7 |
+| 141 | `tests/unit/test_period_levels.py` | 8 |
+| 142 | `tests/unit/test_poi_lifecycle_and_freshness.py` | 14 |
+| 143 | `tests/unit/test_poi_overlap_merge_and_precedence.py` | 9 |
+| 144 | `tests/unit/test_poi_analyzer_api.py` | 11 |
+| 145 | `tests/unit/test_poi_batch_replay_equivalence.py` | 6 |
+| 146 | `tests/unit/test_poi_exports.py` | 5 |
+
+**Corrected path-split terminology (register §35AH): both exact splits stated, never conflated.** **NEW-PATH SPLIT:** 18 new source / 16 new test (34 new paths). **AFFECTED-PATH SPLIT:** 19 source (18 new + 1 modified `domain/enums.py`) / 16 test (35 affected paths total). 120 new top-level test functions (7+8+8+8+8+6+5+5+5+7+8+14+9+11+6+5), combined with the existing 380: **500**. **23 new public exports for `poi/__init__.py`** (corrected from an internally-inconsistent original claim of 24; no `domain`/`structure` re-exports; callers import the 4 reused errors and `DerivedOutputIdentityProvider` directly from `btmm_ai_scanner.domain`). Full detail: register §35AH/§35AI/§35AJ.
+
+**Dependency direction — corrected (register §35AH, `structure` removed):** `poi/` depends on `domain`, `measurements`, `contracts`, `config` — does **not** depend on `structure` (removed entirely; no implementable POI type's approved rule required it, register §35B/§35S) and does not depend on `market_data`'s pipeline/repository/replay modules directly. No `market_data`/`domain` Protocol is modified.
+
+**Fingerprint strategy (register §35G): Option C** — a third disclosed, tested-equivalent duplicate of the canonical `_canonicalize`/`_compute_content_fingerprint` implementation (matching `1B-I-STRUCTURE`'s own precedent), now backed by a required **three-way** cross-package equivalence test (`test_poi_fingerprint_serializer_matches_domain_and_structure_serializers`), extending the two-way test `1B-I-STRUCTURE` already established.
+
+**Resolved and now author-approved: the period-window gap is fully specified as one exact, `ENGINEERING-PROVISIONAL` UTC policy (register §35R).** Day = `[00:00:00 UTC, next day 00:00:00 UTC)`; ISO week = `[Monday 00:00:00 UTC, next Monday 00:00:00 UTC)`; calendar month = `[1st 00:00:00 UTC, 1st-of-next-month 00:00:00 UTC)` — no broker-local timezone, no DST adjustment, weekends/holidays simply contain no candles. **The author has explicitly ratified this exact policy (register §35AP, item 9)**; `poi/period_levels.py` may now be implemented against it, exactly as documented.
+
+**No code, test, dependency, or package file is created or modified by this section.** The 34 new rows and the one wording annotation to row 82 are the only inventory-affecting changes; the total changed-path count would grow from 113 to 147, and no existing row would be added, removed, renamed, or renumbered beyond the 34 new additions.
+
+**Author-approved, exactly as corrected — no modification was made to any corrected element (register §35AP).** No row above is marked implemented, verified, committed, pushed, or closed; no code, test, dependency, or package file exists yet for this milestone. No production approval is implied or requested. **Next controlled action:** implement all 35 approved paths in one complete controlled cycle (no per-file decision groups), followed by one final architectural audit, at most one correction cycle for a genuine defect, one implementation commit, and one compact closure commit.
