@@ -1501,3 +1501,13 @@ This closure does not authorize production use, live trading, POI detection, BTM
 **The 28 new rows are the only inventory-affecting changes proposed;** the total changed-path count would grow from 168 to 196 upon approval and implementation — no existing row (1–167) would be added, removed, renamed, or renumbered.
 
 **Author-approved 2026-07-30, exactly as corrected — no modification was made to any corrected element (register §38Z).** Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`. **Not yet implemented, verified, audited, committed, or pushed as source code.** Full architecture, orchestration order, public contracts, and the complete implementability matrix: register §38.
+
+## 44. `1B-L-SCANNER-A1` — Tick-Size Provenance Amendment (Inventory Impact Note, Author-Approved)
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** This supersedes the prior `ARCHITECT-RECOMMENDED`/`AUTHOR-DECISION REQUIRED` status. **Author-approved 2026-07-30:** *"I approve 1B-L-SCANNER-A1 — Tick-Size Provenance Amendment for controlled implementation. The milestone remains NOT PRODUCTION-APPROVED."* Full detail: register §39 (recommendation §39A–§39G, approval record §39H). `1B-L-SCANNER` (§43 above) was implemented exactly as approved in commit `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e`; a post-implementation correction cycle then found that tick-normalizing `PoiValidationReport.mean_boundary_error_ticks` is impossible under the currently-approved contracts, since no output reachable from `evaluate_scanner`'s locked two-argument signature carries `minimum_price_tick`.
+
+**Approved decision (register §39B):** add exactly one field, `minimum_price_tick: Decimal`, to `ScannerReplayResult` (field count 10 → 11), populated by `run_scanner_replay` from its own already-received `ScannerConfiguration` argument. **No new path, no new contract, no new export, no new API, no new enum, no new error.** `evaluate_scanner`'s own signature is unchanged.
+
+**Inventory effect: none.** This amendment adds no path and therefore no row to the master Section 9 table. The total changed-path count remains **196**, creation order **168–195**, unchanged. Once implemented, the affected paths are expected to be a subset already inside the existing 28-path `1B-L-SCANNER` scope (most likely `scanner/configuration.py`, `scanner/replay.py`, `scanner/poi_validation.py`, and their already-existing tests) — **no twenty-ninth path is authorized.**
+
+**Not yet implemented.** This record is documentation-and-approval-only; implementation has not begun.

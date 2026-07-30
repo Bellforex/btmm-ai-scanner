@@ -6126,3 +6126,144 @@ Every scanner-level tuple (`processed_timeframes`, `measurement_analyses`, `stru
 - **Historical-input capability:** normalization pipeline reusable; no real file parser exists or is added by this milestone (§38E).
 
 **This approval authorizes exactly one complete implementation cycle** covering all 28 approved paths at once (no per-file decision groups), followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use.** Implementation has not started — this remains a documentation-and-inventory-only approval record.
+
+## 39. `1B-L-SCANNER-A1` — Tick-Size Provenance Amendment (Author-Approved)
+
+**Status: `AUTHOR-APPROVED`. `APPROVED FOR CONTROLLED IMPLEMENTATION`. `NOT YET IMPLEMENTED`. `NOT PRODUCTION-APPROVED`.** This supersedes every current-state reference to `ARCHITECT-RECOMMENDED`/`AUTHOR-DECISION REQUIRED` for this amendment (§39H records the exact author statement and date); the confirmed-contradiction and recommendation records below are preserved unchanged, not deleted. This is a narrow, single-purpose amendment to the already-implemented `1B-L-SCANNER` architecture (§38, commit `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e`), raised after the post-implementation correction cycle discovered a genuine, confirmed contract contradiction while attempting to tick-normalize `PoiValidationReport.mean_boundary_error_ticks`. This section is documentation only — no source file, test file, dependency, lockfile, Protocol, or inventory row is affected by this record.
+
+### 39A. Confirmed contradiction
+
+Direct inspection of the actually-implemented code (not the architecture prose) confirms, exactly:
+
+1. `evaluate_scanner(replay_result: ScannerReplayResult, reviewed_cases: tuple[ReviewedScannerCase, ...]) -> ScannerBacktestReport` (`scanner/evaluation.py`) receives only these two arguments — no configuration parameter of any kind, matching §38T's own lock ("no `EvaluationConfiguration` parameter").
+2. `ScannerReplayResult` (10 fields, `scanner/replay.py`), `ScannerAnalysis` (12 fields, `scanner/analysis.py`), `PoiAnalysis`/`PoiObservation`/`CurrentPoiState` (`poi/analyzer.py`, `poi/observation.py`, `poi/current_state.py`), `MarketMeasurementAnalysis` (`domain/analyzer.py`), `ReviewedScannerCase` (13 fields) and `ExpectedPoiLabel` (9 fields, `scanner/labels.py`) — every contract reachable from `evaluate_scanner`'s own two parameters — carries **no `minimum_price_tick` field anywhere**.
+3. `minimum_price_tick: Decimal` (required, no default) exists only on `MarketMeasurementConfiguration` (`domain/configuration.py`), `PoiConfiguration` (`poi/configuration.py`), and `BtmmConfiguration` (`btmm/configuration.py`) — three of the four upstream configurations composed by `ScannerConfiguration`. **`StructureConfiguration` (`structure/configuration.py`) does not own this field at all** (its only substantive field is `swing_relationship_equal_tolerance_atr_multiplier`); it is excluded from the equality invariant below for exactly this reason.
+4. `ScannerConfiguration` itself (10 fields, `scanner/configuration.py`) composes all four upstream configurations by reference but is only ever supplied to `scan_market`/`run_scanner_replay` — it is never retained inside `ScannerReplayResult` or `ScannerAnalysis`. Consequently, the tick size used to produce a given replay result is **not retained anywhere in the output data**, by original design (§38N/§38C: no duplicated upstream thresholds, no configuration carried through to reports).
+
+**Conclusion: the existing `mean_boundary_error_ticks` implementation cannot truthfully produce a tick-normalized value, because no approved contract reachable from `evaluate_scanner`'s locked signature carries the tick size.** This is the confirmed reason for this amendment.
+
+### 39B. Recommended author decision
+
+**Add exactly one field to `ScannerReplayResult`:**
+
+```
+minimum_price_tick: Decimal
+```
+
+**Exact placement (field count 10 → 11):**
+
+```
+symbol: InternalSymbol | None
+snapshots: tuple[ScannerAnalysis, ...]
+final_snapshot: ScannerAnalysis
+detection_mismatches: tuple[DetectionMismatch, ...]
+direct_batch_verified: bool
+minimum_price_tick: Decimal          # NEW — inserted here
+availability_time_utc: datetime
+evidence_classification: EvidenceClassification
+rule_version: SemVer
+contract_version: SemVer
+schema_version: SemVer
+```
+
+**Justification for this exact position:** it groups with the other single-value, result-describing facts about the completed replay (`direct_batch_verified`, `availability_time_utc`, `evidence_classification`) rather than with the tuple-valued fields above it (`snapshots`, `final_snapshot`, `detection_mismatches`), and precedes the version/provenance trailer (`rule_version`/`contract_version`/`schema_version`) that this project places last on every contract, without exception, across all four analytical packages. Placing it immediately after `direct_batch_verified` keeps every "was this replay computed correctly, and under what canonical scale" fact adjacent.
+
+**Ownership:**
+- `ScannerReplayResult` owns the canonical tick-size provenance for the completed replay.
+- `run_scanner_replay` copies the validated, canonical Decimal value from its own `scanner_configuration: ScannerConfiguration` argument (already received today — no new parameter needed) into the returned `ScannerReplayResult.minimum_price_tick`.
+- `evaluate_scanner` reads `replay_result.minimum_price_tick` directly — its own signature is **unchanged**.
+- `ScannerAnalysis`, `ReviewedScannerCase`, `ExpectedPoiLabel` are **unchanged**.
+
+**Totals after this amendment, if approved and implemented:**
+- `ScannerReplayResult`: 10 → **11** fields.
+- Total contracts/inputs: **remains 17** (a field-count change to one already-approved contract is not a new contract).
+- Total APIs: **remains 3**.
+- Total exports: **remains 26**.
+- Total enums: **remains 2**.
+- Total errors: **remains 4**.
+- **No new public name is introduced.**
+
+### 39C. Canonical tick validation (new `ScannerConfiguration` invariant)
+
+**Exact invariant, using the actual implemented field names:**
+
+```
+measurement_configuration.minimum_price_tick
+==
+poi_configuration.minimum_price_tick
+==
+btmm_configuration.minimum_price_tick
+```
+
+`structure_configuration` is excluded from this equality — it genuinely does not own a `minimum_price_tick` field (§39A.3).
+
+**Requirements:**
+- Decimal only; no float conversion anywhere in the check.
+- Finite (already guaranteed — `Decimal` values on these three configurations are never `NaN`/`Infinity` per each configuration's own existing `field_validator`, confirmed in `domain/configuration.py._validate_minimum_price_tick`).
+- Strictly greater than zero.
+- A mismatch among the three values raises `InvalidScannerConfigurationError` (reused, not a new error — error count remains 4).
+- No silent precedence rule (no "prefer measurement's value," no averaging).
+- No symbol-based fabricated tick registry.
+- No default chosen during evaluation — the value must come from the caller-supplied, already-validated `ScannerConfiguration` alone.
+
+**The canonical replay tick is that single validated, equal Decimal value** — copied verbatim into `ScannerReplayResult.minimum_price_tick`, never recomputed at evaluation time.
+
+### 39D. Replay-result behavior
+
+`run_scanner_replay` must populate `ScannerReplayResult.minimum_price_tick` from the validated `scanner_configuration` for **both** the non-empty-replay path and the valid-empty-replay path (§38Y) — a valid empty replay still carries tick-size provenance, since `ScannerConfiguration` (and therefore its three tick-bearing sub-configurations) is supplied and validated regardless of whether any candle is present.
+
+The field must:
+- be immutable (inherited automatically — `ScannerReplayResult` is a frozen `ContractModel`, like every other contract in this codebase);
+- serialize as a canonical Decimal string under `model_dump(mode="json")` (inherited automatically — the existing project-wide `Decimal` → string JSON convention, §38K, requires no new serializer);
+- participate in ordinary deterministic `ScannerReplayResult` equality (inherited automatically — Pydantic structural equality already covers every field);
+- **not** participate in any upstream `DerivedOutput` identity (it is a plain configuration-derived scalar copy, not an identified fact);
+- **not** create a new `DerivedOutputType` (none is introduced by this amendment);
+- **not** depend on reviewed labels in any way (`ReviewedScannerCase`/`ExpectedPoiLabel` remain untouched and are never consulted for this value).
+
+### 39E. Tick-normalized boundary error (exact evaluation behavior)
+
+For every matched POI pair (an existing `LabelMatch` with `status = MATCHED`, produced by the already-locked greedy matching algorithm, §38I):
+
+```
+bottom_error_ticks = abs(expected_zone_bottom - detected_zone_bottom) / replay_result.minimum_price_tick
+top_error_ticks    = abs(expected_zone_top    - detected_zone_top)    / replay_result.minimum_price_tick
+```
+
+Decimal arithmetic only, at every step — no float conversion anywhere in this computation.
+
+**Existing, already-locked aggregation rule (read directly from the implemented `PoiValidationReport` contract, not re-derived): `mean_boundary_error_ticks: Decimal | None` is the arithmetic **mean, across all `MATCHED` pairs**, of a **per-pair maximum** — `max(bottom_error_ticks, top_error_ticks)` — with denominator-zero (no matched pairs) reporting `None`, never a fabricated `0`, exactly as already locked in §38J ("Denominator-zero mean fields report `None`, never a fabricated `0`").** This amendment changes only the **units** of the per-pair component values fed into that already-approved mean-of-maxima aggregation (tick-normalized instead of raw price distance) — it does not invent a new aggregation (no total, no separate maximum-of-report field, no tuple of errors is introduced).
+
+Zero-height point POIs (`expected_zone_top == expected_zone_bottom`, or the detected equivalent) use the identical `bottom_error_ticks`/`top_error_ticks` formula unchanged — the two boundaries simply happen to coincide; no special-case branch is introduced.
+
+**Reject, at validation time, before any comparison uses the tick value:** zero tick, negative tick, non-finite Decimal, and any float conversion anywhere in the pipeline — all already covered by §39C's invariant plus each configuration's own existing positive-Decimal validator.
+
+### 39F. Scope effect
+
+This amendment, once approved and implemented, is expected to affect only paths already inside the approved 28-path `1B-L-SCANNER` scope — most likely `scanner/configuration.py` (the new invariant), `scanner/replay.py` (the new field and its population), and `scanner/poi_validation.py` (tick-normalized computation), plus the existing scanner tests that already own configuration, replay, and POI-validation behavior. **No twenty-ninth path is authorized by this amendment.** The exact implementation path list is not locked here — it must be finalized during the ownership audit that precedes actual implementation, not assumed in advance.
+
+**Unaffected by this amendment (must remain exactly as already locked):** 28 scanner implementation paths (14 source / 14 test), 128 literal scanner tests (AST top-level) across those 14 test files, AST top-level combined total 710 (582 pre-scanner + 128 scanner), pytest-collected combined total 788 (660 pre-scanner + 128 scanner), inventory total 196 (creation order 168–195), 2 enums, 4 errors, 3 APIs, 26 exports.
+
+### 39G. Other correction-cycle findings — explicitly still pending
+
+**This amendment resolves only the tick-size-provenance contradiction (§39A–§39E).** It does not redesign, and does not claim to resolve, the remaining findings already identified during the post-implementation correction-cycle audit, which remain outstanding pending their own (separate) correction pass once this amendment is approved and implemented:
+
+1. `DetectionMismatch` record-level IDs and fingerprints (currently whole-concept-tuple granularity).
+2. Complete `CHANGED_ONLY` snapshot-retention comparison (currently scoped to `setup_summaries` only).
+3. Reviewed lifecycle comparison (currently a self-consistency check of the replay's own transitions, not a comparison against `ReviewedScannerCase`/`ExpectedBtmmLabel` reviewed facts).
+4. `LifecycleMismatch.expected_prior_state`/`actual_prior_state`/`expected_resulting_state`/`actual_resulting_state` population (currently always `None`).
+5. Separation of lifecycle agreement from final-state agreement in `PoiValidationReport` (currently identical by construction).
+6. State-specific BTMM matching timestamp selection (currently the earliest of three optional label timestamps, regardless of which phase is being compared).
+7. Health-metric honesty for `gaps_encountered`/`duplicates_rejected`/`invalid_candles_rejected`/`identity_collision_count`/`typed_error_count` (currently unconditional `0`).
+8. Correct AST-top-level-versus-pytest-collected terminology in any future reporting (582/128/710 AST; 660/128/788 pytest-collected — both correct, describing different things).
+
+### 39H. Amendment approval record
+
+**Author decision: `APPROVED`.** The author explicitly approved the `1B-L-SCANNER-A1` Tick-Size Provenance Amendment exactly as documented (§39A–§39G), with no modification to any recommended element.
+
+**Exact author statement, recorded verbatim:** *"I approve 1B-L-SCANNER-A1 — Tick-Size Provenance Amendment for controlled implementation. The milestone remains NOT PRODUCTION-APPROVED."*
+
+**Approval date: 2026-07-30.**
+
+**Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** This approval authorizes the exact, narrow implementation recommended in §39B–§39E — one field addition (`ScannerReplayResult.minimum_price_tick`, 10 → 11 fields), one new configuration invariant, and the tick-normalized boundary-error formula applied to the already-locked mean-of-maxima aggregation — and nothing beyond it. No new path, contract, export, API, enum, or error is authorized. This record does not modify, supersede, or remove the original `1B-L-SCANNER` author approval (§38Z) or its implementation history (commit `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e`) — both remain intact and unchanged. The other post-implementation correction-cycle findings (§39G) remain outstanding and are not authorized for implementation by this approval.
+
+**Implementation has not begun.** This remains a documentation-and-approval-only record.
