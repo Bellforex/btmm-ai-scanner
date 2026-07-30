@@ -5077,3 +5077,696 @@ No other defect was found. Every other approved control was audited and confirme
 **No dependency change. No `market_data` or `structure` Protocol change. No production approval granted by this record.** The milestone remains `NOT PRODUCTION-APPROVED`.
 
 **Next controlled action:** define the **BTMM Manipulation Lifecycle Foundation** (proposed identifier `1B-K-BTMM`, proposed title "BTMM Manipulation Lifecycle Foundation"), using the completed market-data, measurement, structure-state, and POI detection and lifecycle foundations. This next architecture definition should cover, without implementing yet: POI interaction as a required boundary; manipulation lifecycle states; accumulation and distribution context; liquidity before, within, and after POI interaction; approach to POI; first contact; overshoot; breach; reclaim; rejection; reaction strength; market speed and displacement; pressure behavior; equal-level liquidity interaction; protected and weak structure references; BOS and CHoCH interaction; buy-to-sell manipulation; sell-to-buy manipulation; lifecycle inheritance; conditional lifecycle reconciliation; POI breach/reclaim/invalidation inheritance; deterministic no-look-ahead transition ordering; historical replay equivalence; and the explicit separation of POI validity, BTMM-pattern validity, entry validity, and trade outcome. That milestone must explicitly exclude live entry execution, stop-loss placement, take-profit placement, position sizing, trade management, visualization, Telegram alerts, backtesting statistics, broker connectivity, MT5/MT4, AI inference, and production approval. That milestone requires one compact architecture definition, one focused audit, at most one consolidated correction, explicit author approval, and one complete implementation cycle — none of which is started by this record.
+
+## 36. BTMM Manipulation Lifecycle Foundation — Architecture (Corrected, Architect-Recommended)
+
+**Status (historical — superseded by author approval, §36AT): `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** **Current status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** This is the corrected `1B-K-BTMM` architecture, resolving every blocking and non-blocking finding from the focused architectural audit (and the subsequent narrow consistency review) in one consolidated pass, now explicitly author-approved. It supersedes the original §36 draft in full — the prior draft's content is not preserved separately, since this correction is itself the complete, current statement of the approved architecture. Nothing in this section is implemented, staged, committed, or pushed by this section.
+
+### 36A. Milestone Identity, Scope Honesty, and Title
+
+**Batch identifier: `1B-K-BTMM`.** **Title: BTMM Manipulation Lifecycle Foundation.** Unlike the original draft, `BTMM_CONFIRMED` is now genuinely reachable by this milestone's own deterministic code — not automatically, but through an explicit, approved, caller-supplied reviewed-evidence channel (§36G2/§36S). "Foundation" remains the correct word: this milestone establishes the complete lifecycle scaffolding, every automatable gate, and the exact contract through which reviewed evidence enters the system: it does not itself perform automatic context detection, automatic session-calendar lookup, or an invented Volume Pillar formula.
+
+**This milestone does not implement:** trade entries, entry validity, stop loss, take profit, position sizing, risk-to-reward, trade management, trade outcome, signal confidence, or AI scoring — exactly as `BTMM_STATE_MACHINE.md`'s "Entry/Risk Separation" section requires.
+
+**Initial status (historical — superseded by author approval, §36AT):** `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`. **Current status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.**
+
+### 36B. Primary Domain Boundary and Concept Separation (unchanged from original draft, reconfirmed)
+
+**Corrected deterministic boundary:**
+
+```
+canonical multi-timeframe NormalizedCandle inputs (M1/M5/M15 only)
+  + MarketMeasurementAnalysis inputs (per timeframe)
+  + PoiAnalysis (single, cross-timeframe aggregate)
+  + BtmmReviewedEvidence inputs (caller-supplied, optional per source POI, §36G2)
+  -> BTMM-eligible POI selection (§36J, unchanged)
+  -> BTMM_CANDIDATE creation (§36I, corrected)
+  -> deterministic gate evaluation (Accuracy, Reaction, Reaction-Speed, Formation-Timeframe)
+  -> reviewed-evidence gate evaluation (Context x3, full Liquidity, Volume Pillar) where supplied
+  -> BtmmLifecycleTransition records
+  -> CurrentBtmmState snapshot per setup
+  -> BtmmAnalysis
+```
+
+`StructureAnalysis` remains excluded from this milestone's input entirely (§36F, unchanged, reconfirmed by direct grep of the approved knowledge base during the audit — zero occurrences of BOS/CHoCH/protected/weak-swing as a mandatory or optional gate anywhere).
+
+**Five separated concepts, never conflated, unchanged:** POI validity (resolved by `1B-J-POI`); POI lifecycle status (resolved by `1B-J-POI`); BTMM setup validity (this milestone, now including genuine `BTMM_CONFIRMED` reachability); entry validity (out of scope); trade outcome (out of scope).
+
+### 36C. No Approved BTMM-Level Pattern Taxonomy Beyond Direction (unchanged, reconfirmed)
+
+No approved "Buy-to-Sell manipulation"/"Sell-to-Buy manipulation" pattern concept exists distinct from generic `BtmmDirection` (`BULLISH_BTMM`/`BEARISH_BTMM`). `source_poi_type` + `btmm_direction` together uniquely distinguish a `BUY_TO_SELL_CANDLE`-sourced setup from any other; no `BtmmPatternType` enum is created. This finding survived the audit unchanged.
+
+### 36D. Ten Mandatory Gates — Corrected Reachability
+
+The original draft found 5 gates fully deterministic and 5 gates permanently blocked. **Corrected finding:** all 10 gates are now reachable — 5 automatically (deterministic), and 5 through an explicit, approved, caller-supplied reviewed-evidence channel that was missing from the original draft (audit Finding B3). No automatic detector is invented for any of the 5 reviewed gates; the milestone only accepts already-reviewed facts as typed input, exactly as `BTMM_STATE_MACHINE.md`'s "Phase 0G Input-Source Policy" explicitly permits (`context_input_source = MANUAL_EXPERT_LABEL`, `liquidity_event_source = MANUAL_EXPERT_LABEL`, and the Volume Pillar Gate's own "expert-labelled volume-switch evidence, or reviewed hybrid evidence" allowance).
+
+| Gate | Reachability | Mechanism |
+|---|---|---|
+| POI Gate | Deterministic | Confirmed, available `PoiObservation` of a BTMM-eligible type |
+| Market Direction Gate | Reviewed evidence | `BtmmReviewedEvidence.market_direction_status = ALIGNED` |
+| Analytical Framework Gate | Reviewed evidence | `BtmmReviewedEvidence.analytical_framework_status = ALIGNED` |
+| Active Session Gate | Reviewed evidence | `BtmmReviewedEvidence.session_status = ACTIVE` |
+| Liquidity Gate (full) | Reviewed evidence | `BtmmReviewedEvidence.liquidity_evidence_status = PRESENT` (may itself be grounded in a reviewed `FALSE_INVALIDATION_CONFIRMED` event, or any other reviewed liquidity-event label) |
+| Accuracy Gate | Deterministic | Ambiguity 8, exact wick geometry (§36K, unchanged) |
+| Volume Pillar Gate | Reviewed evidence only (Option B, §36R corrected) | `BtmmReviewedEvidence.volume_pillar_status = SUPPORTS` |
+| Reaction Gate | Deterministic, corrected timing | Ambiguity 9, resolved only at the 5th confirmed reaction candle (§36N, corrected) |
+| Reaction Speed Gate | Deterministic | Reuses `measure_leg` over the exactly-defined reaction leg |
+| Formation Timeframe Gate | Deterministic | Fixed M5/M15-vs-M1 rule |
+
+**`BTMM_CONFIRMED` is reachable when all 10 rows above resolve simultaneously at `FINAL_GATE_EVALUATION`** (§36S). Missing reviewed evidence never silently passes a gate — an absent or non-`ALIGNED`/non-`ACTIVE`/non-`PRESENT`/non-`SUPPORTS` reviewed value leaves the corresponding gate unresolved (`BTMM_BLOCKED`) or, where the reviewed value is a definitive rejection (`MISALIGNED`, `INACTIVE`, `FAILS`), triggers the matching cancellation reason (§36H2).
+
+### 36E. Accumulation and Distribution — Deferred (unchanged, reconfirmed)
+
+Zero approved definition exists anywhere in the knowledge base for either term. No public enum, field, or output is created for either. Unaffected by this correction.
+
+### 36F. Structural Context — Excluded (unchanged, reconfirmed)
+
+`StructureAnalysis` remains excluded from the input model entirely; no approved rule anywhere makes BOS, CHoCH, or protected/weak swings a precondition for any BTMM concept, reconfirmed by direct grep during the audit.
+
+### 36G. Input Model and Validation (corrected: adds reviewed evidence)
+
+```
+BtmmTimeframeInput:
+    timeframe: Timeframe
+    candles: tuple[NormalizedCandle, ...]
+    measurement_analysis: MarketMeasurementAnalysis
+```
+
+(Unchanged from the original draft — no `StructureAnalysis` field, no `poi_analysis` field on the per-bundle input.)
+
+**Validation, corrected to include reviewed evidence (all checks below raise the exact 6-error vocabulary of §36AF, broadening existing error triggers rather than adding new error classes):**
+
+- One `InternalSymbol` across all bundles, the supplied `PoiAnalysis`, and every supplied `BtmmReviewedEvidence` record (`MixedSymbolAnalysisError`, reused).
+- Canonical ascending timeframe-strength bundle order; duplicate timeframe rejection (`DuplicateBtmmTimeframeInputError`/`UnsortedBtmmTimeframeInputError`, unchanged).
+- Per-bundle candle ordering/duplication (`DuplicateCandleRecordError`/`UnsortedCandleSequenceError`, reused, unchanged).
+- `measurement_analysis` prefix consistency against its own bundle (`InputPrefixMismatchError`, unchanged trigger).
+- Every `PoiObservation` referenced by `source_poi_record_id` (from `PoiAnalysis` or from `BtmmReviewedEvidence`) must exist in the supplied `poi_analysis.poi_observations` tuple (`MissingSourcePoiRecordError`, trigger broadened to cover reviewed-evidence references too).
+- **New, corrected — reviewed-evidence-specific validation, folded into `InputPrefixMismatchError`'s existing trigger family rather than a new error class (keeping the error count at exactly 6 new/10 total):** at most one `BtmmReviewedEvidence` record per distinct `source_poi_record_id` in a single `analyze_btmm()` call (duplicate reviewed evidence for one source POI is rejected); each record's `symbol`/`timeframe` must match its referenced source POI's own `symbol`/`source_timeframe`; `availability_time_utc` must be timezone-aware UTC; `availability_time_utc` must not exceed the maximum availability of the visible input prefix (candles + measurement analysis + POI analysis supplied in the same call).
+- Unsupported timeframe: any bundle whose `timeframe` is not in `{M1, M5, M15}` is rejected (unchanged).
+- Empty bundle tuple / empty `poi_analysis` / empty `reviewed_evidence`: returns the empty `BtmmAnalysis` aggregate. **`reviewed_evidence = ()` is always valid** — an empty tuple means no reviewed evidence is available for any setup, and every reviewed gate simply stays unresolved; it is never treated as invalid input.
+- No future source fact: every BTMM output's own `availability_time_utc` formula (§36AA) structurally prevents this, and is now extended to cover reviewed evidence explicitly (§36AA2).
+
+### 36G2. Reviewed-Evidence Input Contract
+
+**One frozen, immutable, caller-supplied input value object — not an engine-generated `DerivedOutput` — because the authoritative standard does not require engine-owned identity for a fact the caller itself originates and vouches for:**
+
+```
+BtmmReviewedEvidence:
+    symbol: InternalSymbol
+    timeframe: Timeframe
+    source_poi_record_id: UUIDv7
+    market_direction_status: BtmmContextAlignmentStatus
+    analytical_framework_status: BtmmContextAlignmentStatus
+    session_status: BtmmSessionStatus
+    liquidity_evidence_status: BtmmLiquidityEvidenceStatus
+    volume_pillar_status: BtmmVolumePillarStatus
+    context_input_source: BtmmEvidenceSource
+    liquidity_event_source: BtmmEvidenceSource
+    volume_evidence_source: BtmmEvidenceSource
+    availability_time_utc: datetime
+    rule_version: SemVer
+    contract_version: SemVer
+    schema_version: SemVer
+```
+
+**Exactly 15 fields.** No `record_id`, `content_fingerprint`, `provenance_id`, or `evidence_classification` field — these are engine-owned `DerivedOutput` concerns (§36AC) that do not apply to a caller-supplied input fact; the authoritative standard nowhere requires this input itself to carry a derived identity. **`liquidity_evidence_status` is typed `BtmmLiquidityEvidenceStatus`, a dedicated new enum, not `BtmmGateStatus` — corrected in this pass; see §36H1 for the semantic analysis proving these are genuinely distinct concepts, not a mere arithmetic-count decision.**
+
+**Permitted evidence-source values for caller-supplied fields (resolving audit Part 9):** `context_input_source` and `liquidity_event_source` must be one of `EXPERT_LABELLED`, `HYBRID_REVIEWED`, or `RULE_BASED_REVIEWED` — never `RULE_BASED` or `MODEL_PROPOSED`, since those two values denote automatically-generated, unreviewed evidence that this milestone's own analyzer (not a caller) produces internally (e.g., the `FALSE_INVALIDATION_CONFIRMED → LIQUIDITY_AFTER_POI/RULE_BASED` pathway of §36M). `volume_evidence_source` is likewise restricted to `EXPERT_LABELLED`/`HYBRID_REVIEWED` (no `RULE_BASED_REVIEWED` equivalent is defined for Volume Pillar by the approved standard, which only names "expert-labelled volume-switch evidence, or reviewed hybrid evidence"). A `BtmmReviewedEvidence` record carrying a disallowed source value is rejected as malformed input (folded into the same broadened `InputPrefixMismatchError` trigger).
+
+**Caller-supplied reviewed evidence never changes the emitted output-level `EvidenceClassification` (§36AD)** — every `BtmmObservation`/`BtmmLifecycleTransition`/`CurrentBtmmState` this milestone emits still stores exactly `ENGINEERING_PROVISIONAL`, regardless of how much reviewed evidence contributed to it. The reviewed evidence's own source fields (`context_input_source`, `liquidity_event_source`, `volume_evidence_source`) are the correct, separate place to record provenance for the *input fact*; they are not empirical or production validation of the *resulting BTMM output*, and are surfaced read-through on `CurrentBtmmState` (§36W) precisely so this distinction stays visible and auditable.
+
+**Validation and behavioral rules (resolving audit Part 5's exact requirements):**
+- Frozen, immutable value object — same `ContractModel`-style base as every other contract in this project.
+- One current reviewed-evidence snapshot per source POI per `analyze_btmm()` call — duplicates rejected (§36G).
+- `symbol`/`timeframe` must match the referenced source POI exactly (§36G).
+- The referenced `source_poi_record_id` must exist in the supplied `PoiAnalysis` (§36G).
+- `availability_time_utc` must be timezone-aware UTC (§36G).
+- Evidence is never used before its own `availability_time_utc`, and never before the source POI's own availability — enforced by the same-group processing model (§36AA2), not by upfront validation alone.
+- Absent reviewed evidence for a given source POI means every reviewed-dependent gate (Context x3, full Liquidity, Volume Pillar) stays at its own `PENDING` value on `CurrentBtmmState` — absence never silently passes a gate.
+- The caller may supply an empty `reviewed_evidence` tuple; this is always valid and results in every setup remaining `BTMM_FORMING`/`BTMM_BLOCKED` (never `BTMM_CONFIRMED`), matching the corrected structural behavior when no reviewer channel is used at all.
+
+**No automatic expert-review process is invented.** `BtmmReviewedEvidence` is a pure, passive input contract — this milestone never generates, infers, or upgrades a reviewed-evidence record on its own; it only accepts what the caller supplies.
+
+### 36H. BTMM Taxonomy (corrected — 15 enums)
+
+Unchanged from the original draft: `BtmmDirection` (2), `BtmmInteractionClass` (9), `BtmmReactionClassification` (5), `BtmmLiquidityLocation` (6), `BtmmFormationStage` (6), `BtmmLifecycleStatus` (5), `BtmmBlockedReason` (4, disclosure corrected in §36H3), `BtmmContextAlignmentStatus` (4, values `PENDING`/`ALIGNED`/`MISALIGNED`/`UNKNOWN`, verified byte-for-byte against `BTMM_STATE_MACHINE.md` line 105-106 during the audit), `BtmmSessionStatus` (4, verified against line 107), `BtmmEvidenceSource` (5, unchanged).
+
+**`BtmmGateStatus`** (`StrEnum`, 3 members): `PENDING`, `PASS`, `FAIL` — used for Accuracy, Reaction, Reaction-Speed, and Formation-Timeframe gate statuses only. **`liquidity_evidence_status` is no longer typed `BtmmGateStatus`** — see the new, dedicated `BtmmLiquidityEvidenceStatus` enum below and the semantic analysis in §36H1.
+
+**Corrected `BtmmLifecycleTransitionType`** (`StrEnum`, **15 members**, resolving audit Findings B5): `ENTERED_FORMING`, `ACCURACY_GATE_CONFIRMED`, `INTERACTION_INELIGIBLE`, `REACTION_GATE_CONFIRMED`, `WEAK_REACTION`, `REACTION_SPEED_GATE_CONFIRMED`, `REACTION_SPEED_FAILED`, `BLOCKED`, `RESUMED_FORMING`, `CONFIRMED`, `POI_REJECTED`, `CONTEXT_REJECTED`, `SESSION_INACTIVE`, `VOLUME_PILLAR_FAILED`, `NO_LIQUIDITY_EVIDENCE`. The original draft's `FORMATION_TIMEFRAME_BLOCKED` and `PENDING_REVIEWED_EVIDENCE_BLOCKED` members are removed and replaced by the single generic `BLOCKED` member, matching `BTMM_STATE_MACHINE.md`'s own "the reason is preserved separately (`blocked_reason`)" design for the Blocked state — the same one-state-plus-separate-reason pattern already used for cancellation. `BlockedReason` for a given `BLOCKED` transition is now carried on the transition record itself (§36X, corrected field list), not inferred from the transition type name.
+
+**Corrected `BtmmCancellationReason`** (`StrEnum`, **8 members**, resolving audit Finding B4 and the reviewed-evidence expansion): `POI_REJECTED`, `INTERACTION_INELIGIBLE`, `WEAK_REACTION`, `REACTION_SPEED_FAILED`, `CONTEXT_REJECTED`, `SESSION_INACTIVE`, `VOLUME_PILLAR_FAILED`, `NO_LIQUIDITY_EVIDENCE`. Now that Context/Session/Volume-Pillar/Liquidity gates are reachable via reviewed evidence (§36D), their corresponding *rejection* outcomes (`MISALIGNED`, `INACTIVE`, `FAILS`, window-closed-with-no-evidence) become reachable too, and are included. **`DIRECTIONAL_CONTINUATION` and `MANUAL_REVIEW_REJECTED` remain explicitly excluded and deferred — see §36H4 for the required, fully researched disposition of each.**
+
+**`BtmmVolumePillarStatus`** (`StrEnum`, **5 members, new**, resolving audit Finding B2): `PENDING`, `SUPPORTS`, `FAILS`, `MISSING_DATA`, `UNRESOLVED` — the exact vocabulary from `BTMM_STATE_MACHINE.md` line 170, verified directly against source text. Used for `CurrentBtmmState.volume_pillar_status` and `BtmmReviewedEvidence.volume_pillar_status`. Only `SUPPORTS` satisfies the Volume Pillar confirmation gate; `FAILS` triggers `BTMM_CANCELLED`/`VOLUME_PILLAR_FAILED`; `PENDING`/`MISSING_DATA`/`UNRESOLVED` all leave the gate unresolved and, at `FINAL_GATE_EVALUATION`, park the setup `BTMM_BLOCKED`/`VOLUME_REVIEW_PENDING` — never silently passed, exactly matching `BTMM_STATE_MACHINE.md`'s own "Evidence unavailable or still awaiting review → BTMM_BLOCKED (never silently passed or cancelled)" rule.
+
+**`BtmmLiquidityEvidenceStatus`** (`StrEnum`, **2 members, new**, resolving the narrow-correction audit's liquidity-semantics finding): `PENDING`, `PRESENT`. Used for both `BtmmReviewedEvidence.liquidity_evidence_status` (the caller-supplied input fact) and `CurrentBtmmState.liquidity_evidence_status` (the analyzer's own preserved field of the same name, per `BTMM_STATE_MACHINE.md`'s own "Preserved independently" field list). Only `PRESENT` satisfies the full Liquidity Gate at `FINAL_GATE_EVALUATION`; `PENDING` (the universal not-yet-resolved marker already reused across every other status enum in this architecture, not a value invented specifically for this field) covers every other case — no reviewed evidence supplied yet, or a supplied record that has not yet confirmed presence.
+
+**15 enums total** (11 unchanged + 1 corrected member-count on 2 of them + 2 new: `BtmmVolumePillarStatus`, `BtmmLiquidityEvidenceStatus`).
+
+#### 36H1. Liquidity-Evidence Semantics — Why a Dedicated Enum, Not `BtmmGateStatus` (corrected)
+
+**This section previously described reusing `BtmmGateStatus` for `liquidity_evidence_status` as a disclosed simplification made "to keep the corrected export/enum count at exactly the values required by this correction" — that framing is withdrawn.** A full-text search of every authoritative BTMM source (`BTMM_STATE_MACHINE.md`, `BTMM_MASTER_SUMMARY.md`, `MEASUREMENT_STANDARDS.md`, `AMBIGUITIES_REQUIRING_AUTHOR_DECISION.md`) finds that `liquidity_evidence_status` is named exactly once with an exact value (`BTMM_STATE_MACHINE.md` line 135: "the gate requires `liquidity_evidence_status = PRESENT`") and is never given a complete enumerated value list anywhere — unlike the Volume Pillar Gate's own field (`volume_pillar_status`), which line 170 enumerates completely and explicitly as five named values (`PENDING`/`SUPPORTS`/`FAILS`/`MISSING_DATA`/`UNRESOLVED`). This asymmetry is not an oversight in the source material; it reflects a genuine semantic difference this architecture must respect rather than paper over:
+
+1. **Does `BtmmGateStatus` have exactly the same semantic states as reviewed liquidity evidence? No.** `BtmmGateStatus` (`PENDING`/`PASS`/`FAIL`) encodes a *computed judgment* — something evaluated a rule and produced a pass/fail verdict. The approved Liquidity Gate text never describes a reviewer rendering a "this liquidity evidence fails/rejects the setup" verdict anywhere — the only reviewed-liquidity concept the text describes is *presence* of a reviewed liquidity event (`EXPERT_LABELLED`/`RULE_BASED_REVIEWED`/`HYBRID_REVIEWED`), not a judgment about whether liquidity behavior "supports" or "opposes" the setup the way Volume Pillar's `SUPPORTS`/`FAILS` explicitly does.
+2. **Does it distinguish absent/present/supports/rejects/unresolved/missing?** No — the approved text never describes a "reviewed liquidity evidence rejects this setup" concept at all (unlike Volume Pillar's explicit `FAILS`, or Context's explicit `MISALIGNED`). The Liquidity Gate's only defined failure mode is *timing-based absence at window close* (`NO_LIQUIDITY_EVIDENCE`), which is a consequence the *analyzer* derives from the reaction window closing without ever having seen `PRESENT` — not a distinct value the reviewer supplies.
+3. **Is "evidence `PRESENT`" semantically identical to "gate `PASS`"?** Functionally yes for the *final*, analyzer-computed field, but the field the approved standard names (`liquidity_evidence_status`) is described once, with one value (`PRESENT`), never as a three-way `PENDING`/`PASS`/`FAIL` judgment — reusing the generic 3-value enum would silently imply a "reviewer says FAIL" semantic the approved text never defines or authorizes, which is exactly the kind of undisclosed invention this project's governance forbids.
+4. **Does reviewed evidence need a distinct status from the computed Liquidity Gate result?** The *type* does not need to be distinct in shape (both `BtmmReviewedEvidence.liquidity_evidence_status` and `CurrentBtmmState.liquidity_evidence_status` use the same new enum, mirroring `BTMM_STATE_MACHINE.md`'s own single named field), but the *vocabulary* must be distinct from `BtmmGateStatus`, since `BtmmGateStatus`'s `FAIL` value has no textual grounding for this field at all.
+
+**Resolution: `BtmmLiquidityEvidenceStatus` (2 members: `PENDING`, `PRESENT`) is added**, using only the one literally attested value (`PRESENT`) plus the generic `PENDING` marker already reused throughout this architecture's other enums (`BtmmContextAlignmentStatus`, `BtmmSessionStatus`, `BtmmGateStatus`, `BtmmVolumePillarStatus` all already use `PENDING` as their own "not yet resolved" value) — no new member name is invented. This corrects the export count to **29** (§36AN) and the enum count to **15** — a genuine consequence of the semantic analysis above, not a target preserved for arithmetic convenience.
+
+#### 36H2. Reviewed-Evidence-Driven Cancellation Semantics
+
+- `market_direction_status = MISALIGNED` or `analytical_framework_status = MISALIGNED` (from a supplied `BtmmReviewedEvidence` record) → `BTMM_CANCELLED`, `cancellation_reason = CONTEXT_REJECTED` — verified against `BTMM_STATE_MACHINE.md` lines 117-118.
+- `session_status = INACTIVE` → `BTMM_CANCELLED`, `cancellation_reason = SESSION_INACTIVE` — line 119.
+- `volume_pillar_status = FAILS` → `BTMM_CANCELLED`, `cancellation_reason = VOLUME_PILLAR_FAILED` — line 178.
+- The five-bar reaction window closes (Reaction Gate resolves) with `liquidity_evidence_status` still `PENDING` (no reviewed evidence supplied, or a supplied record that never reached `PRESENT`) → `BTMM_CANCELLED`, `cancellation_reason = NO_LIQUIDITY_EVIDENCE` — line 135 ("If the full reaction window closes with no reviewed evidence present, use `BTMM_CANCELLED`, `cancellation_reason = NO_LIQUIDITY_EVIDENCE`"). **This is the one reviewed-evidence-dependent cancellation with a deterministic *timing* trigger even absent reviewed evidence** — the others (`CONTEXT_REJECTED`/`SESSION_INACTIVE`/`VOLUME_PILLAR_FAILED`) only fire when reviewed evidence is actually supplied and is a definitive rejection; `liquidity_evidence_status` has no such definitive-rejection value at all (§36H1) — its *absence* at window close is itself the only failure mode, handled by timing alone, not by a rejection value the reviewer supplies.
+- None of these four cancellations invalidates the underlying POI, consistent with every other cancellation reason in this architecture.
+
+#### 36H3. Blocked-Reason Disclosure (resolving audit Finding N2)
+
+`BtmmBlockedReason` (4 members, unchanged: `CONTEXT_UNKNOWN`, `LIQUIDITY_REVIEW_PENDING`, `VOLUME_REVIEW_PENDING`, `FORMATION_TIMEFRAME_NOT_CONFIRMED`) deliberately omits the approved example values `MISSING_ATR` and `MISSING_PRICE_METADATA`, now explicitly justified against the actual implemented upstream behavior: **`MISSING_ATR` never arises** because `measurements.atr.compute_atr_series`/`poi/lifecycle.py`'s own `_zone_reference_atr` helper (verified in source) always supplies a computable fallback (the candle's own high-low range) whenever a true ATR value is unavailable — there is no code path in this milestone's dependencies where ATR is simply absent. **`MISSING_PRICE_METADATA` never arises as a lifecycle-blocked state** because invalid instrument/price metadata is rejected at the input-validation boundary (raising a typed error such as `InputPrefixMismatchError`) before any `BtmmObservation`/`CurrentBtmmState` is ever created — it is a construction-time validation failure, not a business-level blocked state a confirmed setup could ever occupy.
+
+#### 36H4. `DIRECTIONAL_CONTINUATION` — Researched Disposition (resolving audit Finding B4, Part 15)
+
+**Research performed:** `BTMM_STATE_MACHINE.md` (line 248) and `BTMM_MASTER_SUMMARY.md` (line 143) both list `DIRECTIONAL_CONTINUATION` as one of exactly 10 approved `cancellation_reason` values, by name only — **neither document, nor any other file in the knowledge base, defines a rule, formula, source-fact set, threshold, or triggering condition for a BTMM-level `DIRECTIONAL_CONTINUATION` cancellation.** A full-text search of the knowledge base finds exactly one *other*, textually similar but conceptually and structurally distinct concept: **`REJECTED_DIRECTIONAL_CONTINUATION`**, defined with an exact formula (`MEASUREMENT_STANDARDS.md` §7 of the Buy-to-Sell/Sell-to-Buy Reversal Confirmation Standard, Ambiguity 13: `Post-Candidate Close − Candidate High > Continuation Close Tolerance`) — but this rule operates entirely within **POI-candidate formation**, before any `PoiObservation` exists, deciding whether a `BUY_TO_SELL_CANDLE`/`SELL_TO_BUY_CANDLE` *candidate* is rejected before ever becoming a confirmed POI. A POI rejected this way (`REJECTED_DIRECTIONAL_CONTINUATION`/`REJECTED_INSUFFICIENT_REVERSAL`) never produces a `PoiObservation` at all and therefore can never reach this milestone's input boundary or seed a `BTMM_CANDIDATE` in the first place — it is not, and cannot be, the source of a *BTMM-level* cancellation.
+
+**Outcome selected: B — NOT DETERMINISTIC.** `DIRECTIONAL_CONTINUATION` is **not** added to `BtmmCancellationReason` in this milestone. **Exact missing dependency:** no BTMM-level rule exists anywhere in the approved knowledge base defining what "directional continuation" means once a BTMM setup is already underway (e.g., whether it refers to price continuing in the pre-manipulation direction after `BTMM_CANDIDATE` creation, after Reaction Start, or some other anchor; what tolerance, window, or measurement it would use) — this is a distinct, unresolved concept requiring its own future author decision and its own dedicated standard, not a reuse of Ambiguity 13's already-resolved, structurally unrelated POI-candidate-level rule. **Why the other 7 cancellation reasons remain implementable while this one is not:** `POI_REJECTED`, `INTERACTION_INELIGIBLE`, `WEAK_REACTION`, and `REACTION_SPEED_FAILED` each have a complete, already-implemented or already-approved deterministic formula (Ambiguity 15's invalidation state machine, Ambiguity 8's interaction classification, Ambiguity 9's reaction classification, and the reused `measure_leg` speed classification, respectively); `CONTEXT_REJECTED`, `SESSION_INACTIVE`, and `VOLUME_PILLAR_FAILED` are fully specified as reviewed-evidence outcomes with an exact, named triggering value (`MISALIGNED`/`INACTIVE`/`FAILS`) the caller supplies. `DIRECTIONAL_CONTINUATION` has neither an automatic formula nor an approved reviewed-evidence field to carry it — it is a named placeholder in the approved vocabulary with zero operational content, and this milestone does not invent one. A static export/enum test (§36AM) asserts `DIRECTIONAL_CONTINUATION` is absent from `BtmmCancellationReason` and from every other public enum, confirming the deferral is enforced, not merely stated. **`MANUAL_REVIEW_REJECTED` receives the same Outcome-B treatment for a related but distinct reason:** no field in the minimal `BtmmReviewedEvidence` contract (§36G2) carries a standalone "reviewer rejected this setup outright" signal independent of a specific gate's own MISALIGNED/INACTIVE/FAILS value; adding one was considered and rejected as unnecessary scope expansion beyond the Phase 0G Input-Source Policy's own named fields — a future, separate decision may add it if a dedicated field is approved.
+
+### 36I. BTMM Lifecycle Model (fully corrected)
+
+#### 36I1. Initial Primary State (resolving audit Finding B5, Part 11)
+
+**A newly exposed `BtmmObservation` always begins with `primary_state = BTMM_CANDIDATE`.** Candidate creation (the exact rule is unchanged from the original draft: POI identified, direction known, available without look-ahead, not rejected by its own formation standard, valid metadata — all already guaranteed by a confirmed `PoiObservation`) emits the public observation and its first `CurrentBtmmState` record, but **does not by itself imply `BTMM_FORMING` or `BTMM_CONFIRMED`.** `formation_stage` is `None` while `primary_state = BTMM_CANDIDATE`, exactly matching `BTMM_STATE_MACHINE.md`'s own statement that formation stages are preserved only "while `primary_state = BTMM_FORMING`." **Availability:** `BTMM_CANDIDATE`'s own `availability_time_utc` equals the source POI's own `availability_time_utc` — no additional delay.
+
+#### 36I2. `BTMM_CANDIDATE → BTMM_FORMING` (corrected — resolves a contradiction found in a subsequent narrow consistency review)
+
+**This section previously stated `ENTERED_FORMING` fires in the same processing step as `BTMM_CANDIDATE` creation. That contradicted this architecture's own same-availability-group policy (§36AA2), which requires a newly created candidate to remain `BTMM_CANDIDATE` for the entirety of its own creation group. This section is corrected below; the same-step trigger is withdrawn.**
+
+**Required initial policy (corrected, final):** a newly created `BtmmObservation` ends its own creation availability group in `primary_state = BTMM_CANDIDATE` — it does **not** emit `ENTERED_FORMING` in that same group, under any circumstance, including when reviewed evidence for its source POI already happens to be available at creation time. The earliest an `ENTERED_FORMING` transition may occur is in a **later** availability group.
+
+**Exact deterministic trigger:** `BTMM_STATE_MACHINE.md` names no distinct transition identifier for this step beyond the bare state pair in its "Allowed and Forbidden Transitions" table (`BTMM_CANDIDATE → BTMM_FORMING → BTMM_CONFIRMED`), and defines no explicit entry gate condition distinguishing `BTMM_CANDIDATE` from `BTMM_FORMING` beyond "evaluation is underway; gates are being checked as evidence becomes available." This architecture therefore retains one explicit, disclosed **ENGINEERING-PROVISIONAL author gap-fill**, corrected to the first genuinely *later* newly available formation fact: **the first confirmed candle, in the source POI's own timeframe, whose own `availability_time_utc` is strictly later than the `BTMM_CANDIDATE`'s own `availability_time_utc`.** This mirrors the identical "same-instant immunity, next-instant eligibility" pattern already established and proven in `1B-J-POI`'s own breach-walk `start_index` computation (`poi/lifecycle.py`: a POI cannot be breached by a candle sharing its own confirming instant, only by a strictly later one) — reused here, not invented fresh, for the analogous candidate-to-formation boundary.
+
+**Required source facts:** the one newly available confirmed candle described above; no additional fact is required. **Availability:** the triggering candle's own `availability_time_utc` (not the candidate's own — this transition's availability is genuinely later, by construction). **Semantic identity:** `(symbol.value, timeframe.value, str(btmm_setup_record_id), "ENTERED_FORMING", str(source_poi_record_id), rule_version)` — deterministic given the setup's own identity, so exactly one `ENTERED_FORMING` transition record is ever produced per setup, regardless of how many later candles arrive. **Fingerprint:** standard content-fingerprint over its own fields, unchanged formula. **Duplicate-transition suppression:** since the semantic key above depends only on the setup's own stable identity (not on the triggering candle), the identity resolver (§36AC) itself guarantees exactly one `ENTERED_FORMING` record is ever created for a given setup — a setup already in `BTMM_FORMING` or beyond is simply never re-evaluated against this trigger again.
+
+**If no further candle in the source POI's own timeframe ever becomes available after `BTMM_CANDIDATE` creation** (the input prefix ends at or before the candidate's own last candle), the setup remains `BTMM_CANDIDATE` indefinitely — never force-advanced, never defaulted to `BTMM_FORMING` — exactly mirroring how an incomplete Reaction Gate window remains `REACTION_IN_PROGRESS` indefinitely (§36N) rather than being force-resolved.
+
+**Candidate cancellation before entering `BTMM_FORMING`:** a `BTMM_CANDIDATE` setup is not exempt from source-POI invalidation. If the source POI itself becomes `GENUINE_INVALIDATION_CONFIRMED` while the setup is still `BTMM_CANDIDATE` (i.e., before its own `ENTERED_FORMING` trigger has fired), the setup transitions **directly** `BTMM_CANDIDATE → BTMM_CANCELLED`, `cancellation_reason = POI_REJECTED` — skipping `BTMM_FORMING` entirely — under the same source-POI-invalidation-priority rule that governs every other state (§36AA2 step 2, §36Z). This makes the previously-marked "not reachable in this milestone" `BTMM_CANDIDATE → BTMM_CANCELLED` row of the transition table (§36I7) now genuinely reachable, corrected below.
+
+#### 36I3. `BTMM_FORMING` — Deterministic Gate Sequence (unchanged core rules, retimed Reaction Gate)
+
+Within `BTMM_FORMING`, the deterministic gates evaluate in this order, exactly as the original draft, with the Reaction Gate's timing corrected (§36N):
+
+- `POI_INTERACTION` stage: Accuracy Gate (§36K, unchanged). Ineligible first interaction → `BTMM_CANCELLED`, `INTERACTION_INELIGIBLE`. Eligible → advances to `REACTION_MONITORING`.
+- `REACTION_MONITORING` stage: Reaction Gate, resolved **only at the 5th confirmed reaction candle** (§36N, corrected), then Reaction-Speed Gate. `WEAK_REACTION` at window close → `BTMM_CANCELLED`, `WEAK_REACTION`. `STANDARD_REACTION`/`STRONG_REACTION` passes; a subsequent `SLOW_OR_UNCLEAR` reaction-leg speed → `BTMM_CANCELLED`, `REACTION_SPEED_FAILED`; `FAST`/`STRONG_FAST` passes.
+- `FINAL_GATE_EVALUATION` stage: **corrected** — every one of the 10 gates in §36D's table is checked against the latest available deterministic facts and the latest available `BtmmReviewedEvidence` snapshot (if any) for this setup's source POI:
+  - If **all 10** resolve favorably (POI/Accuracy/Reaction/Reaction-Speed/Formation-Timeframe deterministically PASS, and Market-Direction/Analytical-Framework `ALIGNED`, Session `ACTIVE`, Liquidity `PRESENT`, Volume-Pillar `SUPPORTS` via reviewed evidence) → `BTMM_CONFIRMED` (§36I5).
+  - If any reviewed-evidence gate is a **definitive rejection** (`MISALIGNED`/`INACTIVE`/`FAILS`) → `BTMM_CANCELLED` with the matching reason (§36H2).
+  - Otherwise (at least one reviewed-evidence gate is absent, `PENDING`, `MISSING_DATA`, or `UNRESOLVED`, with no definitive rejection anywhere) → `BTMM_BLOCKED` (§36I4).
+  - If the source POI's own timeframe is `M1` → `BTMM_BLOCKED`, `blocked_reason = FORMATION_TIMEFRAME_NOT_CONFIRMED`, regardless of every other gate's status (per `BTMM_STATE_MACHINE.md`: "an M1-only setup must remain `BTMM_FORMING` or `BTMM_BLOCKED`... it must not independently become `BTMM_CONFIRMED`").
+
+#### 36I4. `BTMM_FORMING ⇄ BTMM_BLOCKED` (resolving audit Finding B5, Part 13)
+
+**`BTMM_FORMING → BTMM_BLOCKED`:** triggered exactly once per distinct unresolved condition, via the single generic `BLOCKED` transition type (§36H, replacing the original draft's 2 reason-specific placeholder types), carrying the specific `blocked_reason` (`CONTEXT_UNKNOWN`, `LIQUIDITY_REVIEW_PENDING`, `VOLUME_REVIEW_PENDING`, or `FORMATION_TIMEFRAME_NOT_CONFIRMED`) as its own field on the `BtmmLifecycleTransition` record (§36X, corrected). **`BTMM_BLOCKED → BTMM_FORMING` (`RESUMED_FORMING`):** triggered exactly when a *new* `BtmmReviewedEvidence` snapshot for this setup's source POI becomes available (a later `availability_time_utc` than any evidence already considered) whose content actually changes at least one previously-unresolved gate's value — a `RESUMED_FORMING` transition is recorded, and the setup re-enters `FINAL_GATE_EVALUATION` in the same or a later availability group (§36AA2), where it may then reach `BTMM_CONFIRMED`, a definitive cancellation, or `BTMM_BLOCKED` again (with a possibly different `blocked_reason`, if a different gate is now the blocking one). **Idempotency (resolving the audit's "repeated-BLOCKED" concern):** if a setup is already `BTMM_BLOCKED` for a given `blocked_reason` and no new reviewed evidence arrives in a later availability group, **no repeated `BLOCKED` transition is emitted** — the setup's `CurrentBtmmState` simply carries forward unchanged (same `content_fingerprint`, since nothing about its public content changed). A setup with no reviewed-evidence channel used at all (`reviewed_evidence = ()`) therefore parks in `BTMM_BLOCKED` exactly once and remains there permanently for the life of the input — this is the disclosed, expected behavior when no reviewer supplies evidence, not an implementation gap.
+
+#### 36I5. `BTMM_FORMING → BTMM_CONFIRMED` (resolving audit Finding B3/B5, Part 8)
+
+Reachable **only** from `BTMM_FORMING` at `FINAL_GATE_EVALUATION` (never directly from `BTMM_BLOCKED`, matching `BTMM_STATE_MACHINE.md`'s transition table exactly — a blocked setup must first `RESUMED_FORMING` before it can confirm). The `CONFIRMED` transition type (§36H) is recorded, `primary_state` becomes `BTMM_CONFIRMED`, `formation_stage` becomes `None` (formation is complete), and `btmm_confirmation_time` (`event_time_utc` on the `CONFIRMED` transition) is stored. **`BTMM_CONFIRMED` is terminal in the forward direction** — `BTMM_CONFIRMED → BTMM_CANCELLED` remains forbidden (§36I6) — but the observation retains **stable conceptual identity** throughout: its `record_id`/semantic key never change on confirmation, and its `content_fingerprint` changes only because the gate-status fields it carries changed value, not because a new record was created.
+
+#### 36I6. Terminal and Forbidden Transitions (unchanged, reconfirmed)
+
+`BTMM_CANCELLED` is terminal — never reactivated; a later eligible interaction with the same POI creates a new, independent `btmm_setup_id`. `BTMM_CANCELLED → BTMM_CONFIRMED` and `BTMM_CONFIRMED → BTMM_CANCELLED` are both forbidden, exactly per `BTMM_STATE_MACHINE.md`. **Source-POI invalidation after confirmation:** a `GENUINE_INVALIDATION_CONFIRMED` event on the source POI, even after `BTMM_CONFIRMED`, still triggers `BTMM_CANCELLED`/`POI_REJECTED` on the linked setup — the "forbidden `CONFIRMED → CANCELLED`" rule governs *market-based/context-based* re-cancellation, not the one, exact, pre-approved POI-invalidation-inheritance path (§36Z), which `BTMM_STATE_MACHINE.md` explicitly carves out ("A later losing trade must not change `BTMM_CONFIRMED` to cancelled" governs trade outcomes, not this inherited POI-rejection path — resolved identically to the original draft's §36Z, unchanged by this correction).
+
+### 36I7. Exact Closed Transition Table (resolving audit Part 14)
+
+| From | May remain | May become | Trigger | Test ownership |
+|---|---|---|---|---|
+| `BTMM_CANDIDATE` | **Yes — for the entirety of its own creation availability group, and for every subsequent group until a later group's own `ENTERED_FORMING` trigger fires (corrected, §36I2)** | `BTMM_FORMING` | The first confirmed candle, in the source POI's own timeframe, whose own `availability_time_utc` is strictly later than `BTMM_CANDIDATE`'s own `availability_time_utc` — never in the same group as creation (corrected, §36I2) | `test_candidate_enters_forming_only_in_later_availability_group`, `test_new_candidate_remains_candidate_in_creation_group`, `test_candidate_to_forming_transition_is_emitted_once` |
+| `BTMM_CANDIDATE` | — | `BTMM_CANCELLED` | **Reachable, corrected from the original draft's "not reachable" claim** — source-POI `GENUINE_INVALIDATION_CONFIRMED` occurring while the setup is still `BTMM_CANDIDATE` (before its own `ENTERED_FORMING` trigger has fired) transitions directly to `BTMM_CANCELLED`/`POI_REJECTED`, skipping `BTMM_FORMING` entirely (§36I2) | `test_candidate_can_cancel_before_entering_forming` |
+| `BTMM_FORMING` | Yes (`POI_INTERACTION`/`REACTION_MONITORING`/`FINAL_GATE_EVALUATION` stage progression) | `BTMM_BLOCKED` | `FINAL_GATE_EVALUATION` with ≥1 unresolved reviewed gate, no definitive rejection | `test_forming_becomes_blocked_for_unresolved_mandatory_gate` |
+| `BTMM_FORMING` | Yes | `BTMM_CONFIRMED` | `FINAL_GATE_EVALUATION` with all 10 gates favorable | `test_btmm_confirmed_requires_all_automatic_and_reviewed_gates` |
+| `BTMM_FORMING` | Yes | `BTMM_CANCELLED` | Accuracy/Reaction/Reaction-Speed Gate failure, or any definitive reviewed-evidence rejection, or source-POI genuine invalidation | `test_source_poi_invalidation_has_transition_priority`, plus per-reason tests |
+| `BTMM_BLOCKED` | Yes (unchanged reason) | `BTMM_FORMING` | New reviewed evidence changes a previously-unresolved gate | `test_blocked_resumes_forming_when_blocker_resolves` |
+| `BTMM_BLOCKED` | Yes | `BTMM_CANCELLED` | Source-POI genuine invalidation (only; a blocked setup cannot receive a definitive reviewed rejection without first passing through a `RESUMED_FORMING` re-evaluation) | `test_source_poi_invalidation_has_transition_priority` |
+| `BTMM_CONFIRMED` | Yes (terminal, forward) | — (no market/context re-cancellation) | N/A | `test_confirmed_forbids_recancellation` (implied by exports/lifecycle test file) |
+| `BTMM_CONFIRMED` | — | `BTMM_CANCELLED` (POI-inheritance only) | Source-POI `GENUINE_INVALIDATION_CONFIRMED` | covered under `POI_REJECTED` inheritance tests |
+| `BTMM_CANCELLED` | Yes (terminal) | — | N/A (never reactivated) | `test_cancellation_is_terminal_never_reactivated` |
+
+Every transition above has an exact trigger, an exact availability rule (§36AA2), and named test ownership (§36AM).
+
+### 36J. POI Eligibility for BTMM — Exact Matrix (unchanged, reconfirmed against source)
+
+Unchanged from the original draft and reconfirmed during the audit by direct comparison against `src/btmm_ai_scanner/poi/enums.py`'s `LIFECYCLE_ELIGIBLE_POI_TYPES` (byte-for-byte match, 18 members) and `NOT_APPLICABLE_LIFECYCLE_POI_TYPES` (14 members, splitting into 2 `CONTEXT-ONLY` + 12 `NOT_APPLICABLE`). No change.
+
+### 36K. POI Interaction and Overshoot — Accuracy Gate (unchanged, reconfirmed against source)
+
+Unchanged from the original draft; formulas reconfirmed verbatim against `MEASUREMENT_STANDARDS.md` "POI Zone Interaction, Penetration, and Overshoot Standard" during the audit. The audit's non-blocking note (N4) is recorded here: Ambiguity 8's Contact/Overshoot Tolerance formulas share numerically identical multipliers with Ambiguity 15's already-implemented `zone_contact_tolerance_*`/`zone_overshoot_tolerance_*` fields in `poi/configuration.py` (`0.05`/`0.10` ATR, `0.10`/`0.25` zone-height) — **this is confirmed to be a coincidence of the two approved standards sharing a numeric convention, not a copy-paste error**: Ambiguity 8 applies its formula to wick extremes for interaction classification, while Ambiguity 15 applies the same-valued formula to candle close for breach/reclaim detection — different price references, different purposes, verified via direct source comparison during the audit.
+
+### 36L. Approach Behavior — Non-Mandatory, Not Automatically Computed (unchanged)
+
+Unchanged from the original draft.
+
+### 36M. Liquidity Before, Within, and After POI (corrected: full gate now reviewed-evidence-reachable)
+
+The automatic `FALSE_INVALIDATION_CONFIRMED → LIQUIDITY_AFTER_POI/RULE_BASED` pathway is preserved exactly as the original draft (§36M unchanged in this respect) — this remains the only *automatically detected* liquidity fact, and it alone still never satisfies the full Liquidity Gate (an unreviewed `RULE_BASED` event cannot pass the gate, per `BTMM_STATE_MACHINE.md` line 131). **Corrected:** the full Liquidity Gate is now genuinely reachable — not merely disclosed as permanently blocked — through the caller-supplied `BtmmReviewedEvidence.liquidity_evidence_status = PRESENT` field (§36G2), which may itself be grounded in a caller's review of the automatically-detected `RULE_BASED` event (upgrading it to `RULE_BASED_REVIEWED` provenance) or in any other independently reviewed liquidity-event label the caller supplies (`EXPERT_LABELLED`/`HYBRID_REVIEWED`). No sweep detector, density score, or liquidity-before/-within automation is invented — these remain explicitly unautomated, exactly as the original draft stated.
+
+### 36N. Reaction Strength and Reaction-Speed Gates (corrected: window-completion timing, resolving audit Finding B1)
+
+Formulas and thresholds are unchanged and were reconfirmed byte-for-byte against `MEASUREMENT_STANDARDS.md` §9-11 during the audit (`STANDARD_REACTION`: ATR Reaction Ratio ≥ 0.75, Zone Clearance Ratio ≥ 1.00, Directional Efficiency ≥ 0.50, Directional Candle Share ≥ 0.60; `STRONG_REACTION`: ≥ 1.25 / ≥ 1.50 / ≥ 0.60 / ≥ 0.67 plus `FAST`/`STRONG_FAST` speed). **Corrected timing, resolving audit Finding B1:**
+
+- **The reaction window contains exactly five confirmed reaction candles.** For reaction candles 1 through 4 (i.e., while the window remains open), `CurrentBtmmState.reaction_classification = REACTION_IN_PROGRESS` **unconditionally** — even if `STANDARD_REACTION` or `STRONG_REACTION` thresholds are already numerically satisfied on an earlier candle. The Reaction Gate does **not** resolve `PASS`/`FAIL` before window completion, and no `BTMM_CONFIRMED` (or any other public transition depending on the Reaction Gate) may use a reaction result from an incomplete window. This corrects the original draft's ambiguous phrasing ("achieved within the window"), which could be misread as authorizing early resolution.
+- **At availability of the fifth confirmed reaction candle:** the complete five-candle window is evaluated as a whole; the **highest** approved reaction tier achieved on **any** candle anywhere within the full window is selected (`STRONG_REACTION` > `STANDARD_REACTION` > `WEAK_REACTION`, per `MEASUREMENT_STANDARDS.md` §4's own "assign the highest reaction tier achieved during the window" rule); `reaction_classification` is finalized to that tier; the Reaction Gate resolves `PASS` (`STANDARD_REACTION`/`STRONG_REACTION`) or `FAIL` (`WEAK_REACTION`) at that same instant.
+- **`availability_time_utc`** for the finalized `reaction_classification` (and any transition depending on it) equals the maximum availability among all five required reaction candles and every other required source fact (ATR, leg metrics) — never earlier.
+- **The finalized classification does not repaint** — once assigned at the fifth candle, it is never revised by a later candle; a `BtmmLifecycleTransition` recording `REACTION_GATE_CONFIRMED`/`WEAK_REACTION` is immutable exactly like every other transition record in this project.
+- **If the five confirmed reaction candles never become available** (e.g., the input prefix ends mid-window): `reaction_classification` remains `REACTION_IN_PROGRESS` indefinitely, the Reaction Gate remains unresolved, and the setup's `primary_state` stays `BTMM_FORMING`/`REACTION_MONITORING` — it is never force-resolved, never defaults to `WEAK_REACTION`, and never blocks (a still-open reaction window is not "missing mandatory information" in the `BTMM_BLOCKED` sense — it is ordinary in-progress evaluation).
+
+### 36O. Pressure Behavior (unchanged)
+
+Unchanged from the original draft.
+
+### 36P. Buy-to-Sell and Sell-to-Buy — Generic Direction, Not Separate Patterns (unchanged)
+
+Unchanged from the original draft.
+
+### 36Q. Structure Interaction — Excluded (unchanged)
+
+Unchanged from the original draft.
+
+### 36R. Volume Pillar Gate — Final Decision (Option B, corrected from author-decision-pending)
+
+**Selected: Option B — no new automatic Volume Pillar formula is implemented; the Volume Pillar is resolved only through the approved reviewed-evidence channel.** The original draft's Option A (reusing price-action proxy fields with a new, disclosed threshold pairing) is **removed from consideration** — it is not implemented and not offered as an alternative, since it would require inventing a SUPPORTS/FAILS threshold mapping the approved standard does not itself specify, which this correction avoids entirely by routing Volume Pillar resolution through `BtmmReviewedEvidence.volume_pillar_status` (§36G2) instead. Price-action/momentum proxy fields already computed internally by POI family detectors are **not** reused for this gate. The gate never silently passes when volume evidence is unavailable — absence leaves `volume_pillar_status = PENDING` (or, if the reviewer explicitly reports missing data, `MISSING_DATA`; or `UNRESOLVED` if reviewed evidence exists but cannot resolve the pillar), and `FINAL_GATE_EVALUATION` parks the setup `BTMM_BLOCKED`/`VOLUME_REVIEW_PENDING` in every one of those three cases.
+
+### 36S. Context Gate — Now Reachable Through Reviewed Evidence (corrected from "structurally unreachable")
+
+**The single most important correction in this pass.** The original draft found `market_direction_status`/`analytical_framework_status`/`session_status` permanently `PENDING`/`UNKNOWN` with no input channel. **Corrected:** these fields are now genuinely settable via `BtmmReviewedEvidence` (§36G2), exactly matching `BTMM_STATE_MACHINE.md`'s own approved "Phase 0G Input-Source Policy" (`context_input_source = MANUAL_EXPERT_LABEL` and equivalents). No automatic detector is invented — `BtmmReviewedEvidence` only accepts already-reviewed facts as typed input; this milestone still never computes a moving average, HH/HL, BOS/CHoCH, or a session calendar itself. **`BTMM_CONFIRMED` is therefore genuinely reachable by `analyze_btmm()`'s own deterministic code, given sufficient caller-supplied reviewed evidence** — not automatically, and not for every setup (a caller supplying `reviewed_evidence = ()` will never see any setup confirm), but reachable in the sense Part 5/Option C of the audit required: the code path exists, is exercised by tests, and does not depend on any future milestone.
+
+### 36T. Formation Timeframe Gate (unchanged)
+
+Unchanged from the original draft.
+
+### 36U. Candidate/Public-Output Separation (unchanged)
+
+Unchanged from the original draft — public existence begins at `BTMM_CANDIDATE` creation (§36I1).
+
+### 36V. BTMM Observation Contract (unchanged, 15 fields, reconfirmed)
+
+Unchanged from the original draft — 15 fields, no entry/SL/TP/trade-outcome/AI-confidence field. Reconfirmed by direct recount during this correction.
+
+### 36W. Current BTMM State Contract (corrected field types and additions)
+
+**33 fields, corrected from the original draft's 32** (net +1: `volume_pillar_status` and `liquidity_evidence_status` are each retyped, not added — the latter now `BtmmLiquidityEvidenceStatus` rather than `BtmmGateStatus`, per the corrected semantic analysis in §36H1; the reviewed-evidence read-through fields below are the actual net additions, offset by removing the two now-redundant blocked-reason-implying transition types from the type system, which does not change contract field count):
+
+```
+record_id: UUIDv7
+content_fingerprint: SHA256Fingerprint
+symbol: InternalSymbol
+timeframe: Timeframe
+btmm_setup_record_id: UUIDv7
+btmm_direction: BtmmDirection
+source_poi_type: PoiType
+primary_state: BtmmLifecycleStatus
+formation_stage: BtmmFormationStage | None
+market_direction_status: BtmmContextAlignmentStatus
+analytical_framework_status: BtmmContextAlignmentStatus
+session_status: BtmmSessionStatus
+accuracy_gate_status: BtmmGateStatus
+interaction_class: BtmmInteractionClass | None
+reaction_gate_status: BtmmGateStatus
+reaction_classification: BtmmReactionClassification | None
+reaction_speed_gate_status: BtmmGateStatus
+reaction_speed_classification: LegSpeedClassification | None
+formation_timeframe_gate_status: BtmmGateStatus
+volume_pillar_status: BtmmVolumePillarStatus
+liquidity_evidence_status: BtmmLiquidityEvidenceStatus
+liquidity_location: BtmmLiquidityLocation | None
+liquidity_evidence_source: BtmmEvidenceSource | None
+reviewed_evidence_availability_time_utc: datetime | None
+cancellation_reason: BtmmCancellationReason | None
+blocked_reason: BtmmBlockedReason | None
+latest_lifecycle_transition_id: UUIDv7 | None
+availability_time_utc: datetime
+rule_version: SemVer
+contract_version: SemVer
+schema_version: SemVer
+evidence_classification: EvidenceClassification
+provenance_id: UUIDv7
+```
+
+**Exact recount: 33 fields.** Changes from the original 32-field draft: `volume_pillar_status` is now typed `BtmmVolumePillarStatus` (was `BtmmGateStatus`); one new field, `reviewed_evidence_availability_time_utc: datetime | None`, is added — `None` until at least one `BtmmReviewedEvidence` snapshot has been applied to this setup, otherwise the availability time of the most recent reviewed-evidence snapshot actually applied (read-through provenance timing, distinct from the record's own `availability_time_utc`, which also folds in every deterministic fact). No field implies entry/stop/target/risk/trade-result/AI-confidence. **Stable semantic identity unchanged: `(symbol, timeframe, source_poi_record_id, rule_version)`** — content evolves as gates resolve (including via reviewed evidence) while `record_id` stays fixed; `content_fingerprint` changes whenever any public field's value changes, including `blocked_reason`/`primary_state`/`volume_pillar_status` transitions.
+
+### 36X. Lifecycle Transitions (corrected field list)
+
+**15 fields, +1 field versus the original draft's 14** (adds `blocked_reason`, needed now that `BLOCKED` is a single generic transition type carrying its reason inline, per §36H/§36I4):
+
+```
+record_id: UUIDv7
+content_fingerprint: SHA256Fingerprint
+symbol: InternalSymbol
+timeframe: Timeframe
+btmm_setup_record_id: UUIDv7
+transition_type: BtmmLifecycleTransitionType
+blocked_reason: BtmmBlockedReason | None
+triggering_candle_record_id: UUIDv7 | None
+triggering_reviewed_evidence_availability_time_utc: datetime | None
+event_time_utc: datetime
+availability_time_utc: datetime
+rule_version: SemVer
+contract_version: SemVer
+schema_version: SemVer
+evidence_classification: EvidenceClassification
+provenance_id: UUIDv7
+```
+
+**Exact recount: 16 fields** (corrected once more after direct enumeration — `blocked_reason` and `triggering_reviewed_evidence_availability_time_utc` are both genuinely new, and `triggering_candle_record_id` is now optional since a `CONTEXT_REJECTED`/`SESSION_INACTIVE`/`VOLUME_PILLAR_FAILED`/`NO_LIQUIDITY_EVIDENCE`/`BLOCKED`/`RESUMED_FORMING`/`CONFIRMED` transition may be triggered by reviewed-evidence availability rather than a specific triggering candle — the field is retained but nullable, and `triggering_reviewed_evidence_availability_time_utc` is populated instead in that case; exactly one of the two triggering-reference fields is non-`None` for any given transition, enforced by construction, not by a separate validation error). `blocked_reason` is `None` for every transition type other than `BLOCKED`.
+
+### 36Y. Cross-POI Applicability Matrix (unchanged)
+
+Unchanged from the original draft.
+
+### 36Z. Lifecycle Reconciliation — POI/BTMM Interplay (unchanged, reconfirmed)
+
+Unchanged from the original draft; **source-POI invalidation priority is now explicit in the same-group ordering model (§36AA2, priority list item 2)** rather than only implied.
+
+### 36AA. Same-Candle and No-Look-Ahead Ordering — Superseded by §36AA2
+
+The original draft's high-level "availability-time-driven correctness by construction" prose is retained as the underlying principle but is now given one exact, closed procedural model in §36AA2, resolving audit Part 17's requirement to replace high-level wording with an exact availability-group model.
+
+### 36AA2. Exact Availability-Group Processing Order (corrected — removes the candidate/forming same-step contradiction)
+
+**This section previously let step 8 create a new `BTMM_CANDIDATE` and its `ENTERED_FORMING` transition in the same step, while step 9 simultaneously claimed a newly created candidate "cannot advance beyond `BTMM_CANDIDATE`/`BTMM_FORMING`" in that group — internally inconsistent, since creating-and-entering-`BTMM_FORMING` in the same group is itself "advancing beyond `BTMM_CANDIDATE`."** Corrected below: candidate creation and the `ENTERED_FORMING` transition are now structurally assigned to different steps that can never apply to the same setup in the same group.
+
+For each global availability group, in this exact order:
+
+1. Bring forward every prior `BtmmObservation` and `CurrentBtmmState` unchanged as the starting point for this group.
+2. Apply source-POI genuine invalidation and terminal cancellation first, for every setup whose source POI became `GENUINE_INVALIDATION_CONFIRMED` in this group — `BTMM_CANCELLED`/`POI_REJECTED` takes priority over every other possible transition for that setup in this same group, **including a setup still in `BTMM_CANDIDATE`** (§36I2's corrected candidate-cancellation rule).
+3. **For every setup still `BTMM_CANDIDATE` from a *prior* group** (not cancelled in step 2 above), check whether this group contains the first confirmed candle, in its own source POI's timeframe, whose `availability_time_utc` is strictly later than that setup's own `BTMM_CANDIDATE` `availability_time_utc` — if so, emit `ENTERED_FORMING` and move `primary_state` to `BTMM_FORMING`/`formation_stage = CONTEXT_CHECK` (§36I2, corrected). **This step never applies to a setup created in this same group** — see step 8.
+4. Apply newly available `BtmmReviewedEvidence` (whose own `availability_time_utc` falls within this group) to every existing `BTMM_FORMING`/`BTMM_BLOCKED` setup referencing the same source POI.
+5. Apply newly available deterministic interaction, reaction (non-final), liquidity (`RULE_BASED` automatic fact only), and gate-progress facts to existing `BTMM_FORMING` setups.
+6. Complete five-candle Reaction Gate windows where the fifth confirmed reaction candle becomes available in this group (§36N).
+7. Select **at most one** primary-state transition per `BtmmObservation` for this group, using this exact priority when more than one condition would otherwise apply simultaneously: **`CANCELLED` > `CONFIRMED` > `BLOCKED` > `RESUMED_FORMING` > `ENTERED_FORMING`.**
+8. Create new `BTMM_CANDIDATE` observations for any newly visible, newly eligible BTMM-eligible POI in this group — **these remain `BTMM_CANDIDATE` for the entire remainder of this group; no `ENTERED_FORMING` transition is ever emitted for a setup in the same group it was created, under any circumstance** (corrected — step 3 above only evaluates setups carried forward from a *prior* group, never one created in step 8 of this same group).
+9. **Structural guarantee (corrected):** a newly created candidate cannot advance beyond `BTMM_CANDIDATE` in its own creation group — not merely "beyond `BTMM_CANDIDATE`/`BTMM_FORMING`" as the original draft stated. By construction it therefore cannot reach `BTMM_FORMING`, `BTMM_BLOCKED`, or `BTMM_CONFIRMED` in that same group either, since each of those requires having first entered `BTMM_FORMING`, which step 8 explicitly withholds.
+10. Finalize `CurrentBtmmState` and deterministic output ordering (§36AH) for the group.
+
+**Consequences, explicitly disclosed:** a newly created candidate always remains `BTMM_CANDIDATE` through the end of its own creation group, full stop — not merely "cannot confirm," but cannot even enter `BTMM_FORMING` — reviewed evidence or not; the earliest `ENTERED_FORMING` transition is structurally guaranteed to occur in a later group (step 3, evaluated only against carried-forward candidates); source-POI invalidation always has priority, including over a still-`BTMM_CANDIDATE` setup (step 2); at most one primary-state transition per observation per group (step 7); no partial group processing (every step applies uniformly across the full visible prefix for the group); no same-group create-and-confirm, and now also no same-group create-and-enter-forming (step 9); no future evidence is ever consulted (every step operates only on facts whose own `availability_time_utc` falls at or before the current group).
+
+### 36AB. Multi-Timeframe Policy (unchanged)
+
+Unchanged from the original draft.
+
+### 36AC. Identity and Fingerprint Strategy — Final Decision (Option B, corrected from author-decision-pending)
+
+**Selected: Option B — a fourth disclosed local canonical serializer implementation.** The original draft's default recommendation (Option A, extracting a shared serializer into a new module and modifying `domain/analyzer.py`/`structure/analyzer.py`/`poi/analyzer.py`) is **removed**. **Reason, exactly as the correction requires:** the measurement, structure, and POI milestones are closed; no correctness defect exists in their existing serializers (verified by direct source comparison during the audit — all three implementations are structurally identical); extracting a shared utility would reopen three closed implementations for a purely cosmetic DRY improvement; the accelerated governance model applied throughout this project prefers zero blast radius on closed work; and four-way equivalence testing provides the required safety net without any shared-file risk. This also matches `1B-J-POI`'s own precedent (its own Option C: a third disclosed duplicate, for the identical reason).
+
+**Requirements, all satisfied by this design:**
+- No completed analyzer (`domain/analyzer.py`, `structure/analyzer.py`, `poi/analyzer.py`) is modified by this milestone.
+- No shared serializer file is introduced anywhere in the repository.
+- `btmm/analyzer.py` owns its own private, local `_canonicalize`/`_compute_content_fingerprint`/`_IdentityResolver`/`_finalize` implementation — a fourth structurally-identical copy.
+- **Maintenance risk is disclosed:** four independent copies of the same ~60-line serializer now exist; a future correctness fix to the canonicalization algorithm (e.g., a new value type needing serialization) must be applied to all four locations, and there is no automated enforcement preventing them from silently drifting apart between now and that future fix — this risk is accepted deliberately, in writing, in exchange for zero blast radius on three closed milestones.
+- **Four-way equivalence testing is mandatory**, extending `1B-J-POI`'s existing three-way test: `test_four_way_serializer_equivalence` (§36AM) constructs one shared corpus of representative values and asserts `domain._compute_content_fingerprint(fields) == structure._compute_content_fingerprint(fields) == poi._compute_content_fingerprint(fields) == btmm._compute_content_fingerprint(fields)` for every value combination, covering at minimum: `Decimal` (including zero and negative), every relevant `StrEnum` member, `UUIDv7`, a timezone-aware `datetime`, `SemVer`, `tuple` (including empty and nested), `None`, `bool`, `int`, `str`, and at least one nested public contract instance (e.g., a `PoiObservation` or `BtmmObservation` field embedded within a dict-like structure) to confirm recursive canonicalization agrees across all four implementations.
+- The corrected 22-path scope (§36AL) reflects Option B cleanly: no existing file outside `btmm/` and `domain/enums.py` is touched.
+
+**Every remaining Option A/Option B uncertainty from the original draft is now removed — Option B is final.**
+
+### 36AD. Evidence Classification (unchanged, reconfirmed)
+
+Unchanged — every emitted output stores exactly `EvidenceClassification.ENGINEERING_PROVISIONAL`; never `AUTHOR_APPROVED`/`BOOK_SOURCED`/a compound value. Reviewed evidence's own provenance fields (§36G2) are a separate axis, reconfirmed non-conflated during this correction.
+
+### 36AE. Output Model and Public API (corrected signature)
+
+**Five contracts:** `BtmmObservation` (§36V), `BtmmLifecycleTransition` (§36X), `CurrentBtmmState` (§36W), `BtmmAnalysis` (aggregate, unchanged shape), `BtmmReviewedEvidence` (§36G2, new) — no `ReactionObservation` sixth contract.
+
+**Corrected public API:**
+
+```python
+def analyze_btmm(
+    timeframe_inputs: tuple[BtmmTimeframeInput, ...],
+    poi_analysis: PoiAnalysis,
+    reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
+    configuration: BtmmConfiguration,
+    identity_provider: DerivedOutputIdentityProvider,
+) -> BtmmAnalysis:
+    ...
+```
+
+`reviewed_evidence` is now a **required** positional parameter (not optional-with-default) — an empty tuple `()` is always valid and is the correct way for a caller with no reviewer channel to call this function, but the parameter itself must always be supplied explicitly, keeping the reviewed-evidence pathway visible at every call site rather than hidden behind a default. **No hidden manual-evidence repository, no global review registry, no wall clock, no I/O, and no future-evidence use** — `reviewed_evidence` is consumed exactly like every other input tuple: read once, validated, and applied only according to its own declared `availability_time_utc` (§36AA2).
+
+**Empty behavior:** `timeframe_inputs == ()` or `poi_analysis.poi_observations == ()` returns the fully-empty `BtmmAnalysis`, unchanged. `reviewed_evidence == ()` is independently valid and does not by itself empty the result — setups still form, interact, and react; they simply never reach `BTMM_CONFIRMED` and eventually park `BTMM_BLOCKED`.
+
+### 36AF. Error Vocabulary (unchanged count: 10 total, 4 reused + 6 new — triggers broadened, no new classes)
+
+| Error | Reused/New | Trigger (corrected/broadened where noted) |
+|---|---|---|
+| `MixedSymbolAnalysisError` | Reused | Mixed symbol across bundles, `poi_analysis`, **or `reviewed_evidence` (broadened)** |
+| `DuplicateCandleRecordError` | Reused | Unchanged |
+| `UnsortedCandleSequenceError` | Reused | Unchanged |
+| `DerivedIdentityCollisionError` | Reused | Unchanged |
+| `InvalidBtmmConfigurationError` | New | Unchanged |
+| `DuplicateBtmmTimeframeInputError` | New | Unchanged |
+| `UnsortedBtmmTimeframeInputError` | New | Unchanged |
+| `InputPrefixMismatchError` | New | Unchanged triggers, **broadened to cover: duplicate `BtmmReviewedEvidence` for one source POI; `BtmmReviewedEvidence.symbol`/`timeframe` disagreeing with its referenced source POI; a naive (non-timezone-aware) `availability_time_utc` on any `BtmmReviewedEvidence`; and a disallowed `BtmmEvidenceSource` value on a caller-supplied evidence field (§36G2)** |
+| `MissingSourcePoiRecordError` | New | Unchanged trigger, **broadened to cover a `BtmmReviewedEvidence.source_poi_record_id` referencing no supplied `PoiObservation`** |
+| `ImpossibleBtmmLifecycleTransitionError` | New | Unchanged |
+
+**Total unchanged at 10** (4 reused + 6 new) — no new error class was introduced; every reviewed-evidence validation rule was folded into the existing, appropriately-named error triggers above, keeping the export-facing error surface at exactly 6.
+
+### 36AG. Configuration (corrected: no Volume Pillar fields, no reviewed-evidence values)
+
+```
+minimum_price_tick: Decimal
+
+eligible_poi_types: frozenset[PoiType] = frozenset(<the 18 BTMM-eligible types>)
+supported_symbols: frozenset[InternalSymbol] = frozenset({XAUUSD, EURUSD, GBPUSD})
+formation_timeframes: frozenset[Timeframe] = frozenset({M5, M15})
+supporting_only_timeframes: frozenset[Timeframe] = frozenset({M1})
+
+interaction_contact_tolerance_atr_multiplier: Decimal = Decimal("0.05")
+interaction_contact_tolerance_zone_height_multiplier: Decimal = Decimal("0.10")
+interaction_overshoot_tolerance_atr_multiplier: Decimal = Decimal("0.10")
+interaction_overshoot_tolerance_zone_height_multiplier: Decimal = Decimal("0.25")
+interaction_edge_touch_max_penetration_ratio: Decimal = Decimal("0.25")
+interaction_partial_entry_max_penetration_ratio: Decimal = Decimal("0.50")
+
+reaction_window_bars: int = 5
+reaction_standard_atr_ratio: Decimal = Decimal("0.75")
+reaction_standard_zone_clearance_ratio: Decimal = Decimal("1.00")
+reaction_standard_directional_efficiency: Decimal = Decimal("0.50")
+reaction_standard_directional_candle_share: Decimal = Decimal("0.60")
+reaction_strong_atr_ratio: Decimal = Decimal("1.25")
+reaction_strong_zone_clearance_ratio: Decimal = Decimal("1.50")
+reaction_strong_directional_efficiency: Decimal = Decimal("0.60")
+reaction_strong_directional_candle_share: Decimal = Decimal("0.67")
+
+reaction_speed_fast_normalized_speed_per_bar: Decimal = Decimal("0.50")
+reaction_speed_fast_directional_efficiency: Decimal = Decimal("0.60")
+reaction_speed_fast_directional_candle_share: Decimal = Decimal("0.67")
+reaction_speed_strong_fast_normalized_speed_per_bar: Decimal = Decimal("0.75")
+reaction_speed_strong_fast_directional_efficiency: Decimal = Decimal("0.75")
+reaction_speed_strong_fast_directional_candle_share: Decimal = Decimal("0.80")
+
+rule_version: SemVer = SemVer.parse("1.0.0")
+contract_version: SemVer = SemVer.parse("0.1.0")
+schema_version: SemVer = SemVer.parse("0.1.0")
+evidence_classification: EvidenceClassification = EvidenceClassification.ENGINEERING_PROVISIONAL
+```
+
+**Corrected: no Volume Pillar threshold field of any kind exists** (Option B removes the need entirely, §36R) — the original draft never actually added one either (Option A was left as a non-default alternative), so this is a confirmation, not a removal. **No reviewed-evidence value (e.g., a default `volume_pillar_status`) belongs in configuration** — reviewed gate values live exclusively in `BtmmReviewedEvidence` (§36G2), a per-call input, never a static configuration default; configuration only ever holds deterministic thresholds and structural constants. **No duplicate POI-lifecycle setting** — `ATR(14)` is read via `measurements.compute_atr_series`, reused, never recomputed; POI lifecycle state is consumed from `PoiAnalysis`, never recomputed. Every remaining field is a deterministic threshold required by one of the 5 automatic gates (Accuracy, Reaction, Reaction-Speed) or a structural constant (`formation_timeframes`, `supporting_only_timeframes`, `eligible_poi_types`, `supported_symbols`) genuinely consulted by name.
+
+### 36AH. Deterministic Ordering (unchanged)
+
+Unchanged from the original draft.
+
+### 36AI. Replay Equivalence Procedure (corrected: includes reviewed evidence)
+
+For each global availability group: (1) append newly-available candles atomically; (2) recompute (or accept caller-supplied) `MarketMeasurementAnalysis`; (3) recompute (or accept caller-supplied) `PoiAnalysis` for the identical visible prefix; **(4) expose only `BtmmReviewedEvidence` records whose own `availability_time_utc` has been reached by this group — never earlier-supplied, never future evidence (corrected/new step)**; (5) re-invoke `analyze_btmm()`; (6) compare against an independent, one-shot, direct-batch call over the complete final state, including the complete final `reviewed_evidence` tuple — must be identical; (7) verify stable `BtmmObservation`/`BtmmLifecycleTransition` identities across growing prefixes; (8) verify `CurrentBtmmState.content_fingerprint` changes only when public content changes; (9) **verify reviewed evidence never leaks backward — a setup's state in an earlier prefix must never reflect reviewed evidence whose `availability_time_utc` falls after that prefix's own visible horizon (new)**; (10) **verify no same-group candidate confirmation (new, §36AA2 step 9)**; (11) **verify source-POI invalidation priority (new, §36AA2 step 2)**; (12) verify `POI_REJECTED` inheritance is stable and never reverses a genuine invalidation.
+
+### 36AJ. Implementability Matrix (corrected: 10 of 12 rows now implementable)
+
+| # | Pattern component | Readiness | Missing decision |
+|---|---|---|---|
+| 1 | POI Gate | **IMPLEMENTABLE** (deterministic) | None |
+| 2 | Accuracy Gate | **IMPLEMENTABLE** (deterministic) | None |
+| 3 | Reaction Gate | **IMPLEMENTABLE** (deterministic, window-completion timing corrected) | None |
+| 4 | Reaction-Speed Gate | **IMPLEMENTABLE** (deterministic) | None |
+| 5 | Formation Timeframe Gate | **IMPLEMENTABLE** (deterministic) | None |
+| 6 | Liquidity-after-POI automatic evidence | **IMPLEMENTABLE** (deterministic, evidence-only) | None |
+| 7 | POI-invalidation inheritance | **IMPLEMENTABLE** (deterministic) | None |
+| 8 | Context Gate (Market Direction/Analytical Framework/Active Session) | **IMPLEMENTABLE** (via caller-supplied reviewed evidence, corrected) | None — resolved by `BtmmReviewedEvidence` |
+| 9 | Volume Pillar Gate | **IMPLEMENTABLE** (via caller-supplied reviewed evidence only, Option B final) | None — resolved by `BtmmReviewedEvidence` |
+| 10 | Full Liquidity Gate (reviewed) | **IMPLEMENTABLE** (via caller-supplied reviewed evidence, corrected) | None — resolved by `BtmmReviewedEvidence` |
+| 11 | Accumulation/Distribution | **DEFERRED** (no approved definition anywhere) | Fresh author decision |
+| 12 | Approach Speed (non-mandatory) | **DEFERRED** (no approved anchor) | Approach-leg anchor rule |
+
+**Totals: 10 of 12 rows IMPLEMENTABLE; 2 rows DEFERRED (Accumulation/Distribution, Approach Speed), unchanged from the original draft since neither is affected by the reviewed-evidence correction; 0 BLOCKED.**
+
+### 36AK. Exact Initial Implementation Set (corrected)
+
+**10 of 12 pattern components are now implementable** (up from 7 in the original draft) — rows 1-10. Deferred: rows 11-12 (Accumulation/Distribution, Approach Speed), for the same reasons as the original draft, unaffected by this correction. Blocked: 0. **Choice: implement all 10 implementable rows**, including the 3 reviewed-evidence-dependent gates (Context, Volume Pillar, full Liquidity) as genuine, tested, reachable code paths — not merely disclosed-as-deferred placeholders. Every field this milestone emits now has an exact, complete, deterministic-or-reviewed-input rule; the only remaining public-facing absence is the omission of Approach Speed fields entirely (unchanged) and the total absence of any Accumulation/Distribution output (unchanged).
+
+### 36AL. Exact File Scope (corrected: 22 paths)
+
+**Corrected: 22 total affected paths — 11 new source, 1 modified existing source, 10 new test.** New-path split: 11 source / 10 test (21 new paths). Affected-path split: 12 source / 10 test.
+
+**11 new source paths** (new top-level package `btmm/`), corrected creation order **147-157**:
+
+| Order | Path |
+|---|---|
+| 147 | `src/btmm_ai_scanner/btmm/__init__.py` |
+| 148 | `src/btmm_ai_scanner/btmm/enums.py` |
+| 149 | `src/btmm_ai_scanner/btmm/configuration.py` |
+| 150 | `src/btmm_ai_scanner/btmm/observation.py` |
+| 151 | `src/btmm_ai_scanner/btmm/reviewed_evidence.py` |
+| 152 | `src/btmm_ai_scanner/btmm/lifecycle.py` |
+| 153 | `src/btmm_ai_scanner/btmm/current_state.py` |
+| 154 | `src/btmm_ai_scanner/btmm/interaction.py` |
+| 155 | `src/btmm_ai_scanner/btmm/reaction.py` |
+| 156 | `src/btmm_ai_scanner/btmm/liquidity.py` |
+| 157 | `src/btmm_ai_scanner/btmm/analyzer.py` |
+
+**1 modified existing path (unchanged):** `src/btmm_ai_scanner/domain/enums.py` (third narrow `DerivedOutputType` extension: `BTMM_OBSERVATION`, `BTMM_LIFECYCLE_TRANSITION`, `CURRENT_BTMM_STATE`; creation order 82 unchanged; annotated in place, not a new inventory row).
+
+**No conditional scope remains** — Option B (§36AC) means `domain/analyzer.py`, `structure/analyzer.py`, `poi/analyzer.py` are never touched under any circumstance; the 22-path figure is final and unconditional, correcting the original draft's conditional 21-or-24 framing.
+
+**10 new test paths (unchanged file list, redistributed counts again for this narrow correction), corrected creation order 158-167:**
+
+| Order | Path | Count |
+|---|---|---|
+| 158 | `tests/unit/test_btmm_configuration.py` | 6 |
+| 159 | `tests/unit/test_btmm_eligibility.py` | 5 |
+| 160 | `tests/unit/test_btmm_interaction.py` | 9 |
+| 161 | `tests/unit/test_btmm_reaction.py` | 11 |
+| 162 | `tests/unit/test_btmm_liquidity.py` | 8 |
+| 163 | `tests/unit/test_btmm_pressure_and_direction.py` | 5 |
+| 164 | `tests/unit/test_btmm_lifecycle_and_gates.py` | 19 |
+| 165 | `tests/unit/test_btmm_analyzer_api.py` | 9 |
+| 166 | `tests/unit/test_btmm_batch_replay_equivalence.py` | 5 |
+| 167 | `tests/unit/test_btmm_exports.py` | 5 |
+
+**Total: 82 new top-level test functions (6+5+9+11+8+5+19+9+5+5), preserved exactly from the prior correction's total** by redistributing counts across the same 10 files rather than adding an 11th file, per this narrow correction's explicit instruction. Combined with the existing 500: **582**, unchanged.
+
+**Dependency direction (unchanged):** `btmm/` depends on `domain`, `measurements`, `contracts`, `config`, `poi` — does **not** depend on `structure`, and (per Option B, §36AC) does **not** depend on any shared serializer module, since none is created.
+
+**Inventory: before 147, new rows 21 (11 source + 10 test), final 168, batch tag `1B-K-BTMM`, creation order 147-167.**
+
+### 36AM. Exact Test Coverage — 82 New Top-Level Test Functions (corrected again — redistributed for the candidate/forming timing correction and the new liquidity-evidence enum)
+
+**`test_btmm_configuration.py` (6, unchanged):** `test_configuration_defaults_match_ambiguity_8_thresholds`, `test_configuration_defaults_match_ambiguity_9_thresholds`, `test_configuration_is_frozen_and_immutable`, `test_configuration_rejects_non_positive_thresholds`, `test_configuration_default_evidence_classification_is_engineering_provisional`, `test_configuration_eligible_poi_types_default_matches_exact_18`.
+
+**`test_btmm_eligibility.py` (5, unchanged):** `test_exact_18_btmm_eligible_poi_types`, `test_equal_highs_and_lows_classified_context_only`, `test_12_period_level_types_classified_not_applicable`, `test_deferred_poi_absent_specifications_never_appear`, `test_eligibility_set_matches_poi_lifecycle_eligible_set_by_cross_reference`.
+
+**`test_btmm_interaction.py` (9, unchanged):** `test_bullish_entry_far_boundary_mapping`, `test_bearish_entry_far_boundary_mapping`, `test_edge_touch_partial_entry_deep_entry_ratio_boundaries`, `test_far_boundary_touch_exact_ratio_one`, `test_controlled_overshoot_within_tolerance`, `test_excessive_overshoot_beyond_tolerance`, `test_near_miss_and_no_contact_distinguished_by_contact_tolerance`, `test_noncanonical_side_interaction_recorded`, `test_wick_and_close_penetration_tracked_independently`.
+
+**`test_btmm_reaction.py` (11, unchanged):** `test_awaiting_reaction_before_reaction_start`, `test_reaction_start_exact_bullish_rule`, `test_reaction_start_exact_bearish_rule`, `test_reaction_gate_remains_in_progress_before_fifth_confirmed_candle`, `test_reaction_gate_resolves_at_fifth_confirmed_candle`, `test_reaction_gate_uses_highest_tier_achieved_in_full_window`, `test_standard_reaction_all_four_conditions`, `test_strong_reaction_all_five_conditions_including_speed`, `test_weak_reaction_on_window_close`, `test_reaction_speed_gate_fast_strong_fast_slow_or_unclear`, `test_reaction_window_never_completing_stays_in_progress_indefinitely`.
+
+**`test_btmm_liquidity.py` (8, corrected — +1, resolving the liquidity-evidence semantics finding):** `test_false_invalidation_confirmed_produces_liquidity_after_poi_rule_based`, `test_liquidity_before_within_and_automatic_rule_based_never_treated_as_reviewed` (merged, combining the original draft's separate before/within-automation and rule-based-reviewed-emission assertions into one test), `test_equal_highs_and_lows_not_treated_as_automatic_evidence`, `test_liquidity_gate_pass_requires_approved_supporting_evidence` (renamed from `test_full_liquidity_gate_reachable_via_reviewed_evidence_present` for exact alignment with the required name), `test_missing_liquidity_evidence_remains_unresolved` (renamed from `test_missing_reviewed_evidence_never_passes_liquidity_gate`), `test_no_liquidity_evidence_cancellation_at_window_close`, `test_reviewed_liquidity_evidence_status_uses_exact_vocabulary` (new — asserts `BtmmLiquidityEvidenceStatus` has exactly 2 members, `PENDING`/`PRESENT`, no invented values), `test_liquidity_evidence_presence_does_not_automatically_pass_gate` (new — asserts `PRESENT` on a reviewed-evidence snapshot does not itself mutate `CurrentBtmmState` until the analyzer's own gate-evaluation step consumes it, keeping the input fact and the computed gate result observably distinct).
+
+**`test_btmm_pressure_and_direction.py` (5, corrected — −1, merged):** `test_pressure_wick_sourced_setup_inherits_context_without_bypassing_gates` (merged from the original draft's two separate pressure tests — one function now asserts both that strength tier is inherited unmodified and that the gate sequence is not bypassed), `test_buy_to_sell_candle_produces_bearish_btmm`, `test_sell_to_buy_candle_produces_bullish_btmm`, `test_no_separate_btmm_pattern_type_enum_exists`, `test_direction_derived_purely_from_source_poi_direction_for_other_types`.
+
+**`test_btmm_lifecycle_and_gates.py` (19, corrected — +2, resolving the candidate/forming timing finding):** `test_candidate_initial_state_is_btmm_candidate`, `test_new_candidate_remains_candidate_in_creation_group` (new), `test_candidate_enters_forming_only_in_later_availability_group` (renamed from `test_candidate_enters_forming_through_explicit_transition`, corrected timing), `test_candidate_to_forming_transition_is_emitted_once` (new — asserts identity-resolver-guaranteed dedup across multiple later groups), `test_candidate_can_cancel_before_entering_forming` (new), `test_interaction_ineligible_cancellation`, `test_forming_becomes_blocked_for_unresolved_mandatory_gate`, `test_blocked_resumes_forming_when_blocker_resolves`, `test_unchanged_blocker_does_not_emit_duplicate_transition`, `test_forbidden_transitions_both_directions` (merged, combining the original draft's separate `CANCELLED→CONFIRMED` and `CONFIRMED→CANCELLED` forbidden-transition assertions into one test), `test_source_poi_invalidation_has_transition_priority`, `test_poi_rejected_inheritance_on_genuine_invalidation`, `test_cancellation_is_terminal_never_reactivated`, `test_new_interaction_creates_new_independent_setup`, `test_context_rejected_cancellation_from_reviewed_evidence`, `test_session_inactive_cancellation_from_reviewed_evidence`, `test_volume_pillar_failed_cancellation_from_reviewed_evidence`, `test_btmm_confirmed_requires_all_automatic_and_reviewed_gates`, `test_directional_continuation_absent_from_public_enum`.
+
+**`test_btmm_analyzer_api.py` (9, corrected — −1, merged):** `test_empty_aggregate_for_empty_input`, `test_rejects_mixed_symbol_across_all_inputs_including_reviewed_evidence`, `test_rejects_duplicate_or_unsorted_timeframe_input`, `test_rejects_unsupported_timeframe`, `test_rejects_measurement_prefix_mismatch`, `test_rejects_missing_source_poi_record`, `test_reviewed_evidence_rejects_unknown_or_duplicate_source_poi` (merged, combining the original draft's two separate reviewed-evidence-rejection assertions into one test), `test_ineligible_poi_type_never_creates_a_setup`, `test_deterministic_across_repeated_calls`.
+
+**`test_btmm_batch_replay_equivalence.py` (5, corrected — −1, merged):** `test_batch_and_replay_produce_identical_observations_and_transitions` (merged, combining the original draft's two separate observation/transition-equivalence assertions into one test), `test_stable_identity_across_growing_prefixes`, `test_current_state_fingerprint_changes_only_with_content`, `test_reviewed_evidence_is_availability_gated_and_never_leaks_backward`, `test_four_way_serializer_equivalence`.
+
+**`test_btmm_exports.py` (5, unchanged, one literal name corrected):** `test_btmm_package_imports_successfully`, `test_exact_29_export_surface_in_order` (renamed from `test_exact_28_export_surface_in_order`, corrected for the new export total), `test_no_entry_stop_target_risk_or_trade_result_field_anywhere`, `test_no_domain_structure_poi_or_measurements_reexport`, `test_no_btmm_pattern_type_enum_exists`.
+
+**Recount: 6+5+9+11+8+5+19+9+5+5 = 82, verified by direct arithmetic.** Every literal test name required by this narrow correction is present and matches exactly, with no naming substitution needed this time: `test_new_candidate_remains_candidate_in_creation_group`, `test_candidate_enters_forming_only_in_later_availability_group`, `test_candidate_to_forming_transition_is_emitted_once`, `test_candidate_can_cancel_before_entering_forming` (all in `test_btmm_lifecycle_and_gates.py`); `test_reviewed_liquidity_evidence_status_uses_exact_vocabulary`, `test_liquidity_evidence_presence_does_not_automatically_pass_gate`, `test_liquidity_gate_pass_requires_approved_supporting_evidence`, `test_missing_liquidity_evidence_remains_unresolved` (all in `test_btmm_liquidity.py`). The net +3 from these two files (lifecycle +2, liquidity +1) is offset by merging 3 pairs of closely related assertions into single test functions elsewhere (pressure-and-direction, analyzer-api, batch-replay-equivalence, each −1) — every merge combines two genuinely related assertions into one still-meaningful test function, not a parametrization, a generated test, or a vacuous assertion. **No test class; no generated test; no helper beginning with `test_`; no `skip`/`xfail`; no vacuous assertion.**
+
+### 36AN. Public Exports (corrected: 29, recounted directly)
+
+**Exactly 29 names, in order — 15 enums, 5 contracts/input value objects, 1 configuration, 6 public errors, 2 API/input:**
+
+```
+ 1. BtmmDirection                          — enum
+ 2. BtmmGateStatus                         — enum
+ 3. BtmmContextAlignmentStatus             — enum
+ 4. BtmmSessionStatus                      — enum
+ 5. BtmmInteractionClass                   — enum
+ 6. BtmmReactionClassification             — enum
+ 7. BtmmLiquidityLocation                  — enum
+ 8. BtmmEvidenceSource                     — enum
+ 9. BtmmLifecycleStatus                    — enum
+10. BtmmFormationStage                     — enum
+11. BtmmLifecycleTransitionType            — enum
+12. BtmmCancellationReason                 — enum
+13. BtmmBlockedReason                      — enum
+14. BtmmVolumePillarStatus                 — enum
+15. BtmmLiquidityEvidenceStatus            — enum (new)
+16. BtmmObservation                        — contract
+17. BtmmLifecycleTransition                — contract
+18. CurrentBtmmState                       — contract
+19. BtmmAnalysis                           — contract
+20. BtmmReviewedEvidence                   — contract/input value object
+21. BtmmConfiguration                      — configuration
+22. BtmmTimeframeInput                     — API input
+23. InvalidBtmmConfigurationError          — error
+24. DuplicateBtmmTimeframeInputError       — error
+25. UnsortedBtmmTimeframeInputError        — error
+26. InputPrefixMismatchError               — error
+27. MissingSourcePoiRecordError            — error
+28. ImpossibleBtmmLifecycleTransitionError — error
+29. analyze_btmm                           — API
+```
+
+**Recounted directly from the numbered list above: 29** — 15 enums (lines 1-15) + 5 contracts/input value objects (lines 16-20) + 1 configuration (line 21) + 6 errors (lines 23-28) + 2 API/input (lines 22, 29) = 29. This is a genuine consequence of the liquidity-evidence semantic analysis in §36H1 — `BtmmLiquidityEvidenceStatus` is a real, distinct enum, not preserved or dropped to hit any preset target — **the export count follows the semantics, not the other way around.** No upstream contract, identity Protocol, serializer helper, internal candidate type, or lifecycle helper function is re-exported.
+
+### 36AO. Complexity and Performance (unchanged)
+
+Unchanged from the original draft.
+
+### 36AP. Explicit Exclusions (corrected: removes the now-resolved reviewed-context/liquidity/volume-pillar exclusion)
+
+Live entry execution; stop-loss placement; take-profit placement; position sizing; trade management; trade outcome; signal confidence; visualization; TradingView rendering; Telegram alerts; news filtering; backtesting statistics; paper trading; broker connectivity; MT5/MT4; AI inference; model training; production approval. **Corrected:** the original draft additionally excluded "the reviewed-context/reviewed-liquidity/volume-pillar-formula input channel" from this milestone — that exclusion is now removed, since this correction implements exactly that channel (§36G2). Still explicitly excluded and deferred to a future, separate, narrowly-scoped task: Accumulation/Distribution (§36E); Approach Speed (§36L); `P0G-B014` general timeframe-strength resolution (§36AB); any sweep-lifecycle detector for Equal Highs/Lows (`P0G-B004`, unchanged); an automatic Volume Pillar formula (Option A, permanently removed from consideration by this correction, §36R); `DIRECTIONAL_CONTINUATION` and `MANUAL_REVIEW_REJECTED` cancellation reasons (§36H4).
+
+### 36AQ. Baseline, Quality Gates, and Stop Conditions (corrected counts)
+
+**Baseline:** `HEAD`/`origin/main` = `545d30b9a6e2d5dae94efc582a3792cebc522049`, unchanged throughout this correction. Full pytest-collected baseline: 578. Existing top-level tests: 500. Existing inventory: 147. **Corrected proposed totals: 22 affected paths (11 new source, 1 modified, 10 new test); 82 new top-level tests (unchanged total, redistributed again for this narrow correction); 582 future combined top-level tests (unchanged); inventory 147 → 168, creation order 147-167 (unchanged by this narrow correction); 29 public exports (corrected from 28, adding `BtmmLiquidityEvidenceStatus`).**
+
+**Future gates (at implementation time, unchanged):** `uv lock --check`; `uv run ruff format --check .`; `uv run ruff check .`; `uv run mypy src tests`; `uv run pytest -q`; `uv run pytest -q tests/test_import_smoke.py tests/test_config_precedence.py`.
+
+**Stop conditions re-checked after this narrow correction, all clear:** the candidate-creation and `ENTERED_FORMING` timing no longer contradict — a newly created candidate provably remains `BTMM_CANDIDATE` through its own entire creation availability group, with the earliest possible `ENTERED_FORMING` transition structurally deferred to a later group (§36I2/§36AA2, resolved); the liquidity-evidence input fact and the final Liquidity Gate result are no longer conflated under one borrowed 3-value enum — a dedicated, minimally-scoped `BtmmLiquidityEvidenceStatus` (2 members, both textually grounded) now represents the field's own genuinely distinct semantics (§36H1, resolved); the export count (29) is a direct consequence of that semantic finding, not a preserved arithmetic target; every other finding from the prior consolidated correction remains resolved and unaffected: the implementability matrix stays 10-of-12; `BTMM_CONFIRMED` remains genuinely reachable; `volume_pillar_status` keeps its own exact 5-value vocabulary; `DIRECTIONAL_CONTINUATION` keeps its fully researched Outcome-B disposition; the Reaction Gate still resolves only at window completion; the fingerprint strategy remains Option B.
+
+### 36AR. Author Decisions Required (corrected, consolidated list)
+
+1. Milestone title and identifier (unchanged: "BTMM Manipulation Lifecycle Foundation" / `1B-K-BTMM`).
+2. No separate `BtmmPatternType` taxonomy (unchanged, §36C).
+3. **Volume Pillar Option B — final, no automatic formula, resolved only via reviewed evidence (§36R).**
+4. **Dedicated `BtmmVolumePillarStatus` (5 members, exact approved vocabulary) — final (§36H).**
+5. **Reviewed-evidence input contract `BtmmReviewedEvidence` (15 fields, §36G2) — final.**
+6. **Corrected `analyze_btmm` signature, with `reviewed_evidence` as a required parameter (§36AE) — final.**
+7. **`BTMM_CONFIRMED` reachable through reviewed evidence (§36D/§36S/§36I5) — final, corrected from "structurally unreachable."**
+8. **Reaction Gate resolution only after five confirmed candles, using the highest tier achieved in the full window (§36N) — final correction.**
+9. **Initial primary state `BTMM_CANDIDATE`, and — corrected in this narrow pass — remains `BTMM_CANDIDATE` throughout its own entire creation availability group (§36I1/§36I2/§36AA2) — final, explicit.**
+10. **`ENTERED_FORMING` is possible only in a later availability group than candidate creation, never the same one — corrected in this narrow pass from the prior "same processing step" trigger, which contradicted the same-group policy (§36I2) — requires explicit author sign-off on this corrected timing.**
+11. **Exact deterministic trigger for `ENTERED_FORMING`: the first confirmed candle, in the source POI's own timeframe, whose `availability_time_utc` is strictly later than `BTMM_CANDIDATE`'s own (§36I2) — disclosed ENGINEERING-PROVISIONAL author gap-fill, requires explicit author sign-off.**
+12. **A candidate genuinely invalidated before its own `ENTERED_FORMING` trigger transitions directly `BTMM_CANDIDATE → BTMM_CANCELLED`/`POI_REJECTED`, skipping `BTMM_FORMING` entirely (§36I2/§36I7, corrected from "not reachable") — final.**
+13. **Explicit `BTMM_FORMING → BTMM_BLOCKED` (generic `BLOCKED`, reason-carrying) transition (§36I4) — final.**
+14. **Explicit `BTMM_BLOCKED → BTMM_FORMING` (`RESUMED_FORMING`) transition, with idempotency guarantee (§36I4) — final.**
+15. **State-transition idempotency guarantee (no repeated `BLOCKED`/`RESUMED_FORMING`/`ENTERED_FORMING` for an unchanged condition, §36I2/§36I4) — final.**
+16. **`DIRECTIONAL_CONTINUATION` Outcome B (not deterministic, deferred, exact missing dependency stated, §36H4) — requires explicit author sign-off on the researched disposition.**
+17. **Reviewed liquidity evidence is semantically separate from the final Liquidity Gate result in shape only where the approved vocabulary requires it — corrected in this narrow pass: a dedicated `BtmmLiquidityEvidenceStatus` (2 members: `PENDING`, `PRESENT`) is used for both the caller-supplied `BtmmReviewedEvidence.liquidity_evidence_status` field and the analyzer-computed `CurrentBtmmState.liquidity_evidence_status` field, replacing the withdrawn `BtmmGateStatus` reuse (§36H1) — requires explicit author sign-off on this corrected semantic model.**
+18. **Exact same-group transition priority (`CANCELLED > CONFIRMED > BLOCKED > RESUMED_FORMING > ENTERED_FORMING`, §36AA2) — final.**
+19. **New candidates cannot advance beyond `BTMM_CANDIDATE` in their creation group — corrected in this narrow pass from "beyond `BTMM_CANDIDATE`/`BTMM_FORMING`," a structural (not merely policy-level) guarantee (§36AA2 step 9) — final.**
+20. **Fingerprint Option B — final, no shared serializer module, no completed analyzer modified (§36AC).**
+21. **Four-way serializer equivalence test requirement (§36AC) — final.**
+22. **Corrected 22-path scope (11 new source, 1 modified, 10 new test) — final, unconditional, unaffected by this narrow pass (§36AL).**
+23. **Corrected 29-export surface (up from 28 in this narrow pass, adding `BtmmLiquidityEvidenceStatus`), recounted directly (§36AN) — final.**
+24. **Exact revised 82-test plan, redistributed again across the same 10 files with literal names (§36AM) — final.**
+25. **Inventory 147 → 168, creation order 147-167 — unaffected by this narrow pass, final (§36AL).**
+26. `BtmmBlockedReason`'s omission of `MISSING_ATR`/`MISSING_PRICE_METADATA`, explicitly justified against implemented upstream behavior (§36H3) — final, unaffected by this narrow pass.
+27. Every item retained unchanged from the prior correction's decision list (POI eligibility matrix, Accuracy/Reaction formula reuse, Pressure policy, Buy-to-Sell/Sell-to-Buy mapping, Structure exclusion, multi-timeframe policy, deterministic ordering, replay-equivalence procedure, evidence-classification policy, complexity policy, exclusion list) remains required as originally listed.
+
+### 36AS. Status and Next Action (corrected twice — consolidated pass, then this narrow consistency pass — historical, superseded by §36AT)
+
+**Status (historical — superseded by author approval, §36AT): `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** **Current status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** The consolidated correction pass resolved B1 (Reaction Gate timing), B2 (`BtmmVolumePillarStatus` vocabulary), B3 (reviewed-evidence input channel and `BTMM_CONFIRMED` reachability), B4 (`DIRECTIONAL_CONTINUATION` researched disposition), B5 (`BTMM_CANDIDATE → BTMM_FORMING` and `BTMM_FORMING ⇄ BTMM_BLOCKED` modeling), N1 (fingerprint Option B), N2 (`BtmmBlockedReason` disclosure), N3 (literal test names), N4 (tolerance-formula coincidence disclosed). The subsequent narrow consistency pass found and resolved two further issues introduced by that same correction: (1) an internal contradiction between `ENTERED_FORMING`'s stated same-step trigger and the same-group policy's requirement that a new candidate cannot advance beyond `BTMM_CANDIDATE` in its own creation group — resolved by moving `ENTERED_FORMING` to a structurally later availability group (§36I2/§36AA2); (2) a semantic conflation of the caller-supplied reviewed-liquidity-evidence input fact with the generic 3-value gate-status enum, previously justified by an explicitly admitted arithmetic-convenience motive — resolved by introducing a dedicated, minimally-scoped `BtmmLiquidityEvidenceStatus` enum grounded only in textually-attested vocabulary (§36H1), which genuinely changes the export count to 29. **This twice-corrected architecture has now been explicitly author-approved in full — see §36AT.** Nothing in this section is implemented, staged, committed, or pushed by this section.
+
+### 36AT. Author Approval Record
+
+**Author decision: `APPROVED`.** The author explicitly approved the corrected `1B-K-BTMM` BTMM Manipulation Lifecycle Foundation architecture exactly as documented (§36A–§36AS, including both the consolidated correction and the subsequent narrow consistency correction), with no modification to any corrected element. **Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** The corrected architecture received audit verdict **A — CORRECTED — READY FOR AUTHOR REVIEW** from the prior narrow consistency correction, and is now explicitly author-approved on that basis.
+
+**Exact approved implementability matrix:** 12 total pattern components — **10 IMPLEMENTABLE** (POI Gate; Accuracy Gate; Reaction Gate; Reaction-Speed Gate; Formation-Timeframe Gate; Liquidity-after-POI rule-based evidence; POI-invalidation inheritance; Context Gate through reviewed evidence; Volume Pillar Gate through reviewed evidence; full Liquidity Gate through reviewed evidence), **2 DEFERRED** (Accumulation/Distribution; Approach Speed), **0 BLOCKED**. This approval authorizes implementation of rows 1-10 only — no public automatic accumulation, distribution, or approach-speed behavior is authorized.
+
+**Exact approved scope:** 22 total affected paths (21 new, 1 modified); 11 new source files (new top-level package `btmm/`, including `reviewed_evidence.py`); 10 new test files; 1 modified existing source file (`src/btmm_ai_scanner/domain/enums.py`, +3 `DerivedOutputType` members: `BTMM_OBSERVATION`, `BTMM_LIFECYCLE_TRANSITION`, `CURRENT_BTMM_STATE`); new-path split 11 source/10 test; affected-path split 12 source/10 test; 82 new top-level test functions (582 combined with the existing 500); 29 public `btmm/__init__.py` exports; inventory 147 → 168 under batch tag `1B-K-BTMM`, creation order 147-167; no dependency change; no lockfile change; no existing `market_data`/`domain`/`structure`/`poi` analyzer file modified (fingerprint Option B, §36AC — no completed analyzer reopened).
+
+**The author approved, without modification, every decision group recorded in §36AR (37 numbered items), including in particular:** the corrected deterministic input boundary with `StructureAnalysis` entirely absent (§36B/§36F); the generic `BtmmDirection`-plus-`source_poi_type` taxonomy with no separate `BtmmPatternType` (§36C); the exact 18 BTMM-eligible/2 CONTEXT-ONLY/12 NOT_APPLICABLE POI-eligibility split, identical to `1B-J-POI`'s own lifecycle-eligibility partition (§36J); the corrected public API with `reviewed_evidence` as a required parameter (§36AE); the `BtmmReviewedEvidence` input contract, 15 fields, no engine-generated `DerivedOutput` identity (§36G2); the dedicated `BtmmVolumePillarStatus` (5 members) and `BtmmLiquidityEvidenceStatus` (2 members) enums, each grounded only in textually-attested vocabulary, replacing the withdrawn generic-enum reuse (§36H/§36H1); Volume Pillar Option B, with automatic-formula Option A permanently removed from consideration (§36R); genuine `BTMM_CONFIRMED` reachability through caller-supplied reviewed evidence, with a reviewed-evidence record never directly setting `BTMM_CONFIRMED` (§36D/§36S/§36I5); the corrected Reaction Gate timing, resolving only at the fifth confirmed reaction candle using the highest tier achieved across the full window, with no repainting (§36N); the explicit initial `primary_state = BTMM_CANDIDATE`/`formation_stage = None` (§36I1); the corrected `ENTERED_FORMING` timing, structurally confined to a later availability group than candidate creation, with duplicate-suppression via stable semantic identity and direct `BTMM_CANDIDATE → BTMM_CANCELLED` cancellation before entering `FORMING` (§36I2); the exact closed transition table covering every state pair (§36I7); the `BTMM_FORMING ⇄ BTMM_BLOCKED` loop with explicit idempotency (§36I4); the corrected 8-member `BtmmCancellationReason`, with `DIRECTIONAL_CONTINUATION` and `MANUAL_REVIEW_REJECTED` researched and explicitly deferred as Outcome B (§36H4); the exact 10-step same-availability-group processing order with explicit transition priority and the structural (not merely policy) guarantee against same-group create-and-form/create-and-confirm (§36AA2); the exact reused Ambiguity 8/9 interaction-and-overshoot and reaction formulas, kept strictly separate from POI-lifecycle breach/reclaim computation (§36K/§36N); the `GENUINE_INVALIDATION_CONFIRMED → BTMM_CANCELLED/POI_REJECTED` inheritance rule (§36Z); pressure as inherited contextual evidence only (§36O); fingerprint Option B, a fourth local private serializer duplicate with mandatory four-way equivalence testing, no completed analyzer reopened (§36AC); the uniform `ENGINEERING_PROVISIONAL` evidence-classification policy (§36AD); the exact corrected 15-field `BtmmObservation`, 16-field `BtmmLifecycleTransition`, 33-field `CurrentBtmmState`, and 15-field `BtmmReviewedEvidence` contracts (§36V-§36X/§36G2); the exact corrected 29-name export list (§36AN); the exact corrected 82-test plan and per-file distribution (§36AM); the exact 22-path file scope with creation order 147-167 (§36AL); and the complete exclusion list (§36AP).
+
+**This approval authorizes exactly one complete implementation cycle** covering all 22 approved paths at once (no per-file decision groups), implementing rows 1-10 of the approved implementability matrix only, followed by one final architectural audit and, only if a genuine defect is found, at most one correction cycle. **This approval does not authorize production use. Implementation has not started — this remains a documentation-only approval.**

@@ -1274,3 +1274,66 @@ This closure does not authorize production use, live trading, POI detection, BTM
 **The 34 new rows and the one wording annotation to row 82 were the only inventory-affecting changes at approval/lock time;** the total changed-path count grew from 113 to 147, and no existing row was added, removed, renamed, or renumbered beyond the 34 new additions.
 
 **Author-approved, exactly as corrected, and now implemented, verified, architecturally audited, committed, pushed, and closed exactly as approved (register §35AQ).** Implementation commit `ebc55e0bdbbef7b7f528d874107daa2d75a5628a`, push `02750b2..ebc55e0 main -> main`. Full suite **578 passed** (458 existing + 120 new); public exports **23**; `PoiType` members **32**; lifecycle-eligible types **18**; `NOT_APPLICABLE` types **14**; one genuine pre-commit correction (a lifecycle-status-reset defect in `poi/lifecycle.py`, corrected inside the approved 35-path scope, no architecture/contract/test-count/export-count/dependency change). No production approval is implied or requested — the milestone remains `NOT PRODUCTION-APPROVED`. **Next controlled action:** define the **BTMM Manipulation Lifecycle Foundation** (proposed identifier `1B-K-BTMM`), covering POI interaction as a required boundary, manipulation lifecycle states, accumulation/distribution context, and the remaining items recorded in register §35AQ — one compact architecture definition, one focused audit, at most one consolidated correction, explicit author approval, and one complete implementation cycle, none of which is started by this record.
+
+## 1B-K-BTMM — BTMM Manipulation Lifecycle Foundation — Exact File Scope (Corrected, Architect-Recommended)
+
+**Status: `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`.** Full architecture: register §36 (corrected). This corrected section supersedes the original 1B-K-BTMM file-scope draft in full, resolving every finding from the focused architectural audit in one consolidated pass.
+
+**Corrected: 22 total affected paths.** **NEW-PATH SPLIT:** 11 new source / 10 new test (21 new paths). **AFFECTED-PATH SPLIT:** 12 source (11 new + 1 modified `domain/enums.py`) / 10 test (22 affected paths total). This is now unconditional — the original draft's conditional 21-or-24-path framing (dependent on the then-unresolved fingerprint-strategy decision) is resolved: fingerprint Option B is final (register §36AC), so no additional existing file is ever touched.
+
+**11 new source paths** (new top-level package `btmm/`), corrected creation order 147-157:
+
+| Order | Path |
+|---|---|
+| 147 | `src/btmm_ai_scanner/btmm/__init__.py` |
+| 148 | `src/btmm_ai_scanner/btmm/enums.py` |
+| 149 | `src/btmm_ai_scanner/btmm/configuration.py` |
+| 150 | `src/btmm_ai_scanner/btmm/observation.py` |
+| 151 | `src/btmm_ai_scanner/btmm/reviewed_evidence.py` |
+| 152 | `src/btmm_ai_scanner/btmm/lifecycle.py` |
+| 153 | `src/btmm_ai_scanner/btmm/current_state.py` |
+| 154 | `src/btmm_ai_scanner/btmm/interaction.py` |
+| 155 | `src/btmm_ai_scanner/btmm/reaction.py` |
+| 156 | `src/btmm_ai_scanner/btmm/liquidity.py` |
+| 157 | `src/btmm_ai_scanner/btmm/analyzer.py` |
+
+**1 modified existing path (unchanged):** `src/btmm_ai_scanner/domain/enums.py` (third narrow `DerivedOutputType` extension: `BTMM_OBSERVATION`, `BTMM_LIFECYCLE_TRANSITION`, `CURRENT_BTMM_STATE`; creation order 82 unchanged).
+
+**10 new test paths (same file list as the original draft, corrected per-file counts), creation order 158-167:**
+
+| Order | Path | Count |
+|---|---|---|
+| 158 | `tests/unit/test_btmm_configuration.py` | 6 |
+| 159 | `tests/unit/test_btmm_eligibility.py` | 5 |
+| 160 | `tests/unit/test_btmm_interaction.py` | 9 |
+| 161 | `tests/unit/test_btmm_reaction.py` | 11 |
+| 162 | `tests/unit/test_btmm_liquidity.py` | 7 |
+| 163 | `tests/unit/test_btmm_pressure_and_direction.py` | 6 |
+| 164 | `tests/unit/test_btmm_lifecycle_and_gates.py` | 17 |
+| 165 | `tests/unit/test_btmm_analyzer_api.py` | 10 |
+| 166 | `tests/unit/test_btmm_batch_replay_equivalence.py` | 6 |
+| 167 | `tests/unit/test_btmm_exports.py` | 5 |
+
+**82 new top-level test functions** (6+5+9+11+8+5+19+9+5+5, redistributed again in a subsequent narrow consistency correction), unchanged total, redistributed across the same 10 files rather than adding an 11th. Combined with the existing 500: **582**, unchanged. **29 new public exports for `btmm/__init__.py`** (corrected from 28 in the same narrow pass — adds `BtmmLiquidityEvidenceStatus`; recounted directly as 15 enums + 5 contracts/input value objects + 1 configuration + 6 errors + 2 API/input = 29).
+
+**Narrow consistency correction (register §36I2/§36AA2/§36H1):** two further issues were found and resolved after the consolidated correction above. (1) `ENTERED_FORMING` (`BTMM_CANDIDATE → BTMM_FORMING`) was originally described as firing in the same processing step as candidate creation, contradicting this milestone's own same-availability-group policy — corrected so a newly created candidate always remains `BTMM_CANDIDATE` through its entire creation group, with `ENTERED_FORMING` structurally deferred to the first later group in which a new confirmed candle becomes available. (2) `BtmmReviewedEvidence.liquidity_evidence_status`/`CurrentBtmmState.liquidity_evidence_status` were typed `BtmmGateStatus`, reusing the generic pass/fail vocabulary for a field the approved standard never describes with pass/fail semantics — corrected to a new, minimally-scoped `BtmmLiquidityEvidenceStatus` enum (2 members: `PENDING`/`PRESENT`, both textually grounded), which is what changes the export total from 28 to 29. Full detail: register §36G2-§36AN (corrected).
+
+**Dependency direction (unchanged):** `btmm/` depends on `domain`, `measurements`, `contracts`, `config`, `poi` — does **not** depend on `structure`, and (per fingerprint Option B, final) does **not** depend on any shared serializer module, since none is created.
+
+**Fingerprint strategy (register §36AC): Option B, final** — a fourth disclosed, local, tested-equivalent duplicate of the canonical `_canonicalize`/`_compute_content_fingerprint` implementation, matching `1B-J-POI`'s own precedent exactly. No completed analyzer (`domain/analyzer.py`, `structure/analyzer.py`, `poi/analyzer.py`) is modified. Backed by a required **four-way** cross-package equivalence test (`test_four_way_serializer_equivalence`), extending the three-way test `1B-J-POI` already established. Maintenance risk (four independent copies of the same serializer) is explicitly disclosed and accepted in exchange for zero blast radius on three closed milestones.
+
+**`BTMM_CONFIRMED` is now genuinely reachable (register §36D/§36S/§36I5, corrected from the original draft's "structurally unreachable" finding):** via one new, explicit, caller-supplied `BtmmReviewedEvidence` input contract (register §36G2) that accepts already-reviewed Context/Liquidity/Volume-Pillar facts exactly as the approved `BTMM_STATE_MACHINE.md` "Phase 0G Input-Source Policy" permits — no automatic context detector, session calendar, or Volume Pillar formula is invented. `analyze_btmm()`'s signature is corrected to `analyze_btmm(timeframe_inputs, poi_analysis, reviewed_evidence, configuration, identity_provider) -> BtmmAnalysis`, with `reviewed_evidence` required (an empty tuple is always valid).
+
+**Reaction Gate timing corrected (register §36N):** the gate no longer resolves before the full five-candle reaction window closes, even if thresholds are met early; the highest reaction tier achieved anywhere in the complete window is selected only at the fifth confirmed candle, preventing a premature-confirmation/repainting risk found during the audit.
+
+**Lifecycle transitions corrected (register §36I1-§36I7):** initial `primary_state = BTMM_CANDIDATE` is now explicit; an `ENTERED_FORMING` transition (disclosed ENGINEERING-PROVISIONAL author gap-fill) models `BTMM_CANDIDATE → BTMM_FORMING`; a single generic `BLOCKED` transition (reason carried inline) and a `RESUMED_FORMING` transition model the `BTMM_FORMING ⇄ BTMM_BLOCKED` loop with explicit idempotency (no repeated transition for an unchanged condition); a `CONFIRMED` transition models reaching `BTMM_CONFIRMED`. `BtmmLifecycleTransitionType` grows from 9 to 15 members; `BtmmCancellationReason` grows from 4 to 8 members (adding `CONTEXT_REJECTED`, `SESSION_INACTIVE`, `VOLUME_PILLAR_FAILED`, `NO_LIQUIDITY_EVIDENCE`, all now reachable via reviewed evidence).
+
+**`DIRECTIONAL_CONTINUATION` researched and resolved as Outcome B — not deterministic, deferred (register §36H4):** no BTMM-level rule for this cancellation reason exists anywhere in the approved knowledge base beyond its bare name; the only defined "directional continuation" concept (`REJECTED_DIRECTIONAL_CONTINUATION`, Ambiguity 13) operates entirely within POI-candidate formation, before any `PoiObservation` or `BTMM_CANDIDATE` exists, and cannot be the source of a BTMM-level cancellation. It is not added to the public enum; a static test enforces its absence.
+
+**`BtmmVolumePillarStatus` (register §36H, new, 5 members: `PENDING`/`SUPPORTS`/`FAILS`/`MISSING_DATA`/`UNRESOLVED`)** replaces the incorrect reuse of the generic `BtmmGateStatus` for `CurrentBtmmState.volume_pillar_status`, matching `BTMM_STATE_MACHINE.md`'s own exact vocabulary. Volume Pillar Option A (proxy-field reuse) is permanently removed from consideration; **Option B is final** — the gate resolves only through `BtmmReviewedEvidence.volume_pillar_status`.
+
+**Corrected `CurrentBtmmState` (33 fields, up from 32) and `BtmmLifecycleTransition` (16 fields, up from 14):** adding `reviewed_evidence_availability_time_utc` and retyping `volume_pillar_status` on the former; adding `blocked_reason` and `triggering_reviewed_evidence_availability_time_utc` (with `triggering_candle_record_id` now nullable) on the latter. `BtmmObservation` remains unchanged at 15 fields. Full detail: register §36V-§36X.
+
+**The 21 new rows and the one wording annotation to row 82 are the only inventory-affecting changes proposed;** the total changed-path count would grow from 147 to 168 upon approval and implementation — no existing row would be added, removed, renamed, or renumbered beyond the 21 new additions.
+
+**Author-approved, exactly as corrected — no modification was made to any corrected element (register §36AT).** Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`. This approval authorizes implementation of rows 1-10 of the 12-row implementability matrix only (Accumulation/Distribution and Approach Speed remain deferred). **Not yet implemented, verified, audited, committed, or pushed as source code.** Full architecture and the complete corrected implementability matrix: register §36.
