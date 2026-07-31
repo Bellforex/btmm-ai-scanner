@@ -1511,3 +1511,21 @@ This closure does not authorize production use, live trading, POI detection, BTM
 **Inventory effect: none.** This amendment adds no path and therefore no row to the master Section 9 table. The total changed-path count remains **196**, creation order **168–195**, unchanged. Once implemented, the affected paths are expected to be a subset already inside the existing 28-path `1B-L-SCANNER` scope (most likely `scanner/configuration.py`, `scanner/replay.py`, `scanner/poi_validation.py`, and their already-existing tests) — **no twenty-ninth path is authorized.**
 
 **Not yet implemented.** This record is documentation-and-approval-only; implementation has not begun.
+
+## 45. `1B-L-SCANNER` and `1B-L-SCANNER-A1` — Formal Closure
+
+**Final status, `1B-L-SCANNER`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`. **Final status, `1B-L-SCANNER-A1`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §40.
+
+**Commit history:** architecture approval `02413cb125f7aa92fd25ebc71f447e3f5fa927d3`; initial implementation `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e` (28 paths: 14 source, 14 test, creation order 168–195); amendment approval `337f8bf9b8db9ef932a1263c2728486817ac7b8a`; validation correction `7314415152390d8e1b9bdc5b25cc19fb24f70b4d` (modified exactly 11 of the same 28 already-approved paths, no twenty-ninth path, no inventory row added).
+
+**Inventory: unchanged and final.** 196 total rows, creation order 0–195, no gaps, no duplicates. `1B-L-SCANNER` occupies rows 168–195 (14 source / 14 test). No inventory change at any point in the amendment or correction cycle.
+
+**Final public surface:** 2 enums, 17 contracts/inputs, 4 errors, 3 APIs, 26 exports — all unchanged in name, order, and count since initial implementation. `ScannerReplayResult` grew from 10 to 11 fields via the approved `1B-L-SCANNER-A1` amendment (`minimum_price_tick: Decimal`, positioned after `direct_batch_verified`, before `availability_time_utc`); no other contract's field count changed.
+
+**Final test and quality results:** AST top-level 582 pre-scanner + 128 scanner = 710 combined; pytest-collected 660 pre-scanner + 128 scanner = 788 combined; `uv lock --check`/`ruff format`/`ruff check`/`mypy src tests` all pass; full suite 788 passed; baseline subset 34 passed.
+
+**Final implementation audit verdict:** `B — PASS WITH DISCLOSED NON-BLOCKING FINDINGS — CORRECTION COMPLETE`, all 22 audit items passed, six disclosed `ENGINEERING-PROVISIONAL` non-blocking limitations retained for later empirical review (full list: register §40I).
+
+**Preserved exclusions (verified absent from the implemented package):** entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, paper/live orders, broker execution, MT4/MT5, trade outcome, profitability/entry backtesting, chart rendering, Telegram delivery, CSV file writing, live provider connection, AI inference, model training, production approval.
+
+**This closure record is documentation-only.** No scanner source file, test file, dependency, lockfile, Protocol, or upstream package is affected. The milestone and its amendment remain `NOT PRODUCTION-APPROVED`.

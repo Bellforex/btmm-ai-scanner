@@ -762,3 +762,19 @@ This milestone completes the deterministic scanner — a pure orchestrator, not 
 **Approved decision:** add exactly one field, `minimum_price_tick: Decimal`, to `ScannerReplayResult` (10 → 11 fields), populated by `run_scanner_replay` from its own already-received, validated `ScannerConfiguration`. A new invariant requires `measurement_configuration.minimum_price_tick == poi_configuration.minimum_price_tick == btmm_configuration.minimum_price_tick` (raising the existing `InvalidScannerConfigurationError` on mismatch); `structure_configuration` is excluded, since it does not own this field. `evaluate_scanner`'s own signature, `ScannerAnalysis`, `ReviewedScannerCase`, and `ExpectedPoiLabel` are all unchanged.
 
 **Totals unaffected:** 17 contracts, 2 enums, 4 errors, 3 APIs, 26 exports, 28 scanner paths, 128 tests, inventory 196 — all remain exactly as already locked. No new path is authorized by this amendment. **Not yet implemented** — this record is documentation-and-approval-only; implementation has not begun.
+
+## 30. `1B-L-SCANNER` and `1B-L-SCANNER-A1` — Formal Closure
+
+**Final status, `1B-L-SCANNER`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`. **Final status, `1B-L-SCANNER-A1`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §40.
+
+**Commit history:** architecture approval `02413cb125f7aa92fd25ebc71f447e3f5fa927d3`; initial implementation `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e` (28 paths, 14 source / 14 test); amendment approval `337f8bf9b8db9ef932a1263c2728486817ac7b8a`; validation correction `7314415152390d8e1b9bdc5b25cc19fb24f70b4d` (11 of the same 28 approved paths modified, no new path, no documentation touched by that commit).
+
+**Final public surface:** 2 enums, 17 contracts/inputs, 4 errors, 3 APIs, 26 exports — unchanged since initial implementation. `ScannerReplayResult`: 10 → 11 fields via the approved amendment (`minimum_price_tick: Decimal`).
+
+**Final test/quality results:** AST 582 + 128 = 710; pytest-collected 660 + 128 = 788; `uv lock --check`, Ruff format, Ruff lint, and mypy all pass; full suite 788 passed; baseline subset 34 passed. Inventory remains 196, creation order 168–195 for this milestone, unchanged.
+
+**Final audit verdict:** `B — PASS WITH DISCLOSED NON-BLOCKING FINDINGS — CORRECTION COMPLETE`; all 22 audit items passed; six disclosed `ENGINEERING-PROVISIONAL` non-blocking limitations retained for later empirical review (full list: register §40I).
+
+**Preserved exclusions:** entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, paper/live orders, broker execution, MT4/MT5, trade outcome, profitability/entry backtesting, chart rendering, Telegram delivery, CSV file writing, live provider connection, AI inference, model training, production approval.
+
+**Documentation-only record.** No source, test, dependency, lockfile, Protocol, or upstream package is affected. Milestone and amendment remain `NOT PRODUCTION-APPROVED`.

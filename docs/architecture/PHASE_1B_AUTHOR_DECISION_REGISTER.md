@@ -6267,3 +6267,115 @@ This amendment, once approved and implemented, is expected to affect only paths 
 **Approved status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** This approval authorizes the exact, narrow implementation recommended in §39B–§39E — one field addition (`ScannerReplayResult.minimum_price_tick`, 10 → 11 fields), one new configuration invariant, and the tick-normalized boundary-error formula applied to the already-locked mean-of-maxima aggregation — and nothing beyond it. No new path, contract, export, API, enum, or error is authorized. This record does not modify, supersede, or remove the original `1B-L-SCANNER` author approval (§38Z) or its implementation history (commit `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e`) — both remain intact and unchanged. The other post-implementation correction-cycle findings (§39G) remain outstanding and are not authorized for implementation by this approval.
 
 **Implementation has not begun.** This remains a documentation-and-approval-only record.
+
+## 40. `1B-L-SCANNER` and `1B-L-SCANNER-A1` — Formal Closure
+
+**Final status, `1B-L-SCANNER`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.
+
+**Final status, `1B-L-SCANNER-A1`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `CLOSED`, `NOT PRODUCTION-APPROVED`.
+
+This closure record makes no claim of production approval, profitability validation, empirical strategy performance, out-of-sample trading validation, live-market readiness, broker readiness, or entry/trade-plan approval. None of those is asserted anywhere in this section.
+
+### 40A. Commit history (complete)
+
+| Commit | Message |
+|---|---|
+| `02413cb125f7aa92fd25ebc71f447e3f5fa927d3` | Approve 1B-L-SCANNER architecture |
+| `c94cd7b0e14c8a171c8918ccfac3f826df1d0b1e` | Implement 1B-L-SCANNER foundation |
+| `337f8bf9b8db9ef932a1263c2728486817ac7b8a` | Approve 1B-L-SCANNER-A1 amendment |
+| `7314415152390d8e1b9bdc5b25cc19fb24f70b4d` | Correct 1B-L-SCANNER validation semantics |
+
+### 40B. Final implementation scope
+
+- **Initial implementation (`c94cd7b`):** 28 total scanner paths — 14 source (`src/btmm_ai_scanner/scanner/*.py`), 14 tests (`tests/unit/test_scanner_*.py`). No twenty-ninth path. No upstream package modified.
+- **Correction commit (`7314415`):** modified exactly 11 of those 28 already-approved paths (7 source: `configuration.py`, `evaluation.py`, `health.py`, `lifecycle_validation.py`, `matching.py`, `poi_validation.py`, `replay.py`; 4 test: `test_scanner_configuration.py`, `test_scanner_label_matching.py`, `test_scanner_poi_validation.py`, `test_scanner_replay_grouping.py`). No new path. No documentation changed by that commit. No dependency, lockfile, Protocol, or upstream package changed.
+- **Inventory:** 196 total rows, creation order 0–195, no gaps, no duplicates. `1B-L-SCANNER` occupies rows 168–195 (14 source + 14 test), locked in `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` Section 9.
+
+### 40C. Final public surface
+
+- **Enums:** 2 (`SnapshotRetentionPolicy`, `LabelMatchStatus`).
+- **Contracts/inputs:** 17.
+- **`ScannerReplayResult`:** 11 fields (was 10 at initial implementation) — `symbol`, `snapshots`, `final_snapshot`, `detection_mismatches`, `direct_batch_verified`, **`minimum_price_tick: Decimal`** (added by the A1 amendment, positioned immediately after `direct_batch_verified` and before `availability_time_utc`), `availability_time_utc`, `evidence_classification`, `rule_version`, `contract_version`, `schema_version`.
+- **Errors:** 4 (`MissingRequiredTimeframeError`, `InvalidScannerConfigurationError`, `InvalidScannerCandleInputError`, `InvalidReviewedLabelError`).
+- **APIs:** 3 (`scan_market`, `run_scanner_replay`, `evaluate_scanner`).
+- **Exports:** exactly 26, unchanged in name, order, and count throughout the amendment and correction cycle.
+- No additional `DerivedOutputType`, no scanner-derived identity type, no new Protocol, no new dependency was introduced at any point across implementation, amendment, or correction.
+
+### 40D. Final test and quality results
+
+**AST top-level test functions:** pre-scanner 582, scanner 128, combined **710**. (582 is the accurate current pre-scanner baseline, not stale — it is a different measurement from the pytest-collected count below, which differs due to normal AST-vs-collection accounting, not drift.)
+
+**Pytest-collected tests:** pre-scanner 660, scanner 128, combined **788**.
+
+**Final quality gate results (re-verified at closure):** `uv lock --check` — PASS; `ruff format --check .` — PASS (172 files); `ruff check .` — PASS; `mypy src tests` — PASS across 172 files; `pytest -q` — 788 passed; original baseline subset (`tests/test_import_smoke.py`, `tests/test_config_precedence.py`) — 34 passed.
+
+### 40E. Final timeframe routing (unchanged since architecture, re-confirmed at closure)
+
+Every supplied, accepted timeframe enters market measurements, structure analysis, POI analysis, and `ScannerAnalysis`. Required: `M1`, `M5`, `M15`. Optional: `H1`, `H3`, `H4`, `D1`, `W1`. BTMM analysis receives only its independently configured eligible subset (default: `M1` supporting-only, `M5`/`M15` formation). **Scanner timeframe acceptance does not equal BTMM timeframe eligibility.**
+
+### 40F. Final scanner behavior (as implemented and corrected)
+
+1. Deterministic input validation (symbol, timeframe, candle-shape, and canonical tick-equality checks).
+2. Market measurements per supplied timeframe.
+3. Structure analysis per supplied timeframe.
+4. Multi-timeframe POI analysis across every accepted timeframe.
+5. BTMM analysis restricted to the configured eligible timeframe subset.
+6. Availability-gated reviewed BTMM evidence.
+7. `ScannerSetupSummary` aggregation, one flat deterministically-ordered tuple.
+8. `ScannerAnalysis` aggregate output.
+9. Deterministic global historical replay across all supplied timeframes.
+10. Atomic global availability groups (no partial-group exposure).
+11. `ALL` and `CHANGED_ONLY` snapshot retention, `CHANGED_ONLY` now comparing complete deterministic snapshot content.
+12. Direct-batch-versus-replay comparison.
+13. `DetectionMismatch` reporting, now at record level for identified facts.
+14. Reviewed POI and BTMM labels (`ReviewedScannerCase`, `ExpectedPoiLabel`, `ExpectedBtmmLabel`).
+15. Deterministic greedy evaluation matching.
+16. `PoiValidationReport` generation, including tick-normalized boundary error.
+17. `BtmmValidationReport` generation, including state-specific timing comparisons.
+18. `LifecycleValidationReport` generation, distinguishing reviewed-fact comparison from internal sequence consistency.
+19. `ScannerHealthReport` generation with honestly-scoped counters.
+20. Deterministic JSON-ready contracts throughout (`ContractModel.model_dump(mode="json")`, no new serializer file).
+
+### 40G. Tick-size provenance amendment result (`1B-L-SCANNER-A1`, implemented)
+
+Canonical invariant: `measurement_configuration.minimum_price_tick == poi_configuration.minimum_price_tick == btmm_configuration.minimum_price_tick` (`structure_configuration` excluded, owns no such field); mismatch raises `InvalidScannerConfigurationError`. `ScannerReplayResult.minimum_price_tick: Decimal` is populated by `run_scanner_replay` from the validated `ScannerConfiguration`, including for a valid-empty replay. POI boundary error: `bottom_error_ticks = abs(expected_zone_bottom - detected_zone_bottom) / minimum_price_tick`; `top_error_ticks = abs(expected_zone_top - detected_zone_top) / minimum_price_tick`; per-pair `max(bottom_error_ticks, top_error_ticks)`; report aggregation is the arithmetic mean across matched pairs, `None` when there are no matches.
+
+### 40H. Validation corrections applied by commit `7314415` (genuine defects, all inside approved scope)
+
+1. Missing tick-size provenance (resolved by the A1 amendment itself).
+2. Raw-price boundary error presented as ticks — corrected to true tick normalization.
+3. Coarse whole-tuple `DetectionMismatch` behavior — corrected to record-level granularity for identified facts.
+4. `setup_summaries`-only `CHANGED_ONLY` comparison — corrected to complete deterministic snapshot comparison.
+5. Earliest-of-several BTMM timestamp selection — corrected to the single primary expected-candidate field.
+6. Self-consistency-only lifecycle validation — corrected to genuine reviewed-expected-versus-detected comparison, kept distinct from internal sequence-consistency checks.
+7. Incomplete `LifecycleMismatch` state population — corrected to populate `resulting_state`/`actual_prior_state` from real transition data.
+8. Lifecycle agreement conflated with final-state agreement — corrected to two honestly distinct POI metrics.
+9. Unclear health-counter semantics — corrected via precise internal documentation of the honest "zero observed at this layer" meaning.
+10. AST-versus-pytest terminology confusion — corrected; both counts (710 AST, 788 pytest-collected) are accurate, non-contradictory measurements of different things.
+
+### 40I. Final implementation audit verdict
+
+**B — PASS WITH DISCLOSED NON-BLOCKING FINDINGS — CORRECTION COMPLETE.** All 22 final audit items passed (canonical tick equality validation; `ScannerReplayResult.minimum_price_tick`; valid-empty replay tick provenance; tick-normalized POI boundary error; `DetectionMismatch` IDs/fingerprints; unidentified-aggregate summaries; complete `CHANGED_ONLY` comparison; state-specific BTMM timestamps; reviewed lifecycle comparison; internal lifecycle consistency separation; `LifecycleMismatch` field population; lifecycle/final-state metric separation; health-metric honesty; empty sentinel; AST/pytest terminology; no-look-ahead; replay equivalence; exact public surface; exact test count; exact scope; no deferred feature; no production approval).
+
+**Six disclosed non-blocking `ENGINEERING-PROVISIONAL` limitations, retained for later empirical review, not silently omitted:**
+
+1. BTMM lifecycle enum-vocabulary reconciliation between `BtmmLifecycleStatus` and `BtmmLifecycleTransitionType`.
+2. First-forming and last-terminal transition selection when multiple eligible transitions exist for one setup.
+3. Synthetic internal-only UUIDv7 keys for genuinely missing reviewed lifecycle events (never exported, never a new identity type).
+4. POI's single available reviewed lifecycle instant uses `latest_acceptable_availability_time_utc` as its comparison proxy.
+5. `expected_prior_state` remains `None` wherever no reviewed-label contract provides an expected prior state.
+6. `DetectionMismatch` record-level comparison was extended beyond the explicitly-named POI/BTMM concepts to the nested measurement and structure identified facts (confirmed swings, displacement observations, equal-level clusters, support/resistance zones, trendlines, swing relationships, structure transitions, current structure states).
+
+### 40J. Historical-input limitation (unchanged, disclosed since architecture)
+
+`run_scanner_replay` consumes already-constructed `ScannerTimeframeInput` values containing normalized candles; the existing normalization pipeline is reusable. Still not implemented by this milestone: a CSV parser, a TradingView export parser, an FXCM disk-file parser, any filesystem historical adapter, any database adapter, or any live provider connection. `OfflineFileSource` remains fixture-mapping based. This does not prevent deterministic replay using normalized historical candle tuples, hand-built or fixture-sourced.
+
+### 40K. Matching-algorithm limitation (unchanged, disclosed since architecture)
+
+Label matching uses the approved deterministic greedy algorithm — `ENGINEERING-PROVISIONAL`, deterministic, not guaranteed globally optimal. Maximum-weight bipartite matching remains explicitly deferred. This affects evaluation assignment only; it never affects `scan_market`'s own deterministic detection computation.
+
+### 40L. Exclusions (preserved, unchanged, verified absent from the implemented package)
+
+Entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, paper orders, live orders, broker execution, MT4, MT5, trade outcome, profitability backtesting, entry backtesting, chart rendering, Telegram delivery, CSV file writing, live provider connection, AI inference, model training, production approval.
+
+**This closure record is documentation-only.** No scanner source file, test file, dependency, lockfile, Protocol, or upstream package is affected by this section. The milestone and its amendment remain `NOT PRODUCTION-APPROVED`.
