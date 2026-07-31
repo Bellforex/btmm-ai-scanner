@@ -6379,3 +6379,589 @@ Label matching uses the approved deterministic greedy algorithm — `ENGINEERING
 Entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, paper orders, live orders, broker execution, MT4, MT5, trade outcome, profitability backtesting, entry backtesting, chart rendering, Telegram delivery, CSV file writing, live provider connection, AI inference, model training, production approval.
 
 **This closure record is documentation-only.** No scanner source file, test file, dependency, lockfile, Protocol, or upstream package is affected by this section. The milestone and its amendment remain `NOT PRODUCTION-APPROVED`.
+
+## 41. Historical Dataset Ingestion and First Scanner Backtest (`1C-A-REAL-BACKTEST`) — Architecture
+
+**Status (historical — superseded by author approval, below): `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** **Current status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `NOT PRODUCTION-APPROVED`.** **Author-approved 2026-07-31:** *"I approve 1C-A-REAL-BACKTEST — Historical Dataset Ingestion and First Scanner Backtest for controlled implementation. The milestone remains NOT PRODUCTION-APPROVED."* This approval supersedes every current-state reference to `ARCHITECT-RECOMMENDED`/`AUTHOR-DECISION REQUIRED` for this milestone; the architecture-recommendation record, the focused read-only audit (verdict `C`), and both consolidated/narrow correction passes below are preserved unchanged, not deleted. This section remains documentation and architecture only; no scanner package, market-data package, test, dependency, lockfile, Protocol, private reference, or inventory entry is modified by this approval. Baseline: `HEAD == origin/main == 76aa2e56e4b2a259edf5d4d46039985bba7a7963`, `1B-L-SCANNER` and `1B-L-SCANNER-A1` both formally `CLOSED`.
+
+### 41A. Purpose and boundary
+
+This milestone permits the already-closed, `NOT PRODUCTION-APPROVED` scanner to run against real historical candle files for the first time. It is a **data-ingestion and orchestration boundary**, not a sixth detector: it adds a disk-file → `SourceCandleInput` → `NormalizedCandle` route (reusing the existing normalization pipeline unmodified), a dataset manifest/provenance layer, a multi-symbol backtest-execution orchestrator over the already-implemented `run_scanner_replay`/`evaluate_scanner`, and a deterministic JSON report writer. It covers exactly the 12 items listed in the assigning task's Part 2 and explicitly excludes entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, profit/loss, drawdown, expectancy, broker execution, MT4/MT5, live provider connection, Telegram, chart rendering, AI training, and production approval — verified nowhere touched by any decision below.
+
+### 41B. Verified upstream contracts (read directly from implemented code, not assumed from prior planning text)
+
+- `ScannerTimeframeInput` (`NamedTuple`, 2 fields): `timeframe: Timeframe`, `candles: tuple[NormalizedCandle, ...]`.
+- `ScannerConfiguration` (11 fields since `1B-L-SCANNER-A1`): unchanged by this milestone; `enabled_symbols` default `{XAUUSD, EURUSD, GBPUSD}`, `required_timeframes` default `{M1, M5, M15}`, `optional_timeframes` default `{H1, H3, H4, D1, W1}`.
+- `ReplayConfiguration` (5 fields), `ScannerReplayResult` (11 fields, including `minimum_price_tick: Decimal` since the A1 amendment), `ScannerBacktestReport` (5 fields: `poi_validation_report`, `btmm_validation_report`, `lifecycle_validation_report`, `health_report`, `replay_result`).
+- `ReviewedScannerCase` (13 fields), `ExpectedPoiLabel` (9 fields), `ExpectedBtmmLabel` (10 fields) — unchanged, `scanner/labels.py`.
+- `scan_market(timeframe_inputs, reviewed_evidence, configuration, identity_provider) -> ScannerAnalysis` and `run_scanner_replay(historical_inputs, reviewed_evidence, scanner_configuration, replay_configuration, identity_provider) -> ScannerReplayResult` both raise `MixedSymbolAnalysisError` if more than one symbol is present across supplied candles — **confirmed structurally: neither function accepts multi-symbol input in one call.**
+- `evaluate_scanner(replay_result, reviewed_cases) -> ScannerBacktestReport` reads `replay_result.minimum_price_tick` and `replay_result.final_snapshot`; it performs no I/O and consumes no dataset-level concept directly.
+- `SourceCandleInput` (`market_data/source_input.py`, 21 fields): carries `provider`, `source_reference`, `source_symbol`, `source_timeframe`, `event_time_utc`, `availability_time_utc: datetime | None`, `original_event_time`, `original_availability_time: datetime | None`, `original_timezone`, OHLC `Decimal`, `volume: Decimal | None`, `volume_kind: CandleVolumeKind`, `completeness: CandleCompleteness`, plus version/provenance fields. **`availability_time_utc` and `original_availability_time` are optional at this stage** — `build_historical_raw_candle` accepts a `None`/`None` pair only as `IngestionOutcome.INDETERMINATE` (not accepted), meaning a real historical loader must itself compute and populate both before calling it.
+- `RawCandle`/`NormalizedCandle` (`contracts/raw_candle.py`, `contracts/normalized_candle.py`): both enforce, via `model_validator`, `availability_time_utc > event_time_utc` (strict) and `original_availability_time.astimezone(UTC) == availability_time_utc`. **This confirms candle-open timestamp semantics are structurally required**: `availability_time_utc` must represent a later instant than `event_time_utc`, consistent only with `event_time_utc` = candle-open and `availability_time_utc` = candle-close (§41G).
+- `build_historical_raw_candle(source_input) -> IngestionResult` (`market_data/raw_candle_builder.py`): validates the availability pair, checks `original_availability_time.astimezone(UTC) == availability_time_utc`, then constructs `RawCandle` inside a `try/except ValidationError`, returning `IngestionOutcome.REJECTED`/`ACCEPTED`/`INDETERMINATE` — never raises past its own boundary.
+- `normalize_raw_candle(raw_candle, *, normalized_record_id, normalized_content_fingerprint, ...) -> IngestionResult`: resolves `symbol`/`timeframe` via `market_data.source_mapping.resolve_internal_symbol`/`resolve_timeframe`, rejecting with `IngestionOutcome.REJECTED` + reason code `UNSUPPORTED_PROVIDER`/`UNSUPPORTED_PROVIDER_SYMBOL`/`UNSUPPORTED_PROVIDER_TIMEFRAME` on failure — never a fuzzy fallback.
+- `InternalSymbol` (`XAUUSD`, `EURUSD`, `GBPUSD`), `Timeframe` (`M1`, `M5`, `M15`, `H1`, `H3`, `H4`, `D1`, `W1`) — confirmed exhaustive, `config/enums.py`.
+- `OfflineFileSource` (`ingestion/offline_file_source.py`): a fixture-`Mapping`-backed `MarketDataSourcePort` implementation — dictionary lookup only, **no file parsing of any kind**. `resolve_internal_symbol`/`resolve_timeframe` (`market_data/source_mapping.py`) currently recognize exactly one provider, `FXCM_PROVIDER = "FXCM"`, mapping `{XAUUSD, EURUSD, GBPUSD}` and `{M1, M5, M15, H1, H3, H4, D1, W1}` — confirming §41H/§41I below reuse existing mappings unmodified.
+- `DerivedOutputIdentityProvider` (`domain/analyzer.py`, bare `Protocol`, one method `identify(*, output_type: DerivedOutputType, semantic_key: tuple[str, ...]) -> UUIDv7`): **verified zero concrete production implementations exist anywhere in `src/`** (`grep -r "def identify(" src/` returns nothing); every one of the ~25 test files implementing `identify()` is a test double (e.g. `_HashIdentityProvider` in `tests/unit/test_analyzer_api.py`), all sharing the identical SHA256-based, version/variant-bit-forced UUIDv7 algorithm (§41P).
+- `BtmmReviewedEvidence` (`btmm/reviewed_evidence.py`, 14 fields, no `record_id`/fingerprint — externally authored, unchanged) confirms the established precedent this milestone's `ReviewedScannerCase` loading (§41P) follows.
+
+### 41C. Dataset directory structure
+
+**Decision: the recommended shape, locked.** Datasets live at repository-root `historical_datasets/<dataset_id>/`, sibling to `src/`, `tests/`, `docs/`, `knowledge/` — data, not code, and (per §38S's own established precedent: "Datasets are not committed as part of this architecture task") **no dataset directory or file is created by this milestone.** Exact layout per dataset:
+
+```
+historical_datasets/
+  <dataset_id>/
+    manifest.json
+    FXCM_XAUUSD_M1.csv
+    FXCM_XAUUSD_M5.csv
+    FXCM_XAUUSD_M15.csv
+    FXCM_XAUUSD_H1.csv
+    FXCM_XAUUSD_H4.csv
+    FXCM_XAUUSD_D1.csv
+    FXCM_EURUSD_*.csv
+    FXCM_GBPUSD_*.csv
+    reviewed_cases.json
+```
+
+**Exact file-naming rule:** `<PROVIDER>_<SYMBOL>_<TIMEFRAME>.csv`, all upper-case, underscore-separated, extension `.csv` — e.g. `FXCM_XAUUSD_M15.csv`. This is a human-readability convention only; **the loader never enumerates the directory to discover files.** Every file the loader will ever open is named explicitly, by exact `relative_path`, inside `manifest.json`'s `file_entries` (§41E) — filesystem enumeration order (which is platform- and filesystem-dependent) never influences which files load or in what order they are processed; the manifest's own declared `file_entries` order is irrelevant to correctness too, since the loader groups results by `(symbol, timeframe)` deterministically (§41I) regardless of manifest listing order.
+
+### 41C2. Path representation and filesystem security (new — resolves focused-audit finding 3)
+
+**Lexical path policy, applies identically to every manifest-owned path (`HistoricalFileEntry.relative_path` and `DatasetManifest.reviewed_case_file`):** every manifest-owned path is a normalized, POSIX-style relative string (forward slashes only). **Rejected at manifest-load time (`InvalidDatasetManifestError`):** an empty path; the literal `"."`; an absolute POSIX path (leading `/`); a Windows drive path (matches `^[A-Za-z]:`); a UNC path (leading `\\` or `//` beyond the first separator); any backslash character; any NUL character; any path containing a `"."` path segment; any path containing a `".."` path segment; a path that normalizes identically to another file entry's own path (duplicate normalized path); a path that normalizes identically to another file entry's path **after casefolding** (duplicate casefolded normalized path — guards case-insensitive filesystems, e.g. default Windows/macOS, where `FXCM_XAUUSD_M1.csv` and `fxcm_xauusd_m1.csv` would otherwise silently collide). **Neither the manifest's own filename (`manifest.json`) nor any report-output path is ever a valid value for a historical input file entry** — a manifest referencing itself, or referencing a path underneath a report-output directory, is rejected the same way.
+
+**Filesystem-security policy (symlink escape and resolved-root containment):** the caller-supplied dataset root is resolved exactly once: `dataset_root_resolved = dataset_path.resolve(strict=True)` — the caller-supplied root *itself* may be a symlink; its own resolved target directory becomes the trusted root for every subsequent check. For every manifest-owned descendant path: (1) the path is constructed purely from `PurePosixPath` components already validated lexically above (never re-parsed from a raw OS-specific string); (2) **any path descendant component that is itself a symbolic link is rejected** — V1 deliberately prohibits symlink descendants even when the symlink's own target would still resolve inside the dataset root, since portably proving "target remains inside root" across POSIX and Windows filesystems is itself a nontrivial, error-prone check, and prohibiting symlinks entirely removes the ambiguity outright; (3) the final constructed path must exist; (4) it is resolved with `strict=True`; (5) the resolved result must satisfy `final_resolved.is_relative_to(dataset_root_resolved)`; (6) it must be a regular file (not a directory, device, or other special file); (7) no two manifest-owned entries may resolve to the identical final target (a duplicate-resolved-target guard distinct from the lexical duplicate-path guard above, since two different declared paths could still resolve to the same real file via an intermediate non-symlink alias on some filesystems). **Any failure in this sequence rejects the whole dataset before any file's content is parsed** (`InvalidDatasetManifestError`) — never a partial, file-level failure.
+
+**New immutable `ContractModel`, `DatasetManifest`, corrected from 16 to 17 fields, exact order — no `record_id`/`content_fingerprint` (externally authored provenance metadata, following the same precedent as `ReviewedScannerCase`/`BtmmReviewedEvidence`, §41B):**
+
+`dataset_id: str`, `dataset_version: str`, `provider: str` (must currently equal `"FXCM"`, the only registered provider — §41H), `source_description: str`, `source_timezone: str` (IANA zone name or `"UTC"`), `created_at_utc: datetime`, `partition: DatasetPartition` (new `StrEnum`: `DEVELOPMENT`, `REVIEWED_VALIDATION`, `OUT_OF_SAMPLE`), `symbols: tuple[InternalSymbol, ...]`, `timeframes: tuple[Timeframe, ...]`, `file_entries: tuple[HistoricalFileEntry, ...]` (§41E, now 16 fields), `timestamp_convention: CandleTimestampConvention` (new `StrEnum`; **only `CANDLE_OPEN_TIME` is accepted by this milestone's parser** — §41G), `candle_completeness_convention: CandleCompletenessConvention` (new `StrEnum`: `ALL_ROWS_CONFIRMED_COMPLETE`, `FINAL_ROW_MAY_BE_INCOMPLETE`), `volume_convention: CandleVolumeKind` (reused from `contracts.raw_candle`, no new enum), `reviewed_case_file: str | None` (relative path to `reviewed_cases.json`; `None` only for a dataset with no reviewed evaluation labels yet), **`reviewed_case_sha256: str | None`** (new field, immediately after `reviewed_case_file` — §41K2; the expected sha256 checksum of `reviewed_case_file`'s own raw on-disk bytes), `notes: str`, `schema_version: SemVer`.
+
+**New invariant:** `reviewed_case_file` is `None` if and only if `reviewed_case_sha256` is `None` — a dataset declaring a reviewed-case file without its checksum, or a checksum without a file, is rejected (`InvalidDatasetManifestError`). When both are present, `reviewed_case_sha256` must be lowercase 64-character SHA-256 hexadecimal. **The manifest does not checksum itself** — `manifest.json`'s own bytes are never hashed or verified against any field inside the manifest; only the files the manifest *references* (candle CSVs, `reviewed_cases.json`) are checksummed.
+
+**Manifest-level cross-field invariant (new, matching this project's established "single canonical value, validated equal everywhere it is redundantly declared" pattern — §39/A1 precedent):** every `HistoricalFileEntry.timezone` must equal the manifest's own `source_timezone` (§41F — a locked V1 simplification: **one timezone per dataset**, not per file; a dataset mixing genuinely different source timezones across files is out of scope for this milestone and would need a future extension). `symbols`/`timeframes` must each equal the deterministic sorted union of every `file_entries[].symbol`/`.timeframe` — a manifest whose summary fields disagree with its own file entries is rejected before any CSV is opened (`InvalidDatasetManifestError`). `file_entries` must be non-empty ("must explicitly list every owned file" combined with a non-empty invariant — an empty dataset is meaningless).
+
+**Dataset partitions:** `DEVELOPMENT` (free-form iteration, no validation claim), `REVIEWED_VALIDATION` (has a genuine `reviewed_cases.json`, used for detection-accuracy review), `OUT_OF_SAMPLE` (author-asserted to be temporally/materially disjoint from any data used to tune detector thresholds). **Locked, explicit finding: a `partition` label alone is never treated as proof of an out-of-sample claim** — no code in this milestone inspects `partition` to grant any special trust; it is a human-facing declaration only, carried through to every report (§41S) so a reader can judge the claim themselves, never silently used to inflate confidence.
+
+### 41E. Historical file-entry contract (corrected — 16 fields, resolves focused-audit finding 4)
+
+**New immutable `ContractModel`, `HistoricalFileEntry`, corrected from 13 to 16 fields, exact order:**
+
+`relative_path: str`, `symbol: InternalSymbol`, `timeframe: Timeframe`, `format: HistoricalFileFormat` (new `StrEnum`; exactly one member for V1, `CSV_CANONICAL_V1` — §41F), `header_mapping: tuple[HeaderMappingEntry, ...]` (corrected type — §41F; was mistakenly typed as a fixed `HeaderMappingProfile` enum in the prior draft), `timestamp_semantics: CandleTimestampConvention` (per-file authority; validated equal to the manifest's own `timestamp_convention` — a second instance of the same cross-field-equality pattern as §41D, disclosed rather than silently assumed redundant), **`timestamp_format: str`** (new field — §41G2; the exact `datetime.strptime` pattern owning this file's own timestamp column syntax), **`calendar_close_day_offset: int | None`** (new field — §41G3; `None` for fixed-intraday timeframes, required for `D1`/`W1`), **`calendar_close_time_local: time | None`** (new field — §41G3; `None` for fixed-intraday timeframes, required for `D1`/`W1`), `timezone: str`, `expected_start: datetime`, `expected_end: datetime`, `expected_row_count: int`, `sha256: SHA256Fingerprint` (reused type, `contracts.types`), `volume_available: bool`, `complete_candles_only: bool`.
+
+**New field placement, exact:** `timestamp_format` immediately after `timestamp_semantics`; `calendar_close_day_offset` and `calendar_close_time_local` immediately after `timestamp_format` (both new fields therefore sit between `timestamp_format` and `timezone`).
+
+**New cross-field invariants (validated at manifest-load time, `InvalidDatasetManifestError` on violation):**
+- For fixed-intraday timeframes (`M1`, `M5`, `M15`, `H1`, `H3`, `H4`): `calendar_close_day_offset` **must be `None`** and `calendar_close_time_local` **must be `None`** — these two fields own calendar-timeframe session-close semantics exclusively (§41G3) and carry no meaning for a fixed-duration timeframe.
+- For `D1`: both fields **are required** (non-`None`); `calendar_close_day_offset` **must equal `0` or `1`** (same trading day's own local close, or the next calendar day's — covering both a midnight-to-midnight convention and a broker session-rollover convention, §41G3).
+- For `W1`: both fields **are required**; `calendar_close_day_offset` **must be between `0` and `7` inclusive**.
+- For every calendar timeframe (`D1`/`W1`), the derived close instant must be strictly later than the open instant (re-confirmed, not merely assumed — §41G3 rule 6).
+
+**No source-session convention is ever silently inferred** — a `D1`/`W1` file entry with `calendar_close_day_offset`/`calendar_close_time_local` left unset is rejected at manifest-load time, not defaulted to any particular broker convention.
+
+No unstructured dictionary is used anywhere a stable contract is required — `DatasetManifest`, `HistoricalFileEntry`, and `HeaderMappingEntry` are all typed `ContractModel`s, matching every other public contract in this repository.
+
+### 41F. Canonical CSV schema and header-mapping policy (corrected — no built-in provider alias tables)
+
+**Corrected finding (this consolidated correction): the prior draft's `HeaderMappingProfile` enum (`CANONICAL`/`TRADINGVIEW`/`FXCM`) implied a repository-owned, hard-coded alias table per provider — which in turn created a genuine open architecture gap (needing real exported files to fix the exact literal alias strings before the architecture could be called complete). That gap is removed by adopting a fully explicit, per-file, manifest-authored mapping instead of any built-in profile.** `HeaderMappingProfile` is withdrawn; no such enum exists in this corrected architecture.
+
+**Locked V1 policy:**
+
+1. The parser supports exactly one canonical logical candle schema: `timestamp`, `open`, `high`, `low`, `close`, optional `volume`, optional `complete`, optional `source_record_id` — modeled as the new `CanonicalCandleField` `StrEnum` (`TIMESTAMP`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VOLUME`, `COMPLETE`, `SOURCE_RECORD_ID`, 8 members). **Mandatory:** `TIMESTAMP`, `OPEN`, `HIGH`, `LOW`, `CLOSE`. **Optional:** `VOLUME` (absent → `volume=None`, `volume_kind=UNKNOWN`), `COMPLETE` (absent → governed by the file entry's own `complete_candles_only` flag, §41J), `SOURCE_RECORD_ID` (absent → deterministic default `f"{relative_path}#{row_number}"`, used as `SourceCandleInput.source_reference`).
+2. Each `HistoricalFileEntry` carries an explicit, manifest-authored `header_mapping: tuple[HeaderMappingEntry, ...]` — no enum-selected profile.
+3. **New immutable `ContractModel`, `HeaderMappingEntry`, 2 fields, exact order (no `record_id`/fingerprint — externally authored mapping metadata):** `canonical_field: CanonicalCandleField`, `source_column: str`. Each entry maps one literal source-file column name onto one canonical logical field. `header_mapping` is a plain immutable ordered `tuple[HeaderMappingEntry, ...]` — not a `dict`/`Mapping` — matching this project's established immutable-collection convention and this task's own explicit preference.
+4. **No automatic header guessing.** A column absent from a file's own `header_mapping` is never inferred from its literal name.
+5. **No fuzzy matching.** `source_column` comparison against the file's actual header row is an exact, case-sensitive string match.
+6. **No hard-coded `TradingView` profile is required or exists.**
+7. **No hard-coded `FXCM` profile is required or exists.**
+8. TradingView-exported and FXCM-exported files are both supported purely through their own dataset's explicit, per-file `header_mapping` — e.g. a TradingView export whose own literal open-time column is named `"time"` is supported by one `HeaderMappingEntry(canonical_field=TIMESTAMP, source_column="time")`; an FXCM export naming the same column `"Date"` is supported by `HeaderMappingEntry(canonical_field=TIMESTAMP, source_column="Date")` — same generic mechanism, different data, zero provider-specific code.
+9. **Invariant, validated at manifest-load time (new `InvalidDatasetManifestError` cause, §41K): unknown or duplicated logical mappings reject the file's manifest entry** — duplicated `source_column` values within one `header_mapping` tuple, duplicated `canonical_field` values within one tuple, and any `source_column` that is blank/whitespace-only, each reject the whole dataset before any CSV is opened (a manifest-authoring defect, not a row-level data-quality finding). `canonical_field` cannot itself be "unknown," since it is a `CanonicalCandleField`-typed field — an out-of-enum value fails Pydantic validation structurally, not via a runtime check.
+10. **Invariant: missing mandatory logical columns reject the file's manifest entry** — a `header_mapping` tuple that does not include all 5 mandatory `CanonicalCandleField` members (`TIMESTAMP`, `OPEN`, `HIGH`, `LOW`, `CLOSE`) is rejected at manifest-load time, same `InvalidDatasetManifestError`.
+
+**A real provider sample remains required before the first actual dataset is run** (someone must still look at a real TradingView/FXCM export to write that dataset's own `header_mapping` correctly) **but is no longer required to finalize this architecture** — the mechanism above is fully specified and requires zero additional decision before implementation begins. Source timezone is never silently inferred (§41D/§41G: `source_timezone` is a required, explicit manifest field). Timestamp meaning (open vs. close) is never silently assumed (§41G: `timestamp_convention` is a required, explicit, and currently single-valued manifest field).
+
+### 41G. Timestamp semantics (corrected — exact string parsing, DST-safe, timeframe-class-specific derivation)
+
+**Decision, locked: the canonical `timestamp` column represents candle OPEN time, in the file's declared `source_timezone`.** This is the only convention this milestone's parser implements (`timestamp_convention` must equal `CANDLE_OPEN_TIME`; a manifest declaring any other value is rejected as `InvalidDatasetManifestError` until a future milestone explicitly adds a close-time path — never silently reinterpreted).
+
+**Corrected finding (this consolidated correction): the prior draft's single universal rule `availability_time_utc = event_time_utc + fixed timeframe duration` is correct for fixed intraday timeframes but wrong in principle for calendar timeframes, since it silently assumes every local day is exactly 24 elapsed hours and every local week is exactly 168 elapsed hours across a DST transition — false in any timezone that observes DST.** Two distinct derivation rules are locked, one per timeframe class:
+
+1. `original_event_time` = the raw parsed timestamp, localized to `source_timezone` (via `zoneinfo`), timezone-aware — unchanged for both classes; exact parsing rule at §41G1.
+2. `event_time_utc` = `original_event_time.astimezone(UTC)` — unchanged for both classes.
+3. **Fixed intraday timeframes (`M1`, `M5`, `M15`, `H1`, `H3`, `H4`):** `original_availability_time = original_event_time + timeframe_duration(timeframe)` (a fixed `timedelta`: 1/5/15 minutes, 1/3/4 hours); `availability_time_utc = event_time_utc + timeframe_duration(timeframe)` — arithmetic performed on the already-UTC instant, so it is unconditionally unambiguous (elapsed real time in UTC has no DST concept at all) — DST never affects intraday derivation, regardless of `source_timezone`.
+4. **Calendar timeframes (`D1`, `W1`):** the close is a **local wall-clock session boundary explicitly declared by `HistoricalFileEntry.calendar_close_day_offset`/`.calendar_close_time_local`**, not a fixed elapsed duration and not an assumption that the close reuses the open's own wall-clock time — exact derivation at §41G3.
+5. **Ambiguous or nonexistent local instants, both classes:** if the *open* local timestamp itself is ambiguous or nonexistent, the row is rejected (`DataQualityIssue`, not an exception — §41K); if the *derived calendar close* (rule 4) is ambiguous or nonexistent, the row is likewise rejected. Exact detection algorithm at §41G2 — **no deterministic disambiguation rule (e.g. "prefer the later of two ambiguous instants") is approved by this milestone**; a future, separately-approved amendment could add one. Neither case is ever silently resolved by guessing fold/DST side.
+6. **Invariant, unconditional for every timeframe and every timezone: `availability_time_utc > event_time_utc`.** Proven, not merely expected: intraday derivation adds a strictly positive `timedelta` to a UTC instant (always later); calendar derivation (§41G3) explicitly re-confirms this same inequality after deriving the close, rejecting the row if it is ever violated rather than assuming it structurally.
+7. **No candle may become visible before its actual derived close** — enforced structurally by using the exact `availability_time_utc` computed above (whichever rule applied) as the value fed into `run_scanner_replay`'s existing, unmodified availability-group gating; the loader itself does not re-implement that gate (unchanged from the prior draft).
+8. **Behavior when `source_timezone == "UTC"`:** UTC observes no DST, so §41G2's fold/round-trip algorithm always finds exactly one valid UTC instant for every local time (never zero, never two) and §41G3's calendar-close derivation always yields exactly a fixed 24-hour (`D1`)/168-hour (`W1`) elapsed duration when `calendar_close_day_offset`/`calendar_close_time_local` reproduce the open's own convention — stated explicitly rather than left to be discovered by accident.
+9. **Incomplete final candle:** unchanged from the prior draft — a row whose `completeness` resolves to `INCOMPLETE` (§41J) is retained in the data-quality report but excluded from the confirmed-history tuple handed to `run_scanner_replay`/`scan_market`.
+10. **`timeframe_duration` for the fixed-intraday case** remains a fixed mapping from the existing `Timeframe` enum members used in rule 3 (`M1`→1 minute, `M5`→5 minutes, `M15`→15 minutes, `H1`→1 hour, `H3`→3 hours, `H4`→4 hours) — no new enum. `D1`/`W1` are deliberately excluded from this fixed-duration mapping and handled exclusively by §41G3.
+
+### 41G1. Timestamp string parsing (new — resolves focused-audit precision finding on timestamp-format acceptance)
+
+**`HistoricalFileEntry.timestamp_format: str`** (§41E) owns the exact source timestamp syntax for that file, one `datetime.strptime` pattern. Parsing rule: `datetime.strptime(source_value.strip(), historical_file_entry.timestamp_format)`. **Requirements:** the entire (stripped) source string must match the pattern — a partial match is a parse failure, not silently accepted; **no format guessing** of any kind is performed; the `strptime` result must be **naive** (`timestamp_format` must not contain `%z`/`%Z` — a format string containing either is rejected at manifest-load time as `InvalidDatasetManifestError`, since this milestone owns exactly one timezone per dataset via `DatasetManifest.source_timezone`, §41D, and a row carrying its own UTC offset would create a second, competing timezone authority); **a row that nonetheless contains a UTC-offset-shaped suffix is therefore rejected** at the row level as a parse failure (the offset text simply fails to match a format string with no `%z`/`%Z` token) — `source_timezone` remains the sole timezone owner, never silently overridden by row content. Fractional seconds are accepted only when `%f` is explicitly present in `timestamp_format`. Leap seconds (a literal `:60` seconds component) are rejected, since `datetime.strptime`'s own seconds field only accepts `00`–`59` and fails to parse a leap second — this is enforced by the standard library itself, not a separate check. An empty (post-strip) timestamp value rejects the row. No system-local timezone is ever consulted at any point in this parsing path.
+
+### 41G2. Exact DST validation algorithm (new — resolves focused-audit finding 2)
+
+**One exact private local-time resolver, owned by `historical_backtest/csv_parser.py` (or a shared private helper module), used identically for both the open timestamp and (per §41G3) the derived calendar close:**
+
+```python
+def _resolve_local_instants(
+    naive_local_datetime: datetime, zone: ZoneInfo
+) -> tuple[datetime, ...]:
+    valid_utc_instants: list[datetime] = []
+    for fold in (0, 1):
+        candidate = naive_local_datetime.replace(tzinfo=zone, fold=fold)
+        candidate_utc = candidate.astimezone(UTC)
+        round_trip = candidate_utc.astimezone(zone)
+        if (
+            round_trip.replace(tzinfo=None) == naive_local_datetime
+            and round_trip.fold == fold
+        ):
+            valid_utc_instants.append(candidate_utc)
+    return tuple(dict.fromkeys(valid_utc_instants))  # de-duplicated, order-preserved
+```
+
+**Classification, exact:** zero valid UTC instants → **nonexistent local time** (the wall-clock value was skipped by a "spring forward" transition); exactly one distinct valid UTC instant → **valid, unambiguous** (the overwhelmingly common case); two distinct valid UTC instants → **ambiguous local time** (the wall-clock value was repeated by a "fall back" transition). **Behavior:** a nonexistent local opening timestamp rejects the row; an ambiguous local opening timestamp rejects the row; a nonexistent derived calendar close (§41G3) rejects the row; an ambiguous derived calendar close rejects the row — all four as a `DataQualityIssue` (never a raised exception) carrying the deterministic file, physical record number (§41O2 rule 2's own `line_num`-based number), the logical field (`"timestamp"` or `"derived_calendar_close"`), and an exact reason code (`NONEXISTENT_LOCAL_TIME`/`AMBIGUOUS_LOCAL_TIME`). **Ambiguity is never resolved by silently selecting `fold=0` or `fold=1`** — merely attaching a `ZoneInfo` via `.replace(tzinfo=zone)` without this round-trip check would silently default to `fold=0` and is explicitly insufficient on its own, per this correction.
+
+### 41G3. D1/W1 explicit session-close derivation (corrected — resolves focused-audit finding 4; replaces the withdrawn "preserve opening wall-clock time" assumption)
+
+**Corrected finding: the prior draft's "advance the calendar date, hold the local time-of-day fixed" rule silently assumed the CSV's own open timestamp already encodes the provider's true session-rollover convention.** Many real daily-bar exports timestamp each row at local midnight regardless of the broker's actual session-close time (e.g. 17:00 America/New_York for many FX brokers), which the prior rule could not represent or correct. This is now resolved by two explicit `HistoricalFileEntry` fields (§41E) that state the session-close convention directly, never inferring it from the open timestamp:
+
+1. Parse and resolve the source local opening datetime (§41G1/§41G2) → `original_event_time`.
+2. `close_date = original_event_time.date() + timedelta(days=calendar_close_day_offset)` (using the file entry's own `calendar_close_day_offset` — `0` or `1` for `D1`, `0`–`7` for `W1`, §41E).
+3. `close_local_naive = datetime.combine(close_date, calendar_close_time_local)` (using the file entry's own `calendar_close_time_local`).
+4. Resolve `close_local_naive` through the exact §41G2 algorithm — zero valid instants or two valid instants each reject the row (`NONEXISTENT_LOCAL_TIME`/`AMBIGUOUS_LOCAL_TIME` on the `"derived_calendar_close"` logical field).
+5. The single resulting valid UTC instant is `close_utc`.
+6. **Require `close_utc > event_time_utc`** — re-confirmed explicitly, not assumed structurally from the offset being non-negative (a manifest author could in principle declare `calendar_close_day_offset=0` with a `calendar_close_time_local` at or before the open's own local time, which this check catches and rejects rather than silently accepting a non-positive or zero-length "day").
+7. `availability_time_utc = close_utc`.
+
+**This explicit mechanism represents every real provider session convention this milestone is aware of, by direct manifest declaration rather than inference:** a midnight-to-midnight daily candle (`calendar_close_day_offset=1`, `calendar_close_time_local=00:00:00`); a 17:00-to-17:00 broker daily candle (`calendar_close_day_offset=1`, `calendar_close_time_local=17:00:00`, when the open itself is also recorded at 17:00); a weekly candle opening Sunday/Monday with a Friday session close (`calendar_close_day_offset` set to the exact number of calendar days from the week's own open to its Friday close, `calendar_close_time_local` set to the Friday close time). **No provider session-close convention is ever inferred from the opening timestamp** — a dataset author who does not know the true convention for their own file cannot silently default it; the fields are mandatory for `D1`/`W1` (§41E) and validated at manifest-load time.
+
+### 41H. Supported symbols
+
+**Decision: reuse the existing `market_data.resolve_internal_symbol`/`FXCM_PROVIDER` mapping unmodified — no new mapping table.** `FXCM:XAUUSD → InternalSymbol.XAUUSD`, `FXCM:EURUSD → InternalSymbol.EURUSD`, `FXCM:GBPUSD → InternalSymbol.GBPUSD`. Every manifest `symbols`/file-entry `symbol` value is validated eagerly at manifest-load time (not deferred to per-row CSV parsing) — an unsupported or ambiguous symbol anywhere in the manifest rejects the whole dataset before any CSV file is opened. No automatic fuzzy symbol matching anywhere.
+
+### 41I. Supported timeframes and H3 policy
+
+Required for scanner execution (reusing `ScannerConfiguration`'s own default unchanged): `M1`, `M5`, `M15`. Optional when supplied: `H1`, `H4`, `D1`, `W1`. **`H3` policy, locked: H3 is omitted, not synthesized.** Neither TradingView nor FXCM standard exports natively supply a 3-hour interval (both providers export standard M1/M5/M15/M30/H1/H4/D1/W1-family intervals — 3-hour bars are not a native provider granularity for either). This milestone does **not** silently resample/aggregate `H1` candles into synthetic `H3` bars — no aggregation rule is approved here. **The first real dataset omits `H3` entirely** (optional, genuinely absent, never faked); a deterministic resampling milestone (a distinct future milestone, e.g. `1C-B-RESAMPLE`) would need its own separate architecture and author approval before `H3` could ever be populated from real files. No `M30`/`H6`/`H8`/`H12` is added — the existing 8-member `Timeframe` enum is unmodified.
+
+### 41J. Candle parsing (corrected — exact CSV edge-case policy, resolves several focused-audit precision findings)
+
+Decimal OHLC parsed via `Decimal(str(field).strip())` — **never `float()`**, matching every existing contract's own `Decimal` typing; scientific notation (e.g. `"1.23E+3"`) is accepted when the resulting `Decimal` is finite, since `Decimal`'s own constructor parses it directly; **`NaN` and positive/negative `Infinity` reject the row** (`Decimal("nan")`/`Decimal("inf")` parse successfully as *values* but are explicitly checked and rejected before use, reason code `NON_FINITE_DECIMAL`) — never silently passed through to `RawCandle`'s own price validators. Negative-zero price (`"-0"`/`"-0.00"`) is rejected the same way every other non-positive price already is, via the existing `validate_price` (`value <= 0`) — `Decimal("-0") == Decimal("0")`, so no special-case is needed. Volume: `Decimal` when present and non-blank, else `None`; negative volume rejects the row (existing `validate_volume`, unchanged). Completeness: an explicit `complete` column (`"true"`/`"false"`, case-insensitive) maps directly to `CandleCompleteness.CONFIRMED_COMPLETE`/`INCOMPLETE`, any other non-blank value rejects the row (`INVALID_COMPLETENESS_VALUE`); when the column is absent, `HistoricalFileEntry.complete_candles_only=True` defaults every row except a final row failing the "already closed as of `manifest.created_at_utc`" check to `CONFIRMED_COMPLETE` (that final exceptional row becomes `INCOMPLETE`, §41G — **`manifest.created_at_utc` is a recorded manifest field, never a live wall-clock query, so this check is fully deterministic and reproducible**); `complete_candles_only=False` with no `complete` column defaults every row to `CandleCompleteness.UNKNOWN`. `source_record_id`: exact derivation at §41O2 rule 2.
+
+**Row/field mechanics, exact:** every field's surrounding whitespace is stripped before parsing. Quoted values and quoted embedded newlines within one logical CSV record are owned entirely by Python's own `csv.reader` (never hand-split on raw commas/newlines) — this is precisely why §41O2 rule 2's `physical_record_number` must read `csv.reader`'s own `line_num` **after** the complete logical record has been consumed, so a multi-physical-line quoted field is still attributed to exactly one record number. Entirely blank logical records (every field empty after the reader itself parses the record) are ignored and **not counted** as data rows at all — counted separately in `blank_rows_skipped`, never as an error and never contributing to `expected_row_count`. A short row (fewer fields than the file's own `header_mapping` requires) rejects the row (`SHORT_ROW`). A row with surplus unnamed columns beyond the header's own column count rejects the row (`SURPLUS_COLUMN`) — distinct from an unexpected *named* column, which is merely ignored (below). Duplicate source column names within one file's own header row reject the **whole file** — recorded as a `DataQualityIssue` with `classification=REJECT_FILE`, **not a raised exception**, since other files in the same dataset still load; that file simply contributes zero candles. Duplicated canonical mappings within one file's own `header_mapping` reject the whole file the same way (§41F, `InvalidDatasetManifestError` at the manifest level, since `header_mapping` is manifest-authored — a manifest-level rejection precedes any CSV file even being opened, stricter than a mere file-level rejection). Empty mandatory fields (a mapped `TIMESTAMP`/`OPEN`/`HIGH`/`LOW`/`CLOSE` column present but blank for one row) reject the row (`EMPTY_MANDATORY_FIELD`). Quoted numeric values (e.g. `"1234.56"` with surrounding quotes in the raw file) are accepted transparently, since `csv.reader` already strips the quoting before the field value ever reaches `Decimal(...)`. Unexpected **named** columns present in the file but absent from its own `header_mapping` (§41F) are ignored, not an error (forward-compatible with extra provider export columns). Unsupported encodings: parsing requires UTF-8 (with or without a leading BOM, decoded via `utf-8-sig` so a BOM is stripped transparently, never left as a literal character in the first header name); any decode failure is likewise a file-level `DataQualityIssue` (`classification=REJECT_FILE`, reason code `UNSUPPORTED_ENCODING`), not a raised exception. **`HistoricalFileEntry.expected_row_count` counts every nonblank logical data record after the header row, including rows that are later rejected** — a rejected row still consumes one unit of `expected_row_count`; only entirely blank records are excluded from this count.
+
+### 41K. Data-quality classification (exact, per condition; six-member `DataQualityClassification` `StrEnum`: `REJECT_DATASET`, `REJECT_FILE`, `REJECT_ROW`, `RETAIN_WITH_GAP_RECORD`, `RETAIN`, `WARNING`)
+
+**Corrected finding: only two conditions abort the whole `load_historical_dataset` call as a raised, typed exception — every other condition, including every file-level and row-level rejection, is represented as data (`DataQualityIssue`/`GapRecord`), matching this project's own established "a validation finding is data, not an exception" precedent (`DetectionMismatch`, §38G/§38O).**
+
+| Condition | Classification | Raises? |
+|---|---|---|
+| Unsorted rows | `WARNING` — loader re-sorts deterministically by `event_time_utc` before use (imposing order, not repairing values) | No |
+| Duplicate rows (identical symbol/timeframe/`event_time_utc`/OHLCV) | `REJECT_ROW` — first file-order occurrence retained, subsequent duplicates rejected and counted | No |
+| Duplicate timestamps with **differing** OHLCV | `REJECT_FILE` — ambiguous ground truth, no silently-picked winner | No |
+| Missing candles (gaps) | `RETAIN_WITH_GAP_RECORD` (§41L) — never row/file rejection, never fabricated fill | No |
+| Overlapping records | `REJECT_FILE` — structural integrity violation | No |
+| Invalid OHLC geometry | `REJECT_ROW` (already enforced by `RawCandle`/`NormalizedCandle` cross-field validators; surfaced as a classified rejection) | No |
+| Zero or negative prices | `REJECT_ROW` (`validate_price`, already enforced) | No |
+| Negative volume | `REJECT_ROW` (`validate_volume`, already enforced) | No |
+| Missing volume | `RETAIN` — `volume=None`, `volume_kind=UNKNOWN`; not an error | No |
+| Incomplete candles | `RETAIN`, reported separately, excluded from the confirmed-history batch (§41G/§41J) | No |
+| Timestamps outside the manifest's declared `[expected_start, expected_end]` | `REJECT_ROW` — the manifest's declared bound is authoritative | No |
+| Duplicate header row within one file | `REJECT_FILE` (§41J) | No |
+| Unsupported file encoding | `REJECT_FILE` (§41J) | No |
+| Invalid `header_mapping` (duplicate/blank/missing-mandatory, §41F) | `REJECT_DATASET` — a manifest-authoring defect, caught before any CSV is opened | **`InvalidDatasetManifestError`** |
+| Checksum mismatch (file `sha256` ≠ manifest-declared `sha256`) | `REJECT_DATASET` — the strongest gate, fails before any row is parsed | **`ChecksumMismatchError`** |
+| Unexpected row count (parsed ≠ `expected_row_count`) | `WARNING` — informational drift counter, never a silent hard rejection by itself | No |
+
+No malformed market data is ever silently repaired anywhere in this table. Exactly two conditions raise; every other condition is captured as a `DataQualityIssue` inside `HistoricalDataQualityReport.issues` (§41M).
+
+### 41K2. Checksum byte semantics (new — resolves focused-audit precision finding 5)
+
+**Every checksum in this architecture (`HistoricalFileEntry.sha256`, `DatasetManifest.reviewed_case_sha256`) is computed identically, exactly:** SHA-256; lowercase hexadecimal; exactly 64 characters; calculated over the file's **raw on-disk bytes** — before any decoding, before BOM removal, before newline normalization, and before any CSV parsing whatsoever. This means the checksum's own input **includes** any leading UTF-8 BOM bytes, the file's original newline bytes (`\n`/`\r\n`, whichever the file actually uses), the file's original quoting bytes, and the file's original encoding bytes exactly as stored — the checksum is of the file as a sequence of bytes, full stop, never of any canonicalized or reinterpreted form. A checksum mismatch rejects the whole dataset (`ChecksumMismatchError`, §41K). This identical rule applies to every candle CSV file and to `reviewed_cases.json` alike. **The manifest does not checksum itself** (§41D) — `manifest.json`'s own bytes are never part of any checksum computation this architecture defines.
+
+### 41L. Gap policy
+
+Gaps are detected using `timeframe_duration`/calendar derivation (§41G) over **retained** candles only, same `(symbol, timeframe)`: for two consecutive retained candles, `missing_bar_count = (next.event_time_utc - previous.event_time_utc) / timeframe_duration - 1` for fixed-intraday timeframes, or the analogous calendar-period count for `D1`/`W1`; any `missing_bar_count > 0` produces one new immutable `GapRecord` (reusing the existing `market_data.gap_observation` concept/pattern, not reinventing it) — **6 fields, exact order:** `symbol: InternalSymbol`, `timeframe: Timeframe`, `gap_start_event_time_utc: datetime`, `gap_end_event_time_utc: datetime`, `missing_bar_count: int`, `likely_market_closure: bool`. `likely_market_closure` is a disclosed heuristic only (the gap's start falls on/adjacent to the FX weekly-close window, Friday evening through Sunday evening UTC) — it never gates loading and is never used to silently discard a gap record. Weekend gaps, holiday gaps, provider outages, intraday missing bars, and otherwise-unknown gaps are all reported identically as `GapRecord`s; the loader does not attempt cause-attribution beyond the one weekly-closure heuristic flag. **No forward filling. No interpolation. No synthetic candle of any kind is ever created.**
+
+### 41M. Historical dataset loader API and its full contract surface
+
+```python
+def load_historical_dataset(
+    dataset_path: Path,
+    configuration: HistoricalDatasetConfiguration,
+) -> LoadedHistoricalDataset: ...
+```
+
+**New immutable `ContractModel`, `HistoricalDatasetConfiguration`, 4 fields, exact order:** `reject_unexpected_row_count_drift: bool` (default `False`; when `True`, promotes the §41K "unexpected row count" `WARNING` to a `REJECT_DATASET` condition), `rule_version: SemVer`, `contract_version: SemVer`, `schema_version: SemVer`.
+
+**New immutable `ContractModel`, `LoadedHistoricalDataset`, 5 fields, exact order (no `record_id`/fingerprint — an aggregate over externally-authored and derived facts, matching `ScannerAnalysis`'s own precedent):** `manifest: DatasetManifest`, `timeframe_inputs_by_symbol: tuple[tuple[InternalSymbol, tuple[ScannerTimeframeInput, ...]], ...]` (**corrected type** — an immutable ordered tuple-of-pairs, not a `Mapping`, matching this project's established no-mutable-container-on-a-frozen-contract convention; deterministic outer order = `InternalSymbol` enum declaration order, inner tuple ordered by `Timeframe` rank, matching `scanner/analyzer.py`'s own `_TIMEFRAME_RANK`), `reviewed_cases: tuple[ReviewedScannerCase, ...]` (§41P), `data_quality_report: HistoricalDataQualityReport` (§41M below), `file_checksums: tuple[tuple[str, SHA256Fingerprint], ...]` (relative path → recomputed sha256, deterministically sorted by path).
+
+**New immutable `ContractModel`, `DataQualityIssue`, 6 fields, exact order:** `relative_path: str`, `row_number: int | None` (`None` for a file- or dataset-level issue), `symbol: InternalSymbol | None`, `timeframe: Timeframe | None`, `reason_code: str`, `classification: DataQualityClassification` (§41K).
+
+**New immutable `ContractModel`, `HistoricalDataQualityReport`, 8 fields, exact order:** `blank_rows_skipped: int`, `unsorted_rows_resorted: int`, `duplicate_rows_rejected: int`, `issues: tuple[DataQualityIssue, ...]`, `gaps: tuple[GapRecord, ...]` (§41L), `checksum_verified: bool`, `checksum_mismatched_files: tuple[str, ...]`, `timeframe_coverage: tuple[TimeframeCoverage, ...]` (§41R).
+
+**Empty behavior:** a `dataset_path` with no `manifest.json` raises a new typed `DatasetManifestNotFoundError` — unlike `scan_market`'s legitimate empty-input case, a dataset is meaningless without a manifest, so this is a hard error, not an empty-success return. A manifest with zero `file_entries`, an invalid `header_mapping` (§41F), or an unsupported `timestamp_convention` (§41G) raises `InvalidDatasetManifestError`. A file checksum mismatch raises `ChecksumMismatchError` (§41K). No live connection of any kind — reads exclusively from `dataset_path` on local disk via `pathlib`.
+
+### 41N. Backtest execution API
+
+```python
+def execute_scanner_backtest(
+    dataset: LoadedHistoricalDataset,
+    scanner_configuration: ScannerConfiguration,
+    replay_configuration: ReplayConfiguration,
+    identity_provider: DerivedOutputIdentityProvider,
+) -> HistoricalBacktestExecutionResult: ...
+```
+
+Steps: (1) read the already-loaded `dataset.timeframe_inputs_by_symbol` (this function performs **no disk I/O of its own** — loading already happened in `load_historical_dataset`); (2) iterate symbols in `dataset`'s own deterministic outer-tuple order; (3) call `run_scanner_replay` **once per symbol** — never combining multiple symbols into one `scan_market`/`run_scanner_replay` call, matching `MixedSymbolAnalysisError`'s existing structural guarantee (§41B); (4) for each symbol, filter `dataset.reviewed_cases` to `case.symbol == symbol` and call `evaluate_scanner` (returns `None` for a symbol with zero matching reviewed cases, rather than a report with all-zero counts, so "no cases evaluated" is never confused with "cases evaluated, zero found"); (5) retain every per-symbol `ScannerReplayResult`; (6) retain every per-symbol `ScannerBacktestReport | None`; (7) retain `dataset.data_quality_report` unchanged (pass-through); (8) return one in-memory `HistoricalBacktestExecutionResult` (§41S) — **no JSON is written by this function**; writing is a separate, explicit, caller-invoked step (§41T), preserving "write deterministic JSON reports only at the outer I/O boundary" literally.
+
+### 41O. Identity-provider implementation (rigorously verified against the repository's own `UUIDv7` contract)
+
+**Confirmed finding: zero concrete production `DerivedOutputIdentityProvider` implementations exist in `src/` today (§41B)** — only ~25 test doubles across `tests/unit/`, all sharing one algorithm. Per this milestone's own scope, a new concrete implementation belongs here: `ContentAddressedIdentityProvider` (`historical_backtest/identity.py`), implementing `identify(*, output_type: DerivedOutputType, semantic_key: str) -> UUIDv7` (the assigning task's own signature — a single joined `str` semantic key, matching how the existing test doubles already call `"|".join(semantic_key)` before hashing).
+
+**Exact construction, reproducing the already-proven test-double algorithm as production code — not a new algorithm:**
+1. Canonical input bytes: `payload = output_type.value + "|" + semantic_key`, UTF-8 encoded.
+2. Hash algorithm: `sha256`. `digest = hashlib.sha256(payload.encode("utf-8")).digest()[:16]` (first 16 bytes → 128 bits, exactly one UUID's worth).
+3. UUIDv7 construction: `as_int = int.from_bytes(digest, "big")`; clear the version nibble and force it to `0b0111` (`7 << 76` after masking); clear the two top variant bits and force them to `0b10` (`RFC 4122`, `2 << 62` after masking); return `UUID(int=as_int)`.
+
+**Verified directly against `contracts/types.py`'s own `_validate_uuidv7`, not casually asserted:** that function requires (a) `candidate.int != 0`, (b) `candidate.version == 7`, (c) `candidate.variant == RFC_4122`. Step 3 above satisfies all three **by construction, not by probability**: forcing the version nibble to the non-zero pattern `0111` makes `as_int == 0` structurally impossible (a zero integer requires every nibble, including the forced version nibble, to be zero — contradiction) regardless of what the hash digest itself contained; `.version` and `.variant` read directly from the same bits that were just explicitly forced. **Disclosed, non-blocking naming caveat:** this construction satisfies the repository's own narrow `UUIDv7` contract (version/variant/non-nil only — confirmed by reading `_validate_uuidv7`, which checks no timestamp bits) but does **not** carry the genuine embedded-Unix-timestamp temporal sortability that RFC 9562 `UUIDv7` values generally have — an already-existing trade-off, since every one of the ~25 existing test-double identity providers in this repository makes the identical trade-off; this milestone does not introduce a new or different risk.
+
+**Determinism and independence properties, verified:** cross-process stability — uses `hashlib.sha256`, never Python's built-in `hash()` (which is per-process-randomized via `PYTHONHASHSEED` unless disabled), so the same `(output_type, semantic_key)` pair produces the identical `UUID` in any process, on any machine, at any time. No call-order dependency — `identify` is a pure function of its two arguments with no internal counter or mutable state. No random input. No wall-clock input. Deterministic collision behavior: unchanged, reused `domain.DerivedIdentityCollisionError` (not redefined) covers a genuine semantic-key collision at the caller level, unrelated to this provider's own construction. The public `DerivedOutputIdentityProvider` Protocol is unmodified.
+
+**Corrected finding (this consolidated correction, focused-audit finding 21): the prior draft's canonical input, `output_type.value + "|" + semantic_key`, is a delimiter-concatenated free-text join, vulnerable in principle to a `semantic_key` string that itself contains a literal `|` (two different logical `(output_type, semantic_key)` pairs could concatenate to the identical payload).** Corrected canonical input, still hashed with `sha256` and still forced to version-7/RFC4122-variant bits exactly as before (§41O steps 2–3 unchanged): a canonical JSON array `[namespace, output_type.value, semantic_key]` where `namespace = "btmm-ai-scanner/derived-output-identity/v1"`, serialized via `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` before UTF-8 encoding — removing any delimiter-collision ambiguity by construction (JSON array serialization of two distinct string elements is injective; no two distinct `(output_type.value, semantic_key)` pairs can serialize to the same canonical bytes). **No public surface change: the class name remains `ContentAddressedIdentityProvider`, its public method signature is unchanged, and this is purely an internal canonical-encoding correction.**
+
+### 41O2. Candle-level identity derivation (private, no new public surface — resolves focused-audit finding 1)
+
+**Confirmed defect, this consolidated correction: `ContentAddressedIdentityProvider` (§41O) cannot own candle-level identity.** `DerivedOutputIdentityProvider.identify` takes `output_type: DerivedOutputType`, and `domain/enums.py`'s `DerivedOutputType` has exactly 14 members (`CONFIRMED_SWING` through `CURRENT_BTMM_STATE`) — verified directly, none represents a candle or source-input concept, and this milestone does not add one (per this task's own explicit instruction). `SourceCandleInput.record_id`/`.content_fingerprint`/`.provenance_id` and `RawCandle`/`NormalizedCandle`'s equivalents are therefore populated by a **separate, private** derivation, owned entirely by `historical_backtest/identity.py`, never exported, never a new contract/enum/API/error/Protocol/`DerivedOutputType` member.
+
+**Canonical serialization (used by every rule below, one shared private helper):** UTF-8; canonical JSON via `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`; no float values anywhere in the serialized structure; `Decimal` → canonical string (matching `ContractModel`'s own established `str(value.normalize())`-style rule, §38K); `datetime` → UTC ISO-8601 string; every enum → its own `.value`; `UUID` → string. Never delimiter-concatenated free text.
+
+**Three explicit private domain tags (string constants inside `identity.py`, never exported):**
+1. `"btmm-ai-scanner/historical-candle-provenance/v1"`
+2. `"btmm-ai-scanner/historical-candle-record/v1"`
+3. `"btmm-ai-scanner/historical-candle-content/v1"`
+
+**Rule 1 — `provenance_id` (identifies one CSV file's contribution to one dataset version, independent of any specific row):** canonical content = `{domain_tag: 1, dataset_id, dataset_version, provider, relative_path: <normalized manifest path, §41C2>, expected_sha256: <HistoricalFileEntry.sha256>}`. Process: canonical JSON bytes → `sha256` → first 16 bytes → force version-7 bits → force RFC-4122-variant bits → construct `UUID` → validated through the existing `UUIDv7` type (`contracts/types.py`'s `_validate_uuidv7`) exactly as `ContentAddressedIdentityProvider` already is (§41O steps 2–3, identical bit-forcing mechanism, applied to different canonical content). **Stated honestly:** this is a deterministic, `UUIDv7`-shaped repository identifier; it satisfies the repository's current version/variant/non-nil validator; it does **not** contain genuine wall-clock `UUIDv7` timestamp semantics; no chronological-ordering meaning is ever claimed for it — identical disclosure to §41O's own, applied consistently.
+
+**Rule 2 — `source_record_id` (a `str`, not a `UUID` — matches `SourceCandleInput.source_reference`'s own `str` type):** for a nonblank `source_record_id` CSV column: strip surrounding whitespace, retain the literal value, and require uniqueness within the owning file (a duplicate literal `source_record_id` within one file is a `DataQualityIssue`, `classification=REJECT_ROW`, reason `DUPLICATE_SOURCE_RECORD_ID`). When absent, derive: `"derived:" + sha256_hex(canonical_json({domain_tag: none, dataset_id, dataset_version, relative_path, physical_record_number, symbol, timeframe, event_time_utc}))`, lowercase hexadecimal. `physical_record_number` = the value of Python `csv.reader`'s own `line_num` attribute **read after the complete logical CSV record has been consumed** (so a quoted, embedded-newline field's multiple physical lines are correctly attributed to one single record number, never split) — never a simple enumerate-index, and never dependent on how many earlier rows were filtered or rejected (a rejected row still consumes its own `line_num` value; no renumbering occurs because of it).
+
+**Rule 3 — `record_id` (the candle's own `UUIDv7` identity, `SourceCandleInput.record_id`/propagated through `RawCandle.record_id`/`NormalizedCandle.raw_candle_id`):** canonical content = `{domain_tag: 2, provenance_id: <rule 1's own output, as a string>, source_record_id: <rule 2's own output>, provider, symbol: <InternalSymbol>, timeframe: <Timeframe>, event_time_utc}`. Same `sha256` → 16-bytes → version/variant-forcing process as rule 1. **The same semantic source record (identical provenance, source_record_id, provider, symbol, timeframe, event_time_utc) receives the identical `record_id` across every process and every execution** — call order, filesystem enumeration order, and wall-clock time never affect it, since none of those inputs appear in the canonical content.
+
+**Rule 4 — `content_fingerprint` (`SHA256Fingerprint`, distinct from `record_id`, deliberately excludes provenance so identical candle *content* from two different files/re-exports fingerprints identically):** canonical content = `{domain_tag: 3, provider, symbol, timeframe, event_time_utc, availability_time_utc, open, high, low, close, volume: <value or null>, complete: <CandleCompleteness.value>, source_record_id}`. **Deliberately excluded:** `record_id`, `provenance_id`, file path, physical row number, execution/wall-clock time — this permits the identical candle content to carry the identical `content_fingerprint` even when its file provenance differs (e.g. the same trading day re-exported into a new dataset version). Output: lowercase 64-character SHA-256 hex digest (a direct hex digest, not put through the version/variant-forcing step — `content_fingerprint` is a `SHA256Fingerprint`, not a `UUIDv7`, matching every other `content_fingerprint` field already in this repository, e.g. `PoiObservation.content_fingerprint`).
+
+**Identity-collision policy (new, private, dataset-load-scoped):** during one `load_historical_dataset` call, three deterministic maps are retained in memory: `provenance_id → canonical provenance bytes`, `record_id → canonical record bytes`, `content_fingerprint → canonical content bytes`. Rule: the same identifier value together with byte-identical canonical content is permitted (idempotent re-derivation, e.g. re-processing the same file); **the same identifier value together with genuinely different canonical content rejects the whole dataset** via `InvalidDatasetManifestError`, whose message names the exact identity category (`provenance_id`/`record_id`/`content_fingerprint`) and the conflicting source files or record identifiers — no collision is ever silently accepted. `ContentAddressedIdentityProvider` (§41O) remains reserved for derived scanner outputs (the 14 `DerivedOutputType` members) and is never used for candle-level fields — the two identity mechanisms are structurally separate, never conflated.
+
+### 41P. Reviewed-case file loading
+
+**New immutable `ContractModel`, `ReviewedCaseDocument`, 3 fields, exact order:** `schema_version: SemVer`, `dataset_id: str`, `cases: tuple[ReviewedScannerCase, ...]`. `reviewed_cases.json` deserializes to exactly this contract — a JSON object, not a bare array — so dataset linkage and schema versioning are explicit typed fields, never inferred from surrounding file-path context. Every element of `cases` is validated via the already-existing `validate_reviewed_scanner_case` (unchanged) before being handed anywhere. Deterministic ordering: the array's own file order is preserved in `cases` (no re-sorting invented); a **new loader-level invariant** (not a `ReviewedScannerCase` contract change) rejects duplicate `case_id` values within one document. Reviewed labels never enter scanner computation — structurally guaranteed already, unchanged, by `evaluate_scanner`'s existing separation from `run_scanner_replay`. A case failing `validate_reviewed_scanner_case` rejects the **whole `ReviewedCaseDocument`'s** evaluation before any `ScannerBacktestReport` is generated for that dataset — fail-fast, no skip-and-continue policy invented.
+
+### 41Q. First real backtest dataset requirements (replaces the withdrawn "calendar range" decision — §41R defines the objective rule)
+
+Symbols: `XAUUSD`, `EURUSD`, `GBPUSD`. Minimum required timeframes: `M1`, `M5`, `M15`. Preferred context timeframes: `H1`, `H4`, `D1` (`H3` omitted, §41I). **No specific calendar length (days/weeks/months) is prescribed anywhere by this architecture.** The first dataset is acceptable if and only if it satisfies §41R's fully objective, configuration-derived history-sufficiency rule for every required timeframe, plus the calendar-period-coverage rule for any period-level POI concept it is meant to exercise — evaluated mechanically against real candle content, never against an assumed date range. This removes "exact first-dataset calendar range" as an open architecture decision entirely (withdrawn from §41AB); what remains — confirming that a *specific* candidate file genuinely satisfies the objective rule — is a data-acquisition and review fact, not an architecture gap (§41X row 17).
+
+### 41R. History-sufficiency policy (corrected — replaces the prior flat "warm-up policy" with a fully audited, multi-dimensional rule)
+
+**Audited lookback/coverage requirements, read directly from every relevant implemented analyzer — not preserved blindly:**
+
+1. **`MarketMeasurementConfiguration`:** `atr_period=14` (ATR warm-up), `range_context_window=20`, `trendline_min_anchor_spacing_bars=5` (one of at least 2 anchors needed for any trendline at all — `domain/trendlines.py`'s own spacing check). **`domain/swings.py`'s internal `_WINDOW_RADIUS=2`** (confirmed-swing pivot confirmation window, not currently exposed as a configuration field) — a pivot's own "local confirmation" requires `end_index + _WINDOW_RADIUS` candles beyond the pivot itself, i.e. at least 4 bars of local context (`2 * _WINDOW_RADIUS`) before any pivot can even be locally confirmed.
+2. **`BtmmConfiguration.reaction_window_bars=5`** (BTMM reaction-classification window).
+3. **`PoiConfiguration.reclaim_window_bars=3`, `.displacement_window_bars=3`, `.base_min_candles=2`** (smallest base-formation POI requirement).
+4. **Confirmed-swing detection has no finite guaranteed-detection ceiling** — verified directly against `domain/swings.py`: after a pivot's local confirmation window, the algorithm searches forward with no fixed cap for a candle that genuinely breaks the pivot's own high/low ("meaningful confirmation"); this can occur immediately after the floor below, arbitrarily much later, or never for a pivot too close to the end of history. This is an inherent property of the already-approved swing-detection algorithm (§34), not something this milestone can or should reduce to one finite number.
+5. **Period-level POI types (`Previous`/`Current Day/Week/Month High/Low`) require calendar-period coverage, not bar-count coverage** — verified directly against `poi/period_levels.py`: day/week/month windows are computed from UTC calendar boundaries over whatever candles are supplied; at least **2 complete instances** of the relevant calendar period (2 days, 2 ISO weeks, 2 calendar months) of underlying candle history must exist before a genuine "previous period" value is ever populated — a categorically different sufficiency dimension, independent of the fixed-bar-count floor below.
+6. **Multi-timeframe independence:** every processed timeframe carries its own independent warm-up floor against its own candle history — 20 `M15` candles never substitute for 20 `D1` candles; a higher-timeframe POI (`H1`/`H4`/`D1`/`W1`) genuinely needs that many bars *of that same timeframe*, not merely elapsed wall-clock time.
+
+**Locked formula — per-timeframe fixed-count warm-up floor (recomputes automatically if any input configuration value changes, never a silently-stale hardcoded number):**
+
+```
+warm_up_floor_bars(timeframe) = max(
+    atr_period,
+    range_context_window,
+    trendline_min_anchor_spacing_bars,
+    reaction_window_bars,
+    reclaim_window_bars,
+    displacement_window_bars,
+    2 * swing_confirmation_window_radius,  # currently 2 * 2 = 4
+)
+```
+
+Under current defaults: `max(14, 20, 5, 5, 3, 3, 4) = 20` (`range_context_window` remains the largest single input) — applied identically, independently, to every processed timeframe.
+
+**New immutable `ContractModel`, `TimeframeCoverage`, 6 fields, exact order:** `symbol: InternalSymbol`, `timeframe: Timeframe`, `candle_count: int`, `warm_up_floor_bars: int`, `meets_warm_up_floor: bool`, `complete_calendar_period_count: int | None` (populated only for `D1`/`W1`, per finding 5 above; `None` otherwise).
+
+**Evaluation-start / insufficient-history behavior:** the loader reports, per reviewed case, whether every one of that case's own `required_timeframes` independently satisfies `meets_warm_up_floor` before `case.evaluation_start_time_utc` — surfaced as an explicit `insufficient_history_case_ids` diagnostic (§41S), never silently passed. Optional timeframes below their own floor are still accepted and processed (matching the already-approved §41B "scanner timeframe acceptance" policy, unchanged); their detections during that period are simply less reliable, not rejected. Labels inside a warm-up window remain an authoring-discipline concern (the reviewed-case author should not place a label there), backed by the `insufficient_history_case_ids` diagnostic as a second, structural safety net. Missed detections during unavailable warm-up are therefore never scored as `MISSED`, by construction of these two safety nets, not by inventing a new suppression rule inside matching/validation itself.
+
+### 41S. Real backtest execution report (corrected — `quality_gate_status` now enum-typed)
+
+**New `StrEnum`, `BacktestQualityGateStatus`, 2 members:** `PASSED`, `FAILED` (evaluated against §41V; replaces the prior draft's untyped `str` field).
+
+**New immutable `ContractModel`, `HistoricalBacktestExecutionResult`, 14 fields, exact order:** `dataset_id: str`, `dataset_version: str`, `execution_id: UUID` (fresh per execution, a run identifier — deliberately **not** content-addressed, since it identifies a specific execution instant, not a repeatable domain fact), `started_at_utc: datetime`, `completed_at_utc: datetime`, `symbols_processed: tuple[InternalSymbol, ...]`, `per_symbol_replay_results: tuple[ScannerReplayResult, ...]`, `per_symbol_backtest_reports: tuple[ScannerBacktestReport | None, ...]` (index-aligned with `symbols_processed`; `None` where zero reviewed cases matched that symbol, §41N), `data_quality_report: HistoricalDataQualityReport`, `insufficient_history_case_ids: tuple[str, ...]` (§41R), `quality_gate_status: BacktestQualityGateStatus`, `output_paths: tuple[str, ...]` (empty unless the caller separately invoked the JSON writer, §41T), `warnings: tuple[str, ...]`, `production_status: str` (a literal constant, always `"NOT_PRODUCTION_APPROVED"` — an explicit marker, never left implicit). **No profit, loss, drawdown, expectancy, or any other profitability-shaped field exists anywhere on this contract.**
+
+### 41T. JSON report writing (permitted at this outer boundary, unlike the closed scanner core; corrected — exact writer contract and failure-cleanup behavior locked)
+
+**New immutable `ContractModel`, `ReportWriteResult`, 3 fields, exact order:** `execution_directory: str`, `written_file_paths: tuple[str, ...]`, `file_checksums: tuple[tuple[str, SHA256Fingerprint], ...]`.
+
+```python
+def write_backtest_report(
+    result: HistoricalBacktestExecutionResult,
+    output_root: Path,
+) -> ReportWriteResult: ...
+```
+
+Output-root argument: `output_root: Path`, caller-supplied, never a hardcoded absolute path. Execution-directory naming: `<output_root>/<dataset_id>/<execution_id>/`. Exact file names, one JSON object per file (never one combined blob): `manifest_echo.json`, `data_quality_report.json`, `replay_result_<symbol>.json`, `backtest_report_<symbol>.json` (written only where a report exists), `execution_summary.json` — **these are ordinary report files; none of them is the completion marker (§41T2)**. Encoding: UTF-8, no BOM. Indentation: 2 spaces, deterministic. Newline policy: `\n` only (no platform-dependent line endings), matching `json.dump`'s own default when the output stream is opened in text mode with `newline=""` disabled translation avoided by writing via `Path.write_text(..., newline="\n")`. Key ordering: each contract's own declared Pydantic field order (unchanged project convention, §38K). `Decimal`/`datetime`/enum/`UUID` serialization: identical to the already-established `ContractModel.model_dump(mode="json")` rules — no new serializer.
+
+**Corrected atomicity claim (resolves focused-audit finding 6, prior consolidated correction): V1 guarantees atomic replacement of each individual report file — it does not, and never claims to, guarantee atomic publication of the complete execution directory as one indivisible unit.** No stronger guarantee than the one stated in §41T2 appears anywhere in this architecture.
+
+**Exact sequence (corrected, this narrow pass — completion marker moved to its own dedicated file, `checksums.json`, §41T2; `execution_summary.json` is now purely an ordinary report):** (1) refuse if the final execution directory already exists (`HistoricalReportWriteError`, before writing anything); (2) create the final execution directory; (3) produce every **ordinary** report file (`manifest_echo.json`, `data_quality_report.json`, `replay_result_<symbol>.json`, `backtest_report_<symbol>.json`, `execution_summary.json`) through a unique temporary sibling `X.json.tmp-<execution_id>` inside that same directory (same filesystem, guaranteeing step-5's `os.replace` is atomic); (4) `flush()` and `os.fsync()` each temporary report file, so the subsequent rename never promotes a file whose bytes are still only in an OS buffer; (5) `os.replace(tmp_path, final_path)` — atomic on both POSIX and Windows for same-directory renames — for each ordinary report file; (6) `os.fsync()` the containing directory's own file descriptor where the platform supports it (POSIX; a no-op skipped on platforms without directory-fsync support, e.g. Windows); (7) compute SHA-256 from the **finalized on-disk bytes** of every ordinary report file (post-rename, never the pre-rename temporary bytes); (8) construct `checksums.json`'s own canonical content (§41T2); (9) write `checksums.json` through its own unique temporary sibling; (10) `flush()` and `os.fsync()` that temporary checksum file; (11) `os.replace` it to its final name, `checksums.json`; (12) `os.fsync()` the containing directory again. **`checksums.json` is therefore always written and finalized last, strictly after every ordinary report file already exists under its own final name.** On any failure before step 11 completes: every temporary file already created for this execution (ordinary or checksum) is removed; a best-effort cleanup of the resulting incomplete execution directory is then attempted (removing whatever ordinary final files were already renamed before the failure); `checksums.json` must never exist in this failure path. Typed I/O errors: `HistoricalReportWriteError` wraps any underlying `OSError` with the specific path and reason — never a bare unguarded exception. **No CSV report writing. No database output.**
+
+### 41T2. Completion marker: `checksums.json` (corrected — resolves a defect in the immediately prior correction pass, which mistakenly named `execution_summary.json` as the completion marker)
+
+**Corrected finding: `execution_summary.json` must never be treated as proof that report publication completed successfully.** It is an ordinary report file like any other (§41S/§41T) — a reader that infers completion from its mere presence would be wrong, since nothing prevents `execution_summary.json` itself from being the very file whose write failed or whose rename never happened. **The dedicated, exclusive completion marker is a separate file, `checksums.json`, written and finalized strictly after every other file (§41T's exact sequence, steps 7–12).**
+
+**No new public contract is introduced for this (preserves the locked 12-contract/28-export totals, §41Y) — `checksums.json`'s shape is a private, internal JSON structure produced directly by `write_backtest_report`'s own serialization logic, exactly 5 keys, exact order:** `schema_version` (`SemVer`'s own canonical string form), `dataset_id` (`str`), `dataset_version` (`str`), `execution_id` (the execution's own `UUID`, string form), `files` (a JSON array, deterministically ordered — sorted by filename — of `[filename, checksum]` two-element arrays; each pair is one finalized report's own report-relative filename and its lowercase 64-character SHA-256 checksum, never a JSON object/mapping, so key order is never subject to any serializer's own object-key-ordering behavior). Serialized via the same canonical-JSON rules already established for every other report file (§41T) — no new serializer, no new public type.
+
+**Exact coverage:** `files` includes every one of the ordinary report files actually written for this execution (`manifest_echo.json`, `data_quality_report.json`, every `replay_result_<symbol>.json`, every `backtest_report_<symbol>.json` that was written, `execution_summary.json`) — and **never** includes: any temporary file (`*.tmp-<execution_id>`), any incomplete/not-yet-renamed file, the execution directory itself, or `checksums.json` itself (a file cannot checksum itself as part of its own content without becoming a moving target — `checksums.json` is deliberately excluded from its own `files` sequence).
+
+**Reader completeness rule, locked:** a reader must treat an execution directory as **incomplete** — and must reject or ignore it — whenever `checksums.json` is absent, regardless of which other files are present, how many files exist, or their modification times. **No reader may ever infer completion from directory existence, from `execution_summary.json`'s presence, from a file count, or from a modification timestamp — `checksums.json`'s own presence and validity is the only completion signal.** A reader that does locate `checksums.json` must then verify, for every `(filename, checksum)` pair listed inside it: the named file exists at its expected report-relative path, and its own recomputed SHA-256 equals the listed checksum. **Missing-file behavior:** a filename listed in `checksums.json` but absent from the directory rejects the whole report directory as incomplete/corrupt. **Unexpected-file behavior:** an ordinary-report-shaped file present in the directory but *not* listed in `checksums.json` is rejected as unexpected, unverified output — never silently trusted. **Checksum-mismatch behavior:** a listed file whose recomputed SHA-256 disagrees with the listed value rejects the whole report directory. **Invalid-marker-schema behavior:** a `checksums.json` that fails to parse as the exact 5-key shape above (missing key, wrong type, malformed JSON) likewise rejects the whole report directory as incomplete — it is never partially trusted.
+
+**Failure/cleanup behavior, explicit:** if cleanup itself cannot fully remove an incomplete execution directory (e.g. a locked file on the host filesystem), `checksums.json` must still remain absent from it — the directory remains visibly, mechanically incomplete by the reader rule above — and **a later run must never silently overwrite or complete an existing, incomplete execution directory**; the existing-directory refusal in §41T's step 1 already prevents a second run from reusing the same `execution_id`/directory at all, so a stuck incomplete directory simply remains a permanently rejected leftover requiring manual operator cleanup, never a silent auto-repair target.
+
+### 41U. CLI and command boundary (corrected — exact 7-tier exit-code policy, precedence rule locked)
+
+**Decision: both a CLI and a Python API are included.** The CLI is a thin `argparse`-based wrapper calling exactly `load_historical_dataset` → `execute_scanner_backtest` → `write_backtest_report` (§41T), with no duplicated logic: `uv run python -m btmm_ai_scanner.historical_backtest --dataset <path> --output <path>`. No interactive prompts anywhere in the execution path.
+
+**Locked exit-code policy (7 tiers, exact):**
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Unexpected internal failure (an exception outside the typed vocabulary below) |
+| `2` | Command usage or configuration error (argparse's own built-in behavior on a missing/malformed `--dataset`/`--output` argument already exits `2` by default — reused, not overridden) |
+| `3` | Manifest, checksum, file-format, or dataset-quality rejection (`DatasetManifestNotFoundError`, `InvalidDatasetManifestError`, `ChecksumMismatchError`) |
+| `4` | Scanner replay or direct-batch equivalence failure (`ScannerReplayResult.direct_batch_verified is False` or non-empty `detection_mismatches`) |
+| `5` | Reviewed-case or evaluation failure (an invalid `ReviewedCaseDocument`/`ReviewedScannerCase`) |
+| `6` | Report-output or atomic-write failure (`HistoricalReportWriteError`) |
+
+**Precedence when multiple failures exist:** the exit code reflects the **earliest failing pipeline stage** (`load_historical_dataset` → `execute_scanner_backtest` → `write_backtest_report`), never the "worst" or "last" one — fail-fast, matching this project's existing discipline throughout; a later stage never even executes once an earlier one has failed, so no genuine ambiguity between codes 3/4/5/6 can ever arise for one single invocation. The first real backtest must be reproducible by invoking this CLI alone, without editing source code.
+
+### 41V. Backtest acceptance gates (first-backtest-only; no accuracy target invented)
+
+All dataset checksums pass; every declared file loads; zero invalid-OHLC rows accepted; zero incomplete candles accepted into the confirmed-history batch; zero unsupported symbol/timeframe/provider values accepted; replay completes for every symbol; `direct_batch_verified` and zero `detection_mismatches` for every symbol (re-using the already-implemented, already-approved replay-equivalence check unchanged); no future-data visibility violation (structurally enforced already, §41G); every report serializes via `.model_dump(mode="json")` without error; every reviewed case is evaluated (or explicitly flagged `insufficient_history`, never silently skipped); precision/recall figures are computed only where the owning case's own `poi_labels_complete`/`btmm_labels_complete` is `True` (unchanged §38J policy). **No required detection-accuracy percentage is invented anywhere in this milestone** — raw detection results are reported first; any future accuracy target is a separate, later, explicitly-approved decision.
+
+### 41W. Empirical output separation (10 items, kept structurally distinct)
+
+1. Dataset-quality result — `HistoricalDataQualityReport`.
+2. Raw `ScannerReplayResult` — per symbol, unchanged contract.
+3. Replay-equivalence result — `ScannerReplayResult.direct_batch_verified`/`.detection_mismatches`, unchanged.
+4. Reviewed-label evaluation — `ScannerBacktestReport`, unchanged.
+5. POI validation — `PoiValidationReport` (on 4), unchanged.
+6. BTMM validation — `BtmmValidationReport` (on 4), unchanged.
+7. Lifecycle validation — `LifecycleValidationReport` (on 4), unchanged.
+8. Scanner-health result — `ScannerHealthReport` (on 4), unchanged.
+9. Execution metadata — `HistoricalBacktestExecutionResult`'s own `execution_id`/timestamps/`quality_gate_status`/`warnings`/`production_status` fields (§41S), new.
+10. Future strategy-profitability analysis — **structurally absent**: no field, contract, or computation anywhere in this milestone represents it. Item 10 remains outside this milestone, exactly as instructed.
+
+### 41X. Implementability matrix (corrected — 20 rows, arithmetic re-verified, not preserved blindly)
+
+**Correction of a genuine arithmetic and classification defect in the prior draft.** The prior draft's own prose claimed "16 `IMPLEMENTABLE`" while its own table only ever supported 14 (rows 1–3, 6–16); 14+3+1+2 = 20, not the 16+3+1+2 = 22 the prose asserted — the table's row-count was always internally correct, but the summary prose miscounted. Separately, §41F's correction (no built-in `TRADINGVIEW`/`FXCM` alias table — an explicit, per-file, manifest-authored `header_mapping` instead) removes rows 4–5's own genuine architecture gap: there is no longer any repository-owned alias string to wait on, so both rows are re-classified `IMPLEMENTABLE`, not `IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL`. Row 17 remains gap-fill, but for a different, honestly-described reason (§41Q/§41R removed the "author-fixed calendar range" decision entirely; what row 17 still needs is a real exported dataset file physically in hand and reviewer-confirmed against the now-fully-objective §41R rule — an external artifact this milestone does not create, not an unresolved decision).
+
+| # | Row | Required upstream | Rule | I/O | Evidence | Readiness | Missing decision | Owner |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Dataset manifest | none new | §41D | file read | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 2 | File-entry manifest | manifest | §41E | file read | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 3 | Canonical CSV parser + explicit header-mapping mechanism | manifest | §41F/§41J | file read | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 4 | TradingView-sourced file compatibility (via manifest `header_mapping`, no dedicated code) | row 3 | §41F | file read | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 5 | FXCM-sourced file compatibility (via manifest `header_mapping`, no dedicated code) | row 3 | §41F | file read | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 6 | UTC conversion | parser | §41G | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 7 | Availability derivation (fixed-intraday + DST-safe calendar) | UTC conversion | §41G | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 8 | Candle normalization | `market_data` (existing) | §41B/§41G | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` (reuses existing pipeline unmodified) | — | this milestone |
+| 9 | Data-quality report | parser | §41K | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 10 | Gap report | data-quality | §41L | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 11 | Reviewed-case JSON loader | `ReviewedScannerCase` (existing) | §41P | file read | external | `IMPLEMENTABLE` | — | this milestone |
+| 12 | Content-addressed identity implementation | `DerivedOutputIdentityProvider` Protocol (existing) | §41O | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 13 | Dataset loader API | 1–11 | §41M | file read | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 14 | Backtest execution API | 12–13, `run_scanner_replay`/`evaluate_scanner` (existing) | §41N | none | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE` | — | this milestone |
+| 15 | JSON writer | 14 | §41T | file write | n/a | `IMPLEMENTABLE` | — | this milestone |
+| 16 | CLI | 13–15 | §41U | file read/write | n/a | `IMPLEMENTABLE` | — (exit codes now locked, §41U) | this milestone |
+| 17 | First real backtest | 1–16 | §41Q/§41R | file read/write | `ENGINEERING-PROVISIONAL` | `IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL` | a real exported dataset file, physically in hand, confirmed by reviewer inspection to satisfy §41R's objective history-sufficiency rule — an external artifact, not a decision | this milestone + a real dataset |
+| 18 | H3 resampling | none approved | §41I | none | n/a | `DEFERRED` | aggregation-rule approval | future |
+| 19 | Live provider ingestion | none approved | — | network | n/a | `BLOCKED` | no approved live-provider architecture | future |
+| 20 | Profit backtesting | entry/stop/target | — | n/a | n/a | `BLOCKED` | `P0G-B016`/`1B-L0-ENTRY-STANDARDS` still unapproved | future |
+
+**Corrected totals, recounted directly from the table above, not asserted:** `IMPLEMENTABLE` = **16** (rows 1–16); `IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL` = **1** (row 17 only); `DEFERRED` = **1** (row 18); `BLOCKED` = **2** (rows 19–20). **Total = 16 + 1 + 1 + 2 = 20.** Included-implementation rows: **1–17 (17 total)**. Deferred: row 18, `H3` resampling. Blocked: row 19, live provider ingestion; row 20, profit backtesting.
+
+**Readiness classification recorded separately from implementation-inclusion status, per this task's own instruction:** all 17 included rows (1–17) are part of this milestone's implementation scope; of those 17, **16 are strictly `IMPLEMENTABLE`** (fully specified, zero remaining architecture decision) and **exactly 1 (row 17) is `IMPLEMENTABLE_WITH_AUTHOR_GAP_FILL`** (fully specified architecturally, but not completable without an external artifact this milestone does not create). No row is described as strictly `IMPLEMENTABLE` when it is in fact gap-fill.
+
+### 41Y. Exact ordered public export list (28 items, corrected — no "potential"/"approximately"/"expected"/"to be finalized" language)
+
+New package `src/btmm_ai_scanner/historical_backtest/`, **12 source files** (unchanged count; `manifest.py` also now owns `HeaderMappingEntry`): `__init__.py`, `enums.py`, `configuration.py`, `manifest.py`, `csv_parser.py`, `data_quality.py`, `loader.py`, `identity.py`, `execution.py`, `reporting.py`, `cli.py`, `__main__.py`. Every public symbol below is re-exported from `historical_backtest/__init__.py`; private parsing helpers (inside `csv_parser.py`) and CLI internals (argument-parser construction inside `cli.py`) are never exported.
+
+| # | Name | Owning path | Purpose | Category |
+|---|---|---|---|---|
+| 1 | `DatasetPartition` | `enums.py` | Dataset partition label (`DEVELOPMENT`/`REVIEWED_VALIDATION`/`OUT_OF_SAMPLE`) | enum |
+| 2 | `CandleTimestampConvention` | `enums.py` | Timestamp convention (`CANDLE_OPEN_TIME`, sole V1 member) | enum |
+| 3 | `CandleCompletenessConvention` | `enums.py` | File-wide completeness convention | enum |
+| 4 | `HistoricalFileFormat` | `enums.py` | File format (`CSV_CANONICAL_V1`, sole V1 member) | enum |
+| 5 | `CanonicalCandleField` | `enums.py` | The 8 canonical logical candle fields (§41F) | enum |
+| 6 | `DataQualityClassification` | `enums.py` | The 6-member data-quality classification (§41K) | enum |
+| 7 | `BacktestQualityGateStatus` | `enums.py` | `PASSED`/`FAILED` (§41S) | enum |
+| 8 | `HistoricalDatasetConfiguration` | `configuration.py` | Loader-level configuration (§41M) | contract |
+| 9 | `HeaderMappingEntry` | `manifest.py` | One source-column → canonical-field mapping (§41F) | contract |
+| 10 | `HistoricalFileEntry` | `manifest.py` | Per-file manifest entry (§41E) | contract |
+| 11 | `DatasetManifest` | `manifest.py` | Dataset-level manifest (§41D) | contract |
+| 12 | `InvalidDatasetManifestError` | `manifest.py` | Manifest/header-mapping/timestamp-convention defect (§41K) | error |
+| 13 | `DataQualityIssue` | `data_quality.py` | One row/file/dataset-level finding (§41M) | contract |
+| 14 | `GapRecord` | `data_quality.py` | One detected gap (§41L) | contract |
+| 15 | `TimeframeCoverage` | `data_quality.py` | Per-(symbol,timeframe) warm-up/calendar coverage (§41R) | contract |
+| 16 | `HistoricalDataQualityReport` | `data_quality.py` | Aggregate data-quality report (§41M) | contract |
+| 17 | `ChecksumMismatchError` | `data_quality.py` | A file's sha256 disagrees with its manifest entry (§41K) | error |
+| 18 | `ReviewedCaseDocument` | `loader.py` | Wrapped `reviewed_cases.json` document (§41P) | contract |
+| 19 | `LoadedHistoricalDataset` | `loader.py` | Full loader result (§41M) | contract |
+| 20 | `DatasetManifestNotFoundError` | `loader.py` | No `manifest.json` at `dataset_path` (§41M) | error |
+| 21 | `load_historical_dataset` | `loader.py` | Dataset loader entry point (§41M) | API |
+| 22 | `ContentAddressedIdentityProvider` | `identity.py` | Concrete `DerivedOutputIdentityProvider` (§41O) | identity implementation |
+| 23 | `HistoricalBacktestExecutionResult` | `execution.py` | Full backtest execution result (§41S) | contract |
+| 24 | `execute_scanner_backtest` | `execution.py` | Backtest orchestration entry point (§41N) | API |
+| 25 | `ReportWriteResult` | `reporting.py` | Outcome of writing one execution's reports (§41T) | contract |
+| 26 | `HistoricalReportWriteError` | `reporting.py` | Report-write failure (§41T) | error |
+| 27 | `write_backtest_report` | `reporting.py` | Outer JSON-writer entry point (§41T) | writer API |
+| 28 | `main` | `cli.py` | CLI entry point, `def main(argv: Sequence[str] | None = None) -> int` (§41U) | CLI-facing API |
+
+**Recounted exact total: 28.** Category subtotals: 7 enums, 12 contracts, 4 errors, 3 core APIs (`load_historical_dataset`, `execute_scanner_backtest`, `write_backtest_report`) + 1 CLI-facing API (`main`) = 4 APIs, 1 identity implementation. `7 + 12 + 4 + 4 + 1 = 28`. `__main__.py` exports nothing of its own (it only calls `cli.main()`); `csv_parser.py` exports nothing of its own (row/file-level findings surface as `DataQualityIssue` data, owned by `data_quality.py`, not as a `csv_parser`-owned type).
+
+### 41Z. Dependency policy
+
+Standard library only: `csv`, `json`, `hashlib`, `pathlib`, `datetime`, `zoneinfo`, `decimal`, `argparse`, `os` (for `os.replace`/`os.fsync`). **No `pandas`. No dataframe dependency of any kind. No `pyproject.toml` change proposed.** Audited and confirmed technically sufficient for manifest parsing, CSV parsing, checksum computation, timezone conversion, and JSON writing — no unavoidable-dependency case exists for this milestone's scope.
+
+### 41AA. Exact test plan (corrected — 68 named tests, complete ownership of every approved behavior including this pass's own corrections, distributed across 13 proposed test files; no "additional defensive tests as implementation detail" language)
+
+**Correction, this consolidated pass: 9 new top-level tests are added, in the exact three files below, to own the behaviors newly locked by this correction (candle-level identity derivation, exact timestamp-format parsing, symlink/casefold path security, explicit D1/W1 session-close metadata). None of the existing 59 tests is renamed, removed, or renumbered out of its own file.** The list below is exact and closed: every top-level test the implementation may add is already named here; **no additional top-level test may be added later without an approved architecture amendment.**
+
+| # | File | Literal top-level test name |
+|---|---|---|
+| 1 | `test_historical_header_mapping.py` | `test_header_mapping_rejects_duplicate_source_column` |
+| 2 | `test_historical_header_mapping.py` | `test_header_mapping_rejects_duplicate_canonical_field` |
+| 3 | `test_historical_header_mapping.py` | `test_header_mapping_rejects_blank_source_column` |
+| 4 | `test_historical_header_mapping.py` | `test_header_mapping_rejects_missing_mandatory_canonical_field` |
+| 5 | `test_historical_header_mapping.py` | `test_header_mapping_accepts_arbitrary_literal_column_names_for_tradingview_and_fxcm_style_files` |
+| 6 | `test_historical_manifest.py` | `test_manifest_rejects_missing_required_fields` |
+| 7 | `test_historical_manifest.py` | `test_manifest_rejects_path_traversal_relative_path` |
+| 8 | `test_historical_manifest.py` | `test_manifest_rejects_symbols_timeframes_summary_mismatch` |
+| 9 | `test_historical_manifest.py` | `test_manifest_rejects_empty_file_entries` |
+| 10 | `test_historical_manifest.py` | `test_manifest_rejects_checksum_mismatch_for_whole_dataset` |
+| 11 | `test_historical_manifest.py` | `test_manifest_rejects_unsupported_timestamp_convention` |
+| 12 | `test_historical_csv_parsing.py` | `test_canonical_schema_parses_via_explicit_header_mapping` |
+| 13 | `test_historical_csv_parsing.py` | `test_ohlc_parsed_as_decimal_never_float` |
+| 14 | `test_historical_csv_parsing.py` | `test_blank_rows_skipped_and_counted` |
+| 15 | `test_historical_csv_parsing.py` | `test_duplicate_header_row_rejects_file_only_not_dataset` |
+| 16 | `test_historical_csv_parsing.py` | `test_unsupported_encoding_rejects_file_only_not_dataset` |
+| 17 | `test_historical_csv_parsing.py` | `test_bom_stripped_transparently_from_first_header` |
+| 18 | `test_historical_timezone.py` | `test_source_local_open_timestamp_converts_to_utc` |
+| 19 | `test_historical_timezone.py` | `test_ambiguous_local_open_timestamp_rejected` |
+| 20 | `test_historical_timezone.py` | `test_nonexistent_local_open_timestamp_rejected` |
+| 21 | `test_historical_timezone.py` | `test_intraday_availability_uses_fixed_elapsed_duration` |
+| 22 | `test_historical_timezone.py` | `test_d1_availability_uses_local_calendar_day_boundary_not_fixed_24_hours` |
+| 23 | `test_historical_timezone.py` | `test_w1_availability_uses_local_calendar_week_boundary_not_fixed_168_hours` |
+| 24 | `test_historical_timezone.py` | `test_utc_source_timezone_fixed_and_calendar_derivation_coincide` |
+| 25 | `test_historical_timezone.py` | `test_ambiguous_or_nonexistent_derived_calendar_close_rejected` |
+| 26 | `test_historical_timezone.py` | `test_manifest_timestamp_format_controls_parsing` |
+| 27 | `test_historical_timezone.py` | `test_row_timezone_offset_is_rejected_when_manifest_timezone_is_used` |
+| 28 | `test_historical_timezone.py` | `test_d1_session_close_metadata_controls_availability` |
+| 29 | `test_historical_timezone.py` | `test_w1_session_close_metadata_controls_availability` |
+| 30 | `test_historical_data_quality.py` | `test_incomplete_candle_excluded_from_confirmed_history_batch` |
+| 31 | `test_historical_data_quality.py` | `test_duplicate_identical_row_rejected_keeping_first_occurrence` |
+| 32 | `test_historical_data_quality.py` | `test_duplicate_differing_row_rejects_whole_file` |
+| 33 | `test_historical_data_quality.py` | `test_invalid_ohlc_geometry_row_rejected` |
+| 34 | `test_historical_data_quality.py` | `test_missing_volume_retained_as_unknown_kind` |
+| 35 | `test_historical_data_quality.py` | `test_row_outside_manifest_declared_range_rejected` |
+| 36 | `test_historical_data_quality.py` | `test_unexpected_row_count_reported_as_warning_only` |
+| 37 | `test_historical_gaps.py` | `test_gap_report_records_missing_bars_without_synthesizing_candles` |
+| 38 | `test_historical_gaps.py` | `test_weekend_gap_flagged_likely_market_closure` |
+| 39 | `test_historical_gaps.py` | `test_no_forward_fill_or_interpolation_anywhere_in_gap_handling` |
+| 40 | `test_historical_loader.py` | `test_unsupported_symbol_rejects_dataset` |
+| 41 | `test_historical_loader.py` | `test_unsupported_timeframe_rejects_dataset` |
+| 42 | `test_historical_loader.py` | `test_loader_result_ordering_independent_of_filesystem_enumeration_order` |
+| 43 | `test_historical_loader.py` | `test_warm_up_floor_computed_from_configuration_not_hardcoded` |
+| 44 | `test_historical_loader.py` | `test_period_level_timeframe_coverage_reports_complete_calendar_period_count` |
+| 45 | `test_historical_loader.py` | `test_insufficient_history_flagged_per_case_not_silently_scored` |
+| 46 | `test_historical_loader.py` | `test_symlink_descendant_is_rejected` |
+| 47 | `test_historical_loader.py` | `test_casefold_path_collision_is_rejected` |
+| 48 | `test_historical_reviewed_cases.py` | `test_reviewed_case_document_loads_in_declared_file_order` |
+| 49 | `test_historical_reviewed_cases.py` | `test_reviewed_case_document_rejects_duplicate_case_id` |
+| 50 | `test_historical_reviewed_cases.py` | `test_invalid_reviewed_case_rejects_whole_file_before_evaluation` |
+| 51 | `test_historical_identity.py` | `test_content_addressed_identity_provider_ignores_call_order` |
+| 52 | `test_historical_identity.py` | `test_content_addressed_identity_provider_produces_valid_uuidv7_version_and_variant_bits` |
+| 53 | `test_historical_identity.py` | `test_content_addressed_identity_provider_is_deterministic_across_process_instances` |
+| 54 | `test_historical_identity.py` | `test_candle_provenance_id_is_deterministic` |
+| 55 | `test_historical_identity.py` | `test_candle_record_id_is_deterministic` |
+| 56 | `test_historical_identity.py` | `test_candle_content_fingerprint_is_canonical` |
+| 57 | `test_historical_execution.py` | `test_execute_scanner_backtest_runs_one_replay_call_per_symbol` |
+| 58 | `test_historical_execution.py` | `test_replay_mismatch_surfaces_as_backtest_execution_failure` |
+| 59 | `test_historical_execution.py` | `test_execute_scanner_backtest_never_opens_a_live_connection` |
+| 60 | `test_historical_execution.py` | `test_execute_scanner_backtest_performs_no_file_io_of_its_own` |
+| 61 | `test_historical_reporting.py` | `test_json_report_writer_is_deterministic_and_atomic` |
+| 62 | `test_historical_reporting.py` | `test_json_report_writer_refuses_to_overwrite_existing_execution` |
+| 63 | `test_historical_reporting.py` | `test_execution_summary_contains_no_profit_or_entry_fields` |
+| 64 | `test_historical_reporting.py` | `test_json_report_writer_cleans_up_temporary_file_after_failed_write` |
+| 65 | `test_historical_cli.py` | `test_cli_exit_code_zero_on_success` |
+| 66 | `test_historical_cli.py` | `test_cli_exit_code_precedence_uses_earliest_failing_pipeline_stage` |
+| 67 | `test_historical_cli.py` | `test_cli_has_no_interactive_prompts` |
+| 68 | `test_historical_exports.py` | `test_historical_backtest_package_exports_exact_public_surface` |
+
+**Per-file distribution (unchanged by this narrow pass):** `test_historical_header_mapping.py` 5, `test_historical_manifest.py` 6, `test_historical_csv_parsing.py` 6, `test_historical_timezone.py` **12**, `test_historical_data_quality.py` 7, `test_historical_gaps.py` 3, `test_historical_loader.py` **8**, `test_historical_reviewed_cases.py` 3, `test_historical_identity.py` **6**, `test_historical_execution.py` 4, `test_historical_reporting.py` 4, `test_historical_cli.py` 3, `test_historical_exports.py` 1. Sum: `5+6+6+12+7+3+8+3+6+4+4+3+1 = 68`. **68 remains the exact, closed total — no sixty-ninth test is added by this pass.**
+
+**Completion-marker behavior ownership, this narrow correction (assigned to the two existing tests that already own atomic writing and failure cleanup — no test renamed, no test added):** row 61, `test_json_report_writer_is_deterministic_and_atomic`, is corrected to additionally verify: `execution_summary.json` is an ordinary report file, never a completion marker; `checksums.json` is written and finalized strictly last, after every ordinary report file; `checksums.json`'s own `files` list excludes itself; a directory missing `checksums.json` is incomplete and must be rejected by a reader. Row 64, `test_json_report_writer_cleans_up_temporary_file_after_failed_write`, is corrected to additionally verify: a failure occurring at any point before `checksums.json` is finalized leaves the directory with no valid completion marker present (`checksums.json` absent), regardless of how many ordinary report files were already finalized.
+
+**Full ownership confirmed for every required-coverage item, including this pass's own new behaviors:** manifest field validation (6/8/9), header mapping (1–5), duplicate mappings (1/2), mandatory canonical columns (4), path traversal (7), symlink escape (46), casefold path collision (47), checksums (10), BOM (17), encoding (16), Decimal parsing (13), timezone parsing (18), timestamp-format parsing (26), row-level UTC-offset rejection (27), DST transition behavior (19/20/25), `D1` calendar availability (22), explicit `D1` session-close metadata (28), `W1` calendar availability (23), explicit `W1` session-close metadata (29), intraday availability (21), incomplete candles (30), duplicate rows (31/32), invalid geometry (33), missing volume (34), gap classification (37), weekend closure (38), deterministic ordering (42), reviewed-case loading (48), derived-scanner-output identity (51/52/53), candle-level provenance/record/content identity (54/55/56), multi-symbol execution (57), replay mismatches (58), JSON atomic writes (61), overwrite refusal (62), CLI exit codes (65/66), no entry fields (63), no profit metrics (63), no live connection (59). **No required coverage is left without a named test owner.**
+
+**Explicitly excluded from every one of these 68 tests and from any test added at implementation:** network access, test classes, generated/parametrized-into-existence tests, `skip`, `xfail`, any helper function named `test_*` that is not itself a real test, and any arbitrary accuracy threshold assertion.
+
+### 41AA2. Exact file scope (corrected — 25 total paths: 12 source, 13 test)
+
+New package `src/btmm_ai_scanner/historical_backtest/` — **12 source files** (§41Y): `__init__.py`, `enums.py`, `configuration.py`, `manifest.py`, `csv_parser.py`, `data_quality.py`, `loader.py`, `identity.py`, `execution.py`, `reporting.py`, `cli.py`, `__main__.py`. **13 test files** (§41AA, one more than the prior draft — `test_historical_header_mapping.py` added): `test_historical_header_mapping.py`, `test_historical_manifest.py`, `test_historical_csv_parsing.py`, `test_historical_timezone.py`, `test_historical_data_quality.py`, `test_historical_gaps.py`, `test_historical_loader.py`, `test_historical_reviewed_cases.py`, `test_historical_identity.py`, `test_historical_execution.py`, `test_historical_reporting.py`, `test_historical_cli.py`, `test_historical_exports.py`. **Total: 25 new paths, 0 modified — source/test split 12/13.** No existing `scanner/`, `market_data/`, `domain/`, `poi/`, `btmm/`, `structure/`, or `ingestion/` file is modified anywhere in this milestone — verified: this correction pass introduced no new integration requirement against any closed package that a plain import cannot satisfy. **Inventory: unchanged at 196 (nothing is implemented by this task); a future approved implementation would add exactly 25 rows, projecting 196 → 221 — this projection is not applied now.** Creation order upon future implementation: 196–220. Dependency direction: `historical_backtest` depends on `market_data`, `scanner`, `domain` (types only), `config`, `contracts`; nothing in any existing package depends on `historical_backtest` (a pure new leaf package). Public/private ownership: every symbol in §41Y's 28-item list is public (re-exported from `__init__.py`); `csv_parser.py`'s row-level parsing helpers and `cli.py`'s argument-parser construction are private, never exported.
+
+### 41AB. Author decisions required before implementation (corrected — 33 items, every focused-audit blocking/non-blocking finding now resolved by an explicit, documented rule)
+
+1. Milestone identifier/title: `1C-A-REAL-BACKTEST` — **recommended, pending approval.**
+2. Canonical directory structure: §41C — **recommended.**
+3. Path representation and filesystem security: §41C2 (lexical path policy, symlink prohibition, resolved-root containment) — **recommended, fully resolved (focused-audit finding 3).**
+4. Manifest schema: §41D (**17 fields**, exact order, `reviewed_case_sha256` added) — **recommended.**
+5. File-entry schema: §41E (**16 fields**, exact order, `timestamp_format`/`calendar_close_day_offset`/`calendar_close_time_local` added) — **recommended.**
+6. Canonical CSV columns: §41F (8 `CanonicalCandleField` members, 5 mandatory) — **recommended.**
+7. Accepted source mappings: explicit per-file `HeaderMappingEntry` tuples, no built-in provider alias table, §41F — **recommended, fully resolved.**
+8. Timestamp semantics: candle-open convention, §41G — **recommended.**
+9. Exact timestamp-string parsing: `HistoricalFileEntry.timestamp_format`, `strptime`-based, no `%z`/`%Z`, §41G1 — **recommended, fully resolved.**
+10. Timezone policy: one IANA timezone per dataset, `zoneinfo`-based — **recommended.**
+11. Exact DST validation algorithm: fold=0/fold=1 UTC round-trip resolver, §41G2 — **recommended, fully resolved (focused-audit finding 2).**
+12. Availability derivation: fixed elapsed duration for intraday timeframes; explicit manifest-declared session-close metadata for `D1`/`W1`, §41G3 — **recommended, fully resolved (focused-audit finding 4).**
+13. Volume policy: optional, `None`/`UNKNOWN` when absent — **recommended.**
+14. Incomplete-candle policy: retained, excluded from confirmed-history batch — **recommended.**
+15. Duplicate/CSV-edge-case policy: §41J/§41K (identical → reject row keep-first; differing → reject file; NaN/Infinity/negative-zero/short-row/surplus-column handling) — **recommended, fully resolved.**
+16. Gap policy: §41L, no fill, no interpolation — **recommended.**
+17. Checksum policy: sha256 per file over raw on-disk bytes, pre-parse, mismatch rejects the whole dataset, §41K2 — **recommended, fully resolved (focused-audit finding 5).**
+18. Required timeframes: `M1`/`M5`/`M15` (unchanged from `ScannerConfiguration` default) — **recommended.**
+19. Optional timeframes: `H1`/`H4`/`D1`/`W1` for the first dataset — **recommended.**
+20. H3 policy: omitted, not synthesized, §41I — **recommended.**
+21. Candle-level identity derivation: private `provenance_id`/`record_id`/`content_fingerprint`/`source_record_id` rules, `historical_backtest/identity.py`, §41O2 — **recommended, fully resolved (focused-audit finding 1); no new public surface.**
+22. Identity-collision policy: reject on genuine collision, `InvalidDatasetManifestError`, §41O2 — **recommended.**
+23. Derived-scanner-output identity implementation: `ContentAddressedIdentityProvider`, canonical-JSON domain-separated input, rigorously verified against `UUIDv7`'s own validator, §41O — **recommended.**
+24. Reviewed-case format: new `ReviewedCaseDocument` contract wrapping `schema_version`/`dataset_id`/`cases`, §41P — **recommended.**
+25. History-sufficiency policy: fully objective, configuration-derived formula (no calendar range decided anywhere), §41R — **recommended, fully resolved.**
+26. Loader API: `load_historical_dataset`, §41M — **recommended.**
+27. Execution API: `execute_scanner_backtest`, §41N — **recommended.**
+28. JSON writer: `write_backtest_report`, exact atomic-per-file (not atomic-per-directory)/fsync/cleanup behavior, §41T; exact completion marker `checksums.json`, written and finalized strictly last, §41T2 (corrected this narrow pass — `execution_summary.json` is an ordinary report file, never the marker) — **recommended, fully resolved (focused-audit finding 6).**
+29. CLI: included, exact 7-tier exit-code policy with earliest-failing-stage precedence, §41U — **recommended, fully resolved.**
+30. Output directory / overwrite policy: `<output root>/<dataset_id>/<execution_id>/`, refuse to overwrite — **recommended.**
+31. First-dataset requirements: symbols/timeframes locked (§41Q); history sufficiency locked as an objective formula (§41R) — **recommended, fully resolved.** What remains is a data-acquisition fact (§41X row 17): a real exported dataset file must physically exist and satisfy the formula, confirmed by reviewer inspection.
+32. Acceptance gates: §41V — **recommended.**
+33. File scope / test plan / exports / inventory / exclusions: §41AA2 (25 paths, 12/13 split, unchanged), §41AA (**68** named tests, exact and closed), §41Y (28-item exact ordered list, unchanged), inventory 196 → 221 (unchanged), §41A's 15-item exclusion list re-confirmed — **recommended.**
+
+**Every item above is now either `recommended` with nothing left open, or explicitly reclassified as a data-acquisition fact rather than a decision (item 31) — every one of the four focused-audit blocking findings (candle identity, DST algorithm, path/symlink security, D1/W1 session-close) and both non-blocking findings (checksum bytes, writer atomicity) is now resolved by an explicit rule cited above, not merely relabeled.**
+
+### 41AC. Mandatory stop-condition check (all clear, re-verified against the corrected architecture)
+
+Checked against every condition in this task's own Part 30: real dataset files **can** enter the scanner (via `load_historical_dataset` → `ScannerTimeframeInput`, reusing the existing normalization pipeline, §41M) — including a genuine identity derivation for those candles now that candle-level identity is resolved (§41O2); timestamp meaning is **not** ambiguous (locked to candle-open, §41G, with any other convention explicitly rejected rather than guessed); availability derivation is **not** ambiguous (exact, timeframe-class-specific rules, §41G/§41G3, DST-audited via an exact implementable algorithm, §41G2); timezones are **never** silently inferred (`source_timezone` is a required explicit field, §41D; row-level offsets are structurally rejected, §41G1); malformed rows are **never** silently repaired (§41K/§41J); no synthetic candle is ever created (§41L); file order **never** affects results (manifest-declared `relative_path` list, never directory enumeration, §41C) and path/symlink security is now explicit (§41C2); identity is **not** call-order dependent, for either derived scanner outputs (§41O) or candle-level records (§41O2), both rigorously verified against the `UUIDv7` contract, not casually asserted; reviewed labels **never** enter scanning (§41P, structurally unchanged); the first backtest **is** reproducible (CLI + explicit dataset/output paths, §41U); file scope is **not** conditional (§41AA2, exact 25-path proposal, unchanged by this correction); exact tests/counts are **not** missing (§41AA, **68** named tests, exact and closed); exact exports are **not** missing (§41Y, 28-item exact list, unchanged); exact CLI exit codes are **not** missing (§41U, 7-tier); profit/trade logic is **absent** (§41A/§41S/§41W); live-provider behavior is **absent** (§41M/§41X row 19). **No mandatory stop condition is triggered.**
+
+### 41AD. Final architecture verdict (corrected — upgraded from the focused audit's verdict C)
+
+**B — CORRECTED WITH NON-BLOCKING FINDINGS — READY FOR AUTHOR APPROVAL.** Every one of the four blocking findings from the focused read-only audit is resolved by an explicit, documented rule, not by relabeling or reclassifying an unresolved question as acceptable: (1) candle-level `provenance_id`/`record_id`/`content_fingerprint`/`source_record_id` derivation is now fully specified, private, and structurally separate from `ContentAddressedIdentityProvider` (§41O2); (2) the DST ambiguous/nonexistent-time detection algorithm is now an exact, implementable fold=0/fold=1 UTC round-trip resolver (§41G2); (3) path lexical validation and filesystem symlink-escape/resolved-root-containment security are now fully specified (§41C2); (4) `D1`/`W1` session-close derivation now uses explicit, mandatory `HistoricalFileEntry` fields (`calendar_close_day_offset`/`calendar_close_time_local`) rather than inferring the broker's session convention from the open timestamp (§41G3/§41E). The two non-blocking precision findings are also resolved: checksum byte-exactness is now locked to raw on-disk, pre-parse bytes (§41K2); the JSON writer's atomicity claim is now correctly scoped to per-file replacement, not whole-directory publication, with an explicit completion-marker rule (§41T). Every core ingestion/orchestration/reporting decision (manifest, file-entry, header-mapping contract, DST-safe timestamp/timezone/availability semantics, symbol/timeframe policy, data quality, gap policy, loader API, execution API, both identity mechanisms, reviewed-case loading, history-sufficiency policy, JSON writer, 7-tier CLI exit codes, acceptance gates, exact file scope, exact 28-item export list, exact 68-test plan, dependency policy) is fully specified and internally consistent with the actual implemented `1B-L-SCANNER`/`1B-L-SCANNER-A1` contracts. **Exactly one disclosed non-blocking gap remains, unchanged from before, and it is a genuine external-data dependency, not an architecture decision:** row 17 of the implementability matrix (§41X) — a real exported dataset file must physically exist and be confirmed, by direct reviewer inspection, to satisfy §41R's objective history-sufficiency rule, before the first real backtest can actually run to completion; this is inherent to any "first real backtest" claim and cannot be resolved by architecture alone. This gap does not contradict any locked field, type, count, enum, contract, error, API, or rule above. This milestone remains `NOT YET IMPLEMENTED` and `NOT PRODUCTION-APPROVED` pending explicit author approval of §41A–§41AC.
