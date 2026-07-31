@@ -14,6 +14,7 @@ from btmm_ai_scanner.scanner.matching import match_poi_detections, zone_overlap_
 _BASE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 _FINGERPRINT = "a" * 64
 _PROV_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdff")
+_MINIMUM_PRICE_TICK = Decimal("0.01")
 
 
 def _label(
@@ -78,7 +79,7 @@ def test_matching_requires_exact_symbol_timeframe_and_direction() -> None:
     label = _label()
     wrong_timeframe = _detection(0, timeframe=Timeframe.M5)
     matches = match_poi_detections(
-        InternalSymbol.XAUUSD, (label,), (wrong_timeframe,), True
+        InternalSymbol.XAUUSD, (label,), (wrong_timeframe,), True, _MINIMUM_PRICE_TICK
     )
     statuses = {m.status for m in matches}
     assert LabelMatchStatus.MATCHED not in statuses
@@ -102,7 +103,9 @@ def test_matching_computes_exact_zone_overlap_ratio() -> None:
 def test_matching_requires_availability_inside_expected_interval() -> None:
     label = _label()
     too_late = _detection(0, availability_offset_minutes=1000)
-    matches = match_poi_detections(InternalSymbol.XAUUSD, (label,), (too_late,), True)
+    matches = match_poi_detections(
+        InternalSymbol.XAUUSD, (label,), (too_late,), True, _MINIMUM_PRICE_TICK
+    )
     assert all(m.status != LabelMatchStatus.MATCHED for m in matches)
 
 
@@ -111,10 +114,18 @@ def test_matching_tie_break_order_is_deterministic() -> None:
     detection_a = _detection(0, availability_offset_minutes=5)
     detection_b = _detection(1, availability_offset_minutes=5)
     matches_1 = match_poi_detections(
-        InternalSymbol.XAUUSD, (label,), (detection_a, detection_b), True
+        InternalSymbol.XAUUSD,
+        (label,),
+        (detection_a, detection_b),
+        True,
+        _MINIMUM_PRICE_TICK,
     )
     matches_2 = match_poi_detections(
-        InternalSymbol.XAUUSD, (label,), (detection_b, detection_a), True
+        InternalSymbol.XAUUSD,
+        (label,),
+        (detection_b, detection_a),
+        True,
+        _MINIMUM_PRICE_TICK,
     )
     matched_1 = next(m for m in matches_1 if m.status == LabelMatchStatus.MATCHED)
     matched_2 = next(m for m in matches_2 if m.status == LabelMatchStatus.MATCHED)
@@ -124,14 +135,18 @@ def test_matching_tie_break_order_is_deterministic() -> None:
 def test_matching_never_produces_an_ambiguous_result() -> None:
     label = _label()
     detections = tuple(_detection(i, availability_offset_minutes=5) for i in range(5))
-    matches = match_poi_detections(InternalSymbol.XAUUSD, (label,), detections, True)
+    matches = match_poi_detections(
+        InternalSymbol.XAUUSD, (label,), detections, True, _MINIMUM_PRICE_TICK
+    )
     matched = [m for m in matches if m.status == LabelMatchStatus.MATCHED]
     assert len(matched) == 1
 
 
 def test_unmatched_expected_label_reported_as_missed() -> None:
     label = _label()
-    matches = match_poi_detections(InternalSymbol.XAUUSD, (label,), (), True)
+    matches = match_poi_detections(
+        InternalSymbol.XAUUSD, (label,), (), True, _MINIMUM_PRICE_TICK
+    )
     assert len(matches) == 1
     assert matches[0].status == LabelMatchStatus.MISSED
     assert matches[0].expected_label_id == "poi-1"
@@ -139,14 +154,18 @@ def test_unmatched_expected_label_reported_as_missed() -> None:
 
 def test_unmatched_detection_reported_as_unexpected_when_case_complete() -> None:
     detection = _detection(0, availability_offset_minutes=5)
-    matches = match_poi_detections(InternalSymbol.XAUUSD, (), (detection,), True)
+    matches = match_poi_detections(
+        InternalSymbol.XAUUSD, (), (detection,), True, _MINIMUM_PRICE_TICK
+    )
     assert len(matches) == 1
     assert matches[0].status == LabelMatchStatus.UNEXPECTED
 
 
 def test_unmatched_detection_reported_as_unreviewed_when_case_incomplete() -> None:
     detection = _detection(0, availability_offset_minutes=5)
-    matches = match_poi_detections(InternalSymbol.XAUUSD, (), (detection,), False)
+    matches = match_poi_detections(
+        InternalSymbol.XAUUSD, (), (detection,), False, _MINIMUM_PRICE_TICK
+    )
     assert len(matches) == 1
     assert matches[0].status == LabelMatchStatus.UNREVIEWED
 
@@ -186,10 +205,18 @@ def test_matching_result_independent_of_detection_registration_order() -> None:
     detection_a = _detection(0, availability_offset_minutes=5)
     detection_b = _detection(1, availability_offset_minutes=6)
     forward = match_poi_detections(
-        InternalSymbol.XAUUSD, (label,), (detection_a, detection_b), True
+        InternalSymbol.XAUUSD,
+        (label,),
+        (detection_a, detection_b),
+        True,
+        _MINIMUM_PRICE_TICK,
     )
     backward = match_poi_detections(
-        InternalSymbol.XAUUSD, (label,), (detection_b, detection_a), True
+        InternalSymbol.XAUUSD,
+        (label,),
+        (detection_b, detection_a),
+        True,
+        _MINIMUM_PRICE_TICK,
     )
     assert sorted(m.status.value for m in forward) == sorted(
         m.status.value for m in backward

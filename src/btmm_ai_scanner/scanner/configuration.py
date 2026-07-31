@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from btmm_ai_scanner.btmm.configuration import BtmmConfiguration
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.types import ContractModel, SemVer
@@ -45,6 +47,24 @@ def validate_configuration(configuration: ScannerConfiguration) -> None:
         )
     if len(configuration.enabled_symbols) == 0:
         raise InvalidScannerConfigurationError("enabled_symbols must be non-empty.")
+
+    # StructureConfiguration owns no minimum_price_tick field and is
+    # deliberately excluded from this invariant (1B-L-SCANNER-A1).
+    measurement_tick = configuration.measurement_configuration.minimum_price_tick
+    poi_tick = configuration.poi_configuration.minimum_price_tick
+    btmm_tick = configuration.btmm_configuration.minimum_price_tick
+    if not (measurement_tick == poi_tick == btmm_tick):
+        raise InvalidScannerConfigurationError(
+            "measurement_configuration.minimum_price_tick, "
+            "poi_configuration.minimum_price_tick, and "
+            "btmm_configuration.minimum_price_tick must all be equal; got "
+            f"{measurement_tick}, {poi_tick}, {btmm_tick}."
+        )
+
+
+def canonical_minimum_price_tick(configuration: ScannerConfiguration) -> Decimal:
+    """The single validated Decimal tick shared by measurement/POI/BTMM configuration."""
+    return configuration.measurement_configuration.minimum_price_tick
 
 
 class ReplayConfiguration(ContractModel):

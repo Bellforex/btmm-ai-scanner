@@ -35,6 +35,18 @@ def build_scanner_health_report(
         if state.reviewed_evidence_availability_time_utc is not None
     )
 
+    # gaps_encountered/duplicates_rejected/invalid_candles_rejected: candle-quality
+    # events (gaps, duplicates, incomplete candles) are already resolved by
+    # market_data's own normalization pipeline before a NormalizedCandle ever
+    # reaches ScannerTimeframeInput; no such event is observable at this layer,
+    # so 0 honestly means "none observed during this component's own
+    # processing" rather than "none occurred upstream".
+    #
+    # identity_collision_count/typed_error_count: DerivedIdentityCollisionError
+    # and every other typed scanner error abort the call before a
+    # ScannerReplayResult can be constructed at all, so a successfully returned
+    # report has, by construction, encountered zero of either during its own
+    # successful run.
     return ScannerHealthReport(
         candles_processed=candles_processed,
         availability_groups_processed=len(replay_result.snapshots),

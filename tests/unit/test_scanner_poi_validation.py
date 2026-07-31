@@ -21,6 +21,7 @@ from btmm_ai_scanner.scanner.poi_validation import build_poi_validation_report
 _BASE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 _FINGERPRINT = "a" * 64
 _PROV_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdff")
+_MINIMUM_PRICE_TICK = Decimal("0.01")
 
 
 def _observation(
@@ -141,20 +142,26 @@ def _case(
 
 def test_poi_validation_reports_expected_detected_and_matched_counts() -> None:
     observation = _observation(0)
-    report = build_poi_validation_report(_case((_label(),)), _poi_analysis(observation))
+    report = build_poi_validation_report(
+        _case((_label(),)), _poi_analysis(observation), _MINIMUM_PRICE_TICK
+    )
     assert report.expected_count == 1
     assert report.detected_count == 1
     assert report.matched_count == 1
 
 
 def test_poi_validation_reports_missed_and_unexpected_counts() -> None:
-    report = build_poi_validation_report(_case((_label(),)), _poi_analysis())
+    report = build_poi_validation_report(
+        _case((_label(),)), _poi_analysis(), _MINIMUM_PRICE_TICK
+    )
     assert report.missed_count == 1
     assert report.unexpected_count == 0
 
     unexpected_observation = _observation(0, availability_offset_minutes=5)
     report_2 = build_poi_validation_report(
-        _case((), poi_labels_complete=True), _poi_analysis(unexpected_observation)
+        _case((), poi_labels_complete=True),
+        _poi_analysis(unexpected_observation),
+        _MINIMUM_PRICE_TICK,
     )
     assert report_2.unexpected_count == 1
 
@@ -162,10 +169,14 @@ def test_poi_validation_reports_missed_and_unexpected_counts() -> None:
 def test_poi_validation_distinguishes_unreviewed_from_unexpected_detections() -> None:
     observation = _observation(0)
     complete = build_poi_validation_report(
-        _case((), poi_labels_complete=True), _poi_analysis(observation)
+        _case((), poi_labels_complete=True),
+        _poi_analysis(observation),
+        _MINIMUM_PRICE_TICK,
     )
     incomplete = build_poi_validation_report(
-        _case((), poi_labels_complete=False), _poi_analysis(observation)
+        _case((), poi_labels_complete=False),
+        _poi_analysis(observation),
+        _MINIMUM_PRICE_TICK,
     )
     assert complete.unexpected_count == 1
     assert complete.unreviewed_count == 0
@@ -175,7 +186,9 @@ def test_poi_validation_distinguishes_unreviewed_from_unexpected_detections() ->
 
 def test_poi_validation_reports_exact_type_and_direction_match_counts() -> None:
     observation = _observation(0)
-    report = build_poi_validation_report(_case((_label(),)), _poi_analysis(observation))
+    report = build_poi_validation_report(
+        _case((_label(),)), _poi_analysis(observation), _MINIMUM_PRICE_TICK
+    )
     assert report.type_match_count == 1
     assert report.direction_match_count == 1
 
@@ -183,9 +196,11 @@ def test_poi_validation_reports_exact_type_and_direction_match_counts() -> None:
 def test_poi_validation_computes_boundary_error_in_ticks() -> None:
     observation = _observation(0, zone_top="101.5", zone_bottom="100")
     report = build_poi_validation_report(
-        _case((_label(zone_top="101", zone_bottom="100"),)), _poi_analysis(observation)
+        _case((_label(zone_top="101", zone_bottom="100"),)),
+        _poi_analysis(observation),
+        _MINIMUM_PRICE_TICK,
     )
-    assert report.mean_boundary_error_ticks == Decimal("0.5")
+    assert report.mean_boundary_error_ticks == Decimal("0.5") / _MINIMUM_PRICE_TICK
 
 
 def test_poi_validation_computes_zone_intersection_and_union() -> None:
@@ -200,19 +215,25 @@ def test_poi_validation_computes_zone_intersection_and_union() -> None:
 def test_poi_validation_computes_zone_overlap_ratio() -> None:
     observation = _observation(0, zone_top="101", zone_bottom="100")
     report = build_poi_validation_report(
-        _case((_label(zone_top="101", zone_bottom="100"),)), _poi_analysis(observation)
+        _case((_label(zone_top="101", zone_bottom="100"),)),
+        _poi_analysis(observation),
+        _MINIMUM_PRICE_TICK,
     )
     assert report.mean_overlap_ratio == Decimal("1")
 
 
 def test_poi_validation_computes_confirmation_timing_delay() -> None:
     observation = _observation(0, availability_offset_minutes=10)
-    report = build_poi_validation_report(_case((_label(),)), _poi_analysis(observation))
+    report = build_poi_validation_report(
+        _case((_label(),)), _poi_analysis(observation), _MINIMUM_PRICE_TICK
+    )
     assert report.mean_confirmation_delay_seconds == Decimal("600")
 
 
 def test_poi_validation_denominator_zero_reports_none_not_zero() -> None:
-    report = build_poi_validation_report(_case(()), _poi_analysis())
+    report = build_poi_validation_report(
+        _case(()), _poi_analysis(), _MINIMUM_PRICE_TICK
+    )
     assert report.mean_boundary_error_ticks is None
     assert report.mean_overlap_ratio is None
     assert report.mean_confirmation_delay_seconds is None
@@ -224,6 +245,11 @@ def test_poi_validation_reports_lifecycle_and_final_state_agreement() -> None:
     report = build_poi_validation_report(
         _case((_label(expected_final_lifecycle_status=PoiLifecycleStatus.NO_BREACH),)),
         _poi_analysis(observation, states=(state,)),
+        _MINIMUM_PRICE_TICK,
     )
     assert report.final_state_agreement_count == 1
-    assert report.lifecycle_agreement_count == 1
+    # 1B-L-SCANNER correction cycle: ExpectedPoiLabel represents only the final
+    # lifecycle status, no separate per-transition lifecycle progression, so
+    # lifecycle_agreement_count is honestly 0, distinct from
+    # final_state_agreement_count.
+    assert report.lifecycle_agreement_count == 0

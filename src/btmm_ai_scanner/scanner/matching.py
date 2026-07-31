@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 
 from btmm_ai_scanner.btmm.observation import BtmmObservation
@@ -53,6 +54,7 @@ def match_poi_detections(
     expected_labels: tuple[ExpectedPoiLabel, ...],
     detections: tuple[PoiObservation, ...],
     case_complete: bool,
+    minimum_price_tick: Decimal,
 ) -> tuple[LabelMatch, ...]:
     candidates: list[
         tuple[
@@ -94,10 +96,14 @@ def match_poi_detections(
                     - label.earliest_valid_availability_time_utc
                 ).total_seconds()
             )
-            boundary_error_ticks = max(
-                abs(label.expected_zone_top - detection.zone_top),
-                abs(label.expected_zone_bottom - detection.zone_bottom),
+            bottom_error_ticks = (
+                abs(label.expected_zone_bottom - detection.zone_bottom)
+                / minimum_price_tick
             )
+            top_error_ticks = (
+                abs(label.expected_zone_top - detection.zone_top) / minimum_price_tick
+            )
+            boundary_error_ticks = max(bottom_error_ticks, top_error_ticks)
 
             key = _sort_key(
                 overlap_ratio,
@@ -188,17 +194,13 @@ def match_poi_detections(
     return tuple(matches)
 
 
-def _btmm_reference_time(label: ExpectedBtmmLabel):  # type: ignore[no-untyped-def]
-    candidates = [
-        value
-        for value in (
-            label.expected_candidate_availability_time_utc,
-            label.expected_forming_availability_time_utc,
-            label.expected_confirmation_or_cancellation_time_utc,
-        )
-        if value is not None
-    ]
-    return min(candidates) if len(candidates) > 0 else None
+def _btmm_reference_time(label: ExpectedBtmmLabel) -> datetime | None:
+    # BtmmObservation (the detected fact being matched) carries exactly one
+    # availability timestamp: its own candidate-detection moment. The
+    # corresponding primary expected field is expected_candidate_availability_time_utc
+    # — not the earliest of the three optional phase timestamps, which describe
+    # later lifecycle phases the detection itself does not carry.
+    return label.expected_candidate_availability_time_utc
 
 
 def match_btmm_detections(

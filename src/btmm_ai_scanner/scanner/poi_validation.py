@@ -31,7 +31,9 @@ def _mean(values: list[Decimal]) -> Decimal | None:
 
 
 def build_poi_validation_report(
-    case: ReviewedScannerCase, poi_analysis: PoiAnalysis
+    case: ReviewedScannerCase,
+    poi_analysis: PoiAnalysis,
+    minimum_price_tick: Decimal,
 ) -> PoiValidationReport:
     detections = tuple(
         observation
@@ -39,7 +41,11 @@ def build_poi_validation_report(
         if observation.symbol == case.symbol
     )
     matches = match_poi_detections(
-        case.symbol, case.expected_poi_labels, detections, case.poi_labels_complete
+        case.symbol,
+        case.expected_poi_labels,
+        detections,
+        case.poi_labels_complete,
+        minimum_price_tick,
     )
 
     matched = [m for m in matches if m.status == LabelMatchStatus.MATCHED]
@@ -76,10 +82,12 @@ def build_poi_validation_report(
         ):
             final_state_agreement_count += 1
 
-    # PoiObservation/CurrentPoiState carry a single terminal lifecycle-status
-    # concept; a richer per-transition-sequence reviewed label would be needed
-    # to distinguish "lifecycle agreement" from "final-state agreement".
-    lifecycle_agreement_count = final_state_agreement_count
+    # ExpectedPoiLabel represents exactly one lifecycle fact
+    # (expected_final_lifecycle_status), already scored by
+    # final_state_agreement_count above. It represents no separate
+    # per-transition lifecycle progression, so lifecycle_agreement_count is
+    # honestly 0 rather than manufactured from the same comparison.
+    lifecycle_agreement_count = 0
 
     return PoiValidationReport(
         expected_count=len(case.expected_poi_labels),

@@ -214,14 +214,37 @@ def test_duplicate_availability_group_never_double_processed() -> None:
 
 
 def test_changed_only_snapshot_retention_omits_unchanged_snapshots() -> None:
-    result = run_scanner_replay(
+    changed_only_result = run_scanner_replay(
         _three_group_inputs(),
         (),
         _config(),
         _replay_config(snapshot_retention=SnapshotRetentionPolicy.CHANGED_ONLY),
         _SequentialIdentityProvider(),
     )
-    assert len(result.snapshots) <= 1
+    all_result = run_scanner_replay(
+        _three_group_inputs(),
+        (),
+        _config(),
+        _replay_config(snapshot_retention=SnapshotRetentionPolicy.ALL),
+        _SequentialIdentityProvider(),
+    )
+    # Every one of the 3 groups in this fixture adds a new candle to at least
+    # one tracked timeframe, so the complete deterministic snapshot content
+    # (not just setup_summaries) genuinely differs group-to-group: CHANGED_ONLY
+    # must retain the same count as ALL for this fixture.
+    assert len(changed_only_result.snapshots) == len(all_result.snapshots)
+
+    # The retention comparison is over the full snapshot, not merely
+    # setup_summaries: two snapshots that agree on setup_summaries but differ
+    # in measurement_analyses must still be treated as changed.
+    first_snapshot = changed_only_result.snapshots[0]
+    mutated_same_setup_summaries = first_snapshot.model_copy(
+        update={"measurement_analyses": ()}
+    )
+    assert (
+        mutated_same_setup_summaries.setup_summaries == first_snapshot.setup_summaries
+    )
+    assert mutated_same_setup_summaries != first_snapshot
 
 
 def test_all_snapshot_retention_keeps_every_group_snapshot() -> None:

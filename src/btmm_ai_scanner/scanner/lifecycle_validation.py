@@ -3,6 +3,8 @@ from typing import Any
 
 from btmm_ai_scanner.contracts.types import ContractModel, UUIDv7
 
+_INITIAL_STATE_LABEL = "INITIAL"
+
 
 class LifecycleMismatch(ContractModel):
     source_record_id: UUIDv7
@@ -26,7 +28,45 @@ class LifecycleValidationReport(ContractModel):
     reordered_events: tuple[LifecycleMismatch, ...]
 
 
-def _to_mismatch(expected: Any, actual: Any) -> LifecycleMismatch:
+def _build_prior_by_id(actual_transitions: tuple[Any, ...]) -> dict[Any, Any]:
+    by_setup: dict[Any, list[Any]] = {}
+    for transition in actual_transitions:
+        setup_key = getattr(
+            transition,
+            "btmm_setup_record_id",
+            getattr(transition, "poi_record_id", None),
+        )
+        by_setup.setdefault(setup_key, []).append(transition)
+
+    prior_by_id: dict[Any, Any] = {}
+    for transitions in by_setup.values():
+        ordered = sorted(
+            transitions,
+            key=lambda t: (t.availability_time_utc, t.event_time_utc, str(t.record_id)),
+        )
+        previous = None
+        for transition in ordered:
+            prior_by_id[transition.record_id] = previous
+            previous = transition
+    return prior_by_id
+
+
+def _resulting_state(transition: Any) -> str | None:
+    if transition is None:
+        return None
+    return str(transition.transition_type)
+
+
+def _prior_state(transition: Any, prior_by_id: dict[Any, Any]) -> str | None:
+    if transition is None:
+        return None
+    prior = prior_by_id.get(transition.record_id)
+    return _resulting_state(prior) if prior is not None else _INITIAL_STATE_LABEL
+
+
+def _to_mismatch(
+    expected: Any, actual: Any, actual_prior_by_id: dict[Any, Any]
+) -> LifecycleMismatch:
     source_record_id = expected.record_id if expected is not None else actual.record_id
     return LifecycleMismatch(
         source_record_id=source_record_id,
@@ -35,9 +75,9 @@ def _to_mismatch(expected: Any, actual: Any) -> LifecycleMismatch:
         else None,
         actual_event_type=str(actual.transition_type) if actual is not None else None,
         expected_prior_state=None,
-        actual_prior_state=None,
-        expected_resulting_state=None,
-        actual_resulting_state=None,
+        actual_prior_state=_prior_state(actual, actual_prior_by_id),
+        expected_resulting_state=_resulting_state(expected),
+        actual_resulting_state=_resulting_state(actual),
         expected_event_time_utc=expected.event_time_utc
         if expected is not None
         else None,
@@ -57,6 +97,7 @@ def build_lifecycle_validation_report(
 ) -> LifecycleValidationReport:
     expected_by_id = {t.record_id: t for t in expected_transitions}
     actual_by_id = {t.record_id: t for t in actual_transitions}
+    actual_prior_by_id = _build_prior_by_id(actual_transitions)
 
     expected_ids_in_order = [t.record_id for t in expected_transitions]
     actual_ids_in_order = [t.record_id for t in actual_transitions]
@@ -66,12 +107,12 @@ def build_lifecycle_validation_report(
     common_ids = expected_id_set & actual_id_set
 
     missing_events = tuple(
-        _to_mismatch(expected_by_id[rid], None)
+        _to_mismatch(expected_by_id[rid], None, actual_prior_by_id)
         for rid in expected_ids_in_order
         if rid not in actual_id_set
     )
     extra_events = tuple(
-        _to_mismatch(None, actual_by_id[rid])
+        _to_mismatch(None, actual_by_id[rid], actual_prior_by_id)
         for rid in actual_ids_in_order
         if rid not in expected_id_set
     )
@@ -81,14 +122,16 @@ def build_lifecycle_validation_report(
     for rid in actual_ids_in_order:
         if rid in seen_actual and rid in common_ids:
             duplicated_events.append(
-                _to_mismatch(expected_by_id.get(rid), actual_by_id.get(rid))
+                _to_mismatch(
+                    expected_by_id.get(rid), actual_by_id.get(rid), actual_prior_by_id
+                )
             )
         seen_actual.add(rid)
 
     expected_common_order = [rid for rid in expected_ids_in_order if rid in common_ids]
     actual_common_order = [rid for rid in actual_ids_in_order if rid in common_ids]
     reordered_events = tuple(
-        _to_mismatch(expected_by_id[rid], actual_by_id[rid])
+        _to_mismatch(expected_by_id[rid], actual_by_id[rid], actual_prior_by_id)
         for rid in common_ids
         if expected_common_order.index(rid) != actual_common_order.index(rid)
     )

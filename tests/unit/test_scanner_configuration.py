@@ -109,6 +109,23 @@ def test_default_scanner_configuration_composes_upstream_configurations() -> Non
     assert config.contract_version == SemVer.parse("0.1.0")
     assert config.schema_version == SemVer.parse("0.1.0")
 
+    # 1B-L-SCANNER-A1: the composed upstream configurations must share one
+    # canonical minimum_price_tick; structure_configuration is excluded since
+    # it owns no such field.
+    validate_configuration(config)
+    assert (
+        config.measurement_configuration.minimum_price_tick
+        == config.poi_configuration.minimum_price_tick
+        == config.btmm_configuration.minimum_price_tick
+        == Decimal("0.01")
+    )
+
+    mismatched_config = _config(
+        poi_configuration=PoiConfiguration(minimum_price_tick=Decimal("0.02"))
+    )
+    with pytest.raises(InvalidScannerConfigurationError):
+        validate_configuration(mismatched_config)
+
 
 def test_required_and_optional_timeframes_must_be_disjoint() -> None:
     config = _config(
@@ -127,6 +144,18 @@ def test_missing_required_timeframe_raises_error() -> None:
     bundle_m5 = ScannerTimeframeInput(timeframe=Timeframe.M5, candles=())
     with pytest.raises(MissingRequiredTimeframeError):
         scan_market((bundle_m1, bundle_m5), (), config, _SequentialIdentityProvider())
+
+    # Valid-empty scan: when required_timeframes is itself empty, an empty
+    # timeframe_inputs tuple is accepted and returns an empty ScannerAnalysis
+    # carrying the epoch empty-result sentinel, never confused with a real
+    # replay availability (which is always strictly after 1970-01-01).
+    empty_config = _config(
+        required_timeframes=frozenset(), optional_timeframes=frozenset()
+    )
+    empty_result = scan_market((), (), empty_config, _SequentialIdentityProvider())
+    assert empty_result.symbol is None
+    assert empty_result.processed_timeframes == ()
+    assert empty_result.availability_time_utc == datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def test_unsupported_timeframe_rejected() -> None:
