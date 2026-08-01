@@ -23,6 +23,7 @@ from btmm_ai_scanner.historical_backtest.identity import (
 from btmm_ai_scanner.historical_backtest.manifest import (
     DatasetManifest,
     HistoricalFileEntry,
+    _load_bundled_zone,
 )
 
 _INTRADAY_DURATION: dict[Timeframe, timedelta] = {
@@ -205,7 +206,7 @@ def parse_candle_rows(
         if hm.source_column in header_index
     }
 
-    zone = ZoneInfo(entry.timezone)
+    zone = _load_bundled_zone(entry.timezone)
 
     issues: list[DataQualityIssue] = []
     blank_rows_skipped = 0

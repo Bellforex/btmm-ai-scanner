@@ -156,6 +156,7 @@ class CandleIdentityCollisionTracker:
         self._provenance: dict[str, bytes] = {}
         self._record: dict[str, bytes] = {}
         self._content: dict[str, bytes] = {}
+        self._normalized_record: dict[str, bytes] = {}
 
     def check_provenance_id(
         self, key: UUID, canonical_bytes: bytes, *, source: str
@@ -183,6 +184,17 @@ class CandleIdentityCollisionTracker:
             key,
             canonical_bytes,
             category="content_fingerprint",
+            source=source,
+        )
+
+    def check_normalized_record_id(
+        self, key: UUID, canonical_bytes: bytes, *, source: str
+    ) -> None:
+        self._check(
+            self._normalized_record,
+            str(key),
+            canonical_bytes,
+            category="normalized_record_id",
             source=source,
         )
 

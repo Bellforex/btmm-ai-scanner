@@ -2,16 +2,21 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import RFC_4122, UUID
 
+import pytest
+
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness
 from btmm_ai_scanner.contracts.types import _validate_uuidv7
 from btmm_ai_scanner.domain.enums import DerivedOutputType
 from btmm_ai_scanner.historical_backtest.identity import (
+    CandleIdentityCollisionTracker,
     ContentAddressedIdentityProvider,
     derive_content_fingerprint,
+    derive_normalized_record_id,
     derive_provenance_id,
     derive_record_id,
 )
+from btmm_ai_scanner.historical_backtest.manifest import InvalidDatasetManifestError
 
 
 def test_content_addressed_identity_provider_ignores_call_order() -> None:
@@ -126,6 +131,39 @@ def test_candle_record_id_is_deterministic() -> None:
         event_time_utc=event_time_utc,
     )
     assert different_id != first_id
+
+    # Strengthened: the normalized-record identity derived from a candle's own
+    # record_id must itself be deterministic and distinct from its input, and
+    # the collision tracker must accept idempotent re-derivation of any
+    # tracked identity category (including the normalized-record category)
+    # while rejecting a genuine collision (same identifier, differing
+    # canonical content) for every tracked category.
+    normalized_first_id, normalized_first_bytes = derive_normalized_record_id(first_id)
+    normalized_second_id, normalized_second_bytes = derive_normalized_record_id(
+        first_id
+    )
+    assert normalized_first_id == normalized_second_id
+    assert normalized_first_bytes == normalized_second_bytes
+    assert normalized_first_id != first_id
+
+    tracker = CandleIdentityCollisionTracker()
+    tracker.check_record_id(first_id, first_bytes, source="file-a.csv")
+    tracker.check_record_id(second_id, second_bytes, source="file-b.csv")
+    tracker.check_normalized_record_id(
+        normalized_first_id, normalized_first_bytes, source="file-a.csv"
+    )
+    tracker.check_normalized_record_id(
+        normalized_second_id, normalized_second_bytes, source="file-b.csv"
+    )
+
+    with pytest.raises(InvalidDatasetManifestError):
+        tracker.check_record_id(
+            first_id, b"different-canonical-bytes", source="file-c.csv"
+        )
+    with pytest.raises(InvalidDatasetManifestError):
+        tracker.check_normalized_record_id(
+            normalized_first_id, b"different-canonical-bytes", source="file-c.csv"
+        )
 
 
 def test_candle_content_fingerprint_is_canonical() -> None:

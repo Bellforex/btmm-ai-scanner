@@ -125,7 +125,11 @@ def _verify_checksum(
 
 
 def _record_to_normalized_candle(
-    record: ParsedCandleRecord, *, entry: HistoricalFileEntry, manifest: DatasetManifest
+    record: ParsedCandleRecord,
+    *,
+    entry: HistoricalFileEntry,
+    manifest: DatasetManifest,
+    identity_tracker: CandleIdentityCollisionTracker,
 ) -> NormalizedCandle:
     volume_kind = (
         manifest.volume_convention
@@ -167,7 +171,12 @@ def _record_to_normalized_candle(
         )
     assert raw_result.candidate_raw_candle is not None
 
-    normalized_record_id, _ = derive_normalized_record_id(record.record_id)
+    normalized_record_id, normalized_record_bytes = derive_normalized_record_id(
+        record.record_id
+    )
+    identity_tracker.check_normalized_record_id(
+        normalized_record_id, normalized_record_bytes, source=entry.relative_path
+    )
     normalize_result = normalize_raw_candle(
         raw_result.candidate_raw_candle,
         normalized_record_id=normalized_record_id,
@@ -311,7 +320,10 @@ def load_historical_dataset(
         confirmed_only: list[NormalizedCandle] = []
         for record in parsed.records:
             candle = _record_to_normalized_candle(
-                record, entry=entry, manifest=manifest
+                record,
+                entry=entry,
+                manifest=manifest,
+                identity_tracker=identity_tracker,
             )
             if record.completeness == CandleCompleteness.INCOMPLETE:
                 issues.append(
@@ -353,7 +365,14 @@ def load_historical_dataset(
     for (symbol, timeframe), candles in candles_by_symbol_timeframe.items():
         candles.sort(key=lambda c: c.event_time_utc)
         complete_calendar_period_count = (
-            len(candles) if timeframe in (Timeframe.D1, Timeframe.W1) else None
+            sum(
+                1
+                for candle in candles
+                if candle.completeness == CandleCompleteness.CONFIRMED_COMPLETE
+                and candle.availability_time_utc <= manifest.created_at_utc
+            )
+            if timeframe in (Timeframe.D1, Timeframe.W1)
+            else None
         )
         timeframe_coverage.append(
             TimeframeCoverage(

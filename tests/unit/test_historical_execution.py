@@ -38,6 +38,8 @@ from btmm_ai_scanner.scanner.configuration import (
     ReplayConfiguration,
     ScannerConfiguration,
 )
+from btmm_ai_scanner.scanner.evaluation import ScannerBacktestReport
+from btmm_ai_scanner.scanner.labels import ReviewedScannerCase
 from btmm_ai_scanner.scanner.replay import ScannerReplayResult
 from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
@@ -101,7 +103,30 @@ _MANDATORY_MAPPING = (
 )
 
 
-def _dataset(symbols: tuple[InternalSymbol, ...]) -> LoadedHistoricalDataset:
+def _reviewed_case(symbol: InternalSymbol, case_id: str) -> ReviewedScannerCase:
+    return ReviewedScannerCase.model_validate(
+        {
+            "case_id": case_id,
+            "dataset_version": "1.0.0",
+            "reviewer_id": "reviewer-1",
+            "review_version": "1.0.0",
+            "symbol": symbol,
+            "evaluation_start_time_utc": datetime(2024, 1, 15, 9, 30, tzinfo=UTC),
+            "evaluation_end_time_utc": datetime(2024, 1, 15, 9, 40, tzinfo=UTC),
+            "required_timeframes": (Timeframe.M1,),
+            "expected_poi_labels": (),
+            "expected_btmm_labels": (),
+            "poi_labels_complete": False,
+            "btmm_labels_complete": False,
+            "notes": "",
+        }
+    )
+
+
+def _dataset(
+    symbols: tuple[InternalSymbol, ...],
+    reviewed_cases: tuple[ReviewedScannerCase, ...] = (),
+) -> LoadedHistoricalDataset:
     file_entries = tuple(
         HistoricalFileEntry.model_validate(
             {
@@ -161,7 +186,7 @@ def _dataset(symbols: tuple[InternalSymbol, ...]) -> LoadedHistoricalDataset:
     return LoadedHistoricalDataset(
         manifest=manifest,
         timeframe_inputs_by_symbol=timeframe_inputs_by_symbol,
-        reviewed_cases=(),
+        reviewed_cases=reviewed_cases,
         data_quality_report=HistoricalDataQualityReport(
             blank_rows_skipped=0,
             unsorted_rows_resorted=0,
@@ -192,18 +217,28 @@ def _scanner_configuration() -> ScannerConfiguration:
 def test_execute_scanner_backtest_runs_one_replay_call_per_symbol(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dataset = _dataset((InternalSymbol.XAUUSD, InternalSymbol.GBPUSD))
-    call_symbols: list[str] = []
+    xauusd_case = _reviewed_case(InternalSymbol.XAUUSD, "case-xauusd")
+    gbpusd_case = _reviewed_case(InternalSymbol.GBPUSD, "case-gbpusd")
+    dataset = _dataset(
+        (InternalSymbol.XAUUSD, InternalSymbol.GBPUSD),
+        reviewed_cases=(xauusd_case, gbpusd_case),
+    )
+    call_order: list[str] = []
+    replay_reviewed_evidence_by_symbol: dict[str, tuple[object, ...]] = {}
+    evaluate_case_ids_by_symbol: dict[str, tuple[str, ...]] = {}
     real_run_scanner_replay = execution_module.run_scanner_replay  # type: ignore[attr-defined]
+    real_evaluate_scanner = execution_module.evaluate_scanner  # type: ignore[attr-defined]
 
-    def _spy(
+    def _replay_spy(
         historical_inputs: tuple[ScannerTimeframeInput, ...],
         reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
         scanner_configuration: ScannerConfiguration,
         replay_configuration: ReplayConfiguration,
         identity_provider: ContentAddressedIdentityProvider,
     ) -> ScannerReplayResult:
-        call_symbols.append(historical_inputs[0].candles[0].symbol.value)
+        symbol = historical_inputs[0].candles[0].symbol.value
+        call_order.append(f"replay:{symbol}")
+        replay_reviewed_evidence_by_symbol[symbol] = reviewed_evidence
         return real_run_scanner_replay(
             historical_inputs,
             reviewed_evidence,
@@ -212,14 +247,70 @@ def test_execute_scanner_backtest_runs_one_replay_call_per_symbol(
             identity_provider,
         )
 
-    monkeypatch.setattr(execution_module, "run_scanner_replay", _spy)
-    execute_scanner_backtest(
+    def _evaluate_spy(
+        replay_result: ScannerReplayResult,
+        reviewed_cases: tuple[ReviewedScannerCase, ...],
+    ) -> ScannerBacktestReport:
+        symbol = reviewed_cases[0].symbol.value
+        call_order.append(f"evaluate:{symbol}")
+        evaluate_case_ids_by_symbol[symbol] = tuple(
+            case.case_id for case in reviewed_cases
+        )
+        return real_evaluate_scanner(replay_result, reviewed_cases)
+
+    monkeypatch.setattr(execution_module, "run_scanner_replay", _replay_spy)
+    monkeypatch.setattr(execution_module, "evaluate_scanner", _evaluate_spy)
+
+    result_with_cases = execute_scanner_backtest(
         dataset,
         _scanner_configuration(),
         ReplayConfiguration(),
         ContentAddressedIdentityProvider(),
     )
-    assert call_symbols == ["XAUUSD", "GBPUSD"]
+
+    # Replay runs once per symbol, and replay always precedes evaluation for
+    # that same symbol (evaluation consumes replay's own real output).
+    assert call_order == [
+        "replay:XAUUSD",
+        "evaluate:XAUUSD",
+        "replay:GBPUSD",
+        "evaluate:GBPUSD",
+    ]
+
+    # Reviewed labels never enter scanner replay input, for either symbol.
+    assert replay_reviewed_evidence_by_symbol == {"XAUUSD": (), "GBPUSD": ()}
+
+    # Reviewed cases for one symbol are never applied to another symbol's
+    # evaluation.
+    assert evaluate_case_ids_by_symbol == {
+        "XAUUSD": ("case-xauusd",),
+        "GBPUSD": ("case-gbpusd",),
+    }
+
+    # A ScannerBacktestReport is retained per symbol once reviewed cases exist.
+    assert all(
+        isinstance(report, ScannerBacktestReport)
+        for report in result_with_cases.per_symbol_backtest_reports
+    )
+
+    # No reviewed label ever changes the raw scanner detection output: replay
+    # results for a dataset without any reviewed cases must be identical to
+    # replay results for the same candle data with reviewed cases present.
+    call_order.clear()
+    replay_reviewed_evidence_by_symbol.clear()
+    evaluate_case_ids_by_symbol.clear()
+    dataset_without_cases = _dataset((InternalSymbol.XAUUSD, InternalSymbol.GBPUSD))
+    result_without_cases = execute_scanner_backtest(
+        dataset_without_cases,
+        _scanner_configuration(),
+        ReplayConfiguration(),
+        ContentAddressedIdentityProvider(),
+    )
+    assert call_order == ["replay:XAUUSD", "replay:GBPUSD"]
+    assert result_without_cases.per_symbol_replay_results == (
+        result_with_cases.per_symbol_replay_results
+    )
+    assert result_without_cases.per_symbol_backtest_reports == (None, None)
 
 
 def test_replay_mismatch_surfaces_as_backtest_execution_failure(

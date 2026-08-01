@@ -1,4 +1,11 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
 from datetime import UTC, datetime, time, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -87,6 +94,146 @@ def _manifest(file_entries: tuple[HistoricalFileEntry, ...]) -> DatasetManifest:
     )
 
 
+_POISONED_TZPATH_SUBPROCESS_SCRIPT = textwrap.dedent(
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
+    from btmm_ai_scanner.contracts.raw_candle import CandleVolumeKind
+    from btmm_ai_scanner.contracts.types import SemVer
+    from btmm_ai_scanner.historical_backtest.csv_parser import parse_candle_rows
+    from btmm_ai_scanner.historical_backtest.enums import (
+        CandleCompletenessConvention,
+        CandleTimestampConvention,
+        CanonicalCandleField,
+        DatasetPartition,
+        HistoricalFileFormat,
+    )
+    from btmm_ai_scanner.historical_backtest.identity import (
+        CandleIdentityCollisionTracker,
+    )
+    from btmm_ai_scanner.historical_backtest.manifest import (
+        DatasetManifest,
+        HeaderMappingEntry,
+        HistoricalFileEntry,
+    )
+
+    _MAPPING = (
+        HeaderMappingEntry(
+            canonical_field=CanonicalCandleField.TIMESTAMP, source_column="TIMESTAMP"
+        ),
+        HeaderMappingEntry(canonical_field=CanonicalCandleField.OPEN, source_column="OPEN"),
+        HeaderMappingEntry(canonical_field=CanonicalCandleField.HIGH, source_column="HIGH"),
+        HeaderMappingEntry(canonical_field=CanonicalCandleField.LOW, source_column="LOW"),
+        HeaderMappingEntry(
+            canonical_field=CanonicalCandleField.CLOSE, source_column="CLOSE"
+        ),
+    )
+
+
+    def _entry(zone_name):
+        return HistoricalFileEntry.model_validate(
+            {
+                "relative_path": "data.csv",
+                "symbol": InternalSymbol.XAUUSD,
+                "timeframe": Timeframe.M1,
+                "format": HistoricalFileFormat.CSV_CANONICAL_V1,
+                "header_mapping": _MAPPING,
+                "timestamp_semantics": CandleTimestampConvention.CANDLE_OPEN_TIME,
+                "timestamp_format": "%Y-%m-%d %H:%M:%S",
+                "calendar_close_day_offset": None,
+                "calendar_close_time_local": None,
+                "timezone": zone_name,
+                "expected_start": datetime(2020, 1, 1, tzinfo=UTC),
+                "expected_end": datetime(2030, 1, 1, tzinfo=UTC),
+                "expected_row_count": 1,
+                "sha256": "a" * 64,
+                "volume_available": False,
+                "complete_candles_only": True,
+            }
+        )
+
+
+    def _manifest(entry):
+        return DatasetManifest.model_validate(
+            {
+                "dataset_id": "dataset-1",
+                "dataset_version": "1.0.0",
+                "provider": "FXCM",
+                "source_description": "unit-test fixture",
+                "source_timezone": entry.timezone,
+                "created_at_utc": datetime(2030, 1, 1, tzinfo=UTC),
+                "partition": DatasetPartition.DEVELOPMENT,
+                "symbols": (InternalSymbol.XAUUSD,),
+                "timeframes": (entry.timeframe,),
+                "file_entries": (entry,),
+                "timestamp_convention": CandleTimestampConvention.CANDLE_OPEN_TIME,
+                "candle_completeness_convention": (
+                    CandleCompletenessConvention.ALL_ROWS_CONFIRMED_COMPLETE
+                ),
+                "volume_convention": CandleVolumeKind.TICK,
+                "reviewed_case_file": None,
+                "reviewed_case_sha256": None,
+                "notes": "",
+                "schema_version": SemVer.parse("0.1.0"),
+            }
+        )
+
+
+    def _parse_one(zone_name, timestamp_text):
+        entry = _entry(zone_name)
+        manifest = _manifest(entry)
+        text = (
+            "TIMESTAMP,OPEN,HIGH,LOW,CLOSE\\n"
+            + timestamp_text
+            + ",2000.00,2000.50,1999.50,2000.10\\n"
+        )
+        result = parse_candle_rows(
+            decoded_text=text,
+            entry=entry,
+            manifest=manifest,
+            identity_tracker=CandleIdentityCollisionTracker(),
+        )
+        if result.records:
+            return {"event_time_utc": result.records[0].event_time_utc.isoformat()}
+        return {"reason_code": result.issues[0].reason_code}
+
+
+    output = {
+        "utc": _parse_one("UTC", "2024-01-15 09:30:00"),
+        "new_york_unambiguous": _parse_one("America/New_York", "2024-01-15 09:30:00"),
+        "new_york_ambiguous": _parse_one("America/New_York", "2024-11-03 01:30:00"),
+        "new_york_nonexistent": _parse_one("America/New_York", "2024-03-10 02:30:00"),
+    }
+    print(json.dumps(output))
+    """
+)
+
+
+def _parse_via_subprocess_with_poisoned_host_tzpath() -> dict[str, dict[str, str]]:
+    with tempfile.TemporaryDirectory() as poisoned_root_text:
+        poisoned_root = Path(poisoned_root_text)
+        (poisoned_root / "UTC").write_bytes(b"not a real tzfile")
+        (poisoned_root / "America").mkdir()
+        (poisoned_root / "America" / "New_York").write_bytes(b"not a real tzfile")
+
+        child_env = {**os.environ, "PYTHONTZPATH": str(poisoned_root)}
+        completed = subprocess.run(
+            [sys.executable, "-c", _POISONED_TZPATH_SUBPROCESS_SCRIPT],
+            capture_output=True,
+            text=True,
+            env=child_env,
+            timeout=60,
+        )
+    assert completed.returncode == 0, (
+        f"subprocess failed under a poisoned host TZPATH (proves host-TZPATH"
+        f" dependence remains): stdout={completed.stdout!r} stderr={completed.stderr!r}"
+    )
+    parsed: dict[str, dict[str, str]] = json.loads(completed.stdout)
+    return parsed
+
+
 def test_source_local_open_timestamp_converts_to_utc() -> None:
     entry = _entry(timezone="America/New_York")
     manifest = _manifest((entry,))
@@ -99,6 +246,26 @@ def test_source_local_open_timestamp_converts_to_utc() -> None:
     )
     assert len(result.records) == 1
     assert result.records[0].event_time_utc == datetime(2024, 1, 15, 14, 30, tzinfo=UTC)
+
+    # Strengthened: prove the real parse_candle_rows path resolves both UTC and
+    # America/New_York exclusively through the bundled tzdata loader, never
+    # through host TZPATH. The child process's PYTHONTZPATH points only at
+    # deliberately corrupt (non-TZif) files for both zone keys; if the parsing
+    # path ever fell back to an unqualified ZoneInfo(zone_name) lookup, the
+    # subprocess would fail to parse those files and raise. Genuine DST
+    # ambiguity/nonexistence for America/New_York is also verified here,
+    # proving the bundled data used is real, not a placeholder.
+    poisoned_results = _parse_via_subprocess_with_poisoned_host_tzpath()
+    assert poisoned_results["utc"] == {"event_time_utc": "2024-01-15T09:30:00+00:00"}
+    assert poisoned_results["new_york_unambiguous"] == {
+        "event_time_utc": "2024-01-15T14:30:00+00:00"
+    }
+    assert poisoned_results["new_york_ambiguous"] == {
+        "reason_code": "AMBIGUOUS_LOCAL_TIME"
+    }
+    assert poisoned_results["new_york_nonexistent"] == {
+        "reason_code": "NONEXISTENT_LOCAL_TIME"
+    }
 
 
 def test_ambiguous_local_open_timestamp_rejected() -> None:

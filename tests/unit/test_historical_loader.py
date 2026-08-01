@@ -47,6 +47,13 @@ _MANDATORY_MAPPING = (
     ),
 )
 
+_MANDATORY_MAPPING_WITH_COMPLETE = (
+    *_MANDATORY_MAPPING,
+    HeaderMappingEntry(
+        canonical_field=CanonicalCandleField.COMPLETE, source_column="COMPLETE"
+    ),
+)
+
 
 def _entry(**overrides: object) -> dict[str, object]:
     fields: dict[str, object] = {
@@ -196,6 +203,82 @@ def test_period_level_timeframe_coverage_reports_complete_calendar_period_count(
         if c.timeframe == Timeframe.M1
     )
     assert m1_coverage.complete_calendar_period_count is None
+
+    # Strengthened: an UNKNOWN-completeness D1 candle (complete_candles_only=False,
+    # no explicit completeness column) is retained in candle_count but must not be
+    # counted as a complete calendar period.
+    unknown_root = tmp_path / "unknown_scenario"
+    unknown_root.mkdir()
+    unknown_text = "TIMESTAMP,OPEN,HIGH,LOW,CLOSE\n2024-01-01 00:00:00,2000.00,2000.50,1999.50,2000.10\n"
+    unknown_sha = _write_csv_and_hash(unknown_root / "d1.csv", unknown_text)
+    unknown_entry = _entry(
+        relative_path="d1.csv",
+        timeframe=Timeframe.D1,
+        calendar_close_day_offset=1,
+        calendar_close_time_local=time(0, 0, 0),
+        expected_row_count=1,
+        expected_end=datetime(2024, 1, 10, tzinfo=UTC),
+        sha256=unknown_sha,
+        complete_candles_only=False,
+    )
+    unknown_manifest_dict = _manifest_dict((unknown_entry,))
+    unknown_manifest_dict["created_at_utc"] = datetime(2024, 1, 10, tzinfo=UTC)
+    unknown_manifest = DatasetManifest.model_validate(unknown_manifest_dict)
+    (unknown_root / "manifest.json").write_bytes(
+        unknown_manifest.model_dump_json().encode("utf-8")
+    )
+    unknown_dataset = load_historical_dataset(
+        unknown_root, HistoricalDatasetConfiguration()
+    )
+    unknown_d1_coverage = next(
+        c
+        for c in unknown_dataset.data_quality_report.timeframe_coverage
+        if c.timeframe == Timeframe.D1
+    )
+    assert unknown_d1_coverage.candle_count == 1
+    assert unknown_d1_coverage.complete_calendar_period_count == 0
+
+    # Strengthened: an explicitly CONFIRMED_COMPLETE D1 candle whose own
+    # availability_time_utc is still after manifest.created_at_utc (the
+    # calendar period has not actually closed as of dataset creation) is
+    # retained in candle_count but must not be counted as a complete
+    # calendar period either.
+    future_root = tmp_path / "future_availability_scenario"
+    future_root.mkdir()
+    future_text = (
+        "TIMESTAMP,OPEN,HIGH,LOW,CLOSE,COMPLETE\n"
+        "2024-01-01 00:00:00,2000.00,2000.50,1999.50,2000.10,true\n"
+    )
+    future_sha = _write_csv_and_hash(future_root / "d1.csv", future_text)
+    future_entry = _entry(
+        relative_path="d1.csv",
+        timeframe=Timeframe.D1,
+        header_mapping=_MANDATORY_MAPPING_WITH_COMPLETE,
+        calendar_close_day_offset=1,
+        calendar_close_time_local=time(0, 0, 0),
+        expected_row_count=1,
+        expected_end=datetime(2024, 1, 10, tzinfo=UTC),
+        sha256=future_sha,
+        complete_candles_only=True,
+    )
+    future_manifest_dict = _manifest_dict((future_entry,))
+    # created_at_utc is before the D1 candle's own calendar close (2024-01-02),
+    # so the period has not genuinely closed yet despite the explicit override.
+    future_manifest_dict["created_at_utc"] = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+    future_manifest = DatasetManifest.model_validate(future_manifest_dict)
+    (future_root / "manifest.json").write_bytes(
+        future_manifest.model_dump_json().encode("utf-8")
+    )
+    future_dataset = load_historical_dataset(
+        future_root, HistoricalDatasetConfiguration()
+    )
+    future_d1_coverage = next(
+        c
+        for c in future_dataset.data_quality_report.timeframe_coverage
+        if c.timeframe == Timeframe.D1
+    )
+    assert future_d1_coverage.candle_count == 1
+    assert future_d1_coverage.complete_calendar_period_count == 0
 
 
 def test_insufficient_history_flagged_per_case_not_silently_scored(
