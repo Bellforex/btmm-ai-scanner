@@ -7040,3 +7040,87 @@ Custom timezone databases; synthetic `tzinfo` implementations; `pytz`; `dateutil
 ### 42K. Final amendment verdict
 
 **A — AMENDMENT APPROVED FOR CONTROLLED IMPLEMENTATION.** The confirmed contradiction (§42B) is fully resolved by an explicit, narrow, additive rule: authorize exactly one new pinned runtime dependency (`tzdata==2026.3`) and one deterministic, bundled-only loading mechanism (§42D) that is private, adds no public surface, changes no locked field/contract/enum/test name, and preserves the already-approved DST algorithm and every already-approved count (paths, tests, exports, inventory) except the two explicitly authorized dependency files. No mandatory-stop-level foundational conflict remains. The author has explicitly approved this amendment (§42, approval record above, 2026-08-01); this amendment itself is now `AUTHOR-APPROVED`/`APPROVED FOR CONTROLLED IMPLEMENTATION` but remains `NOT YET IMPLEMENTED` and `NOT PRODUCTION-APPROVED` — the WIP restoration sequence (§42J) has not yet been executed, `pyproject.toml`/`uv.lock` are still unmodified, `tzdata` is still not installed, and the underlying `1C-A-REAL-BACKTEST` milestone remains blocked on implementation until that sequence is carried out in a separate implementation task.
+
+## 43. `1C-A-REAL-BACKTEST` and `1C-A-REAL-BACKTEST-A1` — Formal Closure
+
+**Final status, `1C-A-REAL-BACKTEST`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `CORRECTED`, `INDEPENDENTLY VERIFIED`, `COMMITTED`, `PUSHED`, `IMPLEMENTATION FOUNDATION CLOSED`, `FIRST REAL PROVIDER BACKTEST PENDING`, `NOT PRODUCTION-APPROVED`.
+
+**Final status, `1C-A-REAL-BACKTEST-A1`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `IMPLEMENTATION FOUNDATION CLOSED`, `NOT PRODUCTION-APPROVED`.
+
+This closure record makes no claim of production approval, a completed real provider backtest, empirical detection accuracy, profitability validation, out-of-sample validation, or live-market readiness. The first real provider backtest remains pending: no genuine FXCM or TradingView historical export has been supplied.
+
+### 43A. Commit history (complete)
+
+| Commit | Message |
+|---|---|
+| `ce21b686fc95288204904fb2cb296907a3681b6e` | Approve 1C-A-REAL-BACKTEST architecture |
+| `85c3154ac005f235f7a9d09b457528521a94e19c` | Approve 1C-A-REAL-BACKTEST-A1 amendment |
+| `30b67bb576dc43d36670705063b814a0139c809c` | Implement 1C-A-REAL-BACKTEST foundation |
+| `17b9a9903ca6ddaf4dce99e25f539b440dd968b0` | Correct 1C-A-REAL-BACKTEST conformance defects |
+
+`17b9a9903ca6ddaf4dce99e25f539b440dd968b0` is the current verified implementation tip (`HEAD` == `origin/main`).
+
+### 43B. Final implementation scope
+
+- **Initial implementation (`30b67bb`):** 27 total affected paths — 25 new (12 source: `__init__.py`, `enums.py`, `configuration.py`, `manifest.py`, `csv_parser.py`, `data_quality.py`, `loader.py`, `identity.py`, `execution.py`, `reporting.py`, `cli.py`, `__main__.py`; 13 test: `test_historical_header_mapping.py`, `test_historical_manifest.py`, `test_historical_csv_parsing.py`, `test_historical_timezone.py`, `test_historical_data_quality.py`, `test_historical_gaps.py`, `test_historical_loader.py`, `test_historical_reviewed_cases.py`, `test_historical_identity.py`, `test_historical_execution.py`, `test_historical_reporting.py`, `test_historical_cli.py`, `test_historical_exports.py`) plus 2 modified existing dependency files (`pyproject.toml`, `uv.lock`, adding `tzdata==2026.3`). No twenty-eighth path.
+- **Post-commit correction (`17b9a99`):** modified exactly 7 of the 25 already-approved paths (3 source: `csv_parser.py`, `identity.py`, `loader.py`; 4 test: `test_historical_execution.py`, `test_historical_identity.py`, `test_historical_loader.py`, `test_historical_timezone.py`). No new path. No deleted path. No documentation, dependency, lockfile, Protocol, or upstream package touched by that commit.
+- **Inventory:** 196 → 221; creation order 196–220. No inventory row added for `pyproject.toml` or `uv.lock` (both already inventoried from repository bootstrap).
+
+### 43C. Final public surface
+
+- **Enums:** 7.
+- **Contracts:** 12 — `HistoricalDatasetConfiguration` (4 fields), `HeaderMappingEntry` (2), `HistoricalFileEntry` (16), `DatasetManifest` (17), `DataQualityIssue` (6), `GapRecord` (6), `TimeframeCoverage` (6), `HistoricalDataQualityReport` (8), `ReviewedCaseDocument` (3), `LoadedHistoricalDataset` (5), `HistoricalBacktestExecutionResult` (14), `ReportWriteResult` (3).
+- **Errors:** 4 — `InvalidDatasetManifestError`, `ChecksumMismatchError`, `DatasetManifestNotFoundError`, `HistoricalReportWriteError`.
+- **APIs:** 4 — `load_historical_dataset`, `execute_scanner_backtest`, `write_backtest_report`, `main`.
+- **Identity implementation:** 1 — `ContentAddressedIdentityProvider`.
+- **Exports:** exactly 28, unchanged in name, order, and count throughout implementation and correction.
+- No public-surface change occurred during the post-commit correction — every fix (bundled-zone wiring, normalized-record collision tracking, calendar-period-count truthfulness, reviewed-case-execution test strengthening) was made entirely inside already-approved private surface or existing test bodies.
+
+### 43D. Final test and quality results
+
+**AST top-level test functions:** pre-1C-A 710, historical-backtest 68, combined **778**.
+
+**Pytest-collected tests:** collected **856**; full suite **856 passed**; baseline subset (`tests/test_import_smoke.py`, `tests/test_config_precedence.py`) **34 passed**.
+
+**Final quality gate results (independently re-verified at closure):** `uv lock --check` — PASS; `ruff format --check .` — PASS (197 files); `ruff check .` — PASS; `mypy src tests` — PASS, zero errors, 197 files; `mypy --no-incremental src tests` — PASS, zero errors, 197 files.
+
+An earlier apparent mypy discrepancy (one phantom `attr-defined` error in `tests/test_import_smoke.py`) was independently traced to stale, ignored local `.mypy_cache` state — reproduced as absent in fresh, isolated worktrees of both the baseline and the implementation commit — and was resolved by removing the ignored local cache only; no mypy configuration, ignore, or exclusion was added anywhere in the repository.
+
+### 43E. Bundled-tzdata amendment result (`1C-A-REAL-BACKTEST-A1`, implemented and corrected)
+
+`tzdata==2026.3` is pinned as an unconditional direct runtime dependency in `pyproject.toml`, resolved and locked in `uv.lock`. The authoritative timezone source for all historical-backtest parsing is the bundled `tzdata` package's own resource tree, accessed exclusively via `importlib.resources` + `tzdata.zoneinfo` + `ZoneInfo.from_file(..., key=zone_name)` (the private `_load_bundled_zone` helper in `manifest.py`); the standard-library `zoneinfo.ZoneInfo` remains the timezone engine. Historical-backtest parsing never consults the host's own `TZPATH`, never calls `zoneinfo.reset_tzpath()`, never mutates `TZ`/`PYTHONTZPATH` or any other environment variable, uses no alternate timezone library, no custom/synthetic timezone implementation, and performs no network timezone retrieval.
+
+Verified (including under a deliberately poisoned host `TZPATH`, in an isolated subprocess): `UTC` loads correctly; `America/New_York` loads correctly; a genuine 2024-11-03 fall-back ambiguous local time is correctly detected and rejected; a genuine 2024-03-10 spring-forward nonexistent local time is correctly detected and rejected; `D1` calendar-close derivation across the spring-forward transition correctly yields 23 elapsed hours (not 24); `W1` calendar-close derivation across the fall-back transition correctly yields 169 elapsed hours (not 168). The originally-approved fold=0/fold=1 UTC round-trip DST resolver is unchanged.
+
+### 43F. Corrected conformance defects (post-commit correction, `17b9a99`)
+
+An independent post-commit conformance audit found the initial implementation's bundled-tzdata wiring incomplete and identified four further, narrower defects. All five were corrected in a single consolidated correction commit and independently re-verified, including by deliberately reintroducing each original defect and confirming the strengthened tests genuinely fail before restoring the fix:
+
+1. **Bundled-tzdata loader not connected to real CSV parsing.** `csv_parser.py`'s `parse_candle_rows` originally constructed its timezone object via the plain, unqualified `ZoneInfo(entry.timezone)`, bypassing the bundled loader entirely for the one code path that performs real candle-timestamp DST conversion (the loader was correctly wired only into manifest-validation-time zone-name checking). **Resolution:** `parse_candle_rows` now uses `_load_bundled_zone(entry.timezone)`. Independently verified host-TZPATH-independent via a poisoned-`PYTHONTZPATH` subprocess test.
+2. **Normalized candle record identities uncovered by collision tracking.** `derive_normalized_record_id`'s output was never routed through `CandleIdentityCollisionTracker`, unlike the other three candle identity categories. **Resolution:** `CandleIdentityCollisionTracker` gained `check_normalized_record_id`; `loader.py` now checks every derived normalized-record ID and its canonical bytes before constructing `NormalizedCandle`.
+3. **`complete_calendar_period_count` counted raw candles, not genuinely complete periods.** For `D1`/`W1`, the field originally used a plain `len(candles)`, which could count a still-open period whose completeness tracking was disabled (`complete_candles_only=False`, yielding `UNKNOWN`) or whose availability time was still in the future relative to `manifest.created_at_utc`. **Resolution:** the metric now counts only candles whose completeness is `CONFIRMED_COMPLETE` and whose `availability_time_utc` is not later than `manifest.created_at_utc`; non-calendar timeframes remain `None`; the field remains dataset-wide, not reviewed-case-window-specific.
+4. **Reviewed-case evaluation branch untested with real, non-empty cases.** No test among the 68 exercised `execute_scanner_backtest`'s evaluation branch with a genuine `ReviewedScannerCase`. **Resolution:** the existing `test_execute_scanner_backtest_runs_one_replay_call_per_symbol` now supplies one real, non-empty case per symbol and verifies replay-before-evaluation ordering, per-symbol case scoping (no cross-symbol leakage), retained `ScannerBacktestReport`, and that reviewed-case presence never changes raw replay/detection output.
+5. **Persistent local `.mypy_cache` produced a phantom error.** Not a source defect — traced to stale, ignored local tool-cache state, confirmed absent in fresh isolated worktrees of both the baseline and implementation commits. **Resolution:** the ignored local cache was removed; both `mypy src tests` and `mypy --no-incremental src tests` pass without any repository configuration change.
+
+No additional test and no additional implementation path was added by this correction; the 68-test plan, 25-path implementation scope, and 28-item export list are all unchanged.
+
+### 43G. Final implemented behavior
+
+Explicit manifest-controlled header mapping (no built-in provider alias table); strict dataset-path lexical validation plus resolved-root containment; descendant-symlink rejection; raw on-disk-byte SHA-256 checksum verification (pre-parse); UTF-8/BOM-transparent decoding; `Decimal`-only OHLC/volume parsing (never `float`); exact manifest-owned `timestamp_format`; deterministic bundled IANA timezone data (§43E); genuine DST ambiguous/nonexistent-time detection via the exact fold=0/fold=1 UTC round-trip algorithm; fixed-duration intraday availability; explicit `D1`/`W1` calendar-close metadata (`calendar_close_day_offset`/`calendar_close_time_local`); explicit row/file/dataset-level completeness handling; missing-volume retained as `CandleVolumeKind.UNKNOWN`; deterministic candle provenance identity, source-record identity, raw-candle-record identity, normalized-record identity, and content fingerprint (five private, canonical-JSON-domain-separated, SHA-256-derived, UUIDv7-shaped or hex-digest rules); genuine collision rejection across all four tracked identity categories; deterministic gap reporting with no forward-fill or interpolation; reviewed-label isolation from scanner replay input; exactly one `run_scanner_replay` call per symbol; replay strictly before evaluation; deterministic JSON reports (`ContractModel.model_dump(mode="json")`); `checksums.json` as the sole completion marker, written strictly last, excluding itself; `execution_summary.json` as an ordinary report file only; per-file atomic replacement (`os.replace`) with no whole-directory atomicity claim; 7-tier CLI exit-code precedence.
+
+None of this constitutes or implies an empirical detection-quality, accuracy, or profitability claim — every test above exercises deterministic-fixture behavior only.
+
+### 43H. Final implementation audit verdicts
+
+- Initial implementation static/final audit: `A` (ready to commit, no correction cycle needed).
+- Independent post-commit conformance audit: `C — POST-COMMIT CORRECTION REQUIRED` (one blocking finding: bundled-tzdata loader not wired into real CSV parsing; four non-blocking findings, listed at §43F).
+- Post-commit correction final audit: `A — PASS, POST-COMMIT CORRECTION COMPLETE`.
+- Independent post-correction verification audit: **`A — PASS, CORRECTION INDEPENDENTLY VERIFIED`** (final).
+
+### 43I. Remaining external dependency — first real provider backtest pending
+
+**The first real provider backtest has not occurred and is not claimed anywhere in this closure record.** It remains pending solely because no genuine historical provider export has been supplied. Required next external input: real FXCM or TradingView historical candle exports for the initial symbols `XAUUSD`, `EURUSD`, `GBPUSD`; required timeframes per symbol `M1`, `M5`, `M15`; preferred optional timeframes `H1`, `H4`, `D1`, `W1`. `H3` remains unsynthesized and deferred (§41I). The repository currently contains no `historical_datasets` directory, no real provider CSV file, no empirical detection report, no accuracy result, and no profitability result. **This is a data-acquisition gap, not an implementation defect** — every architecture and implementability-matrix condition needed to consume such a file once supplied is already implemented and verified.
+
+### 43J. Preserved exclusions (verified absent from the implemented package)
+
+`H3` resampling/synthesis, live provider ingestion, entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, profit/loss, drawdown, expectancy, trade outcome, broker execution, MT4, MT5, Telegram, chart rendering, AI inference, AI training, production approval.

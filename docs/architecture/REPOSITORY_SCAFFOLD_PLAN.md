@@ -810,3 +810,25 @@ This milestone completes the deterministic scanner — a pure orchestrator, not 
 **WIP status:** the 12 already-written source files remain preserved untracked in git stash `"WIP 1C-A before tzdata amendment"`, not committed, not popped. Implementation resumes only in a separate, later implementation task via the approved restoration sequence (register §42J).
 
 **Final amendment verdict:** `A — AMENDMENT APPROVED FOR CONTROLLED IMPLEMENTATION`. **Not yet implemented.** Documentation-only; no source, test, dependency, lockfile, or Protocol is affected by this section. Remains `NOT PRODUCTION-APPROVED`.
+
+## 33. `1C-A-REAL-BACKTEST` and `1C-A-REAL-BACKTEST-A1` — Formal Closure
+
+**Final status, `1C-A-REAL-BACKTEST`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `ARCHITECTURALLY AUDITED`, `CORRECTED`, `INDEPENDENTLY VERIFIED`, `COMMITTED`, `PUSHED`, `IMPLEMENTATION FOUNDATION CLOSED`, `FIRST REAL PROVIDER BACKTEST PENDING`, `NOT PRODUCTION-APPROVED`. **Final status, `1C-A-REAL-BACKTEST-A1`:** `AUTHOR-APPROVED`, `IMPLEMENTED`, `VERIFIED`, `COMMITTED`, `PUSHED`, `IMPLEMENTATION FOUNDATION CLOSED`, `NOT PRODUCTION-APPROVED`. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §43.
+
+**Commit history:** architecture approval `ce21b686fc95288204904fb2cb296907a3681b6e`; A1 amendment approval `85c3154ac005f235f7a9d09b457528521a94e19c`; initial implementation `30b67bb576dc43d36670705063b814a0139c809c` (27 paths, 25 new: 12 source / 13 test, plus 2 modified dependency files `pyproject.toml`/`uv.lock`); post-commit correction `17b9a9903ca6ddaf4dce99e25f539b440dd968b0` (7 of the same 25 already-approved paths modified, no new path, no documentation touched by that commit).
+
+**Final public surface:** 7 enums, 12 contracts, 4 errors, 4 APIs, 1 identity implementation, 28 exports — unchanged since initial implementation. No public-surface change occurred during the post-commit correction.
+
+**Final test/quality results:** AST 710 + 68 = 778; pytest-collected 856; `uv lock --check`, Ruff format, Ruff lint, and mypy (normal + no-incremental) all pass, zero errors across 197 files; full suite 856 passed; baseline subset 34 passed. Inventory 196 → 221, creation order 196–220, unchanged.
+
+**Bundled-tzdata amendment result:** `tzdata==2026.3` unconditional direct runtime dependency; all historical-backtest timezone parsing uses the bundled `tzdata` resources exclusively (never the host `TZPATH`); verified under a deliberately poisoned host `TZPATH` for `UTC`, `America/New_York`, genuine ambiguous/nonexistent local times, and `D1`/`W1` calendar-close derivation across DST.
+
+**Corrected defects (post-commit correction):** bundled-zone loader wired into `csv_parser.py`'s real parsing path; normalized-record collision tracking added; `complete_calendar_period_count` corrected to count only confirmed-complete, past-available candles; reviewed-case evaluation branch exercised by an existing execution test; stale local `.mypy_cache` removed. No additional test or path added.
+
+**Final audit verdict:** `A — PASS, CORRECTION INDEPENDENTLY VERIFIED` (final), following an independent post-commit conformance audit verdict `C — POST-COMMIT CORRECTION REQUIRED` and a post-commit correction final audit `A — PASS, POST-COMMIT CORRECTION COMPLETE`.
+
+**Remaining external dependency:** the first real provider backtest remains pending — no genuine FXCM or TradingView historical export has been supplied. Required next external input: real historical candle exports for `XAUUSD`/`EURUSD`/`GBPUSD`, timeframes `M1`/`M5`/`M15` (preferred optional `H1`/`H4`/`D1`/`W1`); `H3` remains unsynthesized and deferred. This is a data-acquisition gap, not an implementation defect.
+
+**Preserved exclusions:** entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, profit/loss, drawdown, expectancy, trade outcome, broker execution, MT4, MT5, Telegram, chart rendering, AI training, production approval.
+
+**Documentation-only record.** No source, test, dependency, lockfile, Protocol, or upstream package is affected. Milestone and amendment remain `NOT PRODUCTION-APPROVED`; the first real provider backtest has not occurred.
