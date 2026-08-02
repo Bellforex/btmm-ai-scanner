@@ -832,3 +832,93 @@ This milestone completes the deterministic scanner — a pure orchestrator, not 
 **Preserved exclusions:** entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, profit/loss, drawdown, expectancy, trade outcome, broker execution, MT4, MT5, Telegram, chart rendering, AI training, production approval.
 
 **Documentation-only record.** No source, test, dependency, lockfile, Protocol, or upstream package is affected. Milestone and amendment remain `NOT PRODUCTION-APPROVED`; the first real provider backtest has not occurred.
+
+## 34. `1C-A-REAL-BACKTEST-A2` — Bounded Incremental Replay and Snapshot Retention Amendment (Architect-Recommended)
+
+**Status: `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`.** Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §44.
+
+**Origin:** the first genuine XAUUSD FXCM replay was deliberately terminated after ~28 minutes for host safety (available RAM below 1 GB and falling; peak working set ~7.3 GB of 15.6 GB physical, ~23.6 GB committed). No report or `checksums.json` was produced. An independent read-only audit confirmed super-linear runtime (≈N^2.60) and memory (≈N^2.16) growth from bounded 250/500-candle real-data samples, verdict `D — MANDATORY STOP — REPLAY ARCHITECTURE CONTRADICTION`. The dataset remains valid; the failure is replay-engine scalability. Another full replay is prohibited pending this amendment's approval and implementation.
+
+**Confirmed causes:** existing `ALL`/`CHANGED_ONLY` retention both hold full cumulative snapshots (`CHANGED_ONLY` gave no measured benefit); `scan_market` recomputes the entire growing candle prefix from scratch every availability-group step, independent of retention policy — the dominant cost; no approved output reads retained `snapshots`, only `final_snapshot`; the existing `warm_up_floor_bars` formula proves the approved rules only need a bounded trailing window, so the cost is a replay-loop artifact, not an architectural requirement.
+
+**Recommended architecture:** a single-pass incremental replay kernel with private, per-domain bounded carried state (measurements/structure/POI/BTMM/orchestration), a new `FINAL_ONLY` retention default for historical backtesting, and an accumulated event/lifecycle ledger — preserving every approved output via `final_snapshot` alone. The existing full-batch `scan_market` is preserved unchanged as the mandatory equivalence oracle, reusing the already-collected 250/500-candle benchmark data as regression fixtures (no new benchmark run).
+
+**Proposed scope (author-decision, narrow):** `SnapshotRetentionPolicy` +1 member (`FINAL_ONLY`, 2→3); `ScannerReplayResult` +1 field (`processed_availability_group_count`, 11→12); 9 modified existing source paths, 0 new source paths; 4 modified + 1 new test path (~16 estimated new named tests). Inventory 221 → **222** (+1), creation order **221**. Estimated AST/pytest totals: ~794/~872.
+
+**Performance gates (`AUTHOR-APPROVED` + `ENGINEERING-PROVISIONAL`, not yet met):** peak working set ≤ 6 GB; available RAM ≥ 4 GB; full replay ≤ 90 minutes; `checksums.json` only after complete success; deterministic rerun; zero equivalence mismatches.
+
+**Focused audit verdict: `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`.** Addresses both causes; preserves no-lookahead, identities, lifecycle ordering, and report/evaluation compatibility by design. Disclosed open questions: sufficiency of existing public current-state summaries as private carried state; exact window sizing; exact test count — deferred to implementation.
+
+**Documentation-only record.** No source, test, dependency, lockfile, Protocol, dataset, manifest, report, or audit result is modified. No benchmark rerun, no full replay. Remains `NOT PRODUCTION-APPROVED`.
+
+### 34-Correction. Consolidated architecture correction (supersedes the `B` verdict recorded above)
+
+**The §34 draft above and its `B` verdict are preserved as historical audit history**, superseded by this correction. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §44O–§44AG.
+
+**Corrected status:** `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`. Interim disposition of the §34 draft: `C — ARCHITECTURE CORRECTION REQUIRED`.
+
+**Exact engine:** one precise `IncrementalReplayKernel` (private, `scanner/replay.py`), 18-step flow locked, not a vague combination.
+
+**Exact domain state, proven field-by-field:** `_MeasurementReplayState` (bounded windows citing `atr_period=14`/`range_context_window=20`/`trendline_min_anchor_spacing_bars=5`); `_StructureReplayState`/`_PoiReplayState`/`_BtmmReplayState` each proven to need explicit private fields beyond the existing public `current_*_state` summaries (which carry IDs, not price/zone/observation detail), bounded by active-object ownership (≤4 structure swings, live-POI count, live-setup count); `_ScannerOrchestrationReplayState` wrapping all four plus a private event ledger. All private; no public surface growth beyond two justified items.
+
+**Exact retention classification:** every historical-sequence category classified A (unbounded)/B (active-object-bounded)/C (fixed configured lookback)/D (derived summary)/E (not retained), each citing an existing approved configuration field or bounded-count justification.
+
+**Exact retention enum/defaults:** `ALL`/`CHANGED_ONLY`/`FINAL_ONLY`; `FINAL_ONLY` → one-item tuple; unbounded policies capped at `_MAX_GROUPS_FOR_UNBOUNDED_RETENTION = 2000` (pending approval); shared default unchanged, historical-backtest default `FINAL_ONLY`.
+
+**Exact `ScannerReplayResult` change:** 11 → 12 fields, `processed_availability_group_count`, fully specified.
+
+**Exact direct-batch oracle policy:** `IMPLEMENTABLE_WITH_AUTHOR_DECISION` — full-scale safety not established; isolated worker + hard ceiling required; report publication blocked on verification crash/timeout too.
+
+**Exact CLI:** `--snapshot-retention {all,changed-only,final-only}`, default `final-only`, new exit code `EXIT_UNSAFE_RETENTION_POLICY = 7`.
+
+**Exact scope:** 9 modified source, 0 new source, 4 modified test, 1 new test. Inventory 221 → **222**, creation order **221**.
+
+**Exact test plan:** **36** new tests exactly (27 new file + 3+1+2+3 across 4 modified files). Projected AST **814**; projected pytest-collected **892** — both exact.
+
+**Corrected matrix:** 14 rows; totals 10/2/1/1/0 = **14**, correcting the prior 13-rows/12-sum arithmetic error.
+
+**Gates relabeled:** `ARCHITECT-RECOMMENDED + ENGINEERING-PROVISIONAL`.
+
+**Final corrected verdict: `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`.** All six automatically-blocking categories (domain-state sufficiency, retention rule, contract change, test count, path scope, matrix arithmetic) resolved exactly. Disclosed non-blocking: direct-batch full-scale oracle safety; measurement-analyzer lookback verification. Not `A`/`C`/`D`.
+
+**Documentation-only.** No source, test, dependency, lockfile, Protocol, dataset, manifest, report, or audit result modified. No benchmark rerun, no full replay. Remains `NOT PRODUCTION-APPROVED`.
+
+### 34-Final-Correction. Final targeted architecture correction (supersedes the `B` verdict recorded above)
+
+**Prior drafts preserved as historical audit history.** Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §44AH–§44AU. Interim disposition: `C — ARCHITECTURE CORRECTION STILL REQUIRED`.
+
+**Wilder ATR proven exact:** 4-scalar incremental state (`previous_candle_close`, `initialization_true_range_sum`, `initialization_sample_count`, `previous_finalized_atr`), zero raw-candle retention, equivalence proven from the literal recursion.
+
+**Corrected dependencies:** pending swing confirmation is unbounded in duration, bounded to ≤2 candidates per timeframe (not the prior "≤4 bars" claim); displacement genuinely bounded to `range_context_window=20`; equal-levels/support-resistance/trendlines corrected from an unproven 20-candle window to their true dependency — the full accumulated confirmed-swings set (classification A), with trendline pairing honestly disclosed as O(swing-count²) worst case.
+
+**Event ledger corrected:** `warnings` added as an 11th field, resolving the prior contradiction.
+
+**Honest memory complexity stated per domain** (C/A/E/T terms); active-object bounds asserted only where an approved rule proves a hard maximum; required A+E empirical evidence deferred to implementation.
+
+**`ALL`/`CHANGED_ONLY` safety corrected:** unsupported 2,000-group cap removed; historical CLI/execution now permits them only up to an exact, evidence-grounded **250 groups**; general Python API unchanged.
+
+**Direct-batch worker fully specified:** 2 new private source paths, isolated `spawn` subprocess, 90-min timeout, 6 GB ceiling, checksum-validated response, full cleanup; full-dataset verification required before any report publishes.
+
+**`ScannerReplayResult` reverted to 11 fields** — no proven public consumer need; group count moves to private `execution_summary.json` alongside 9 cross-platform (nullable, non-failing, identity-excluded) metrics.
+
+**Corrected scope:** 2 new source, 9 modified source, 2 new test, 4 modified test. Inventory 221 → **225** (+4), creation order **221–224**. Exact test plan: **50** new tests, exact names (register §44AR); "legacy oracle" comparisons at large scale use the one-shot batch oracle only. Projected AST **828**; pytest-collected **906**.
+
+**Corrected matrix:** 15 rows, totals 11/2/1/1/0 = **15**.
+
+**Final verdict: `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`.** All eight non-blockable-by-instruction items resolved exactly. Disclosed open findings: O(A_swings²) worst-case complexity; full-dataset oracle safety unproven; required A+E benchmark not yet run.
+
+**Documentation-only.** No source, test, dependency, lockfile, Protocol, dataset, manifest, report, or audit result modified. No benchmark rerun, no full replay. Remains `NOT PRODUCTION-APPROVED`.
+
+### 34-Author-Approval. Author approval — architecture-approval stage closed
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`.** Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §44AV. **Accepted verdict: `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`**, adopted as-is. Architecture approval only — no implementation, no completed replay, no full rerun authorization, no accuracy/profitability/trading/production claim.
+
+**Approved architecture:** `IncrementalReplayKernel`; incremental measurement (proven Wilder ATR), structure, POI, BTMM, orchestration state; complete 11-field ledger with `warnings`; `FINAL_ONLY` historical default; `ScannerReplayResult` unchanged at 11 fields; `ALL`/`CHANGED_ONLY` capped at 250 groups (historical CLI only); isolated direct-batch worker; no publication without successful full-dataset verification; private cross-platform metrics; exact 2-new/9-modified source, 2-new/4-modified test scope; exact 50-test plan.
+
+**Approved gates, relabeled `AUTHOR-APPROVED + ENGINEERING-PROVISIONAL`:** peak WS ≤6 GB; available RAM ≥4 GB; runtime ≤90 min; no uncontrolled committed-memory growth; deterministic rerun; zero mismatches; no report before success; `checksums.json` last.
+
+**Approved open findings:** O(A_swings²) trendline worst case needs empirical measurement; full-dataset oracle safety unproven, needs isolated-worker testing; A+E memory needs empirical measurement before the genuine replay.
+
+**Recorded:** no implementation yet; full XAUUSD replay remains blocked; dataset/manifest unchanged; no accuracy/profitability claim; `NOT PRODUCTION-APPROVED`. All prior history preserved unchanged.
+
+**Documentation-only.** No source, test, dependency, lockfile, Protocol, dataset, or manifest modified.

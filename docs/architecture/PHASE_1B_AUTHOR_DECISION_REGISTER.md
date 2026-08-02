@@ -7124,3 +7124,902 @@ None of this constitutes or implies an empirical detection-quality, accuracy, or
 ### 43J. Preserved exclusions (verified absent from the implemented package)
 
 `H3` resampling/synthesis, live provider ingestion, entry confirmation, entry price, stop loss, take profit, risk/reward, position sizing, profit/loss, drawdown, expectancy, trade outcome, broker execution, MT4, MT5, Telegram, chart rendering, AI inference, AI training, production approval.
+
+## 44. `1C-A-REAL-BACKTEST-A2` — Bounded Incremental Replay and Snapshot Retention Amendment (Architect-Recommended)
+
+**Status: `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`.** This amendment supersedes **only** the replay scalability design (`SnapshotRetentionPolicy`, `run_scanner_replay`'s per-step recomputation strategy, and the historical-backtest CLI's retention default). It makes **no change** to approved candle data, normalized market-data contracts, measurement definitions, structure definitions, POI definitions, BTMM definitions, no-lookahead rules, identity semantics, reviewed-case labels, or the entry/trade exclusions — every one of those remains exactly as approved in §41/§42/§43. Full detail: `PHASE_1B_EXACT_SCAFFOLD_FILE_SCOPE.md` §49; `REPOSITORY_SCAFFOLD_PLAN.md` §34; `PROJECT_STATE.md` §59.
+
+**Origin.** The first genuine XAUUSD FXCM replay (dataset `xauusd_2026_07_pilot`, `historical_datasets` sibling directory outside the repository) was deliberately terminated (worker PID 6080) after ~28 minutes for host safety when available physical RAM fell below 1 GB and continued falling, with peak working set ~7.3 GB against 15.6 GB total physical RAM and ~23.6 GB committed. No report file and no `checksums.json` were produced. A subsequent independent, read-only replay-memory scalability audit (`1C-A2-REPLAY-MEMORY-AUDIT`, evidence at `C:\Users\GOLD COMPUTERS\Desktop\BTMM_REAL_DATA\AUDITS\replay_memory\`) empirically confirmed the cause using bounded 250- and 500-candle real-data samples and reached verdict `D — MANDATORY STOP — REPLAY ARCHITECTURE CONTRADICTION`. **The dataset itself remains valid and unchanged; the failure is a replay-engine scalability defect, not a data defect.** Another full 18,474-candle replay attempt is prohibited pending this amendment's approval and implementation.
+
+### 44A. Confirmed starting facts (from the independent audit; not re-derived here)
+
+- Existing `SnapshotRetentionPolicy` values: `ALL`, `CHANGED_ONLY` — exhaustive (`scanner/enums.py`).
+- Both existing policies retain **full** `ScannerAnalysis` objects; `CHANGED_ONLY` retains a full object whenever the whole-object canonical JSON differs from the previous retained one, not a delta.
+- On the real 250-candle sample, `CHANGED_ONLY` retained 250/250 snapshots — identical to `ALL`, and was measurably slower (58.1s vs. 48.6s), because it pays full-object JSON-serialization comparison cost on top of identical underlying computation. `CHANGED_ONLY` provides no measured benefit for real multi-timeframe data.
+- Every approved downstream output (`evaluate_scanner`, direct-batch equivalence, report writing) already reads only `replay_result.final_snapshot`, never `replay_result.snapshots` — confirmed from `scanner/evaluation.py` and `scanner/replay.py`.
+- `scan_market` (`scanner/analyzer.py`) is a pure, stateless function of its full input: at every availability-group step, `run_scanner_replay` (`scanner/replay.py`) passes the **entire visible candle prefix accumulated so far** (`visible_by_timeframe`, which only grows), and `scan_market` recomputes `analyze_market_measurements`/`analyze_structure_state`/`analyze_pois`/`analyze_btmm` from that full prefix every time — there is no incremental/previous-state parameter anywhere in these signatures.
+- Empirically, runtime scaled ≈ N^2.60 and peak working set scaled ≈ N^2.16 between the 250- and 500-candle samples (6.07× runtime and 4.48× peak memory for a 2× input increase) — both clearly super-linear, confirmed from real data, not synthetic.
+- The full 18,474-candle dataset is unsafe under the current design on a 15.6 GB machine: the audit's own order-of-magnitude projection (explicitly labeled an estimate) put full-dataset runtime on the order of tens of days and RAM exhaustion around N≈780–1,100 candles — consistent with the real 28-minute failure.
+- `warm_up_floor_bars` (`historical_backtest/data_quality.py`) already defines a **bounded** maximum lookback (`max(atr_period, range_context_window, trendline_min_anchor_spacing_bars, reaction_window_bars, reclaim_window_bars, displacement_window_bars, 2×swing-confirmation-radius)`, evaluated to 20 bars for this dataset's configuration) — this is strong, code-grounded evidence that the **approved rule set itself only ever requires a bounded trailing window**, not full history-to-date. The O(N²)+ cost is therefore an artifact of `run_scanner_replay`'s per-step full-recompute call pattern, not an inherent requirement of the detection rules.
+
+### 44B. Required semantic invariants (locked; any future implementation must preserve all of these)
+
+1. Availability-time-ordered processing (unchanged from `run_scanner_replay`'s existing group-by-availability-time loop).
+2. No candle visible before its own `availability_time_utc` (no-lookahead, unchanged).
+3. Stable, deterministic candle/group ordering (unchanged sort key: `(availability_time_utc, event_time_utc, record_id)`).
+4. Stable deterministic identities and content fingerprints (all `derive_*` functions and `ContentAddressedIdentityProvider` unchanged).
+5. Exact POI eligibility rules (unchanged, §35 family).
+6. Exact POI lifecycle rules (unchanged, §35 family).
+7. Exact BTMM eligibility and lifecycle rules (unchanged, §36 family).
+8. Exact structure-event semantics (unchanged, §34 family).
+9. At most the same transitions permitted per candle/group as today's full-recompute engine produces.
+10. Existing direct-batch comparison semantics unchanged unless a future, separately authorized amendment says otherwise.
+11. Existing reviewed-label isolation unchanged (`evaluate_scanner` reads only `final_snapshot`, never touches raw replay mechanics).
+12. One symbol per replay call (unchanged, `MixedSymbolAnalysisError` still applies).
+13. Native M1/M5/M15 candles without resampling (unchanged — this amendment touches replay *computation strategy*, never candle data).
+14. Identical final results for equivalent input — **the existing, unmodified, full-batch `scan_market` call remains the semantic oracle** for all bounded equivalence testing; it is not deleted, replaced, or altered by this amendment.
+15. No entry, stop-loss, take-profit, P&L, or execution behavior is introduced.
+
+### 44C. Options evaluated
+
+**A. Retention-only change (e.g. `FINAL_ONLY`, `LATEST_ONLY`, `NONE`).** Fixes retained-output memory (the `snapshots` tuple can shrink to one entry or zero) but **does not, by itself, fix full-prefix recomputation** — `scan_market` is still called once per availability-group with the full growing prefix regardless of what gets retained afterward; runtime remains ≈O(N²)+ under a retention-only fix. Memory behavior: good. Runtime behavior: unchanged/still unsafe. Contract impact: one new enum member. Test impact: low. Implementation complexity: low. Migration risk: low. Reporting/evaluation compatibility: full (§44A already shows evaluation never used `snapshots`). **Recommendation: adopt as one component, not a standalone fix.**
+
+**B. Incremental domain state.** Process one availability group at a time, carrying explicit prior state for measurements, structure, POI, BTMM, and scanner orchestration, so each step's cost depends only on the bounded new information in that group, not the full prefix. Semantic correctness: achievable in principle, since §44A's `warm_up_floor_bars` evidence shows the rule set is already bounded-window by nature. No-lookahead preservation: fully compatible (arguably *more* explicit, since state carried forward can never include future information by construction). Memory behavior: bounded per step (proportional to the fixed lookback window, not N). Runtime behavior: O(1) amortized work per step → O(N) total, down from O(N²)+. Contract impact: new **private** per-domain state contracts (§44G); no change to existing public `MarketMeasurementAnalysis`/`StructureAnalysis`/`PoiAnalysis`/`BtmmAnalysis`/`ScannerAnalysis` shapes. Test impact: significant (new equivalence-oracle suite, §44H). Implementation complexity: high — touches four domain analyzer modules plus the replay loop. Migration risk: moderate, fully mitigated by the mandatory differential-equivalence strategy against the preserved full-batch oracle. **Recommendation: adopt as the core computational fix.**
+
+**C. Precomputed or memoized pipeline.** Precompute stable lower-level measurements/structure once and reuse them rather than recalculating unchanged prefixes. On inspection this is not a distinct architecture from B — it is an *implementation technique* for achieving incremental behavior (a memoization cache is, in effect, an ad hoc incremental state contract without an explicit, typed shape). Adopting memoization without an explicit state contract risks hidden mutable cache state that is hard to reason about for determinism and hard to make replay-resumable. **Rejected as a standalone option; folded into B's explicit-contract approach.**
+
+**D. Single-pass replay kernel.** Move the sequential availability-group loop into one scanner-orchestration kernel that updates state and emits events once per group, rather than reconstructing a full `ScannerAnalysis` tree from scratch every step. This is the natural *orchestration* counterpart to B's *domain-state* changes — B without D would still rebuild a full `ScannerAnalysis` shell every step even if the underlying domain computations were incremental; D without B would have nothing incremental to orchestrate. Semantic correctness, no-lookahead, memory, and runtime characteristics mirror B. Contract impact: `scanner/replay.py`'s internal loop changes; `run_scanner_replay`'s public signature and `ScannerReplayResult`'s existing fields are unchanged. **Recommendation: adopt, combined with B, as one coherent design — not a separate option.**
+
+**E. Checkpointed or chunked replay.** Naïve chunking that resets structure/POI/BTMM lifecycle state between chunks is explicitly rejected — it would silently violate invariants 5–9 (lifecycle continuity) by losing earlier state. However, once B/D provide an explicit, immutable, serializable per-group state contract, that same contract is *inherently* a valid checkpoint boundary — persisting it between chunks becomes possible without redesigning anything further. **Recommendation: defer actual checkpoint persistence/resume to a future, separately authorized task (§44K); the state contracts in this amendment are designed to be checkpoint-resume-*compatible*, but checkpoint persistence itself is out of this amendment's scope.**
+
+**F. Event/delta retention.** Retain `final_snapshot` plus deterministic accumulated observation/transition/warning records rather than retaining every cumulative `ScannerAnalysis` tree. This directly implements what §44A already showed is sufficient: no approved output needs the full per-step history, only the final state (which itself already contains the complete, accumulated set of observations/transitions since `PoiAnalysis`/`BtmmAnalysis`/`StructureAnalysis` are themselves cumulative-to-date summaries). **Recommendation: adopt — this is what makes a `FINAL_ONLY`-style retention policy (option A) *complete*, i.e. lossless with respect to every currently-approved required output.**
+
+### 44D. Recommended architecture (combining A, B, D, F; explicitly rejecting C and deferring E)
+
+**One coherent design: a single-pass incremental replay kernel with explicit, private, per-domain state contracts, a new bounded-retention default, and the existing full-batch `scan_market` preserved unchanged as the semantic oracle.**
+
+- **State entering one availability group** (per timeframe where applicable): a bounded trailing candle/measurement window (sized by the existing `warm_up_floor_bars`-style configuration values already owned by `MarketMeasurementConfiguration`/`BtmmConfiguration`/`PoiConfiguration`) plus each domain's own prior current-state summary (`CurrentStructureState | None`, `current_poi_states`, `current_btmm_states` — all of which **already exist as public fields today**, produced but never fed back in).
+- **Input consumed by that group:** exactly the new candle(s) that become visible at that group's `availability_time_utc`, plus reviewed evidence newly gated-eligible at that timestamp — never the full prefix.
+- **State emitted after that group:** new immutable versions of each domain's carried state, structurally identical in kind to what is consumed, ready for the next group.
+- **Observations/transitions emitted:** each domain's own newly created records for that group only, appended to a single running, deterministic, order-preserving event/lifecycle ledger for the whole replay (implements option F).
+- **Final replay-result construction:** `final_snapshot` is materialized **once**, at the end, from the final accumulated domain states, into the existing, unchanged public `ScannerAnalysis` shape — byte-identical in shape and semantics to today's output. `ScannerReplayResult.snapshots` is governed by the new retention policy (§44F); `final_snapshot` remains unconditionally, separately present under every policy.
+- **Direct-batch verification behavior:** unchanged — still one full-batch call to the existing, unmodified `scan_market(historical_inputs, ...)`, compared against the incremental engine's `final_snapshot` via the existing `_compare_snapshots` logic. This is the semantic oracle required by invariant 14.
+- **Evaluation behavior:** unchanged — `evaluate_scanner` continues to read only `final_snapshot`/`minimum_price_tick`; zero changes required to `scanner/evaluation.py`.
+- **Report-writing behavior:** unchanged file set and unchanged `checksums.json` completion-marker rule; `replay_result_{symbol}.json` shrinks in size under the new default retention policy since `snapshots` now holds one entry instead of thousands.
+- **Deterministic identity ownership:** unchanged — the incremental kernel must derive every identity/fingerprint using exactly the same semantic keys the full-recompute engine would have produced; this is the crux of the mandatory equivalence testing (§44H).
+- **Error and rollback behavior:** unchanged — an internal error still aborts the whole replay with no partial `ScannerReplayResult` returned, matching today's exception-propagation behavior. Checkpoint-based partial-resume is explicitly deferred (§44C option E, §44K).
+
+**Genuinely open engineering question, disclosed non-blocking:** whether the *existing public* `CurrentStructureState`/`current_poi_states`/`current_btmm_states` summaries are, as-is, a *complete* sufficient carried state for bit-exact incremental resumption, or whether private companion fields (e.g. raw trailing candle context beyond what those summaries capture) are additionally required, is not fully resolved by this read-only architecture task and is left to implementation-time design and the mandatory equivalence-test suite to prove out.
+
+### 44E. Retention contract
+
+**New exact closed set: `ALL`, `CHANGED_ONLY`, `FINAL_ONLY`.** `ALL` and `CHANGED_ONLY` are preserved unchanged, only for backward compatibility with existing scanner tests/callers that assert specific behavior under them — neither becomes the default for historical backtesting.
+
+- **Default policy for normal (non-historical) `run_scanner_replay` callers:** `ReplayConfiguration.snapshot_retention` class-level default remains `ALL`, unchanged, preserving 100% of existing scanner-package test assumptions (small fixture-scale inputs, where `ALL` is harmless).
+- **Default policy for historical backtesting specifically:** `SnapshotRetentionPolicy.FINAL_ONLY`, set locally by `execute_scanner_backtest`/the historical-backtest CLI, not by changing the shared `ReplayConfiguration` class default — minimal-blast-radius change.
+- **CLI exposure:** yes — one new optional flag, `--snapshot-retention {ALL,CHANGED_ONLY,FINAL_ONLY}`, default `FINAL_ONLY`.
+- **Exact meaning of `replay_result.snapshots` under every policy:** `ALL` = one full `ScannerAnalysis` per availability-group, unchanged; `CHANGED_ONLY` = one full `ScannerAnalysis` per group whose full serialization differs from the previous retained one, unchanged; `FINAL_ONLY` = exactly one entry, identical to `final_snapshot`.
+- **`final_snapshot` always separately present:** yes, unconditionally, under all three policies — unchanged from today.
+- **Report files include snapshots by default:** yes, but minimal (one entry) under the new historical-backtest default.
+- **Debug snapshot output optional:** yes — a caller wanting the full step-by-step trace can still explicitly request `ALL` via the CLI flag or API; understood as a debug/analysis mode, not intended for real-scale datasets.
+
+**No approved detection output may depend on full snapshot retention — already true today (§44A) and unchanged by this amendment.**
+
+### 44F. Incremental state contracts (proposed shape; exact field lists deferred to implementation)
+
+For each domain, a new **private** (not publicly exported), immutable, `ContractModel`-typed carried-state contract:
+
+- **Measurements:** bounded trailing candle window (sized by `atr_period`/`range_context_window`/`trendline_min_anchor_spacing_bars`) + running swing/ATR/equal-level/support-resistance/trendline working state. No semantic identity (internal working state, not a detection record). JSON-serializable for future checkpoint-resume compatibility. Initialization: empty/zero state before the first candle. One-group transition: pure function `(prior_state, new_candles_for_group) -> (new_state, new_measurement_observations)`. Finalization: derive the existing public `MarketMeasurementAnalysis` shape unchanged. Error conditions: propagate unchanged.
+- **Structure:** carries the existing public `CurrentStructureState | None` + a bounded trailing protected/weak-swing window.
+- **POI:** carries the existing public `current_poi_states` + a bounded trailing candle/measurement window sized by `max(reclaim_window_bars, displacement_window_bars)`.
+- **BTMM:** carries the existing public `current_btmm_states` + a bounded trailing window sized by `reaction_window_bars`.
+- **Scanner orchestration:** the tuple of the above four (per applicable timeframe) plus the running event/lifecycle ledger (accumulated `poi_observations`, `poi_lifecycle_transitions`, `btmm_observations`, `btmm_lifecycle_transitions`, `structure_transitions`, `setup_summaries`) needed to answer every required output (§44A) at finalization without the old per-step full-snapshot list.
+
+All five are **private implementation state** — none is proposed for public export. No public surface growth is proposed beyond §44E/§44G's two explicitly disclosed items.
+
+### 44G. Proposed public-surface changes (author-decision items; narrow)
+
+1. `SnapshotRetentionPolicy` gains one new member, `FINAL_ONLY` (2 → 3 values; no new enum type; existing member names/values unchanged).
+2. `ScannerReplayResult` gains one new field, `processed_availability_group_count: int` (11 → 12 fields) — directly diagnostic of the scalability concern this amendment exists to resolve; no other new field is proposed. Elapsed-time and peak-memory telemetry are explicitly **deferred** (§44K), not proposed here, to keep this amendment's contract-field growth minimal and narrowly justified.
+
+No other public export, contract, error, or API is added, removed, or renamed.
+
+### 44H. Equivalence strategy (mandatory before this amendment may be considered implemented)
+
+**Exact differential-test oracle: the existing, unmodified, full-batch `run_scanner_replay`/`scan_market` path (legacy) versus the new incremental kernel (optimized), compared via the existing `_compare_snapshots`-style byte-stable canonical-JSON diffing.**
+
+Required controlled comparisons (reusing the already-collected 250- and 500-combined-candle real-data prefixes from the `1C-A2-REPLAY-MEMORY-AUDIT` benchmark evidence as regression fixtures — **no new benchmark run is required to define this suite**): 1 availability group; 10 groups; 50 groups; 100 groups; 250 combined candles; 500 combined candles; session-gap boundaries; overlapping M1/M5/M15 availability times; POI creation; POI touch and invalidation; BTMM observation and transition; structure BOS and CHoCH; no-event sequences; replay with reviewed cases; direct-batch verification itself.
+
+Compared fields: `final_snapshot`; POI observations; POI lifecycle transitions; BTMM observations; BTMM lifecycle transitions; structure transitions; setup summaries; warnings; identities; content fingerprints; event ordering; availability timestamps; mismatch results (`detection_mismatches` must be empty in every comparison). Byte-stable canonical representations are required wherever already guaranteed today (identical to the existing `_canonical_dump_one`/`_canonical_dump_many` approach).
+
+### 44I. Performance and safety gates (`AUTHOR-APPROVED` + `ENGINEERING-PROVISIONAL`, pending empirical validation — not yet met, not yet tested)
+
+For the real XAUUSD dataset (≈15.6 GB physical RAM, ≈18,474 supplied candles, three timeframes M1/M5/M15):
+
+- Worker peak working set: no more than 6 GB.
+- Available system RAM: must remain at least 4 GB throughout.
+- No uncontrolled committed-memory growth.
+- Full replay runtime: no more than 90 minutes.
+- No report directory published before successful completion.
+- `checksums.json` written only after complete success.
+- Deterministic rerun result (identical hashes across repeated runs).
+- Zero replay-equivalence mismatches against the legacy oracle.
+
+**These are provisional acceptance thresholds for a future, separately authorized implementation-and-validation task. Meeting them does not, by itself, constitute production approval or an empirical-accuracy claim.**
+
+### 44J. Failure and recovery
+
+- **Low-memory prediction:** not implemented by this amendment; design-compatible with a future self-monitoring addition, not required for V1.
+- **Worker failure:** unchanged — no report is written; matches today's behavior exactly.
+- **Partial-output cleanup:** unchanged — reuses the existing `write_backtest_report` try/except cleanup (deletes partial files, removes the execution directory) on `HistoricalReportWriteError`.
+- **Completion-marker rules:** unchanged — `checksums.json` remains the sole report-completion marker, written strictly last, excluding itself.
+- **Optional checkpoint behavior:** deferred (§44C option E) — the new state contracts are designed to be checkpoint-resume-compatible in principle; checkpoint persistence/resume logic itself is a separate future decision, not implemented here.
+- **Safe cancellation:** deferred — a future engine could support graceful interrupt between groups since incremental state is already a clean boundary; not required for V1.
+- **Deterministic restart / no duplicate lifecycle events after restart:** deferred alongside checkpointing.
+- **No incomplete report treated as valid:** unchanged — the existing `checksums.json` rule already guarantees this.
+
+### 44K. CLI and reporting impact
+
+**Authorized new CLI option (exactly one):** `--snapshot-retention {ALL,CHANGED_ONLY,FINAL_ONLY}`, default `FINAL_ONLY`. **Rejected:** an engine-version/legacy-vs-optimized selector (unnecessary — the incremental kernel replaces the internal step-loop implementation but must produce identical results, verified by §44H; there is no user-facing "engine choice," only the preserved full-batch `scan_market` oracle used internally for direct-batch verification). **Rejected/deferred:** checkpoint-directory, checkpoint-interval, and memory-safety-mode flags (§44J).
+
+**Authorized new report field (exactly one, matching §44G item 2):** `processed_availability_group_count`. **Deferred:** engine version, replay mode, peak-memory metrics, runtime metrics, checkpoint metadata — all require additional design work beyond this amendment's narrow scope. **No profitability or trade metric is added, proposed, or implied.**
+
+### 44L. Exact proposed implementation scope (not executed by this amendment)
+
+- **Modified existing source paths (9):** `scanner/enums.py` (new `FINAL_ONLY` member); `scanner/configuration.py` (no default change, documentation only); `scanner/replay.py` (incremental kernel, new `processed_availability_group_count` field); `domain/analyzer.py` (private incremental measurement state + transition function, alongside the unchanged `analyze_market_measurements` oracle); `structure/analyzer.py` (private incremental structure state + transition function); `poi/analyzer.py` (private incremental POI state + transition function); `btmm/analyzer.py` (private incremental BTMM state + transition function); `historical_backtest/cli.py` (new `--snapshot-retention` flag); `historical_backtest/execution.py` (thread the retention choice through to `ReplayConfiguration`).
+- **New source paths: 0.** No new top-level package or file is proposed; every incremental-state contract is added as private classes inside its already-owning domain module, minimizing path-scope and inventory impact.
+- **Modified existing test paths (4):** `tests/unit/test_scanner_replay_grouping.py`; `tests/unit/test_scanner_batch_replay_equivalence.py`; `tests/unit/test_historical_execution.py`; `tests/unit/test_historical_cli.py`.
+- **New test paths (1):** `tests/unit/test_scanner_replay_incremental_equivalence.py`, housing the §44H differential-oracle suite.
+- **Documentation paths:** the four documents modified by this amendment task itself (register, file-scope doc, scaffold plan, `PROJECT_STATE.md`); no other documentation path.
+- **Dependency/lockfile impact:** none proposed — `pyproject.toml`/`uv.lock` unchanged.
+- **Protocol impact:** none — `DerivedOutputIdentityProvider` and all other Protocols unchanged.
+- **Inventory:** unchanged at 221 now; **+1** projected upon future approved implementation (221 → **222**, the one new test file), creation order **221**.
+- **Public export impact:** 0 new export names (§44G's two items are a value-set change and a field-count change to already-exported names, not new names).
+- **Contract-count impact:** 0 new contract types; 1 existing contract (`ScannerReplayResult`) field-count growth 11 → 12 (author-decision).
+- **Enum-count impact:** 0 new enum types; 1 existing enum (`SnapshotRetentionPolicy`) value-count growth 2 → 3 (author-decision).
+- **Exact top-level test count:** not finalized by this architecture task — estimated at approximately 16 new named tests in the one new file, covering the §44H scenario list, plus strengthened assertions (not new top-level tests, per established project convention) in the 4 modified existing files. Exact count is an implementation-time decision.
+- **Projected AST total (estimate):** 778 (current, post-1C-A-REAL-BACKTEST) + ~16 ≈ **~794**.
+- **Projected pytest-collected total (estimate):** 856 (current) + ~16 ≈ **~872**.
+
+### 44M. Decision matrix
+
+| Row | Classification |
+|---|---|
+| Snapshot retention (`FINAL_ONLY` addition) | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Incremental measurements | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Incremental structure | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Incremental POI | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Incremental BTMM | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Single-pass orchestration | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Direct-batch equivalence | `IMPLEMENTABLE` (unchanged design) |
+| Report compatibility | `IMPLEMENTABLE` (unchanged file set, one optional new field) |
+| Checkpointing | `DEFERRED` |
+| CLI control | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| Legacy-engine compatibility | `IMPLEMENTABLE` (already exists, preserved unchanged) |
+| Performance instrumentation (beyond group count) | `DEFERRED` |
+| Full XAUUSD rerun | `BLOCKED` (prohibited pending this amendment's approval, implementation, and validation) |
+
+### 44N. Focused architecture audit (read-only, this task's own Part 16)
+
+1. **Both memory and runtime causes addressed?** Yes, by design — F/A for memory, B/D for runtime — grounded in the confirmed audit evidence (§44A).
+2. **No-lookahead preserved?** Yes — strictly availability-time-ordered, state only ever carries forward.
+3. **Identities preserved?** Yes — unchanged derivation, required by invariant 4/14.
+4. **Lifecycle ordering preserved?** Yes — same group processing order as today.
+5. **Exact final outputs preserved?** Design requirement, enforced by the mandatory equivalence suite (§44H) — **not yet empirically proven**, since no code has been written and no new benchmark was run, per this task's own read-only scope.
+6. **Event histories preserved?** Yes, via the accumulated ledger (option F), losslessly with respect to every currently-approved output (§44A).
+7. **Report compatibility?** Yes — unchanged file set and completion-marker rule.
+8. **Direct-batch equivalence?** Preserved unchanged, used as the mandatory oracle.
+9. **Reviewed-case compatibility?** Yes — `evaluate_scanner` untouched.
+10. **Bounded memory?** Theoretically yes, grounded in the existing `warm_up_floor_bars` bounded-window evidence — **not yet empirically validated** (no new benchmark run, correctly, per instruction).
+11. **Practical runtime?** Theoretically improved to ~O(N) total — **not yet empirically validated**.
+12. **Failure recovery?** Existing rules preserved; checkpointing explicitly deferred, not a blocking gap for V1.
+13. **Exact scope?** Defined narrowly (§44L): 9 modified source paths, 0 new source paths, 4 modified test paths, 1 new test path.
+14. **Exact tests?** Estimated, not finalized — explicitly disclosed as implementation-time work.
+15. **No unrelated feature growth?** Confirmed — no entry/SL/TP/trade/profitability/live-provider/MT4/MT5/Telegram/AI content anywhere in this amendment.
+16. **No production approval?** Confirmed — none declared anywhere in this section.
+
+**Verdict (SUPERSEDED — see §44O): `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`.** The recommended architecture is coherent, addresses both confirmed root causes, and is grounded in the actual implemented code and the independent audit's real-data evidence rather than assumption. It is not `A` because genuine open engineering questions remain undisclosed-to-closed: (i) whether the existing public `current_*_state` summaries are complete as private incremental carried state or need companion fields (§44D); (ii) exact bounded-window sizing per domain; (iii) exact final test count. It is not `C` or `D` because no fundamental obstacle to a semantically equivalent, scalable design was found — on the contrary, the existing `warm_up_floor_bars` bounded-window formula is direct code-level evidence that the approved rule set was always compatible with bounded, incremental computation; the O(N²)+ cost is a replay-loop implementation artifact, not an architectural contradiction in the approved detection rules themselves.
+
+**This §44A–§44N draft and its `B` verdict are preserved unchanged above as historical audit history. They are superseded by the consolidated correction below (§44O onward), whose own verdict is the current, authoritative one.**
+
+### 44O. Consolidated architecture correction — status and disposition
+
+**Corrected status: `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`.** The draft verdict is corrected from `B` to **`C — ARCHITECTURE CORRECTION REQUIRED`** as the interim status of the §44A–§44N draft, superseded by this correction's own final verdict at §44Z. Per the original correction task's own instruction, the prior `B` verdict is retained only as historical audit history (§44N, annotated above), never presented as the current verdict. This correction resolves every item the original draft left as an estimate, an unresolved window, an open contract question, or a miscounted matrix, replacing each with an exact, closed answer.
+
+### 44P. Exact optimized engine — the Incremental Availability-Group Replay Kernel
+
+**One precise engine, not a vague combination.** The engine — internal name `IncrementalReplayKernel`, private to `scanner/replay.py`, no public export — replaces only the internal loop body of `run_scanner_replay`; its public signature, inputs, and outputs are unchanged.
+
+1. **Dataset inputs accepted:** identical to today — `historical_inputs: tuple[ScannerTimeframeInput, ...]`, `reviewed_evidence: tuple[BtmmReviewedEvidence, ...]`, `scanner_configuration: ScannerConfiguration`, `replay_configuration: ReplayConfiguration`, `identity_provider: DerivedOutputIdentityProvider`. No change to `run_scanner_replay`'s signature.
+2. **Availability-group construction:** unchanged — identical to today's `flat_candles` construction: every candle across every supplied timeframe, tagged `(availability_time_utc, event_time_utc, str(record_id), timeframe, candle)`, sorted by `(availability_time_utc, event_time_utc, record_id)`. Candles sharing an identical `availability_time_utc` form one group.
+3. **Group ordering:** strictly ascending `availability_time_utc`, unchanged.
+4. **State before the first group:** each of the five domain states (§44Q–§44U) at its own defined empty/zero construction; the event ledger (§44U) empty.
+5. **State entering each subsequent group:** exactly the immediately-prior group's emitted state — never reconstructed from scratch, never re-derived from raw candle history.
+6. **New candles consumed per timeframe:** only the candles newly appearing in this specific group (the delta at this `availability_time_utc`) — never the full prefix. This is the exact mechanical difference from today's `visible_by_timeframe`-based full-prefix reconstruction.
+7. **Measurement update performed:** for each timeframe with new candles this group, `_MeasurementReplayState`'s one-group transition function (§44Q) runs, consuming the new candles plus its own bounded trailing window, producing an updated state and this group's newly confirmed swings/displacement observations/equal-level clusters/support-resistance zones/trendlines (if any).
+8. **Structure update performed:** `_StructureReplayState`'s one-group transition function (§44R) runs next, consuming this group's newly confirmed swings, producing an updated state and this group's newly emitted structure transitions (if any).
+9. **POI update performed:** `_PoiReplayState`'s one-group transition function (§44S) runs next, consuming this group's new candles and this group's measurement output, producing an updated state and this group's newly emitted POI observations/lifecycle transitions (if any).
+10. **BTMM update performed:** `_BtmmReplayState`'s one-group transition function (§44T) runs last, consuming this group's new POI output and gated reviewed evidence, producing an updated state and this group's newly emitted BTMM observations/lifecycle transitions (if any).
+11. **Event ledger update performed:** this group's newly emitted records from steps 7–10 are appended, in that exact order, to the running `_ScannerEventLedger` (§44U) — an append-only, order-preserving accumulator; nothing is ever removed from it during the replay.
+12. **Snapshot retention decision (per §44W, exact):** if `FINAL_ONLY`, no full `ScannerAnalysis` is materialized this group — skip to the next group. If `ALL`, materialize this group's full `ScannerAnalysis` (from current domain states + ledger-to-date, matching today's public shape) and append it unconditionally. If `CHANGED_ONLY`, materialize this group's full `ScannerAnalysis`, compare via the existing, unchanged whole-object canonical-JSON equality check against the previously retained one, append only if different.
+13. **Final state construction:** after the last group, the five domain states and the complete event ledger represent the entire replay's outcome.
+14. **Final `ScannerAnalysis` construction:** exactly one full materialization always occurs at the end, regardless of policy, from the final domain states and the complete ledger — producing `final_snapshot`, byte-identical in public shape to today's `ScannerAnalysis`.
+15. **Direct-batch verification:** unchanged in mechanism (§44V) — one call to the existing, unmodified `scan_market(historical_inputs, reviewed_evidence, scanner_configuration, identity_provider)`, compared against `final_snapshot` via the existing `_compare_snapshots`.
+16. **Replay-result construction:** `ScannerReplayResult(symbol=..., snapshots=<per §44W>, final_snapshot=<step 14>, detection_mismatches=<step 15>, direct_batch_verified=..., minimum_price_tick=..., availability_time_utc=..., processed_availability_group_count=<exact count of groups processed, §44X>, evidence_classification=..., rule_version=..., contract_version=..., schema_version=...)`.
+17. **Evaluation:** unchanged — `evaluate_scanner` reads only `final_snapshot`/`minimum_price_tick`; zero code change.
+18. **Reporting:** unchanged file set and `checksums.json` rule; `execution_summary.json` gains additional private dict keys (§44Y), no contract change.
+
+**Each accepted candle is processed exactly once by each domain's transition function, except where an explicitly bounded lookback is semantically required (§44Q–§44U, sized by already-approved configuration fields, never an invented number).**
+
+### 44Q. Exact measurement domain state
+
+**Class name:** `_MeasurementReplayState` (private, `domain/analyzer.py`, no public export). **Frozen:** yes, `ContractModel`-typed (inherits `frozen=True` from the base). **Exact fields, in order:**
+
+1. `timeframe: Timeframe`
+2. `trailing_candles: tuple[NormalizedCandle, ...]` — bounded to the most recent `max(atr_period=14, range_context_window=20, trendline_min_anchor_spacing_bars=5, 2×swing_confirmation_radius=4) = 20` candles (the exact existing `warm_up_floor_bars` value for this dataset's default configuration — classification C, §44R2 item 1/2/3).
+3. `pending_swing_candidates: tuple[_SwingCandidate, ...]` — unconfirmed pivots awaiting confirmation, bounded to the swing-confirmation radius window (`2×2=4` bars) — `_SwingCandidate` is a new private type (not previously existing), holding exactly the fields needed to resume confirmation: candidate price, candidate index/time, confirmation-window remaining count.
+4. `confirmed_swings_window: tuple[ConfirmedSwing, ...]` — the trailing `range_context_window=20`-bounded pool used for equal-level/support-resistance/trendline candidate detection (classification C).
+5. `running_atr_state: tuple[Decimal, ...] | None` — the trailing `atr_period=14` true-range values needed to recompute ATR on each update; `None` before the first candle.
+
+**Initialization:** all tuple fields `()`, `running_atr_state=None`, per timeframe. **Update inputs:** `(prior_state, new_candles_for_group)`. **One-group transition output:** `(new_state, new_confirmed_swings_this_group, new_displacement_observations_this_group, new_equal_level_clusters_this_group, new_support_resistance_zones_this_group, new_trendlines_this_group)`. **Accumulated records:** none held in this state — accumulation lives in `_ScannerEventLedger` (§44U); this state holds only the bounded working window. **Bounded histories:** items 2–5 above, each bounded as stated. **Finalization:** the public `MarketMeasurementAnalysis` is built once, at the very end, from the ledger's full accumulated confirmed-swings/displacement/equal-level/support-resistance/trendline lists (classification A, §44R2) — not from this bounded state directly. **Validation:** new candles must be chronologically after `trailing_candles[-1]` when non-empty (monotonic). **Error conditions:** propagate unchanged — no new exception type. **Deterministic identity ownership:** unchanged; every `derive_*` call inside the transition function uses exactly the same semantic key inputs the existing full-recompute `analyze_market_measurements` would produce for the same candle. **Serialization required:** yes, `ContractModel` JSON-serializable by construction, for future checkpoint-resume compatibility (deferred, not implemented). **Checkpointing:** deferred, but this state's shape is designed to support it without further redesign.
+
+**Verification-required-at-implementation-time (disclosed, non-blocking):** the exact internal lookback used by equal-level clustering, support-resistance zone detection, and trendline anchor selection is grounded in the existing, already-approved `range_context_window`/`trendline_min_anchor_spacing_bars` configuration fields and the existing `warm_up_floor_bars` formula's own precedent (which already treats these fields as the authoritative "sufficient history" bound for this exact rule set) — but this correction has not traced every line of `analyze_market_measurements`'s internals to prove byte-for-byte that no code path exceeds this bound. Implementation must verify this against the literal analyzer code, backed by the mandatory equivalence suite (§44V2), before merging.
+
+### 44R. Exact structure domain state
+
+**Class name:** `_StructureReplayState` (private, `structure/analyzer.py`). **Frozen:** yes. **Exact fields, in order:**
+
+1. `timeframe: Timeframe`
+2. `current_state: CurrentStructureState | None` — the existing **public** contract, reused. **Proof of insufficiency alone:** `CurrentStructureState` (`structure/current_state.py:14-29`) carries `active_protected_high_swing_id: UUIDv7 | None`, `active_protected_low_swing_id`, `active_weak_high_swing_id`, `active_weak_low_swing_id` — **identifiers only**, not the swings' own price levels. Evaluating a future candle's BOS/CHoCH requires comparing against the swing's actual `broken_level_price`-equivalent (the swing's own price), which `CurrentStructureState` does not carry. Hence:
+3. `active_protected_high_swing: ConfirmedSwing | None` — the full swing object referenced by field 2's `active_protected_high_swing_id`.
+4. `active_protected_low_swing: ConfirmedSwing | None`
+5. `active_weak_high_swing: ConfirmedSwing | None`
+6. `active_weak_low_swing: ConfirmedSwing | None`
+
+Fields 3–6 are bounded by **active-object ownership** (classification B, §44R2) — exactly ≤4 objects per timeframe, retained only while `current_state` still references them; discarded the instant a break/supersession removes the reference.
+
+**Initialization:** `current_state=None`, fields 3–6 `None`. **Update inputs:** `(prior_state, new_confirmed_swings_this_group, new_candles_for_group)`. **Transition output:** `(new_state, new_structure_transitions_this_group)`. **Accumulated records:** none held here — structure transitions accumulate in the ledger (classification A). **Bounded histories:** fields 3–6 only. **Finalization:** `StructureAnalysis` built from the ledger's full structure-transitions history + the final `current_state`. **Validation/error conditions:** unchanged, no new exception type. **Deterministic identity:** unchanged. **Serialization:** yes. **Checkpointing:** deferred.
+
+### 44S. Exact POI domain state
+
+**Class name:** `_PoiReplayState` (private, `poi/analyzer.py`). **Frozen:** yes. **Exact fields, in order:**
+
+1. `timeframe: Timeframe`
+2. `live_pois: tuple[PoiObservation, ...]` — the full observation record (`poi/observation.py:15-38`: `record_id`, `zone_top`, `zone_bottom`, `source_candle_record_ids`, etc.) for every currently non-terminal-lifecycle POI. **Proof of insufficiency of `CurrentPoiState` alone:** `CurrentPoiState` (`poi/current_state.py:20-35`) carries `poi_record_id: UUIDv7` — an identifier — plus lifecycle/tap/age fields, but **no `zone_top`/`zone_bottom`**. Evaluating whether a future candle touches or invalidates a POI requires its zone boundaries, which only `PoiObservation` carries. Hence `live_pois` is required in addition to field 3.
+3. `current_states_by_poi: tuple[CurrentPoiState, ...]` — the existing public contract, reused, one entry per entry in `live_pois`.
+
+Both fields bounded by **active-object ownership** (classification B) — retained only while `poi_lifecycle_status` remains non-terminal; the count is bounded by the number of currently-live (not yet invalidated/expired) POIs, not by candle count.
+
+**Initialization:** both `()`. **Update inputs:** `(prior_state, new_candles_for_group, new_measurement_state_this_group)`. **Transition output:** `(new_state, new_poi_observations_this_group, new_poi_lifecycle_transitions_this_group)`. **Finalization:** `PoiAnalysis.poi_observations`/`.poi_lifecycle_transitions` built from the ledger's full cumulative history (classification A — every POI ever detected, live or invalidated, per the approved "complete POI detections" required output); `.current_poi_states` built from the final `current_states_by_poi` (live POIs only, matching today's semantics). **Validation/error/identity/serialization/checkpointing:** as §44R.
+
+### 44T. Exact BTMM domain state
+
+**Class name:** `_BtmmReplayState` (private, `btmm/analyzer.py`). **Frozen:** yes. **Exact fields, in order:**
+
+1. `live_setups: tuple[BtmmObservation, ...]` — the full observation record (`btmm/observation.py:15-27`) for every currently non-terminal-lifecycle BTMM setup. **Proof of insufficiency of `CurrentBtmmState` alone:** `CurrentBtmmState` (`btmm/current_state.py:31-51`) carries `btmm_setup_record_id: UUIDv7` — an identifier — plus lifecycle/gate/classification fields, but not the setup's own `source_poi_record_id`/`candidate_event_time_utc` needed to re-evaluate future reaction/gate transitions against the originating POI. Hence `live_setups` is required in addition to field 2.
+2. `current_states_by_setup: tuple[CurrentBtmmState, ...]` — the existing public contract, reused, one entry per entry in `live_setups`.
+
+Both bounded by **active-object ownership** — BTMM spans its `formation_timeframes | supporting_only_timeframes` union together (not strictly per-timeframe-isolated), matching today's `analyze_btmm` call shape exactly; no `timeframe` field on this state (unlike measurement/structure/POI) for that reason.
+
+**Initialization/update/transition/finalization/validation/identity/serialization/checkpointing:** structurally identical in kind to §44S, substituting BTMM's own observation/lifecycle-transition types and `reaction_window_bars=5` as the relevant bounded-lookback configuration field for any trailing-candle context the transition function needs.
+
+### 44U. Exact scanner-orchestration state
+
+**Class name:** `_ScannerOrchestrationReplayState` (private, `scanner/replay.py`). **Frozen:** yes. **Exact fields, in order:**
+
+1. `measurement_states_by_timeframe: tuple[tuple[Timeframe, _MeasurementReplayState], ...]`
+2. `structure_states_by_timeframe: tuple[tuple[Timeframe, _StructureReplayState], ...]`
+3. `poi_states_by_timeframe: tuple[tuple[Timeframe, _PoiReplayState], ...]`
+4. `btmm_state: _BtmmReplayState`
+5. `event_ledger: _ScannerEventLedger` — a further private, frozen `ContractModel` (§44U2) holding every accumulated classification-A record (§44R2) in stable emission order.
+
+**Initialization:** each sub-state at its own empty construction; empty ledger. **Update inputs:** one availability group's newly-visible candles per timeframe + gated reviewed evidence. **Transition output:** a new orchestration state (all sub-states updated per §44P steps 7–10) plus the ledger extended by this group's newly emitted records. **Finalization:** exactly one full `ScannerAnalysis` materialization (§44P step 14). **Deterministic identity:** unchanged throughout. **Serialization:** yes — every field is `ContractModel`-typed. **Checkpointing:** deferred; this state is the natural future checkpoint boundary.
+
+### 44U2. `_ScannerEventLedger` — exact fields
+
+Private, frozen, `scanner/replay.py`. Fields, in order: `confirmed_swings: tuple[ConfirmedSwing, ...]`, `displacement_observations: tuple[DisplacementObservation, ...]`, `equal_level_clusters: tuple[EqualLevelCluster, ...]`, `support_resistance_zones: tuple[SupportResistanceZone, ...]`, `trendlines: tuple[Trendline, ...]`, `structure_transitions: tuple[StructureTransition, ...]`, `poi_observations: tuple[PoiObservation, ...]`, `poi_lifecycle_transitions: tuple[PoiLifecycleTransition, ...]`, `btmm_observations: tuple[BtmmObservation, ...]`, `btmm_lifecycle_transitions: tuple[BtmmLifecycleTransition, ...]`. Every field is append-only across the whole replay — matches classification A items exactly (§44R2). `setup_summaries` is **not** a ledger field (classification D, §44R2) — it is derived once, at finalization, from the final `current_btmm_states`/`btmm_observations`/`poi_analysis`, exactly as today's existing `_build_setup_summaries` already does as a pure function.
+
+### 44R2. Historical-sequence retention classification (every item, exact)
+
+| Item | Classification | Justification |
+|---|---|---|
+| Raw candles by timeframe | **C. Fixed configured lookback** | Bounded to trailing `max(atr_period=14, range_context_window=20, trendline_min_anchor_spacing_bars=5, 2×swing_confirmation_radius=4)=20` candles — the existing `warm_up_floor_bars` value. |
+| ATR inputs | **C. Fixed configured lookback** | Trailing `atr_period=14` true-range values (`MarketMeasurementConfiguration.atr_period`). |
+| Swing candidates (unconfirmed) | **C. Fixed configured lookback** | Bounded to the swing-confirmation window (`2×_SWING_CONFIRMATION_WINDOW_RADIUS=4` bars, `historical_backtest/data_quality.py`). |
+| Confirmed swings (equal-level/S-R/trendline candidate pool) | **C. Fixed configured lookback** | Bounded to trailing `range_context_window=20` (equal-level/S-R) and `trendline_min_anchor_spacing_bars=5`-spaced anchors within that same window. |
+| Confirmed swings (active protected/weak references) | **B. Bounded by active object ownership** | Exactly ≤4 per timeframe, retained exactly as long as `CurrentStructureState` still references them (§44R fields 3–6), regardless of elapsed bar count. |
+| Equal-high/equal-low references | **C. Fixed configured lookback** | `range_context_window=20`. |
+| Support/resistance references | **C. Fixed configured lookback** | `range_context_window=20`. |
+| Trendline anchors | **C. Fixed configured lookback** | `trendline_min_anchor_spacing_bars=5` minimum spacing within `range_context_window=20`. |
+| Protected and weak levels | **B. Bounded by active object ownership** | Same as the active-swing item above — ≤4 per timeframe. |
+| Structure transitions | **A. Unbounded semantic record** | Once confirmed, permanently required for the approved `structure_analyses[*].structure_transitions` output; retained in `_ScannerEventLedger` for the whole replay. |
+| POI source candles | **E. Not retained** | Needed only transiently to derive a POI's own `PoiObservation` (zone/fingerprint) at creation; the finished, self-contained `PoiObservation` is sufficient afterward. |
+| Active POIs | **B. Bounded by active object ownership** | `live_pois`/`current_states_by_poi` (§44S), retained only while lifecycle status is non-terminal. |
+| Invalidated/expired POIs | **A. Unbounded semantic record** | Once terminal, the POI's own final observation + lifecycle transition move into `_ScannerEventLedger` permanently (required for "complete POI detections"), while dropping out of the *live* working set. |
+| BTMM observations | **A. Unbounded semantic record** | Required for the approved `btmm_observations` output for the whole replay. |
+| BTMM lifecycle states (live setups) | **B. Bounded by active object ownership** | `live_setups`/`current_states_by_setup` (§44T), non-terminal only. |
+| Warnings | **A. Unbounded semantic record** | Accumulate across the whole replay into the final result. |
+| Setup summaries | **D. Derived summary only** | Recomputed once at finalization from final `current_btmm_states`/`btmm_observations`/`poi_analysis`, exactly as today's `_build_setup_summaries`; never retained as a running history. |
+| Scanner analyses (per-group full snapshots) | **E. Not retained**, except when explicitly requested via `ALL`/`CHANGED_ONLY` (§44W), in which case they are materialized per-group and retained per that policy's own rule. | This is the entire purpose of the redesign. |
+
+No item's classification required inventing an arbitrary lookback — every "C" entry cites an existing, already-approved configuration field; every "B" entry cites an existing, already-approved public reference field whose bounded count (≤4 structure swings, or the live-POI/live-setup count) is a structural property of the approved rules, not a chosen number.
+
+### 44V. Exact no-lookahead transition order (locked)
+
+One availability-group transition is one exact ordered transaction:
+
+1. New normalized candles for this group become visible (added to each affected timeframe's bounded trailing window, §44Q field 2).
+2. Measurement update runs first, per affected timeframe, ordered by `_TIMEFRAME_RANK` — matches today's `scan_market` ordering (measurement before structure before POI before BTMM) exactly, since structure/POI/BTMM all depend on measurement output.
+3. Structure update runs next, consuming this group's newly confirmed swings.
+4. POI update runs next, consuming this group's new candles and measurement output.
+5. BTMM update runs last, consuming this group's new POI output and gated reviewed evidence (`evidence.availability_time_utc <= group_availability`, unchanged gating rule).
+6. Setup summaries are **not** emitted per-group (classification D) — computed once at finalization.
+7. This group's newly emitted records are appended to `_ScannerEventLedger` in the exact order listed in §44U2.
+
+**Preserved exactly:** availability-time ordering (step-by-step, ascending); same-group visibility (all candles sharing one `availability_time_utc` become visible together, exactly as today); CHoCH/BOS priority rules (unchanged — owned entirely inside `_StructureReplayState`'s transition function, not touched by this amendment's orchestration change); one-transition-per-candle restrictions (unchanged); POI eligibility (unchanged, owned inside `_PoiReplayState`'s transition function); BTMM eligibility (unchanged, owned inside `_BtmmReplayState`'s transition function); stable event ordering (guaranteed by the ledger's append-only, fixed-order construction); stable identities and fingerprints (§44Q–§44T's identity clauses).
+
+**Rollback:** every transition function is pure and non-mutating — it returns a *new* immutable state object rather than mutating the prior one in place. If any domain update raises inside a group's transition (steps 2–5), the exception propagates unchanged through `run_scanner_replay`, exactly as today; the caller's last reference remains the prior, fully-committed group's state, since the new state object was never constructed successfully. **No partially updated state can escape**, by construction — there is no assignment of a partially-built state to any variable the caller can observe.
+
+### 44W. Exact retention policy
+
+**Exact enum after the amendment (`scanner/enums.py`):**
+
+```python
+class SnapshotRetentionPolicy(StrEnum):
+    ALL = "ALL"
+    CHANGED_ONLY = "CHANGED_ONLY"
+    FINAL_ONLY = "FINAL_ONLY"
+```
+
+- **`ALL`:** retains one full `ScannerAnalysis` per availability-group, materialized via §44P step 12's `ALL` branch. Intended use: debug/full-trace analysis on small (fixture-scale) inputs only. **Safety restriction:** rejected above `_MAX_GROUPS_FOR_UNBOUNDED_RETENTION = 2000` availability groups (exact number, `ARCHITECT-RECOMMENDED`, pending explicit author approval — chosen conservatively above the audit's own empirically-tested-safe range of ≤500 groups, but not itself empirically validated at 2000). Rejection raises the existing, already-public `InvalidScannerConfigurationError` — no new exception type. **Honest disclosure:** even under the corrected engine, `ALL`'s own *retained-output* memory remains structurally tied to what "retain everything" means — each retained snapshot's own size still grows across the replay (since `PoiAnalysis.poi_observations`/`BtmmAnalysis.btmm_observations`/etc. are cumulative-to-date per classification A), so total retained bytes under `ALL` is still O(N²) in the worst case even though the *compute* cost per group is now bounded. The engine redesign fixes runtime for every policy; it does not, and cannot, fix `ALL`'s inherent memory definition — this is why the safety cap remains mandatory regardless of the engine fix.
+- **`CHANGED_ONLY`:** comparison remains the existing, unchanged whole-object canonical-JSON equality check (`json.dumps(...) != json.dumps(...)`) — not redesigned. Materializes each group's full `ScannerAnalysis` (same per-group cost as `ALL`) and retains it only if it differs from the previously retained one. Intended use: identical debug/analysis tier as `ALL`. **Same safety restriction** (`_MAX_GROUPS_FOR_UNBOUNDED_RETENTION = 2000`), since the independent audit already proved it retains 100% of snapshots on real multi-timeframe data — no memory advantage over `ALL` is assumed.
+- **`FINAL_ONLY`:** `replay_result.snapshots` is **a one-item tuple containing exactly `final_snapshot`** (not empty) whenever at least one availability group was processed (`processed_availability_group_count >= 1`); this preserves the invariant `len(snapshots) >= 1` uniformly across all three policies for any non-empty replay, avoiding a special case elsewhere in reporting/tests. The pre-existing, already-approved empty-input special case (`len(historical_inputs) == 0` or `len(flat_candles) == 0` after filtering) is **unchanged** and continues to return `snapshots=()` regardless of policy, since zero groups were processed. `final_snapshot` remains unconditionally, separately present under every policy — unchanged. No per-group materialization occurs under `FINAL_ONLY` — this is the entire point.
+
+**Default policies (locked, not left open):**
+- **Shared `ReplayConfiguration` class-level default:** unchanged, remains `ALL` — preserves 100% of existing scanner-package test assumptions for small fixture-scale callers.
+- **Historical-backtest default:** `FINAL_ONLY`, set locally by `execute_scanner_backtest`/the historical-backtest CLI (not by changing the shared class default) — minimal blast radius.
+
+### 44X. Exact `ScannerReplayResult` change
+
+**Decision: one new field is genuinely necessary and is added; the contract grows from 11 to 12 fields.**
+
+- **Name:** `processed_availability_group_count`
+- **Position:** 8th field, immediately after `availability_time_utc`, before `evidence_classification` — grouped with other execution-fact fields, not with the version-metadata trio (`rule_version`/`contract_version`/`schema_version`), which remain last per this codebase's established convention.
+- **Type:** `int`
+- **Optionality:** required (never `None`), present under every retention policy and in the pre-existing empty-input special case.
+- **Validation:** must be `>= 0` — `0` in the empty-input special case (zero groups processed, matching today's existing branch), `>= 1` in every non-empty replay.
+- **Semantic meaning:** the exact count of distinct availability-groups actually processed during this replay — the N in this amendment's own O(N) cost model; independent of raw supplied-candle count.
+- **JSON representation:** a plain JSON integer, no special serializer.
+- **Identity/fingerprint impact:** none — never participates in any `derive_*`/identity/fingerprint computation (§44Y's cross-cutting rule).
+- **Backward-compatibility impact:** any test fixture that constructs `ScannerReplayResult(...)` literally (rather than via `run_scanner_replay`) requires this field added at implementation time — flagged as a mechanical, low-risk, implementation-time verification item, not a design gap.
+- **Report use:** appears automatically in `replay_result_{symbol}.json` since `write_backtest_report` already dumps the whole result via `model_dump(mode="json")` — no reporting-code change needed for this field specifically.
+- **Test ownership:** `test_processed_availability_group_count_matches_actual_group_count` in `tests/unit/test_scanner_replay_grouping.py` (§44AD).
+
+### 44Y. Direct-batch oracle safety (exact policy)
+
+1. **Is one complete `scan_market` call over 18,474 candles expected to be memory-safe?** **Not established.** `scan_market` itself is preserved completely unmodified by this amendment (§44P step 15) — it retains its original full-recompute characteristics. A *single* call over the full dataset is paid only once (not N times, unlike today's replay loop), but this correction has no isolated benchmark of a single full-batch `scan_market` call at that scale, and none was run here (benchmarking prohibited by this task's own scope).
+2. **Does it retain internal cumulative histories?** Yes, structurally — its return value's `poi_analysis.poi_observations`/`btmm_analysis.btmm_observations`/etc. are cumulative across whatever candles it is given, same as always. For 18,474 candles this could still be one very large object, even though only one such object exists (not N of them, unlike the old replay loop).
+3. **Does it have a separate memory limit?** No — no memory governor exists anywhere in the codebase today.
+4. **In-process or isolated worker?** Today: in-process, same process as the replay. **Corrected policy:** the oracle call **must** run in an isolated worker process, with its own hard memory ceiling and automatic abort, before it is ever invoked at real-data scale — a new required safety property, not present today.
+5. **What happens when it exceeds a safety threshold?** Today: nothing (no monitoring exists) — this is exactly the mechanism that let the original real replay attempt consume the host down to ~400 MB available before manual, user-authorized termination. **Corrected policy:** the isolated worker enforces the threshold and self-terminates before host-level exhaustion, reporting a distinct, structured failure rather than an uncontrolled crash.
+6. **Is report publication prohibited when verification is incomplete?** Yes, already true today for a *mismatch* (`cli.py`'s `main()` returns `EXIT_REPLAY_FAILURE` before calling `write_backtest_report`) — **extended by this correction** to also cover a verification-worker crash, timeout, or threshold-abort, treated identically to a mismatch: no report is published.
+7. **Can bounded-sample equivalence ever substitute for full-dataset equivalence?** **No, not for the oracle's own memory-safety question.** Bounded-sample testing (§44V2) proves the *incremental engine* matches the *unmodified full-batch oracle* at small scale — it says nothing about whether a single full-batch oracle call is itself safe at 18,474-candle scale, which is a separate question about `scan_market`'s own unmodified scaling.
+8. **Does the first genuine replay require full-dataset direct-batch verification?** Per invariant 10 (§44B), yes by default — but given the genuine, disclosed memory-safety uncertainty in item 1, this cannot be responsibly locked as an unconditional requirement without implementation-time evidence.
+
+**Classification: `IMPLEMENTABLE_WITH_AUTHOR_DECISION`** (per this task's own explicit instruction for exactly this situation). **Required implementation-time evidence before the first full 18,474-candle rerun is attempted:** (a) an isolated, memory-monitored, hard-ceiling-enforced benchmark of the unmodified `scan_market` function alone (not the replay loop) at increasing candle counts, run as a separate worker process; (b) if that isolated test shows unsafe scaling at full size, the full-dataset direct-batch gate itself requires its own separate, future amendment (e.g. a sampled/bounded oracle, or chunked oracle verification with cross-validation) — explicitly out of this amendment's scope to pre-decide; (c) the oracle, whenever run at any scale, runs in an isolated worker with a hard ceiling, per item 4 above.
+
+### 44Z. Exact performance instrumentation
+
+Nine of ten metrics require **no public contract change** — `write_backtest_report`'s existing `execution_summary_payload` (`historical_backtest/reporting.py`) is already a plain `dict`, not a strict model (it already gains `tzdata_version` this way), so additional keys are free of contract-count impact:
+
+| Metric | Collected where | Appears where |
+|---|---|---|
+| Processed availability-group count | `_ScannerOrchestrationReplayState` group loop (§44P step 16) | `ScannerReplayResult.processed_availability_group_count` (§44X, public — the one justified exception) and automatically echoed into `execution_summary.json` |
+| Accepted candle count by timeframe | Already collected today | Already exists: `data_quality_report.timeframe_coverage[*].candle_count` — no new collection needed |
+| Elapsed seconds | `time.perf_counter()` bracketing the `run_scanner_replay` call in `execute_scanner_backtest` | `execution_summary_payload["replay_elapsed_seconds"]` |
+| Peak working-set bytes | `ctypes`/`GetProcessMemoryInfo` (same technique used in this session's own audit benchmarking) | `execution_summary_payload["peak_working_set_bytes"]` |
+| Available-system-memory minimum | Periodic sampling during the replay, in `execute_scanner_backtest` or the CLI wrapper | `execution_summary_payload["minimum_available_system_ram_bytes"]` |
+| Retained snapshot count | `len(replay_result.snapshots)` | `execution_summary_payload["retained_snapshot_count"]` (also directly derivable from the already-dumped `snapshots` array) |
+| Event-ledger counts | Already directly countable from `final_snapshot`'s existing public fields | No new collection — `len(final_snapshot.poi_analysis.poi_observations)` etc., already present |
+| Final-result serialized byte size | Computed once after `model_dump(mode="json")` | `execution_summary_payload["final_replay_result_bytes"]` |
+| Direct-batch elapsed seconds | Bracketing the isolated oracle-verification worker call (§44Y item 4) | `execution_summary_payload["direct_batch_elapsed_seconds"]` |
+| Direct-batch peak working-set bytes | Same isolated worker, `ctypes` measurement | `execution_summary_payload["direct_batch_peak_working_set_bytes"]` |
+
+**Cross-cutting rule (locked):** none of these ten metrics ever participates in any `derive_*`/identity/fingerprint computation. They are purely observational, computed after or alongside the deterministic computation, never fed into it — deterministic scanner identities are fully preserved.
+
+### 44AA. Exact CLI design
+
+**Authorized (exactly one new flag):** `--snapshot-retention {all,changed-only,final-only}` (lowercase-hyphenated CLI convention), mapped internally to `all→ALL`, `changed-only→CHANGED_ONLY`, `final-only→FINAL_ONLY`. **Default:** `final-only`. **Invalid-value behavior:** `argparse`'s own `choices=` validation rejects an unrecognized value, causing the existing, unchanged `SystemExit(2)` behavior (`cli.py`'s own documented "argparse itself exits 2 on a usage/parse error") — reuses `EXIT_USAGE_ERROR=2`, no new exit code needed for this case. **Interaction with historical execution:** the parsed value is threaded into `ReplayConfiguration(snapshot_retention=<parsed value>)`, passed to `execute_scanner_backtest`. **Legacy behavior remains callable:** yes — `all`/`changed-only` remain valid CLI values, *subject to* the §44W safety cap. **Unsafe-policy handling:** if the dataset's group count is known (or reasonably estimated from candle counts) to exceed `_MAX_GROUPS_FOR_UNBOUNDED_RETENTION=2000` and `all`/`changed-only` was requested, the CLI rejects the run **before** starting replay, with **exactly one new exit code**, `EXIT_UNSAFE_RETENTION_POLICY = 7` (tiered immediately after the existing `EXIT_REPORT_WRITE_FAILURE = 6`) — this hard rejection **is** the required explicit-acknowledgment mechanism; no silent override exists, and none is authorized by this amendment.
+
+**Rejected, confirmed:** checkpoint-directory/interval arguments, engine-selection flags, live-data arguments, trading arguments — none added. Checkpointing remains deferred; nothing in this correction proves it is required for the first real replay (the incremental engine's O(N) bounded design is the required fix; checkpointing is a resilience nicety, not a correctness or scalability requirement).
+
+### 44AB. Exact implementation paths (proposed; not executed by this correction)
+
+**Modified existing source paths (9), each with exact responsibility:**
+
+1. `src/btmm_ai_scanner/scanner/enums.py` — add `FINAL_ONLY = "FINAL_ONLY"` to `SnapshotRetentionPolicy` (§44W).
+2. `src/btmm_ai_scanner/scanner/replay.py` — implement `IncrementalReplayKernel` (§44P), `_ScannerOrchestrationReplayState`/`_ScannerEventLedger` (§44U/§44U2), the retention-policy materialization logic and `_MAX_GROUPS_FOR_UNBOUNDED_RETENTION` safety cap (§44W), and the new `processed_availability_group_count` field (§44X).
+3. `src/btmm_ai_scanner/domain/analyzer.py` — add `_MeasurementReplayState` and its one-group transition function (§44Q), alongside the unmodified `analyze_market_measurements` (preserved for the direct-batch oracle, §44Y).
+4. `src/btmm_ai_scanner/structure/analyzer.py` — add `_StructureReplayState` and its transition function (§44R), alongside the unmodified `analyze_structure_state`.
+5. `src/btmm_ai_scanner/poi/analyzer.py` — add `_PoiReplayState` and its transition function (§44S), alongside the unmodified `analyze_pois`.
+6. `src/btmm_ai_scanner/btmm/analyzer.py` — add `_BtmmReplayState` and its transition function (§44T), alongside the unmodified `analyze_btmm`.
+7. `src/btmm_ai_scanner/historical_backtest/cli.py` — add `--snapshot-retention` (§44AA) and `EXIT_UNSAFE_RETENTION_POLICY=7`.
+8. `src/btmm_ai_scanner/historical_backtest/execution.py` — thread the CLI-selected retention policy into `ReplayConfiguration`; collect and pass through the §44Z performance keys to `reporting.py`.
+9. `src/btmm_ai_scanner/historical_backtest/reporting.py` — extend the existing `execution_summary_payload` dict with the §44Z keys (same mechanism already used for `tzdata_version`); no contract change.
+
+**New source paths: 0.**
+
+**Modified existing test paths (4), each with exact responsibility:**
+
+1. `tests/unit/test_scanner_replay_grouping.py` — retention-policy and group-count assertions (§44AD).
+2. `tests/unit/test_scanner_batch_replay_equivalence.py` — legacy-oracle non-modification regression guard (§44AD).
+3. `tests/unit/test_historical_execution.py` — historical default and execution-summary key assertions (§44AD).
+4. `tests/unit/test_historical_cli.py` — CLI flag parsing, invalid value, and unsafe-policy rejection (§44AD).
+
+**New test paths (1):** `tests/unit/test_scanner_replay_incremental_equivalence.py` — the full differential-oracle scenario matrix (§44AD).
+
+**Documentation paths:** exactly the four files this correction itself modifies (this register, the file-scope doc, the scaffold plan, `PROJECT_STATE.md`) — no other documentation path.
+
+**Dependency/lockfile paths:** none — `pyproject.toml`/`uv.lock` unchanged.
+
+**Confirmed:** no unrelated path; no private-reference path; no external-data path; no dataset path. Every path above is an existing, already-inventoried repository path, except the one new test file (a new, inventoried *repository* path, never external data).
+
+### 44AC. Exact public surface and inventory
+
+| Item | Before | After |
+|---|---|---|
+| Public enum-type count | unchanged | unchanged (0 new enum types) |
+| `SnapshotRetentionPolicy` member count | 2 | 3 |
+| Public contract count (scanner + historical_backtest combined) | unchanged | unchanged (0 new contract types) |
+| `ScannerReplayResult` field count | 11 | 12 |
+| Public error count | unchanged | unchanged (0 new error types — the §44W safety-cap rejection reuses the existing `InvalidScannerConfigurationError`) |
+| Public API count | unchanged | unchanged (0 new public functions) |
+| Public identity-implementation count | unchanged | unchanged |
+| Export count | unchanged | unchanged (0 new export names — `FINAL_ONLY` is a new *value* of an already-exported name; `processed_availability_group_count` is a new *field* of an already-exported name) |
+
+**New file inventory row:** `tests/unit/test_scanner_replay_incremental_equivalence.py` — **exact inventory row 222** (0-indexed position 221), **exact creation order 221**. **Inventory before:** 221. **Inventory after:** 222. **Creation-order range:** 221 (single new row).
+
+### 44AD. Exact test plan (closed, no estimates)
+
+**New file — `tests/unit/test_scanner_replay_incremental_equivalence.py` (new), exactly 27 top-level test functions, in this exact order:**
+
+1. `test_incremental_engine_matches_legacy_oracle_for_one_availability_group`
+2. `test_incremental_engine_matches_legacy_oracle_for_ten_availability_groups`
+3. `test_incremental_engine_matches_legacy_oracle_for_fifty_availability_groups`
+4. `test_incremental_engine_matches_legacy_oracle_for_one_hundred_availability_groups`
+5. `test_incremental_engine_matches_legacy_oracle_for_250_combined_candles`
+6. `test_incremental_engine_matches_legacy_oracle_for_500_combined_candles`
+7. `test_incremental_engine_matches_legacy_oracle_across_overlapping_m1_m5_m15_availability_times`
+8. `test_incremental_engine_matches_legacy_oracle_across_a_session_gap_boundary`
+9. `test_incremental_engine_matches_legacy_oracle_for_a_no_event_sequence`
+10. `test_incremental_engine_matches_legacy_oracle_for_a_structure_bos_sequence`
+11. `test_incremental_engine_matches_legacy_oracle_for_a_structure_choch_sequence`
+12. `test_incremental_engine_matches_legacy_oracle_for_poi_creation`
+13. `test_incremental_engine_matches_legacy_oracle_for_a_poi_touch`
+14. `test_incremental_engine_matches_legacy_oracle_for_a_poi_invalidation`
+15. `test_incremental_engine_matches_legacy_oracle_for_a_btmm_observation`
+16. `test_incremental_engine_matches_legacy_oracle_for_a_btmm_lifecycle_transition`
+17. `test_incremental_engine_preserves_identity_equality_against_legacy_oracle`
+18. `test_incremental_engine_preserves_content_fingerprint_equality_against_legacy_oracle`
+19. `test_incremental_engine_preserves_event_emission_order_against_legacy_oracle`
+20. `test_incremental_engine_matches_legacy_oracle_with_reviewed_cases_present`
+21. `test_incremental_engine_direct_batch_verification_reports_zero_mismatches`
+22. `test_performance_metrics_excluded_from_scanner_identity_and_fingerprints`
+23. `test_incremental_engine_rolls_back_cleanly_on_a_domain_update_failure`
+24. `test_incremental_engine_supports_all_retention_policy_below_the_safety_cap`
+25. `test_incremental_engine_supports_changed_only_retention_policy_below_the_safety_cap`
+26. `test_final_only_retention_produces_a_single_retained_snapshot`
+27. `test_unbounded_retention_above_the_safety_cap_is_rejected`
+
+Scenarios 5–6 reuse the already-collected 250/500-combined-candle real-data prefixes from the `1C-A2-REPLAY-MEMORY-AUDIT` benchmark evidence as fixtures — no new benchmark run required.
+
+**Modified existing files, exact new top-level tests appended, in order:**
+
+- `tests/unit/test_scanner_replay_grouping.py` (+3): `test_snapshot_retention_policy_includes_final_only_member`; `test_final_only_retention_semantics_are_general_purpose_correct`; `test_processed_availability_group_count_matches_actual_group_count`.
+- `tests/unit/test_scanner_batch_replay_equivalence.py` (+1): `test_legacy_full_batch_scan_market_is_unmodified_by_the_incremental_amendment`.
+- `tests/unit/test_historical_execution.py` (+2): `test_historical_backtest_defaults_to_final_only_retention`; `test_execution_summary_includes_new_performance_metric_keys`.
+- `tests/unit/test_historical_cli.py` (+3): `test_cli_accepts_snapshot_retention_flag_with_all_three_values`; `test_cli_rejects_invalid_snapshot_retention_value_with_usage_error`; `test_cli_rejects_unsafe_retention_policy_above_the_safety_cap`.
+
+**`checksums.json` completion behavior and general report compatibility (coverage items 33–34) require no new test:** the report-writing mechanism and completion-marker rule are unchanged by this correction; coverage remains fully owned by the two existing reporting tests already covering atomic writing and failure cleanup, per the established project precedent from the original `1C-A-REAL-BACKTEST` milestone.
+
+**Exact total new top-level tests: 27 + 3 + 1 + 2 + 3 = 36.** No parametrization is introduced that would change AST-vs-pytest collection arithmetic — all 36 are plain, non-parametrized top-level functions, preserving this milestone family's established 1:1 AST-to-pytest-collected ratio.
+
+**Exact projected AST total:** 778 (current, post-`1C-A-REAL-BACKTEST`) + 36 = **814**.
+**Exact projected pytest-collected total:** 856 (current) + 36 = **892**.
+
+### 44AE. Corrected decision matrix (arithmetic verified)
+
+The original draft's matrix stated 13 rows but summed category totals to only 12 (an undercount of the `IMPLEMENTABLE` category, which should have included "legacy-engine compatibility" as a third member, not two). This correction replaces it with the exact 14-row matrix requested:
+
+| # | Row | Classification | Author decision required |
+|---|---|---|---|
+| 1 | Incremental measurement state | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — private state contract, §44Q |
+| 2 | Incremental structure state | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — §44R |
+| 3 | Incremental POI state | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — §44S |
+| 4 | Incremental BTMM state | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — §44T |
+| 5 | Scanner orchestration (single-pass kernel) | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — §44P/§44U |
+| 6 | `FINAL_ONLY` retention | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — new enum member + historical default, §44W |
+| 7 | Legacy `ALL` compatibility | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — exact `_MAX_GROUPS_FOR_UNBOUNDED_RETENTION=2000` cap requires sign-off |
+| 8 | `CHANGED_ONLY` compatibility | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — same cap |
+| 9 | Direct-batch equivalence | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — per §44Y, explicitly dictated |
+| 10 | CLI retention control | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` | Yes — new flag + new exit code, §44AA |
+| 11 | Reporting compatibility | `IMPLEMENTABLE` | No — additive dict keys only, §44Z |
+| 12 | Performance instrumentation | `IMPLEMENTABLE` | No — fully specified, §44Z |
+| 13 | Checkpointing | `DEFERRED` | N/A |
+| 14 | Full genuine XAUUSD rerun | `BLOCKED` | N/A — prohibited pending approval, implementation, and §44Y evidence |
+
+**Category totals (verified to sum to the exact row count):** `IMPLEMENTABLE_WITH_AUTHOR_DECISION` = 10 (rows 1–10); `IMPLEMENTABLE` = 2 (rows 11–12); `DEFERRED` = 1 (row 13); `BLOCKED` = 1 (row 14); `NOT_APPLICABLE` = 0. **10 + 2 + 1 + 1 + 0 = 14 — matches the row count exactly.**
+
+### 44AF. Performance and safety gates (relabeled)
+
+**Corrected label: `ARCHITECT-RECOMMENDED + ENGINEERING-PROVISIONAL`** (not `AUTHOR-APPROVED...` — no author approval has yet occurred anywhere in this document; the original draft's label was premature and is corrected here). The label becomes `AUTHOR-APPROVED + ENGINEERING-PROVISIONAL` only after explicit author approval is recorded in a future section.
+
+**Internal consistency verified:** peak working set ≤6 GB and available RAM ≥4 GB are jointly consistent on a 15.6 GB machine (6 GB worker + ≥4 GB free leaves ≤5.6 GB for OS/other processes — not contradictory). A 90-minute runtime ceiling is consistent with the O(N) bounded-cost design *if* achieved (18,474 groups at a generous 100 ms/group average ≈ 30.8 minutes, well inside the ceiling) — not proven, but not internally contradictory either. Zero-mismatch/deterministic-rerun/no-report-before-success/`checksums.json`-last are all consistent with existing, unchanged rules.
+
+**Exact measurement points:** peak working set and elapsed seconds — §44Z, isolated-worker measurement for the oracle (§44Y), in-process measurement for the incremental engine. Available RAM minimum — periodic sampling during the replay (§44Z). **Failure behavior:** any gate breach aborts the run, writes no report (§44Y item 6, extended), and is classified per §44Y's isolated-worker failure path — never a silent partial result.
+
+### 44AG. Focused corrected audit and final verdict
+
+1. **Exact incremental state sufficiency?** Proven field-by-field for all five domains (§44Q–§44U), with explicit private additions wherever the existing public `current_*_state` summaries were shown insufficient (structure's active-swing objects, POI's `live_pois`, BTMM's `live_setups`).
+2. **No arbitrary unresolved windows?** Confirmed — every bounded window cites an existing, already-approved configuration field or an existing, already-approved bounded-count reference (§44R2); one item (equal-level/S-R/trendline exact internal lookback) is disclosed as requiring implementation-time verification against the literal analyzer code, grounded in the existing `warm_up_floor_bars` precedent — not invented.
+3. **No-lookahead?** Preserved exactly (§44V).
+4. **Lifecycle semantics?** Preserved — same domain ordering, same eligibility rules, all owned unchanged inside each domain's own transition function.
+5. **Identities?** Preserved unchanged throughout (§44Q–§44T, §44Z cross-cutting rule).
+6. **Event ordering?** Preserved by the ledger's fixed append order (§44U2, §44V step 7).
+7. **Full output preservation?** Every approved required output remains derivable from `final_snapshot` alone, materialized once at finalization (§44P step 14).
+8. **Bounded snapshot retention?** `FINAL_ONLY` — exactly one snapshot, unconditionally (§44W). `ALL`/`CHANGED_ONLY` remain capped at an exact, author-decision-pending group limit (§44W, §44AE row 7–8).
+9. **Runtime reduction?** O(N) domain-compute design, down from O(N²)+, per group (§44P) — theoretical, not yet empirically validated (no new benchmark run, correctly, per this task's scope).
+10. **Direct-batch safety?** Exact policy defined (§44Y), correctly classified `IMPLEMENTABLE_WITH_AUTHOR_DECISION` with explicit required implementation-time evidence — not silently assumed safe.
+11. **Reporting compatibility?** Unchanged file set/rules; additive-only `execution_summary.json` keys (§44Z).
+12. **Evaluation compatibility?** Zero code change required (§44P step 17).
+13. **Exact contract changes?** Fully specified — `ScannerReplayResult` 11→12, one named field, fully described (§44X); `SnapshotRetentionPolicy` 2→3 (§44W); no other contract touched.
+14. **Exact CLI behavior?** Fully specified — one flag, three values, one new exit code, exact rejection rule (§44AA).
+15. **Exact implementation paths?** 9 modified source (each with stated responsibility), 0 new source, 4 modified test, 1 new test (§44AB).
+16. **Exact tests?** 36 new top-level tests, exact names, exact order, exact per-file counts (§44AD) — no "approximately."
+17. **Exact inventory?** 221 → 222, creation order 221 (§44AC).
+18. **Correct matrix arithmetic?** 14 rows, categories sum to 14 exactly (§44AE).
+19. **Failure recovery?** Existing cleanup/`checksums.json` rules unchanged; oracle-worker failure handling extended (§44Y item 6); checkpointing remains deferred, not required for correctness.
+20. **No production approval?** Confirmed — none declared anywhere in this correction.
+
+**Every item this correction task itself named as automatically blocking if unresolved — domain-state sufficiency, retention rule, contract change, test count, path scope, matrix arithmetic — now has an exact, closed answer. None remains unresolved in that specific sense.**
+
+**Final corrected verdict (§44AG, SUPERSEDED — see §44AH onward): `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`.** Not `A`, because two genuinely open items remain honestly disclosed rather than closed: (i) the full-dataset direct-batch oracle's own memory safety (§44Y), explicitly classified `IMPLEMENTABLE_WITH_AUTHOR_DECISION` with defined required evidence — a real open question, but not blocking, since a decidable interim policy (isolated worker, hard ceiling, no report without complete verification) is fully defined; (ii) the equal-level/support-resistance/trendline internal-lookback verification against literal analyzer code (§44Q), grounded in existing precedent but not line-by-line traced in this read-only correction. Neither is a domain-state-sufficiency, retention-rule, contract-change, test-count, path-scope, or matrix-arithmetic gap — every one of those six specific categories is now exactly and closedly answered. Not `C` or `D`, because no unresolved item in this correction falls into the six categories this task itself defines as automatically blocking, and no fundamental obstacle to a semantically equivalent, scalable design remains — the `warm_up_floor_bars`-grounded bounded-window evidence and the field-by-field state-sufficiency proofs together demonstrate a concrete, implementable path.
+
+**This §44O–§44AG correction is preserved unchanged above as historical audit history. Item (ii) above — the equal-level/support-resistance/trendline lookback, left as "grounded but not traced" — was traced line-by-line in this final targeted correction (§44AH onward) and found to be materially different from what §44Q assumed. This final correction supersedes §44O–§44AG's verdict; the current, authoritative verdict is §44AT.**
+
+## 44AH. Final targeted correction — status
+
+**Interim disposition of §44O–§44AG: `C — ARCHITECTURE CORRECTION STILL REQUIRED`**, per this task's own instruction, resolved by §44AT. Corrected status: `ARCHITECT-RECOMMENDED`, `AUTHOR-DECISION REQUIRED`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`.
+
+## 44AI. Measurement-state sufficiency — traced line-by-line
+
+**ATR — `measurements/atr.py:7-43`, `compute_atr_series`.** Exact Wilder recursion: `_true_range(candle, previous_close)` needs only the current candle's high/low and the immediately preceding candle's close (`measurements/atr.py:7-15`). Seeding (`atr.py:31-33`): the value at index `period-1` is the **simple average** of the first `period` true ranges of whatever sequence is supplied. Recursion (`atr.py:35-41`): `current_atr = (previous_atr × (period-1) + true_range[index]) / period` — an infinite-impulse-response recursion in which the current value depends on the *entire* prior history through `previous_atr`, never on a fixed window of raw candles. **Proven exact incremental state — `_AtrIncrementalState` (private, `domain/analyzer.py`):**
+
+| Field | Type | Purpose |
+|---|---|---|
+| `previous_candle_close` | `Decimal \| None` | True-range input for the next candle; `None` only before the first candle ever seen |
+| `initialization_true_range_sum` | `Decimal` | Running sum of true ranges seen so far, relevant only until `initialization_sample_count == atr_period` |
+| `initialization_sample_count` | `int` | Candles seen so far during the pre-seed phase; once it reaches `atr_period`, the seed is computed and this field stops mattering |
+| `previous_finalized_atr` | `Decimal \| None` | The most recently finalized Wilder ATR value; `None` until seeded |
+
+`atr_period` itself is **not** stored in this state — it is read from `MarketMeasurementConfiguration` on every transition call, since it is static configuration, not evolving state. The user's candidate field "initialization true-range tuple" is **not required in tuple form**: `atr.py:32`'s seed line (`sum(true_ranges[0:period], Decimal(0)) / Decimal(period)`) only ever needs the **sum**, never the individual pre-seed values — a running scalar sum is the exact sufficient replacement, proven directly from the seed formula. **This state requires zero raw candle retention for ATR itself.** Equivalence proof: given identical `previous_candle_close`/`previous_finalized_atr`/`initialization_true_range_sum`/`initialization_sample_count` at the start of a replay segment, and identical subsequent candles, the incremental recursion produces byte-identical `Decimal` values to `compute_atr_series` called on the full history, since both apply the exact same seed formula over the exact same first-`period` true ranges and the exact same recursive update thereafter. **Failure condition:** if the incremental engine's own accumulation does not begin at the true first candle of the dataset (i.e., if it were ever seeded from a truncated window instead), the seed — and every subsequent value — would silently diverge from the full-history calculation. This is why the incremental engine must accumulate ATR state from the dataset's actual first candle, never from an arbitrary "last N" truncation.
+
+**Confirmed swings — `domain/swings.py:84-287`.** Local pivot detection (`swings.py:91,96-98`) needs an exact, hardcoded `_WINDOW_RADIUS=2` window (5 candles centered on the candidate) — a genuine fixed window, but a module constant, not even configuration-derived. **Meaningful-confirmation search (`swings.py:235-255`) is an unbounded forward scan** — `for j in range(search_start, n): ... if current_excursion >= threshold: confirmation_index = j; break` has no upper bound; in a flat/ranging market this can remain pending for an arbitrarily large number of future candles. The prior correction's claim that pending swing candidates are "bounded to `2×swing_confirmation_radius=4` bars" (§44Q) **conflated the local-pivot window with the confirmation-wait duration and is corrected here: the confirmation wait is unbounded in duration.** It is, however, **bounded in count**: `_supersede_same_direction_runs` (`swings.py:183-205`) collapses any run of same-type local pivots down to a single most-extreme candidate before it is ever offered for confirmation, and the alternating constraint (`swings.py:228-229`, `last_confirmed_type`) means at most one pending candidate per swing type can exist per timeframe. **Corrected classification: B — bounded by active-object ownership, exactly ≤2 pending candidates per timeframe (one HIGH, one LOW), unbounded duration.** Each pending candidate's own incremental state needs only: `pivot.price`, `pivot.reference_atr`, `pivot.tie_tolerance`, and a running extreme (`lowest_low` or `highest_high` since local confirmation — itself updatable in O(1) per new candle: `lowest_low = min(lowest_low, new_candle.low)`, per `swings.py:239-241`) — **no raw candle retention is needed for the confirmation search itself**, only this running extreme. `last_confirmed_type: SwingType | None` (a single scalar) completes the state.
+
+**Displacement — `domain/displacement.py:66-105`.** Needs exactly `candles[index - window : index]` where `window = configuration.range_context_window` (`displacement.py:70,75`) — a genuine, code-proven, exact fixed window. **Confirmed classification: C, exact `range_context_window` (20 by default), raw candles required (not just a summary), since `range_speed_ratio`/`median_total_range` (`measurements/candle_metrics.py:47-63`) need the individual total-range values of each preceding candle, not merely their sum.**
+
+**Equal-level clusters — `domain/equal_levels.py:77-155`, `_sweep_one_type`.** Operates entirely on `confirmed_swings` (never raw candles), sorted by confirmation time, sweeping to build **one open cluster at a time per type** (`equal_levels.py:119-136`): a new swing either joins the current open cluster (if within tolerance) or closes it and starts a new one. **There is no `range_context_window` bound anywhere in this function — the prior correction's classification (§44R2: "C — fixed configured lookback, `range_context_window=20`") is corrected here: it is wrong.** A cluster can, in principle, form between swings separated by however many candles elapsed while a cluster remained open (governed entirely by price tolerance, not time or candle count). **Corrected classification: A for the underlying `confirmed_swings` set itself (already retained in the ledger, §44AJ) — no additional raw-candle window is needed; the only additional state is the currently-open cluster's member list per type (bounded by active-object ownership, in practice small, but not hard-capped by any approved rule).**
+
+**Support/resistance zones — `domain/support_resistance.py:65-158,161-305`.** `_evaluate_reaction` scans forward from any given index with **no fixed bound** until price closes back out of the candidate zone (`support_resistance.py:80-89`), then evaluates a `reaction_window_bars`-bounded window after that point. `detect_support_resistance_zones` searches for qualifying "touches" among **all** same-type swings occurring after an origin (`support_resistance.py:234-280`), with **no fixed time or candle-count bound** — a touch can occur arbitrarily long after its origin. **Corrected classification: A for `confirmed_swings` (as above); the reaction-window evaluation itself is O(1)-per-candle incremental (the zone's own top/bottom and running extreme since the origin/touch are all that is needed to evaluate the just-arrived candle — no retained raw-candle span is needed), but the *candidate-tracking state* (how many origins are simultaneously awaiting a reaction, and how many touches are simultaneously being evaluated against how many open zones) is bounded only by the number of confirmed swings accumulated so far, not by `range_context_window`.**
+
+**Trendlines — `domain/trendlines.py:76-229`.** Iterates over **all pairs** of same-type confirmed swings (`trendlines.py:104,108`), an O(swing-count²) scan, checking spacing/slope, then an "integrity" check against **every candle between the two anchors** (`trendlines.py:161-176`, potentially spanning the full distance between two arbitrarily-separated swings), then searching **all later same-type swings** for a confirming touch (`trendlines.py:178-195`). **No `range_context_window` bound exists here either — the prior correction's classification is corrected: it is wrong.** The between-anchor integrity check, however, can be performed **incrementally**: `projected - candle_close > pierce_tolerance` (`trendlines.py:163-174`) only needs the just-arrived candle's own close and the trendline candidate's already-known slope/anchor — it does not require retaining the raw candle span for later batch reprocessing. **Corrected classification: A for `confirmed_swings`; pending trendline-candidate tracking (pairs not yet disqualified or confirmed) is bounded by the number of confirmed swings, worst case O(A_swings²) if no pruning occurred — heavily reduced in practice by the spacing/slope disqualification checks, which eliminate most pairs immediately, but not hard-capped by any approved rule.**
+
+**"Pressure wicks" and "meaningful swings" (user's coverage list):** "meaningful swings" is not a separate output — it is `ConfirmedSwing`'s own `meaningful_confirmation_time_utc` mechanism, already fully traced above as part of confirmed-swing detection. "Pressure wicks" is not a `domain`-package measurement at all — it is a **POI**-domain detector (`poi/pressure_wicks.py`, part of POI sufficiency, §44AK), not a measurement dependency; it is not misclassified here, merely correctly relocated to the POI section.
+
+**Range context:** not a separate output — `range_context_window` is a configuration field consumed directly by displacement (bounded, proven) and indirectly referenced (but not literally windowing) by equal-level/S-R/trendline detection, corrected above.
+
+## 44AJ. Corrected event ledger — resolving the warnings contradiction
+
+**Exact `_ScannerEventLedger` fields, in order (private, frozen, `scanner/replay.py`):**
+
+| # | Field | Type | Ordering | Dedup | Identity | Append condition | Finalization owner | Memory class |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `confirmed_swings` | `tuple[ConfirmedSwing, ...]` | Chronological by `meaningful_confirmation_time_utc` | None (unique `record_id` by construction) | Own `record_id`/`content_fingerprint` | Whenever a pending candidate reaches meaningful confirmation | `MarketMeasurementAnalysis.confirmed_swings` | A |
+| 2 | `displacement_observations` | `tuple[DisplacementObservation, ...]` | Chronological | None | Own `record_id` | Every group once the `range_context_window` warm-up is satisfied | `MarketMeasurementAnalysis.displacement_observations` | A |
+| 3 | `equal_level_clusters` | `tuple[EqualLevelCluster, ...]` | By `confirmation_time_utc` | None | Own `record_id` | Whenever an open cluster closes | `MarketMeasurementAnalysis.equal_level_clusters` | A |
+| 4 | `support_resistance_zones` | `tuple[SupportResistanceZone, ...]` | By `confirmation_time_utc` | None | Own `record_id` | Whenever a zone's reaction confirms | `MarketMeasurementAnalysis.support_resistance_zones` | A |
+| 5 | `trendlines` | `tuple[Trendline, ...]` | By anchor indices | None | Own `record_id` | Whenever a trendline candidate confirms | `MarketMeasurementAnalysis.trendlines` | A |
+| 6 | `structure_transitions` | `tuple[StructureTransition, ...]` | Chronological | None | Own `record_id` | Whenever structure confirms a break | `StructureAnalysis.structure_transitions` | A |
+| 7 | `poi_observations` | `tuple[PoiObservation, ...]` | Chronological | None | Own `record_id` | Whenever a POI is detected (live or later invalidated) | `PoiAnalysis.poi_observations` | A |
+| 8 | `poi_lifecycle_transitions` | `tuple[PoiLifecycleTransition, ...]` | Chronological | None | Own `record_id` | Whenever a POI lifecycle transition occurs | `PoiAnalysis.poi_lifecycle_transitions` | A |
+| 9 | `btmm_observations` | `tuple[BtmmObservation, ...]` | Chronological | None | Own `record_id` | Whenever a BTMM setup is observed | `BtmmAnalysis.btmm_observations` | A |
+| 10 | `btmm_lifecycle_transitions` | `tuple[BtmmLifecycleTransition, ...]` | Chronological | None | Own `record_id` | Whenever a BTMM lifecycle transition occurs | `BtmmAnalysis.btmm_lifecycle_transitions` | A |
+| 11 | **`warnings`** (new — resolves the contradiction) | `tuple[str, ...]` | Emission order | None (duplicates permitted, matching today's plain-list semantics) | None — plain strings, no record_id | Whenever a domain condition matching an existing warning trigger occurs (today's sole trigger, replay/direct-batch mismatch, is evaluated once at finalization per `execution.py`'s existing logic; the field exists for completeness and correctness of the A-classification, not to introduce a new trigger) | `HistoricalBacktestExecutionResult.warnings` | A (in practice bounded to a handful of entries under today's one trigger) |
+
+`setup_summaries` remains **not** a ledger field (classification D) — derived once at finalization from the final `current_btmm_states`/`btmm_observations`/`poi_analysis`, exactly as today's existing `_build_setup_summaries`.
+
+## 44AK. Structure/POI/BTMM sufficiency (unchanged from §44R/§44S/§44T, re-confirmed)
+
+No new insufficiency was found in structure/POI/BTMM state beyond what §44R/§44S/§44T already proved (existing public `current_*_state` summaries insufficient alone; explicit private additions — active swing objects, `live_pois`, `live_setups` — required and already specified). These three sections are re-confirmed unchanged by this final correction. "Pressure wicks" (§44AI) is a POI detector consuming the same bounded `_PoiReplayState` inputs (candles + measurement output) already specified in §44S — no additional state beyond what §44S already defines.
+
+## 44AL. Honest memory complexity (C / A / E / T)
+
+| Domain component | Complexity | Basis |
+|---|---|---|
+| ATR | O(1) per timeframe | §44AI — 4 scalars, no candle retention |
+| Local pivot detection | O(C), C=5 (hardcoded) | `_WINDOW_RADIUS=2` |
+| Pending swing confirmation | O(A), A≤2 per timeframe, unbounded duration | §44AI |
+| Displacement | O(C), C=`range_context_window`=20 | `displacement.py:70` |
+| Equal-level clusters | O(A_swings) | §44AI — no fixed window |
+| Support/resistance | O(A_swings) candidate tracking | §44AI |
+| Trendlines | O(A_swings²) worst case, heavily pruned in practice | §44AI |
+| Structure | O(1) per timeframe, ≤4 active objects | §44R |
+| POI | O(A_poi), live-POI count, not hard-capped | §44S |
+| BTMM | O(A_btmm), live-setup count, not hard-capped | §44T |
+| Event ledger | O(E), total accumulated detections across the whole replay | §44AJ |
+
+**Complete optimized-engine memory complexity, stated honestly:** `O(T×C) + O(T×A_active) + O(A_swings) + O(A_swings²) [worst case, pruned in practice] + O(E)` — as opposed to today's `O(N²)+` dominated by full-prefix recomputation at every step. **Active-object retention is not described as constant-bounded except where a hard maximum count is proven by an existing approved rule** (structure's ≤4, swing-confirmation's ≤2 per timeframe); POI/BTMM live-object counts and the swing-dependent terms are honestly disclosed as **not hard-capped**, bounded in practice by real market structure but without a proven architectural maximum.
+
+**Distinguished:** (1) removal of O(N²) snapshot duplication — fully achieved, the per-step full-prefix recomputation is eliminated; (2) unavoidable O(A+E) semantic-output storage — present, honestly smaller than O(N) raw-candle retention but not zero and not provably tiny, since A_swings and E both grow with replay length, just far more slowly than candle count; (3) optional debug snapshot storage — `ALL`/`CHANGED_ONLY`, capped at 250 groups for historical use (§44AM), unbounded up to that cap, opt-in only.
+
+**Required empirical evidence that A+E remains safe for the real XAUUSD dataset:** a bounded benchmark measuring *actual* accumulated ledger size (E) and *actual* peak concurrent live-object counts (A) at increasing candle counts, up to and including the full 18,474. Per this correction's own scope restriction, no new benchmark was run to produce this evidence — it is explicitly **deferred to implementation time**, a required pre-condition before any full rerun is authorized, matching the same evidentiary pattern already established for the direct-batch oracle (§44AN).
+
+## 44AM. Corrected ALL/CHANGED_ONLY safety policy
+
+**The prior `_MAX_GROUPS_FOR_UNBOUNDED_RETENTION = 2000` cap is removed — it was not supported by the measured evidence and is corrected here.**
+
+**Measured evidence (from the independent `1C-A2-REPLAY-MEMORY-AUDIT` benchmark, not rerun by this correction):** 250 groups ≈ 629 MB peak working set, 131.8 MB retained result; 500 groups ≈ 2.8 GB peak, 687.1 MB result — a ≈4.5× memory increase for a 2× group increase, confirming severe super-linear growth in the *retained-output* dimension (independent of the runtime fix). No direct measurement exists between 250 and 500, and 500 already shows problematic growth.
+
+**Selected policy: Option B — the historical-backtest CLI/execution path permits `ALL`/`CHANGED_ONLY` only up to an exact, defensible group count of `250`** — the largest value directly confirmed safe by measurement (≈629 MB), not an interpolated or extrapolated figure. Values between 250 and 500 are unproven by direct measurement and are not treated as safe. A deterministic byte/memory-budget guard (Option C) was considered and rejected as the primary mechanism for this correction: it would require additional, not-yet-designed runtime-monitoring machinery with more moving parts than a simple, evidence-grounded exact count, for no proven safety benefit over the simpler bound. Rejection raises the existing `InvalidScannerConfigurationError` — no new exception type.
+
+**General Python API (non-historical callers of `run_scanner_replay` directly):** the shared `ReplayConfiguration` class-level default and behavior remain **entirely unchanged** — no cap is enforced by `scanner/replay.py`/`scanner/configuration.py` themselves, preserving every existing scanner-package test's assumptions at fixture scale. **The 250-group cap is enforced exclusively by `historical_backtest/execution.py`**, before `run_scanner_replay` is ever called, once the dataset's group/candle count is known — a historical-backtest-specific business rule, not a change to the general-purpose replay library.
+
+## 44AN. Full isolated direct-batch verification worker
+
+**Exact owning source path (new):** `src/btmm_ai_scanner/historical_backtest/direct_batch_worker.py` (private module, no public export).
+
+**Exact private worker function:** `_direct_batch_worker_entrypoint(request_path: str, response_path: str) -> None` — the subprocess entry point; reads a serialized request from `request_path`, computes, writes a serialized response to `response_path`, exits. A second private function, `_run_isolated_direct_batch_verification(historical_inputs, reviewed_evidence, scanner_configuration, timeout_seconds, memory_ceiling_bytes) -> _DirectBatchVerificationOutcome`, owns the parent-side orchestration (spawn, monitor, terminate, validate, clean up).
+
+**Process-start method:** `multiprocessing.get_context("spawn").Process(...)` — `spawn`, not `fork`, chosen explicitly for cross-platform consistency (fork is unavailable on Windows) and to give the worker a clean, independent memory footprint rather than inheriting the parent's.
+
+**Serialized request shape (JSON file):** `historical_inputs` (canonical JSON of each `ScannerTimeframeInput` bundle's `NormalizedCandle` tuples), `reviewed_evidence` (canonical JSON), `scanner_configuration` (canonical JSON) — `identity_provider` is not serialized; the worker constructs a fresh `ContentAddressedIdentityProvider()` itself, since it is stateless and deterministic by construction.
+
+**Serialized response shape (JSON file):** `{"status": "SUCCESS"|"TIMEOUT"|"MEMORY_CEILING_EXCEEDED"|"CRASHED"|"CORRUPTED", "final_snapshot_json": <dict, present only if SUCCESS>, "elapsed_seconds": <float>, "peak_working_set_bytes": <int | null>, "checksum": <sha256 hex, present only if SUCCESS>}`.
+
+**stdout/stderr handling:** redirected to a dedicated temporary log file, never interleaved with the parent's own output; discarded on `SUCCESS`, preserved (copied out before cleanup) on any other status.
+
+**Timeout:** default 5400 seconds (90 minutes), matching the overall replay-runtime gate (§44AF) — `ARCHITECT-RECOMMENDED + ENGINEERING-PROVISIONAL`, pending author approval.
+
+**Memory ceiling:** default 6 GB (6 × 1024³ bytes), matching the worker peak-working-set gate (§44AF).
+
+**Memory-monitoring interval:** the parent samples the child's OS-reported working set every 5 seconds (via the portable collector, §44AO) — balancing responsiveness against monitoring overhead.
+
+**Windows termination mechanism:** `multiprocessing.Process.terminate()`, which invokes `TerminateProcess` on Windows — a hard, immediate kill, matching the same mechanism used to end the original failed replay attempt in this session.
+
+**Worker exit-code meanings:** `0` = success; `1` = unhandled exception/crash inside the worker; `2` = corrupted/unreadable request. Timeout and memory-ceiling events are detected and enforced by the **parent** (not read from the child's exit code, since a hard-killed process's exit code is not meaningfully informative) and recorded as their own distinct `status` values.
+
+**Crash behavior:** an unexpected, non-zero, non-timeout, non-ceiling exit is classified `CRASHED`; any response file present is not trusted (checksum validation, below, would fail regardless).
+
+**Timeout behavior:** the parent terminates the child after `timeout_seconds` elapses with no valid response file; classified `TIMEOUT`.
+
+**Out-of-memory behavior:** the parent's periodic monitor observes working set exceeding `memory_ceiling_bytes` and terminates the child immediately; classified `MEMORY_CEILING_EXCEEDED`.
+
+**Result checksum/integrity validation:** the response's `checksum` field must equal a fresh SHA-256 (computed by the parent) of the canonical JSON dump of `final_snapshot_json`; a mismatch is classified `CORRUPTED` and treated identically to a crash — never trusted, regardless of the claimed `status`.
+
+**Temporary-file ownership:** request, response, and log files live under a dedicated `tempfile.mkdtemp(prefix="btmm_direct_batch_")` subdirectory, owned exclusively by this invocation.
+
+**Cleanup:** the parent deletes the entire temporary subdirectory after reading and validating the result, on every outcome — except that on any non-`SUCCESS` outcome, the stdout/stderr log is copied out for diagnostics before deletion.
+
+**Parent-process behavior:** blocks with periodic monitoring (not busy-waiting) until the worker reaches a terminal state; never runs a second worker concurrently; the overall CLI/execution flow does not proceed to report writing until this resolves.
+
+**Report-publication behavior:** `write_backtest_report` is invoked **only** when the worker's status is `SUCCESS` and the checksum validates; any other status aborts with **no report at all** — extending the already-existing "no report on mismatch" rule to also cover a crash, timeout, memory-ceiling event, or corrupted response.
+
+**Chosen policy (exactly one):** **A — the first real replay requires successful full-dataset direct-batch verification before reports are published.** The full genuine XAUUSD rerun therefore remains **blocked** not only on the incremental engine's own implementation, but also on this isolated worker successfully completing under the stated gates, and on the §44AL empirical A+E evidence being gathered.
+
+## 44AO. Cross-platform performance-metrics collection
+
+**Exact private collector location (new source path):** `src/btmm_ai_scanner/historical_backtest/process_metrics.py` (private, no public export).
+
+| Platform | Peak working-set collection | Notes |
+|---|---|---|
+| Windows | `ctypes` + `GetProcessMemoryInfo`/`PeakWorkingSetSize` (same technique used in this session's own audit benchmarking) | |
+| Linux | `resource.getrusage(resource.RUSAGE_SELF).ru_maxrss`, multiplied by 1024 (Linux reports **kilobytes**) | A well-known cross-platform unit inconsistency, handled explicitly via `sys.platform` detection |
+| macOS | `resource.getrusage(resource.RUSAGE_SELF).ru_maxrss`, used as-is (macOS reports **bytes**, not kilobytes) | Same function, different units — the collector must not assume Linux units on macOS |
+| Unsupported/unknown platform | Returns `None` | Never raises |
+
+**Field types:** `peak_working_set_bytes: int | None`, `minimum_available_system_ram_bytes: int | None` — nullable everywhere. **Missing environmental metrics never fail execution** — a `None`/JSON `null` is recorded, the replay and report-writing proceed normally. **They never participate in semantic identity or deterministic detection outputs** — the cross-cutting rule from §44Z is preserved and restated here explicitly per this task's own instruction.
+
+**Exact execution-summary JSON keys (revised — `ScannerReplayResult` itself is unchanged, see §44AP):** `processed_availability_group_count`, `replay_elapsed_seconds`, `peak_working_set_bytes`, `minimum_available_system_ram_bytes`, `retained_snapshot_count`, `final_replay_result_bytes`, `direct_batch_elapsed_seconds`, `direct_batch_peak_working_set_bytes`, `direct_batch_verification_status` (one of the §44AN status values), `metrics_platform` (`"windows"`/`"linux"`/`"darwin"`/`"unsupported"`, so a report reader can correctly interpret any `null`s). All ten live in the existing, already-flexible `execution_summary_payload` dict — the same mechanism already used for `tzdata_version`.
+
+## 44AP. `ScannerReplayResult` reconsidered — 11 fields preserved, not 12
+
+**Corrected decision: `ScannerReplayResult` remains at exactly 11 fields — unchanged.** No concrete public consumer was found to genuinely require `processed_availability_group_count` as a public field: `evaluate_scanner` does not need it (§44P); direct-batch comparison does not need it; reporting can read it from `execution_summary.json` exactly as easily as from the result object (§44AO); no existing scanner-package test or public API references such a count. Per this task's own instruction to preserve the existing field count unless a concrete public semantic requirement is proven, and none was proven, **the group count moves entirely into the private `execution_summary.json` metadata (§44AO)** alongside the other nine metrics. The prior correction's §44X (proposing the 12th field) is superseded by this section.
+
+## 44AQ. Corrected numeric public surface (exact, before/after)
+
+| Item | Before | After |
+|---|---|---|
+| Public enum types | — | Unchanged (0 new types) |
+| `SnapshotRetentionPolicy` members | 2 | 3 |
+| Public contract types | — | Unchanged (0 new types) |
+| `ScannerReplayResult` fields | 11 | **11 (unchanged — corrected from the prior 11→12 proposal)** |
+| Public errors | — | Unchanged (0 new — safety-cap rejection reuses `InvalidScannerConfigurationError`) |
+| Public APIs | — | Unchanged (0 new — the worker entrypoint and metrics collector are both private) |
+| Public identity implementations | — | Unchanged |
+| Export count | — | Unchanged (0 new export names) |
+
+## 44AR. Corrected exact test plan (no estimates; legacy-sequential-oracle safety clarified)
+
+**Clarification required by this task:** "legacy oracle" comparisons at **large** sizes (250/500 combined candles) compare the incremental engine against the **one-shot, single-call `scan_market` batch function** (fast — one O(N)-ish pass, not the old per-step sequential replay loop). They never reproduce the old sequential `run_scanner_replay` loop at unsafe sizes — that loop is precisely the broken O(N²)+ design being replaced, and running it again at 250/500-candle scale in a "standard unit test" would risk reproducing the ≈295-second, ≈2.8 GB benchmark this whole amendment exists to eliminate. Comparisons at **small** sizes (1/10/50/100 availability groups, and small synthetic fixtures) may safely compare against **both** the old sequential per-step loop (trivially fast at this scale) **and** the one-shot batch oracle, giving a stronger step-by-step guarantee with no safety risk.
+
+**New file 1 — `tests/unit/test_scanner_replay_incremental_equivalence.py` (new), exactly 32 top-level tests, in order:**
+
+1. `test_incremental_engine_matches_legacy_sequential_oracle_for_one_availability_group`
+2. `test_incremental_engine_matches_legacy_sequential_oracle_for_ten_availability_groups`
+3. `test_incremental_engine_matches_legacy_sequential_oracle_for_fifty_availability_groups`
+4. `test_incremental_engine_matches_legacy_sequential_oracle_for_one_hundred_availability_groups`
+5. `test_incremental_engine_matches_one_shot_batch_oracle_for_250_combined_candles`
+6. `test_incremental_engine_matches_one_shot_batch_oracle_for_500_combined_candles`
+7. `test_incremental_engine_matches_one_shot_batch_oracle_across_overlapping_m1_m5_m15_availability_times`
+8. `test_incremental_engine_matches_one_shot_batch_oracle_across_a_session_gap_boundary`
+9. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_no_event_sequence`
+10. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_structure_bos_sequence`
+11. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_structure_choch_sequence`
+12. `test_incremental_engine_matches_legacy_sequential_oracle_for_poi_creation`
+13. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_poi_touch`
+14. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_poi_invalidation`
+15. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_btmm_observation`
+16. `test_incremental_engine_matches_legacy_sequential_oracle_for_a_btmm_lifecycle_transition`
+17. `test_incremental_engine_preserves_identity_equality_against_one_shot_batch_oracle`
+18. `test_incremental_engine_preserves_content_fingerprint_equality_against_one_shot_batch_oracle`
+19. `test_incremental_engine_preserves_event_emission_order_against_legacy_sequential_oracle`
+20. `test_incremental_engine_matches_legacy_sequential_oracle_with_reviewed_cases_present`
+21. `test_performance_metrics_excluded_from_scanner_identity_and_fingerprints`
+22. `test_incremental_engine_rolls_back_cleanly_on_a_domain_update_failure`
+23. `test_wilder_atr_incremental_state_matches_full_history_after_initialization`
+24. `test_measurement_state_equivalence_beyond_the_range_context_window`
+25. `test_warning_ledger_retains_every_warning_for_the_whole_replay`
+26. `test_active_poi_state_is_preserved_across_availability_groups`
+27. `test_active_btmm_state_is_preserved_across_availability_groups`
+28. `test_event_ledger_emission_order_matches_the_locked_transition_order`
+29. `test_incremental_engine_supports_all_retention_policy_below_the_historical_safety_cap`
+30. `test_incremental_engine_supports_changed_only_retention_policy_below_the_historical_safety_cap`
+31. `test_final_only_retention_produces_a_single_retained_snapshot`
+32. `test_replay_configuration_rejects_all_and_changed_only_above_250_groups_at_the_api_level`
+
+Scenarios 5–6 reuse the already-collected 250/500-combined-candle real-data prefixes from the `1C-A2-REPLAY-MEMORY-AUDIT` evidence, comparing against the one-shot batch oracle only — no reproduction of the old sequential loop at this scale, no new benchmark run.
+
+**New file 2 — `tests/unit/test_historical_direct_batch_worker.py` (new), exactly 7 top-level tests, in order:**
+
+1. `test_direct_batch_worker_succeeds_and_returns_a_validated_checksum`
+2. `test_direct_batch_worker_times_out_and_is_terminated`
+3. `test_direct_batch_worker_exceeding_the_memory_ceiling_is_terminated`
+4. `test_direct_batch_worker_corrupted_response_is_rejected`
+5. `test_no_report_is_published_after_incomplete_direct_batch_verification`
+6. `test_direct_batch_worker_temporary_files_are_cleaned_up_after_success`
+7. `test_direct_batch_worker_preserves_logs_on_failure_before_cleanup`
+
+**Modified existing files, exact new top-level tests appended, in order:**
+
+- `tests/unit/test_scanner_replay_grouping.py` (+3): `test_snapshot_retention_policy_includes_final_only_member`; `test_final_only_retention_semantics_are_general_purpose_correct`; `test_scanner_replay_result_field_count_is_unchanged_at_eleven`.
+- `tests/unit/test_scanner_batch_replay_equivalence.py` (+1): `test_legacy_full_batch_scan_market_is_unmodified_by_the_incremental_amendment`.
+- `tests/unit/test_historical_execution.py` (+4): `test_historical_backtest_defaults_to_final_only_retention`; `test_execution_summary_includes_new_performance_metric_keys`; `test_execution_summary_records_processed_availability_group_count`; `test_performance_metrics_fall_back_to_null_on_an_unsupported_platform`.
+- `tests/unit/test_historical_cli.py` (+3): `test_cli_accepts_snapshot_retention_flag_with_all_three_values`; `test_cli_rejects_invalid_snapshot_retention_value_with_usage_error`; `test_cli_rejects_unsafe_retention_policy_above_the_safety_cap`.
+
+**Exact total new top-level tests: 32 + 7 + 3 + 1 + 4 + 3 = 50.** No parametrization changes AST-vs-pytest collection arithmetic.
+
+**Exact projected AST total:** 778 + 50 = **828**.
+**Exact projected pytest-collected total:** 856 + 50 = **906**.
+
+## 44AS. Corrected exact implementation scope
+
+**New source paths (2):** `src/btmm_ai_scanner/historical_backtest/direct_batch_worker.py` (isolated verification worker, §44AN); `src/btmm_ai_scanner/historical_backtest/process_metrics.py` (cross-platform metrics collector, §44AO).
+
+**Modified existing source paths (9), corrected responsibilities:**
+1. `scanner/enums.py` — add `FINAL_ONLY`.
+2. `scanner/replay.py` — incremental kernel, orchestration state, corrected 11-field ledger (§44AJ), retention mechanics for all three policies (no cap logic — the cap is historical-backtest-specific, see #8).
+3. `domain/analyzer.py` — proven `_MeasurementReplayState`/`_AtrIncrementalState` and per-measurement transition functions (§44AI), alongside unmodified `analyze_market_measurements`.
+4. `structure/analyzer.py` — `_StructureReplayState` + transition (§44AK).
+5. `poi/analyzer.py` — `_PoiReplayState` + transition, including pressure-wick detection inputs (§44AK).
+6. `btmm/analyzer.py` — `_BtmmReplayState` + transition (§44AK).
+7. `historical_backtest/cli.py` — `--snapshot-retention` flag, new exit code, invokes the isolated worker (via #new-1) rather than an in-process call.
+8. `historical_backtest/execution.py` — threads retention policy through; **enforces the 250-group safety cap for `ALL`/`CHANGED_ONLY`** (§44AM, raising `InvalidScannerConfigurationError`); invokes the metrics collector (#new-2) and the isolated worker (#new-1); gates report writing on worker `SUCCESS`.
+9. `historical_backtest/reporting.py` — extends `execution_summary_payload` with all ten metric keys (§44AO).
+
+**New test paths (2):** `tests/unit/test_scanner_replay_incremental_equivalence.py`; `tests/unit/test_historical_direct_batch_worker.py`.
+
+**Modified existing test paths (4):** `tests/unit/test_scanner_replay_grouping.py`; `tests/unit/test_scanner_batch_replay_equivalence.py`; `tests/unit/test_historical_execution.py`; `tests/unit/test_historical_cli.py`.
+
+**Documentation paths:** exactly the four files this correction modifies.
+
+**Dependency/lockfile paths:** none — `multiprocessing`, `resource`, and `ctypes` are all standard-library, no new dependency.
+
+**Confirmed:** no hidden worker or monitoring implementation left outside this declared scope — the isolated worker (#new-1) and metrics collector (#new-2) are both explicitly declared, named, and scoped above. No unrelated, private-reference, external-data, or dataset path is touched.
+
+**Inventory:** 221 → **225** (+4: 2 new source, 2 new test), creation order **221–224**.
+
+## 44AT. Final reissued decision matrix (15 rows, exact)
+
+| # | Row | Classification |
+|---|---|---|
+| 1 | Measurement sufficiency | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 2 | Structure sufficiency | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 3 | POI sufficiency | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 4 | BTMM sufficiency | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 5 | Event ledger | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 6 | `FINAL_ONLY` | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 7 | `ALL` safety | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 8 | `CHANGED_ONLY` safety | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 9 | Isolated direct-batch worker | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 10 | Direct-batch full-dataset gate | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 11 | CLI | `IMPLEMENTABLE_WITH_AUTHOR_DECISION` |
+| 12 | Reporting | `IMPLEMENTABLE` |
+| 13 | Performance metrics | `IMPLEMENTABLE` |
+| 14 | Checkpointing | `DEFERRED` |
+| 15 | Full genuine replay | `BLOCKED` |
+
+**Category totals:** `IMPLEMENTABLE_WITH_AUTHOR_DECISION` = 11 (rows 1–11); `IMPLEMENTABLE` = 2 (rows 12–13); `DEFERRED` = 1 (row 14); `BLOCKED` = 1 (row 15); `NOT_APPLICABLE` = 0. **11 + 2 + 1 + 1 + 0 = 15 — matches the exact row count.**
+
+## 44AU. Final targeted audit and verdict
+
+1. **Wilder ATR exactness?** Proven exactly, byte-equivalence argued from the literal recursion (§44AI) — not merely asserted.
+2. **Every measurement dependency?** Traced line-by-line for ATR, confirmed swings, displacement, equal-levels, support/resistance, trendlines (§44AI).
+3. **Absence of arbitrary history windows?** Confirmed — every previously-unproven 20-candle-style claim for equal-levels/S-R/trendlines is corrected to its true dependency (confirmed swings, classification A), not an invented window.
+4. **Structure-state sufficiency?** Re-confirmed, unchanged from §44R.
+5. **POI-state sufficiency?** Re-confirmed, unchanged from §44S.
+6. **BTMM-state sufficiency?** Re-confirmed, unchanged from §44T.
+7. **Ledger completeness?** Corrected — `warnings` added, resolving the prior contradiction (§44AJ).
+8. **Honest memory complexity?** Stated in full, including the O(A_swings²) worst-case trendline disclosure (§44AL) — not minimized.
+9. **Safe debug-retention policy?** Corrected to an exact, evidence-grounded 250-group cap (§44AM), not an invented 2000.
+10. **Direct-batch worker completeness?** Fully specified end-to-end (§44AN) — process model, serialization, timeout, memory ceiling, termination, integrity validation, cleanup, publication gating.
+11. **Report-publication policy?** Exactly one policy chosen — full-dataset verification required before publication (§44AN).
+12. **Public-contract stability?** `ScannerReplayResult` reverted to 11 fields, unchanged, with justification (§44AP).
+13. **Metrics portability?** Windows/Linux/macOS/unsupported all specified, nullable, non-failing (§44AO).
+14. **Exact paths?** 2 new source, 9 modified source, 2 new test, 4 modified test, all with stated responsibility (§44AS).
+15. **Exact tests?** 50 new top-level tests, exact names and order (§44AR).
+16. **Exact public counts?** All reported numerically, `ScannerReplayResult` unchanged at 11 (§44AQ).
+17. **Exact matrix arithmetic?** 15 rows, categories sum to 15 (§44AT).
+18. **No production approval?** Confirmed — none declared anywhere in this correction.
+
+**None of the eight items this task itself forbids classifying as non-blocking remains unresolved:** Wilder ATR state is proven, not asserted; historical lookback is corrected to its true dependency, not left arbitrary; the ledger is complete; the retention limit is evidence-grounded; the direct-batch worker is fully specified; the public-contract change is resolved (reverted, with justification); test arithmetic is exact; path scope is exact.
+
+**Final verdict: `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`.** Not `A`, because genuine, substantive, honestly-disclosed engineering findings remain open pending implementation-time empirical evidence: (i) the O(A_swings²) worst-case trendline-candidate-tracking complexity, mitigated but not eliminated by pruning; (ii) the full-dataset direct-batch oracle's own memory safety, still empirically unproven at 18,474-candle scale; (iii) the required A+E empirical benchmark (§44AL) has not been run, correctly, per this correction's own scope restriction. None of these is a domain-state-sufficiency, retention-rule, contract-change, test-count, path-scope, or matrix-arithmetic gap — every one of those is now exactly and closedly answered, corrected, and where necessary reversed with justification. Not `C` or `D` — no fundamental obstacle to a semantically equivalent, scalable design was found; on the contrary, this correction proves a concrete incremental design exists for every domain, including a rigorous, code-grounded proof that Wilder ATR needs no raw-candle retention at all, at the cost of honestly acknowledging that equal-level/support-resistance/trendline tracking is more complex — and less trivially bounded — than originally hoped.
+
+## 44AV. Author approval — architecture-approval stage closed
+
+**Status: `AUTHOR-APPROVED`, `APPROVED FOR CONTROLLED IMPLEMENTATION`, `NOT YET IMPLEMENTED`, `FIRST GENUINE REPLAY STILL PENDING`, `NOT PRODUCTION-APPROVED`.** This supersedes the prior `ARCHITECT-RECOMMENDED`/`AUTHOR-DECISION REQUIRED` status carried through §44O–§44AU. **Accepted architecture-audit verdict: `B — READY WITH DISCLOSED NON-BLOCKING FINDINGS`** (§44AU, unchanged, adopted as-is — not upgraded to `A`, since the disclosed findings below remain genuinely open). **This approval is architecture approval only.** It does not approve: implementation; the first genuine replay as completed; full XAUUSD rerun authorization; scanner accuracy; POI or BTMM detection correctness on real data; profitability; trading; or production use.
+
+**Approved architecture (§44P–§44AU, unchanged by this approval, adopted exactly as corrected):**
+- `IncrementalReplayKernel` (§44P) — the single-pass, per-availability-group replay engine, replacing only `run_scanner_replay`'s internal loop body.
+- Exact incremental measurement state, including the proven Wilder-ATR sufficiency (§44AI, §44Q).
+- Exact incremental structure state (§44R).
+- Exact incremental POI state (§44S).
+- Exact incremental BTMM state (§44T).
+- Exact scanner-orchestration state (§44U).
+- The complete 11-field event ledger, including `warnings` (§44AJ).
+- `FINAL_ONLY` as the historical-backtest default retention policy (§44W, §44AM).
+- `ScannerReplayResult` remaining at exactly 11 fields, unchanged (§44AP).
+- `ALL` and `CHANGED_ONLY` restricted to at most **250** availability groups in the historical-backtest CLI/execution path, with the general Python API left unchanged (§44AM).
+- The isolated direct-batch verification worker (§44AN), including its exact process model, timeout, memory ceiling, and integrity validation.
+- The rule that no report may publish without successful full-dataset direct-batch verification (§44AN, policy A).
+- Private, cross-platform performance instrumentation (§44AO).
+- The exact implementation path scope: 2 new source paths, 9 modified existing source paths, 2 new test paths, 4 modified existing test paths (§44AS).
+- The exact 50-test plan, names, and order (§44AR).
+
+**Approved provisional gates — label corrected to `AUTHOR-APPROVED + ENGINEERING-PROVISIONAL`** (superseding §44AF/§44AL's `ARCHITECT-RECOMMENDED + ENGINEERING-PROVISIONAL` label, now that explicit author approval has occurred): worker peak working set ≤ 6 GB; available physical RAM never below 4 GB; full replay runtime ≤ 90 minutes; no uncontrolled committed-memory growth; deterministic rerun; zero replay-equivalence mismatches; no report publication before complete success; `checksums.json` finalized last. These remain **provisional** — approval of the gates as the correct acceptance thresholds to test against, not a claim that any implementation has yet met them.
+
+**Approved non-blocking implementation-time findings (§44AU items i–iii, explicitly accepted as open, not silently dropped):**
+1. Trendline pairing has O(A_swings²) worst-case behavior (§44AI, §44AL) and requires empirical measurement before the worst case can be ruled out in practice.
+2. Full-dataset direct-batch oracle memory safety remains unproven (§44AN) and must be tested through the isolated, safety-controlled worker before any full rerun.
+3. Actual A + E semantic-state/event-ledger memory (§44AL) must be measured empirically before authorizing the genuine replay.
+
+**Explicitly recorded:**
+- Implementation has not begun — none of the 2 new source paths, 9 modified source paths, 2 new test paths, or 4 modified test paths (§44AS) exist yet.
+- The full XAUUSD replay remains **blocked**, pending implementation, the three findings above being resolved with empirical evidence, and the isolated direct-batch worker succeeding under the approved gates.
+- The external dataset (`xauusd_2026_07_pilot`) and its manifest remain valid and unchanged throughout every architecture/audit/correction/approval task in this sequence.
+- No accuracy or profitability claim is made anywhere in this approval.
+- **The milestone remains `NOT PRODUCTION-APPROVED`.**
+
+**All prior draft, audit, and correction history (§44A–§44AU) is preserved unchanged above** — nothing is deleted or rewritten; this section records only the author's decision to approve the architecture as corrected, closing the architecture-approval stage and opening the path to a separate, future, explicitly authorized implementation task.
+
+**This approval is documentation-only.** No source file, test file, dependency, lockfile, Protocol, dataset, or manifest is modified by this section.
