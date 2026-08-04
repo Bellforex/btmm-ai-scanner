@@ -13,6 +13,7 @@ from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolum
 from btmm_ai_scanner.contracts.types import SemVer
 from btmm_ai_scanner.domain.analyzer import (
     AmbiguousEventTimeAnalysisError,
+    MarketMeasurementAnalysis,
     UnsortedCandleSequenceError,
     _advance_measurement_replay_state,
     _atr_incremental_step,
@@ -23,10 +24,13 @@ from btmm_ai_scanner.domain.analyzer import (
 )
 from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
 from btmm_ai_scanner.domain.enums import DerivedOutputType
+from btmm_ai_scanner.domain.equal_levels import EqualLevelCluster
 from btmm_ai_scanner.domain.swings import (
+    ConfirmedSwing,
     _merge_adjacent_plateaus,
     _supersede_same_direction_runs,
 )
+from btmm_ai_scanner.domain.trendlines import Trendline
 from btmm_ai_scanner.measurements.atr import compute_atr_series
 
 _RAW_CANDLE_ID = UUID("0193f350-1234-7abc-8def-abcdefabcdaa")
@@ -606,3 +610,240 @@ def test_incremental_engine_rolls_back_cleanly_on_a_domain_update_failure() -> N
 
     resumed = _advance_measurement_replay_state(state, _RICH_SWING_CANDLES[10], _CONFIG)
     assert len(resumed.candles_so_far) == len(candles_before) + 1
+
+
+# =====================================================================
+# Subsystem 2b-final: incremental equal-level / trendline frontier.
+# Every assertion below uses the one-shot batch analyze_market_measurements
+# as the oracle and compares the COMPLETE MarketMeasurementAnalysis at the
+# controlled prefixes, never counts alone.
+# =====================================================================
+
+_FRONTIER_SEEDS = (42, 7, 99, 123)
+_FRONTIER_CANDLES = {
+    seed: _build(_random_walk_prices(180, seed=seed)) for seed in _FRONTIER_SEEDS
+}
+
+
+def _batch_analysis(
+    candles: tuple[NormalizedCandle, ...], k: int
+) -> MarketMeasurementAnalysis:
+    return analyze_market_measurements(candles[:k], _CONFIG, _HashIdentityProvider())
+
+
+def _incremental_series(
+    candles: tuple[NormalizedCandle, ...],
+) -> list[MarketMeasurementAnalysis]:
+    """Full incremental MarketMeasurementAnalysis at every prefix (no oracle
+    calls — used to locate the prefixes where a scenario occurs)."""
+    state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    series: list[MarketMeasurementAnalysis] = []
+    for candle in candles:
+        state = _advance_measurement_replay_state(state, candle, _CONFIG)
+        series.append(_measurement_replay_state_to_analysis(state))
+    return series
+
+
+@pytest.mark.parametrize("seed", _FRONTIER_SEEDS)
+def test_incremental_frontier_matches_batch_oracle_at_every_prefix(seed: int) -> None:
+    matched, mismatched = _replay_all_prefixes_match_oracle(_FRONTIER_CANDLES[seed])
+    assert matched, f"seed={seed} mismatched prefixes: {mismatched}"
+
+
+def test_frontier_does_not_treat_confirmed_swings_as_append_only() -> None:
+    """Out-of-order confirmation inserts a swing at a MIDDLE list position, so
+    an existing entry changes (not a pure tail append). The trendline frontier
+    must invalidate/re-arm rather than assume append-only; assert the scenario
+    occurs and the full analysis still matches the oracle at those prefixes."""
+    candles = _FRONTIER_CANDLES[7]
+    series = _incremental_series(candles)
+    non_append_prefixes: list[int] = []
+    previous: tuple[ConfirmedSwing, ...] = ()
+    for k, incremental in enumerate(series, start=1):
+        swings = incremental.confirmed_swings
+        common = 0
+        limit = min(len(previous), len(swings))
+        while common < limit and previous[common] == swings[common]:
+            common += 1
+        if common < len(previous):
+            non_append_prefixes.append(k)
+        previous = swings
+
+    assert non_append_prefixes, (
+        "fixture never produced a non-append confirmed-swing change"
+    )
+    for k in non_append_prefixes:
+        assert series[k - 1] == _batch_analysis(candles, k), (
+            f"prefix {k} diverged from the batch oracle"
+        )
+
+
+def test_trendline_created_from_a_newly_appended_anchor_matches_the_oracle() -> None:
+    candles = _FRONTIER_CANDLES[42]
+    series = _incremental_series(candles)
+    added_prefixes: list[int] = []
+    previous_ids: set[UUID] = set()
+    for k, incremental in enumerate(series, start=1):
+        ids = {t.record_id for t in incremental.trendlines}
+        if ids - previous_ids:
+            added_prefixes.append(k)
+        previous_ids = ids
+
+    assert added_prefixes, "fixture never created a trendline"
+    for k in added_prefixes:
+        batch = _batch_analysis(candles, k)
+        assert series[k - 1] == batch
+        assert [t.record_id for t in series[k - 1].trendlines] == [
+            t.record_id for t in batch.trendlines
+        ], f"trendline canonical ordering diverged at prefix {k}"
+
+
+def test_trendline_invalidated_after_a_frontier_change_matches_the_oracle() -> None:
+    candles = _FRONTIER_CANDLES[7]
+    series = _incremental_series(candles)
+    removed_prefixes: list[int] = []
+    previous_ids: set[UUID] = set()
+    for k, incremental in enumerate(series, start=1):
+        ids = {t.record_id for t in incremental.trendlines}
+        if previous_ids - ids:
+            removed_prefixes.append(k)
+        previous_ids = ids
+
+    assert removed_prefixes, "fixture never invalidated a previously emitted trendline"
+    for k in removed_prefixes:
+        assert series[k - 1] == _batch_analysis(candles, k)
+        assert series[k - 2] == _batch_analysis(candles, k - 1)
+
+
+def test_unaffected_historical_trendline_is_preserved_to_the_final_prefix() -> None:
+    candles = _FRONTIER_CANDLES[123]
+    series = _incremental_series(candles)
+    final = series[-1]
+    assert len(final.trendlines) >= 2, "fixture too thin to test preservation"
+    final_by_id = {t.record_id: t for t in final.trendlines}
+
+    first_seen: dict[UUID, tuple[int, Trendline]] = {}
+    for k, incremental in enumerate(series, start=1):
+        for trendline in incremental.trendlines:
+            if (
+                trendline.record_id in final_by_id
+                and trendline.record_id not in first_seen
+            ):
+                first_seen[trendline.record_id] = (k, trendline)
+
+    preserved = [
+        record_id
+        for record_id, (k, trendline) in first_seen.items()
+        if k < len(series) - 5 and trendline == final_by_id[record_id]
+    ]
+    assert preserved, "no historical trendline survived unchanged to the final prefix"
+    assert final == _batch_analysis(candles, len(candles))
+
+
+def test_existing_equal_level_cluster_membership_change_matches_the_oracle() -> None:
+    candles = _FRONTIER_CANDLES[123]
+    series = _incremental_series(candles)
+    changed_prefixes: list[int] = []
+    previous: dict[UUID, tuple[UUID, ...]] = {}
+    for k, incremental in enumerate(series, start=1):
+        current = {
+            c.record_id: c.component_swing_record_ids
+            for c in incremental.equal_level_clusters
+        }
+        for record_id, members in previous.items():
+            if record_id in current and current[record_id] != members:
+                changed_prefixes.append(k)
+                break
+        previous = current
+
+    assert changed_prefixes, (
+        "fixture never changed an existing equal-level cluster's membership"
+    )
+    for k in changed_prefixes:
+        assert series[k - 1] == _batch_analysis(candles, k)
+
+
+def test_unaffected_equal_level_cluster_preserved_when_another_changes() -> None:
+    candles = _FRONTIER_CANDLES[99]
+    series = _incremental_series(candles)
+    saw_preserved_across_change = False
+    previous: dict[UUID, EqualLevelCluster] = {}
+    for k, incremental in enumerate(series, start=1):
+        current: dict[UUID, EqualLevelCluster] = {
+            c.record_id: c for c in incremental.equal_level_clusters
+        }
+        if previous and set(current) != set(previous):
+            preserved = [
+                record_id
+                for record_id in current
+                if record_id in previous and current[record_id] == previous[record_id]
+            ]
+            if preserved:
+                saw_preserved_across_change = True
+                assert incremental == _batch_analysis(candles, k)
+        previous = current
+
+    assert saw_preserved_across_change, (
+        "fixture never preserved an equal-level cluster across a set change"
+    )
+
+
+def test_frontier_identity_and_fingerprint_equality_against_the_oracle() -> None:
+    candles = _FRONTIER_CANDLES[123]
+    state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    saw_trendline = False
+    saw_cluster = False
+    for k, candle in enumerate(candles, start=1):
+        state = _advance_measurement_replay_state(state, candle, _CONFIG)
+        incremental = _measurement_replay_state_to_analysis(state)
+        batch = _batch_analysis(candles, k)
+
+        assert [t.record_id for t in incremental.trendlines] == [
+            t.record_id for t in batch.trendlines
+        ]
+        assert {t.record_id: t.content_fingerprint for t in incremental.trendlines} == {
+            t.record_id: t.content_fingerprint for t in batch.trendlines
+        }
+        assert [c.record_id for c in incremental.equal_level_clusters] == [
+            c.record_id for c in batch.equal_level_clusters
+        ]
+        assert {
+            c.record_id: c.content_fingerprint for c in incremental.equal_level_clusters
+        } == {c.record_id: c.content_fingerprint for c in batch.equal_level_clusters}
+        if incremental.trendlines:
+            saw_trendline = True
+        if incremental.equal_level_clusters:
+            saw_cluster = True
+
+    assert saw_trendline and saw_cluster
+
+
+def test_frontier_caches_roll_back_cleanly_on_a_domain_update_failure() -> None:
+    state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    for candle in _RICH_SWING_CANDLES[:90]:
+        state = _advance_measurement_replay_state(state, candle, _CONFIG)
+
+    high_before = state.equal_level_cache_high
+    low_before = state.equal_level_cache_low
+    trendline_caches_before = state.trendline_caches
+    clusters_before = state.equal_level_clusters_so_far
+    trendlines_before = state.trendlines_so_far
+
+    out_of_order = _candle(
+        9999,
+        100.0,
+        101.0,
+        99.0,
+        100.0,
+        event_time=_RICH_SWING_CANDLES[5].event_time_utc,
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        _advance_measurement_replay_state(state, out_of_order, _CONFIG)
+
+    # The prior state object is never mutated: the very same cache objects
+    # (identity, not just equality) survive the failed transition.
+    assert state.equal_level_cache_high is high_before
+    assert state.equal_level_cache_low is low_before
+    assert state.trendline_caches is trendline_caches_before
+    assert state.equal_level_clusters_so_far == clusters_before
+    assert state.trendlines_so_far == trendlines_before
