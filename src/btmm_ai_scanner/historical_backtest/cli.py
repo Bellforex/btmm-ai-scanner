@@ -27,6 +27,7 @@ from btmm_ai_scanner.scanner.configuration import (
     ReplayConfiguration,
     ScannerConfiguration,
 )
+from btmm_ai_scanner.scanner.enums import SnapshotRetentionPolicy
 from btmm_ai_scanner.scanner.labels import InvalidReviewedLabelError
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
 
@@ -64,7 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)  # argparse itself exits 2 on a usage/parse error
 
     scanner_configuration = _default_scanner_configuration()
-    replay_configuration = ReplayConfiguration()
+    replay_configuration = ReplayConfiguration(
+        snapshot_retention=SnapshotRetentionPolicy.FINAL_ONLY
+    )
     identity_provider = ContentAddressedIdentityProvider()
 
     try:

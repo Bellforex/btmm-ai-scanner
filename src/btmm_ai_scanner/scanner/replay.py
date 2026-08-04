@@ -460,12 +460,20 @@ def run_scanner_replay(
 
             if replay_configuration.snapshot_retention == SnapshotRetentionPolicy.ALL:
                 snapshots.append(snapshot)
+            elif (
+                replay_configuration.snapshot_retention
+                == SnapshotRetentionPolicy.FINAL_ONLY
+            ):
+                pass
             elif len(snapshots) == 0 or json.dumps(
                 snapshots[-1].model_dump(mode="json"), separators=(",", ":")
             ) != json.dumps(snapshot.model_dump(mode="json"), separators=(",", ":")):
                 snapshots.append(snapshot)
 
     assert final_snapshot is not None
+
+    if replay_configuration.snapshot_retention == SnapshotRetentionPolicy.FINAL_ONLY:
+        snapshots = [final_snapshot]
 
     detection_mismatches: tuple[DetectionMismatch, ...] = ()
     if replay_configuration.verify_against_direct_batch:
