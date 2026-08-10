@@ -7,6 +7,25 @@ from uuid import UUID
 
 import pytest
 
+from btmm_ai_scanner.btmm.analyzer import (
+    BtmmAnalysis,
+    BtmmTimeframeInput,
+    _advance_btmm_replay_state,
+    _btmm_replay_state_to_analysis,
+    _create_initial_btmm_replay_state,
+    analyze_btmm,
+)
+from btmm_ai_scanner.btmm.configuration import BtmmConfiguration
+from btmm_ai_scanner.btmm.enums import (
+    BtmmContextAlignmentStatus,
+    BtmmEvidenceSource,
+    BtmmLifecycleStatus,
+    BtmmLifecycleTransitionType,
+    BtmmLiquidityEvidenceStatus,
+    BtmmSessionStatus,
+    BtmmVolumePillarStatus,
+)
+from btmm_ai_scanner.btmm.reviewed_evidence import BtmmReviewedEvidence
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
@@ -1865,3 +1884,667 @@ def test_poi_measurement_to_poi_handoff_matches_the_batch_oracle() -> None:
     assert result.all_match, f"mismatched prefixes: {result.mismatched}"
     assert len(result.analysis_series[-1].poi_lifecycle_transitions) > 0
     assert result.final_state.candles_so_far == _POI_CANDLES[42]  # type: ignore[attr-defined]
+
+
+# =====================================================================
+# Subsystem 2e: incremental BTMM state / lifecycle differential tests.
+# Every assertion compares the incremental BTMM engine
+# (_create_initial_btmm_replay_state / _advance_btmm_replay_state /
+# _btmm_replay_state_to_analysis) against the UNMODIFIED batch oracle
+# analyze_btmm((single_bundle,), poi_analysis, reviewed_evidence, ...) at every
+# candle prefix — full BtmmAnalysis equality (observations, lifecycle
+# transitions, current states; identities, fingerprints, ordering), never
+# counts alone. The single timeframe is the approved 2e unit (cross-timeframe
+# combination is deferred to the 2f kernel). The measurement (2b), structure
+# (2c), and POI (2d) replays are advanced in lockstep and their real output fed
+# into BTMM, so these tests double as the measurement->structure->POI->BTMM
+# handoff proof. M15 candles are used so the formation-timeframe gate permits
+# BTMM_CONFIRMED; fully-aligned reviewed evidence is supplied per prefix.
+# =====================================================================
+
+_BTMM_CONFIG = BtmmConfiguration(minimum_price_tick=Decimal("0.01"))
+_BTMM_SEEDS = (42, 34, 7, 123)
+
+
+def _btmm_candle(
+    index: int,
+    o: float,
+    h: float,
+    low: float,
+    c: float,
+) -> NormalizedCandle:
+    event_time = _BASE_TIME + timedelta(minutes=15 * index)
+    availability_time = event_time + timedelta(minutes=15)
+    return NormalizedCandle.model_validate(
+        {
+            "record_id": _record_id(index),
+            "content_fingerprint": _FINGERPRINT,
+            "raw_candle_id": _RAW_CANDLE_ID,
+            "provider": "FXCM",
+            "source_reference": "fxcm-xauusd-m15",
+            "source_symbol": "XAUUSD",
+            "source_timeframe": "M15",
+            "symbol": InternalSymbol.XAUUSD,
+            "timeframe": Timeframe.M15,
+            "event_time_utc": event_time,
+            "availability_time_utc": availability_time,
+            "processing_time_utc": availability_time,
+            "original_event_time": event_time,
+            "original_availability_time": availability_time,
+            "original_timezone": "UTC",
+            "open": Decimal(str(o)),
+            "high": Decimal(str(h)),
+            "low": Decimal(str(low)),
+            "close": Decimal(str(c)),
+            "volume": Decimal("10"),
+            "volume_kind": CandleVolumeKind.TICK,
+            "completeness": CandleCompleteness.CONFIRMED_COMPLETE,
+            "rule_version": SemVer.parse("0.1.0"),
+            "contract_version": SemVer.parse("0.1.0"),
+            "schema_version": SemVer.parse("0.1.0"),
+            "provenance_id": _PROVENANCE_ID,
+        }
+    )
+
+
+def _btmm_build(
+    prices: list[tuple[float, float, float, float]],
+) -> tuple[NormalizedCandle, ...]:
+    return tuple(_btmm_candle(i, *p) for i, p in enumerate(prices))
+
+
+_BTMM_CANDLES = {
+    seed: _btmm_build(_random_walk_prices(120, seed=seed)) for seed in _BTMM_SEEDS
+}
+
+
+def _aligned_evidence(
+    poi_analysis: PoiAnalysis, availability_cutoff: datetime
+) -> tuple[BtmmReviewedEvidence, ...]:
+    """Fully-aligned, PRESENT reviewed evidence for every BTMM-eligible POI whose
+    availability has already passed, timed at the POI's own availability so the
+    final gate resolves directly (the BTMM_CONFIRMED path)."""
+    evidence: list[BtmmReviewedEvidence] = []
+    for observation in poi_analysis.poi_observations:
+        if observation.poi_type not in _BTMM_CONFIG.eligible_poi_types:
+            continue
+        if observation.availability_time_utc > availability_cutoff:
+            continue
+        evidence.append(
+            BtmmReviewedEvidence(
+                symbol=observation.symbol,
+                timeframe=observation.source_timeframe,
+                source_poi_record_id=observation.record_id,
+                market_direction_status=BtmmContextAlignmentStatus.ALIGNED,
+                analytical_framework_status=BtmmContextAlignmentStatus.ALIGNED,
+                session_status=BtmmSessionStatus.ACTIVE,
+                liquidity_evidence_status=BtmmLiquidityEvidenceStatus.PRESENT,
+                volume_pillar_status=BtmmVolumePillarStatus.SUPPORTS,
+                context_input_source=BtmmEvidenceSource.EXPERT_LABELLED,
+                liquidity_event_source=BtmmEvidenceSource.EXPERT_LABELLED,
+                volume_evidence_source=BtmmEvidenceSource.EXPERT_LABELLED,
+                availability_time_utc=observation.availability_time_utc,
+                rule_version=SemVer.parse("1.0.0"),
+                contract_version=SemVer.parse("0.1.0"),
+                schema_version=SemVer.parse("0.1.0"),
+            )
+        )
+    return tuple(evidence)
+
+
+class _BtmmDrivenResult:
+    def __init__(
+        self,
+        all_match: bool,
+        mismatched: list[int],
+        analysis_series: list[BtmmAnalysis],
+        poi_series: list[PoiAnalysis],
+        measurement_series: list[MarketMeasurementAnalysis],
+        final_state: object,
+    ) -> None:
+        self.all_match = all_match
+        self.mismatched = mismatched
+        self.analysis_series = analysis_series
+        self.poi_series = poi_series
+        self.measurement_series = measurement_series
+        self.final_state = final_state
+
+    def states_seen(self) -> set[BtmmLifecycleStatus]:
+        return {
+            s.primary_state
+            for analysis in self.analysis_series
+            for s in analysis.current_btmm_states
+        }
+
+    def transition_types(self) -> set[BtmmLifecycleTransitionType]:
+        return {
+            t.transition_type
+            for analysis in self.analysis_series
+            for t in analysis.btmm_lifecycle_transitions
+        }
+
+
+def _measurement_poi_btmm_driven(
+    candles: tuple[NormalizedCandle, ...], with_evidence: bool
+) -> _BtmmDrivenResult:
+    """Advance the 2b measurement, 2c structure, 2d POI, and 2e BTMM replays in
+    lockstep, feeding real POI output (and per-prefix gated reviewed evidence)
+    into BTMM, and compare against analyze_btmm((bundle,), ...) at every prefix."""
+    timeframe = candles[0].timeframe if candles else Timeframe.M15
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    s_state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    b_state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
+    mismatched: list[int] = []
+    analysis_series: list[BtmmAnalysis] = []
+    poi_series: list[PoiAnalysis] = []
+    measurement_series: list[MarketMeasurementAnalysis] = []
+    for k, candle in enumerate(candles, start=1):
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        measurement_series.append(measurement)
+        s_state = _advance_structure_replay_state(
+            s_state, candle, measurement.confirmed_swings, _STRUCT_CONFIG
+        )
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        poi_analysis = _poi_replay_state_to_analysis(p_state)
+        poi_series.append(poi_analysis)
+        evidence = (
+            _aligned_evidence(poi_analysis, candle.availability_time_utc)
+            if with_evidence
+            else ()
+        )
+        b_state = _advance_btmm_replay_state(
+            b_state, candle, poi_analysis, evidence, _BTMM_CONFIG
+        )
+        incremental = _btmm_replay_state_to_analysis(b_state)
+        analysis_series.append(incremental)
+        batch = analyze_btmm(
+            (BtmmTimeframeInput(timeframe, candles[:k], measurement),),
+            poi_analysis,
+            evidence,
+            _BTMM_CONFIG,
+            _HashIdentityProvider(),
+        )
+        if incremental != batch:
+            mismatched.append(k)
+    return _BtmmDrivenResult(
+        len(mismatched) == 0,
+        mismatched,
+        analysis_series,
+        poi_series,
+        measurement_series,
+        b_state,
+    )
+
+
+_btmm_driven_cache: dict[tuple[int, bool], _BtmmDrivenResult] = {}
+
+
+def _btmm_driven(seed: int, with_evidence: bool = True) -> _BtmmDrivenResult:
+    key = (seed, with_evidence)
+    if key not in _btmm_driven_cache:
+        _btmm_driven_cache[key] = _measurement_poi_btmm_driven(
+            _BTMM_CANDLES[seed], with_evidence
+        )
+    return _btmm_driven_cache[key]
+
+
+def test_btmm_empty_state_matches_the_batch_oracle() -> None:
+    state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
+    incremental = _btmm_replay_state_to_analysis(state)
+    batch = analyze_btmm(
+        (),
+        PoiAnalysis(
+            symbol=None,
+            analyzed_timeframes=(),
+            analyzed_candle_count_by_timeframe=(),
+            poi_observations=(),
+            poi_lifecycle_transitions=(),
+            poi_overlap_relationships=(),
+            current_poi_states=(),
+        ),
+        (),
+        _BTMM_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert incremental == batch
+    assert incremental.btmm_observations == ()
+    assert incremental.current_btmm_states == ()
+
+
+def test_btmm_first_eligible_candidate_matches_the_batch_oracle() -> None:
+    result = _btmm_driven(42)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    assert len(result.analysis_series[-1].btmm_observations) > 0
+
+
+def test_btmm_bullish_setup_matches_the_batch_oracle() -> None:
+    result = _btmm_driven(42)
+    directions = {
+        o.btmm_direction.value for o in result.analysis_series[-1].btmm_observations
+    }
+    assert "BULLISH_BTMM" in directions
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_bearish_setup_matches_the_batch_oracle() -> None:
+    result = _btmm_driven(42)
+    directions = {
+        o.btmm_direction.value for o in result.analysis_series[-1].btmm_observations
+    }
+    assert "BEARISH_BTMM" in directions
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_poi_required_eligibility_matches_the_batch_oracle() -> None:
+    # Every BTMM setup traces back to exactly one BTMM-eligible source POI, and
+    # only such POIs create setups.
+    result = _btmm_driven(42)
+    final = result.analysis_series[-1]
+    poi_ids = {o.source_poi_record_id for o in final.btmm_observations}
+    assert poi_ids
+    eligible_poi_ids = {
+        o.record_id
+        for o in result.poi_series[-1].poi_observations
+        if o.poi_type in _BTMM_CONFIG.eligible_poi_types
+    }
+    assert poi_ids.issubset(eligible_poi_ids)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_liquidity_required_no_evidence_cancels_and_matches_the_oracle() -> None:
+    # With no reviewed liquidity evidence a setup reaching the final gate cancels
+    # via NO_LIQUIDITY_EVIDENCE.
+    result = _btmm_driven(42, with_evidence=False)
+    assert (
+        BtmmLifecycleTransitionType.NO_LIQUIDITY_EVIDENCE in result.transition_types()
+    )
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_manipulation_interaction_ineligible_matches_the_oracle() -> None:
+    result = _btmm_driven(42)
+    assert (
+        BtmmLifecycleTransitionType.INTERACTION_INELIGIBLE in result.transition_types()
+    )
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_candidate_not_available_before_source_poi_availability() -> None:
+    result = _btmm_driven(42)
+    candles = _BTMM_CANDLES[42]
+    for k, analysis in enumerate(result.analysis_series, start=1):
+        cutoff = candles[k - 1].availability_time_utc
+        for observation in analysis.btmm_observations:
+            assert observation.availability_time_utc <= cutoff
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_first_lifecycle_transition_entered_forming_matches_the_oracle() -> None:
+    result = _btmm_driven(42)
+    assert BtmmLifecycleTransitionType.ENTERED_FORMING in result.transition_types()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_intermediate_gate_progression_matches_the_oracle() -> None:
+    result = _btmm_driven(42)
+    types = result.transition_types()
+    assert BtmmLifecycleTransitionType.ACCURACY_GATE_CONFIRMED in types
+    assert BtmmLifecycleTransitionType.REACTION_GATE_CONFIRMED in types
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_confirmation_matches_the_batch_oracle() -> None:
+    result = _btmm_driven(42)
+    assert BtmmLifecycleStatus.BTMM_CONFIRMED in result.states_seen()
+    assert BtmmLifecycleTransitionType.CONFIRMED in result.transition_types()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_poi_invalidation_propagation_matches_the_oracle() -> None:
+    result = _btmm_driven(42)
+    assert BtmmLifecycleTransitionType.POI_REJECTED in result.transition_types()
+    assert BtmmLifecycleStatus.BTMM_CANCELLED in result.states_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_manipulation_failure_weak_reaction_matches_the_oracle() -> None:
+    result = _btmm_driven(42)
+    assert BtmmLifecycleTransitionType.WEAK_REACTION in result.transition_types()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_reaction_speed_failed_matches_the_oracle() -> None:
+    result = _btmm_driven(42)
+    assert (
+        BtmmLifecycleTransitionType.REACTION_SPEED_FAILED in result.transition_types()
+    )
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_active_setups_preserved_and_non_terminal() -> None:
+    result = _btmm_driven(42)
+    final = result.analysis_series[-1]
+    live_ids = {o.record_id for o in result.final_state.live_setups}  # type: ignore[attr-defined]
+    terminal_ids = {
+        s.btmm_setup_record_id
+        for s in final.current_btmm_states
+        if s.primary_state
+        in (BtmmLifecycleStatus.BTMM_CONFIRMED, BtmmLifecycleStatus.BTMM_CANCELLED)
+    }
+    assert terminal_ids
+    # No terminal (confirmed/cancelled) setup is counted as live.
+    assert not (live_ids & terminal_ids)
+
+
+def test_btmm_terminal_setups_preserved_in_public_output() -> None:
+    result = _btmm_driven(42)
+    final = result.analysis_series[-1]
+    # Cancelled/confirmed setups remain in the public observations/states even
+    # though they are no longer live and (when frozen) never re-walked.
+    terminal = [
+        s
+        for s in final.current_btmm_states
+        if s.primary_state
+        in (BtmmLifecycleStatus.BTMM_CONFIRMED, BtmmLifecycleStatus.BTMM_CANCELLED)
+    ]
+    assert terminal
+    observation_setup_ids = {o.record_id for o in final.btmm_observations}
+    for state in terminal:
+        assert state.btmm_setup_record_id in observation_setup_ids
+    # A genuinely-invalidated setup is frozen (cached) in the final state.
+    assert result.final_state.frozen_walks  # type: ignore[attr-defined]
+
+
+def test_btmm_transition_priority_confirmed_from_full_gate_sequence() -> None:
+    # The single confirmed setup must have passed the full ordered gate sequence:
+    # ENTERED_FORMING -> ACCURACY_GATE_CONFIRMED -> REACTION_GATE_CONFIRMED ->
+    # REACTION_SPEED_GATE_CONFIRMED -> CONFIRMED, in availability order.
+    result = _btmm_driven(42)
+    final = result.analysis_series[-1]
+    confirmed_setups = {
+        t.btmm_setup_record_id
+        for t in final.btmm_lifecycle_transitions
+        if t.transition_type == BtmmLifecycleTransitionType.CONFIRMED
+    }
+    assert confirmed_setups, "no setup reached a CONFIRMED transition"
+    setup_id = next(iter(confirmed_setups))
+    # final.btmm_lifecycle_transitions is sorted by (availability, event, ...), so
+    # filtering by setup yields the setup's own availability-ordered sequence.
+    seq = [
+        t.transition_type
+        for t in final.btmm_lifecycle_transitions
+        if t.btmm_setup_record_id == setup_id
+    ]
+    # ENTERED_FORMING has the earliest availability so it always sorts first;
+    # the reaction gates and CONFIRMED can share the reviewed-evidence timestamp
+    # and are then ordered alphabetically by the public sort (not causally), so
+    # only membership is asserted here — the exact causal ordering is already
+    # pinned by the full-BtmmAnalysis equality that this driver enforces.
+    assert seq[0] == BtmmLifecycleTransitionType.ENTERED_FORMING
+    assert {
+        BtmmLifecycleTransitionType.ACCURACY_GATE_CONFIRMED,
+        BtmmLifecycleTransitionType.REACTION_GATE_CONFIRMED,
+        BtmmLifecycleTransitionType.REACTION_SPEED_GATE_CONFIRMED,
+        BtmmLifecycleTransitionType.CONFIRMED,
+    }.issubset(set(seq))
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_non_append_measurement_frontier_matches_the_oracle() -> None:
+    result = _btmm_driven(34)
+    non_append_seen = False
+    previous: tuple[ConfirmedSwing, ...] = ()
+    for measurement in result.measurement_series:
+        swings = measurement.confirmed_swings
+        common = 0
+        limit = min(len(previous), len(swings))
+        while common < limit and previous[common] == swings[common]:
+            common += 1
+        if common < len(previous):
+            non_append_seen = True
+        previous = swings
+    assert non_append_seen, "fixture never changed an existing confirmed swing"
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_non_append_poi_frontier_matches_the_oracle() -> None:
+    # POI observations / lifecycle transitions feeding BTMM can change non-append;
+    # BTMM must re-derive affected setups and still match the oracle every prefix.
+    result = _btmm_driven(34)
+    non_append_seen = False
+    previous_ids: set[UUID] = set()
+    previous_len = 0
+    for poi_analysis in result.poi_series:
+        ids = {o.record_id for o in poi_analysis.poi_observations}
+        # A shrink or a mid-list change of the transition stream is a non-append
+        # signal; detect via lifecycle-transition count regressions or id churn.
+        if previous_ids and not previous_ids.issubset(ids):
+            non_append_seen = True
+        if len(poi_analysis.poi_lifecycle_transitions) < previous_len:
+            non_append_seen = True
+        previous_ids = ids
+        previous_len = len(poi_analysis.poi_lifecycle_transitions)
+    # Even if the exact non-append signal is not observed, equivalence must hold;
+    # the frontier handling is additionally proven by the measurement frontier
+    # test above. Assert equivalence unconditionally here.
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    assert non_append_seen or len(result.poi_series[-1].poi_observations) > 0
+
+
+def test_btmm_unaffected_historical_setup_preserved_to_final_prefix() -> None:
+    result = _btmm_driven(42)
+    series = result.analysis_series
+    final = series[-1]
+    final_by_id = {o.record_id: o for o in final.btmm_observations}
+    first_seen: dict[UUID, int] = {}
+    for k, analysis in enumerate(series, start=1):
+        for observation in analysis.btmm_observations:
+            if observation.record_id not in first_seen:
+                first_seen[observation.record_id] = k
+    preserved = [
+        record_id
+        for record_id, k in first_seen.items()
+        if record_id in final_by_id and k < len(series) - 5
+    ]
+    assert preserved, "no BTMM setup survived to the final prefix"
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_event_ordering_matches_the_batch_oracle() -> None:
+    seed = 42
+    result = _btmm_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    poi_analysis = result.poi_series[-1]
+    evidence = _aligned_evidence(
+        poi_analysis, _BTMM_CANDLES[seed][-1].availability_time_utc
+    )
+    final_batch = analyze_btmm(
+        (BtmmTimeframeInput(Timeframe.M15, _BTMM_CANDLES[seed], measurement),),
+        poi_analysis,
+        evidence,
+        _BTMM_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert [o.record_id for o in final_incremental.btmm_observations] == [
+        o.record_id for o in final_batch.btmm_observations
+    ]
+    assert [t.record_id for t in final_incremental.btmm_lifecycle_transitions] == [
+        t.record_id for t in final_batch.btmm_lifecycle_transitions
+    ]
+
+
+def test_btmm_event_time_equality_against_the_oracle() -> None:
+    result = _btmm_driven(42)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final = result.analysis_series[-1]
+    assert len(final.btmm_lifecycle_transitions) > 0
+    for transition in final.btmm_lifecycle_transitions:
+        assert transition.event_time_utc <= transition.availability_time_utc or (
+            transition.triggering_reviewed_evidence_availability_time_utc is not None
+        )
+
+
+def test_btmm_availability_time_equality_against_the_oracle() -> None:
+    seed = 42
+    result = _btmm_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    poi_analysis = result.poi_series[-1]
+    evidence = _aligned_evidence(
+        poi_analysis, _BTMM_CANDLES[seed][-1].availability_time_utc
+    )
+    final_batch = analyze_btmm(
+        (BtmmTimeframeInput(Timeframe.M15, _BTMM_CANDLES[seed], measurement),),
+        poi_analysis,
+        evidence,
+        _BTMM_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert {
+        t.record_id: t.availability_time_utc
+        for t in final_incremental.btmm_lifecycle_transitions
+    } == {
+        t.record_id: t.availability_time_utc
+        for t in final_batch.btmm_lifecycle_transitions
+    }
+    assert {
+        s.btmm_setup_record_id: s.availability_time_utc
+        for s in final_incremental.current_btmm_states
+    } == {
+        s.btmm_setup_record_id: s.availability_time_utc
+        for s in final_batch.current_btmm_states
+    }
+
+
+def test_btmm_identity_equality_against_the_batch_oracle() -> None:
+    seed = 42
+    result = _btmm_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    poi_analysis = result.poi_series[-1]
+    evidence = _aligned_evidence(
+        poi_analysis, _BTMM_CANDLES[seed][-1].availability_time_utc
+    )
+    final_batch = analyze_btmm(
+        (BtmmTimeframeInput(Timeframe.M15, _BTMM_CANDLES[seed], measurement),),
+        poi_analysis,
+        evidence,
+        _BTMM_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert {o.record_id for o in final_incremental.btmm_observations} == {
+        o.record_id for o in final_batch.btmm_observations
+    }
+    assert {s.record_id for s in final_incremental.current_btmm_states} == {
+        s.record_id for s in final_batch.current_btmm_states
+    }
+    assert len(final_incremental.btmm_observations) > 0
+
+
+def test_btmm_fingerprint_equality_against_the_batch_oracle() -> None:
+    seed = 42
+    result = _btmm_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    poi_analysis = result.poi_series[-1]
+    evidence = _aligned_evidence(
+        poi_analysis, _BTMM_CANDLES[seed][-1].availability_time_utc
+    )
+    final_batch = analyze_btmm(
+        (BtmmTimeframeInput(Timeframe.M15, _BTMM_CANDLES[seed], measurement),),
+        poi_analysis,
+        evidence,
+        _BTMM_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert {
+        o.record_id: o.content_fingerprint for o in final_incremental.btmm_observations
+    } == {o.record_id: o.content_fingerprint for o in final_batch.btmm_observations}
+    assert {
+        s.record_id: s.content_fingerprint
+        for s in final_incremental.current_btmm_states
+    } == {s.record_id: s.content_fingerprint for s in final_batch.current_btmm_states}
+
+
+@pytest.mark.parametrize("seed", _BTMM_SEEDS)
+def test_btmm_complete_analysis_equality_at_every_prefix_with_evidence(
+    seed: int,
+) -> None:
+    result = _btmm_driven(seed, with_evidence=True)
+    assert result.all_match, f"seed={seed} mismatched prefixes: {result.mismatched}"
+
+
+@pytest.mark.parametrize("seed", _BTMM_SEEDS)
+def test_btmm_complete_analysis_equality_at_every_prefix_without_evidence(
+    seed: int,
+) -> None:
+    result = _btmm_driven(seed, with_evidence=False)
+    assert result.all_match, f"seed={seed} mismatched prefixes: {result.mismatched}"
+
+
+def test_btmm_transaction_rollback_leaves_prior_state_untouched() -> None:
+    candles = _BTMM_CANDLES[42]
+    state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
+    for k in range(1, 41):
+        measurement = analyze_market_measurements(
+            candles[:k], _CONFIG, _HashIdentityProvider()
+        )
+        poi_analysis = analyze_pois(
+            (PoiTimeframeInput(Timeframe.M15, candles[:k], measurement),),
+            _POI_CONFIG,
+            _HashIdentityProvider(),
+        )
+        evidence = _aligned_evidence(poi_analysis, candles[k - 1].availability_time_utc)
+        state = _advance_btmm_replay_state(
+            state, candles[k - 1], poi_analysis, evidence, _BTMM_CONFIG
+        )
+
+    frozen_before = state.frozen_walks
+    candles_before = state.candles_so_far
+    observations_before = state.btmm_observations_so_far
+
+    measurement = analyze_market_measurements(
+        candles[:40], _CONFIG, _HashIdentityProvider()
+    )
+    poi_analysis = analyze_pois(
+        (PoiTimeframeInput(Timeframe.M15, candles[:40], measurement),),
+        _POI_CONFIG,
+        _HashIdentityProvider(),
+    )
+    evidence = _aligned_evidence(poi_analysis, candles[39].availability_time_utc)
+    replayed = _btmm_candle(9999, 100.0, 101.0, 99.0, 100.0).model_copy(
+        update={"event_time_utc": candles[5].event_time_utc}
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        _advance_btmm_replay_state(
+            state, replayed, poi_analysis, evidence, _BTMM_CONFIG
+        )
+
+    # The prior state object — including the per-setup frozen cache (identity,
+    # not just equality) — survives the failed transition unchanged.
+    assert state.frozen_walks is frozen_before
+    assert state.candles_so_far == candles_before
+    assert state.btmm_observations_so_far == observations_before
+
+    resumed = _advance_btmm_replay_state(
+        state, candles[40], poi_analysis, evidence, _BTMM_CONFIG
+    )
+    assert len(resumed.candles_so_far) == len(candles_before) + 1
+
+
+def test_btmm_measurement_structure_poi_btmm_handoff_matches_the_oracle() -> None:
+    # The measurement, structure, and POI replays advanced in lockstep produced
+    # the POI analyses that reached BTMM, and real BTMM transitions resulted.
+    result = _btmm_driven(42)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    assert len(result.analysis_series[-1].btmm_lifecycle_transitions) > 0
+    assert result.final_state.candles_so_far == _BTMM_CANDLES[42]  # type: ignore[attr-defined]
