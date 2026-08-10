@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -27,6 +28,7 @@ from btmm_ai_scanner.poi.current_state import CurrentPoiState
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import (
     LIFECYCLE_ELIGIBLE_POI_TYPES,
+    PoiDirection,
     PoiFamily,
     PoiFreshnessStatus,
     PoiLifecycleStatus,
@@ -35,8 +37,13 @@ from btmm_ai_scanner.poi.enums import (
 )
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
 from btmm_ai_scanner.poi.lifecycle import (
+    LifecycleWalkResult,
     PoiLifecycleTransition,
     TransitionCandidate,
+    _classify_tap_count,
+    _is_breach,
+    _touches_zone,
+    _zone_reference_atr,
     run_poi_lifecycle,
 )
 from btmm_ai_scanner.poi.observation import PoiObservation
@@ -727,4 +734,605 @@ def analyze_pois(
         poi_lifecycle_transitions=lifecycle_transitions,
         poi_overlap_relationships=overlap_relationships,
         current_poi_states=tuple(current_states),
+    )
+
+
+# =====================================================================
+# Subsystem 2d: private incremental POI replay state (single timeframe).
+#
+# The public analyze_pois above is preserved byte-for-byte and remains the sole
+# semantic oracle. This section adds a private, per-timeframe incremental engine
+# that reproduces analyze_pois((single_bundle,), ...) EXACTLY at every candle
+# prefix while making the dominant cost — the per-POI lifecycle walk — genuinely
+# incremental instead of re-walking each POI's whole post-availability candle
+# stream from scratch on every candle.
+#
+# Cross-timeframe merge is a no-op within one timeframe (resolve_merges only
+# merges a child into a STRONGER-timeframe parent, and a single bundle has one
+# timeframe), so it is deferred to the 2f orchestration kernel, exactly as the
+# register's per-timeframe _PoiReplayState (§44S) and poi_states_by_timeframe
+# (§44U) design intends. Detection, merge, overlap, observation/transition
+# finalization, current-state building, and sorting all reuse the unchanged
+# batch helpers, so they are exact by construction; only the lifecycle walk is
+# made incremental. The lifecycle walk reuses the unchanged run_poi_lifecycle on
+# the candle suffix anchored at each POI's first breach — breach detection is
+# independent of the carried status, so a fresh walk over candles[first_breach:]
+# reproduces every subsequent episode identically — combined with incremental
+# tap counting and terminal-result caching. Pinned by permanent per-prefix
+# differential tests against the batch oracle.
+# =====================================================================
+
+
+def _lifecycle_tolerance(
+    candles: tuple[NormalizedCandle, ...],
+    atr_values: tuple[Decimal | None, ...],
+    index: int,
+    zone_height: Decimal,
+    min_tick: Decimal,
+    atr_multiplier: Decimal,
+    height_multiplier: Decimal,
+) -> Decimal:
+    """A faithful copy of run_poi_lifecycle's internal ``tolerance`` closure,
+    used only to detect a POI's first breach identically to the batch oracle."""
+    fallback = candles[index].high - candles[index].low
+    reference_atr = _zone_reference_atr(atr_values, index, fallback)
+    bound_a = atr_multiplier * reference_atr
+    bound_b = height_multiplier * zone_height if zone_height > 0 else bound_a
+    return max(Decimal("2") * min_tick, min(bound_a, bound_b))
+
+
+class _PoiLifecycleWalkState(NamedTuple):
+    """Per-POI incremental lifecycle state. Immutable; a new instance is built
+    each advance so a failed transition never mutates the caller's state.
+
+    Pre-breach candles are scanned once for the first breach (``scan_index``
+    cursor); from the first breach onward the unchanged run_poi_lifecycle is
+    re-run over ``candles[first_breach_index:]`` (bounded, exact) until the POI
+    reaches a terminal genuine-invalidation, whose walk output is then cached.
+    Taps/freshness/age are accumulated incrementally over ``candles[start_index:]``."""
+
+    start_index: int | None
+    start_search_index: int
+    tap_index: int | None
+    scan_index: int | None
+    first_breach_index: int | None
+    tap_count: int
+    in_tap: bool
+    terminal: bool
+    cached_transitions: tuple[TransitionCandidate, ...]
+    cached_status: PoiLifecycleStatus
+    cached_last_seen_candle: NormalizedCandle | None
+
+
+def _create_poi_lifecycle_walk_state() -> _PoiLifecycleWalkState:
+    return _PoiLifecycleWalkState(
+        start_index=None,
+        start_search_index=0,
+        tap_index=None,
+        scan_index=None,
+        first_breach_index=None,
+        tap_count=0,
+        in_tap=False,
+        terminal=False,
+        cached_transitions=(),
+        cached_status=PoiLifecycleStatus.NO_BREACH,
+        cached_last_seen_candle=None,
+    )
+
+
+def _advance_poi_lifecycle(
+    prev: _PoiLifecycleWalkState,
+    candles: tuple[NormalizedCandle, ...],
+    atr_values: tuple[Decimal | None, ...],
+    symbol: InternalSymbol,
+    timeframe: Timeframe,
+    poi_record_id: UUID,
+    direction: PoiDirection,
+    zone_top: Decimal,
+    zone_bottom: Decimal,
+    availability_time_utc: datetime,
+    configuration: PoiConfiguration,
+) -> tuple[_PoiLifecycleWalkState, LifecycleWalkResult]:
+    n = len(candles)
+    zone_height = zone_top - zone_bottom
+    min_tick = configuration.minimum_price_tick
+
+    # 1. Resolve the fixed start_index (first candle available strictly after the
+    #    POI's own availability), scanning only candles not yet examined.
+    start_index = prev.start_index
+    start_search_index = prev.start_search_index
+    tap_index = prev.tap_index
+    scan_index = prev.scan_index
+    if start_index is None:
+        idx = start_search_index
+        while idx < n:
+            if candles[idx].availability_time_utc > availability_time_utc:
+                start_index = idx
+                break
+            idx += 1
+        if start_index is None:
+            # No candle is visible after the POI's availability yet: exactly the
+            # run_poi_lifecycle start_index == len(candles) case.
+            return (
+                prev._replace(start_search_index=n),
+                LifecycleWalkResult(
+                    transitions=(),
+                    final_status=PoiLifecycleStatus.NO_BREACH,
+                    freshness_status=PoiFreshnessStatus.FRESH,
+                    tap_count=0,
+                    tap_classification=None,
+                    age_in_confirmed_bars=0,
+                    last_seen_candle=None,
+                ),
+            )
+        start_search_index = start_index
+        tap_index = start_index
+        scan_index = start_index
+
+    assert tap_index is not None
+    assert scan_index is not None
+
+    # 2. Incremental tap/freshness accumulation over candles[start_index:].
+    tap_count = prev.tap_count
+    in_tap = prev.in_tap
+    for idx in range(tap_index, n):
+        touching = _touches_zone(candles[idx], zone_top, zone_bottom)
+        if touching and not in_tap:
+            tap_count += 1
+            in_tap = True
+        elif not touching:
+            in_tap = False
+    tap_index = n
+
+    freshness_status = (
+        PoiFreshnessStatus.INTERACTED if tap_count > 0 else PoiFreshnessStatus.FRESH
+    )
+    tap_classification = _classify_tap_count(tap_count)
+    age_in_confirmed_bars = max(0, n - start_index)
+
+    # 3. Breach walk (transitions / final_status / last_seen).
+    terminal = prev.terminal
+    first_breach_index = prev.first_breach_index
+    cached_transitions = prev.cached_transitions
+    cached_status = prev.cached_status
+    cached_last_seen_candle = prev.cached_last_seen_candle
+
+    if terminal:
+        transitions = cached_transitions
+        final_status = cached_status
+        last_seen_candle = cached_last_seen_candle
+    else:
+        if first_breach_index is None:
+            idx = scan_index
+            while idx < n:
+                overshoot = _lifecycle_tolerance(
+                    candles,
+                    atr_values,
+                    idx,
+                    zone_height,
+                    min_tick,
+                    configuration.zone_overshoot_tolerance_atr_multiplier,
+                    configuration.zone_overshoot_tolerance_zone_height_multiplier,
+                )
+                if _is_breach(
+                    candles[idx], direction, zone_top, zone_bottom, overshoot
+                ):
+                    first_breach_index = idx
+                    break
+                idx += 1
+            scan_index = n if first_breach_index is None else first_breach_index
+
+        if first_breach_index is None:
+            transitions = ()
+            final_status = PoiLifecycleStatus.NO_BREACH
+            last_seen_candle = candles[n - 1] if start_index < n else None
+        else:
+            anchor = first_breach_index
+            walk = run_poi_lifecycle(
+                candles[anchor:],
+                atr_values[anchor:],
+                symbol,
+                timeframe,
+                poi_record_id,
+                direction,
+                zone_top,
+                zone_bottom,
+                availability_time_utc,
+                configuration,
+            )
+            transitions = walk.transitions
+            final_status = walk.final_status
+            last_seen_candle = walk.last_seen_candle
+            if final_status == PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED:
+                terminal = True
+                cached_transitions = transitions
+                cached_status = final_status
+                cached_last_seen_candle = last_seen_candle
+
+    new_state = _PoiLifecycleWalkState(
+        start_index=start_index,
+        start_search_index=start_search_index,
+        tap_index=tap_index,
+        scan_index=scan_index,
+        first_breach_index=first_breach_index,
+        tap_count=tap_count,
+        in_tap=in_tap,
+        terminal=terminal,
+        cached_transitions=cached_transitions,
+        cached_status=cached_status,
+        cached_last_seen_candle=cached_last_seen_candle,
+    )
+    result = LifecycleWalkResult(
+        transitions=transitions,
+        final_status=final_status,
+        freshness_status=freshness_status,
+        tap_count=tap_count,
+        tap_classification=tap_classification,
+        age_in_confirmed_bars=age_in_confirmed_bars,
+        last_seen_candle=last_seen_candle,
+    )
+    return new_state, result
+
+
+@dataclass
+class _PoiReplayState:
+    """Private, per-timeframe incremental POI state for subsystem 2d. Not part
+    of the public contract surface; owned exclusively by the scanner replay
+    path. analyze_pois (and run_poi_lifecycle) remain the unmodified batch
+    oracle.
+
+    §44S names three fields: timeframe, live_pois (full PoiObservation records
+    for currently non-terminal-lifecycle POIs — required because CurrentPoiState
+    carries only ids, not zone_top/zone_bottom), and current_states_by_poi. The
+    remaining fields are proven-necessary private additions mirroring the 2b/2c
+    precedent (the not-yet-built §44U event ledger will later subsume the
+    accumulated public outputs): candles_so_far rebuilds the single-timeframe
+    bundle each advance; lifecycle_states carries each POI's incremental walk;
+    the *_so_far tuples hold the finalized public outputs (classification A).
+
+    Treated immutably: _advance_poi_replay_state never mutates an existing
+    instance, so a raised exception leaves the caller's state intact."""
+
+    resolver: _IdentityResolver
+    rule_version_text: str
+    timeframe: Timeframe | None = None
+    symbol: InternalSymbol | None = None
+    candles_so_far: tuple[NormalizedCandle, ...] = ()
+    lifecycle_states: dict[UUID, _PoiLifecycleWalkState] = field(default_factory=dict)
+    live_pois: tuple[PoiObservation, ...] = ()
+    current_states_by_poi: tuple[CurrentPoiState, ...] = ()
+    poi_observations_so_far: tuple[PoiObservation, ...] = ()
+    poi_lifecycle_transitions_so_far: tuple[PoiLifecycleTransition, ...] = ()
+
+
+def _create_initial_poi_replay_state(
+    identity_provider: DerivedOutputIdentityProvider,
+    configuration: PoiConfiguration,
+) -> _PoiReplayState:
+    return _PoiReplayState(
+        resolver=_IdentityResolver(identity_provider),
+        rule_version_text=str(configuration.rule_version),
+    )
+
+
+def _advance_poi_replay_state(
+    state: _PoiReplayState,
+    candle: NormalizedCandle,
+    measurement_analysis: MarketMeasurementAnalysis,
+    configuration: PoiConfiguration,
+) -> _PoiReplayState:
+    """Advance the incremental POI state by exactly one new candle plus the
+    current single-timeframe measurement analysis (from the 2b measurement
+    replay). Transactional: every value is built from locals and the replacement
+    _PoiReplayState is constructed only at the very end, so a raised exception
+    (out-of-order candle) leaves the caller's state — including its per-POI
+    lifecycle_states — untouched. Reproduces analyze_pois((bundle,), ...) exactly
+    while advancing each POI's lifecycle incrementally rather than re-walking it
+    from scratch."""
+    if state.candles_so_far:
+        previous_candle = state.candles_so_far[-1]
+        if candle.event_time_utc <= previous_candle.event_time_utc:
+            raise UnsortedCandleSequenceError(
+                "candles must be canonically ordered by strictly increasing"
+                " event_time_utc."
+            )
+
+    new_candles = (*state.candles_so_far, candle)
+    rule_version_text = state.rule_version_text
+    resolver = state.resolver
+
+    bundle = PoiTimeframeInput(
+        timeframe=candle.timeframe,
+        candles=new_candles,
+        measurement_analysis=measurement_analysis,
+    )
+
+    # Detection + base observation finalization (reuses the unchanged batch
+    # helpers; single-timeframe merge is a no-op but is still applied for exact
+    # parity with analyze_pois).
+    all_candidates = _detect_bundle_candidates(bundle, configuration)
+    observations_list: list[PoiObservation] = []
+    for candidate in all_candidates:
+        semantic_key = _semantic_key_for_candidate(candidate, rule_version_text)
+        record_id = resolver.resolve(DerivedOutputType.POI_OBSERVATION, semantic_key)
+        provenance_id = resolver.resolve(
+            DerivedOutputType.POI_OBSERVATION, (*semantic_key, "provenance")
+        )
+        fields = _normalize_candidate_fields(candidate)
+        fields.update(
+            rule_version=configuration.rule_version,
+            contract_version=configuration.contract_version,
+            schema_version=configuration.schema_version,
+            evidence_classification=configuration.evidence_classification,
+            provenance_id=provenance_id,
+        )
+        content_fingerprint = _compute_content_fingerprint(fields)
+        observations_list.append(
+            PoiObservation(
+                record_id=record_id,
+                content_fingerprint=content_fingerprint,
+                **fields,  # type: ignore[arg-type]
+            )
+        )
+    observations = tuple(observations_list)
+
+    merged_children, effective_timeframe_overrides = resolve_merges(observations)
+    updated_observations: list[PoiObservation] = []
+    for observation in observations:
+        update: dict[str, object] = {}
+        if observation.record_id in merged_children:
+            update["merged_source_poi_record_ids"] = merged_children[
+                observation.record_id
+            ]
+        if observation.record_id in effective_timeframe_overrides:
+            update["effective_timeframe"] = effective_timeframe_overrides[
+                observation.record_id
+            ]
+        if update:
+            observation = _refingerprint(observation.model_copy(update=update))
+        updated_observations.append(observation)
+    observations = tuple(updated_observations)
+
+    atr_values = compute_atr_series(new_candles, 14)
+
+    # Lifecycle: incremental per-POI walk, carried by record_id.
+    new_lifecycle_states: dict[UUID, _PoiLifecycleWalkState] = {}
+    all_transitions: list[TransitionCandidate] = []
+    current_state_fields_by_poi: dict[UUID, dict[str, object]] = {}
+    live_pois_list: list[PoiObservation] = []
+
+    for observation in observations:
+        if observation.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
+            prev_walk = state.lifecycle_states.get(
+                observation.record_id, _create_poi_lifecycle_walk_state()
+            )
+            new_walk, walk = _advance_poi_lifecycle(
+                prev_walk,
+                new_candles,
+                atr_values,
+                observation.symbol,
+                observation.source_timeframe,
+                observation.record_id,
+                observation.direction,
+                observation.zone_top,
+                observation.zone_bottom,
+                observation.availability_time_utc,
+                configuration,
+            )
+            new_lifecycle_states[observation.record_id] = new_walk
+            all_transitions.extend(walk.transitions)
+            if walk.last_seen_candle is not None:
+                elapsed = (
+                    walk.last_seen_candle.availability_time_utc
+                    - observation.availability_time_utc
+                )
+            else:
+                elapsed = (
+                    observation.availability_time_utc
+                    - observation.availability_time_utc
+                )
+            current_state_fields_by_poi[observation.record_id] = {
+                "symbol": observation.symbol,
+                "timeframe": observation.source_timeframe,
+                "poi_record_id": observation.record_id,
+                "poi_type": observation.poi_type,
+                "direction": observation.direction,
+                "poi_lifecycle_status": walk.final_status,
+                "freshness_status": walk.freshness_status,
+                "tap_count": walk.tap_count,
+                "tap_classification": walk.tap_classification,
+                "age_start_time_utc": observation.availability_time_utc,
+                "age_in_confirmed_bars": walk.age_in_confirmed_bars,
+                "elapsed_time_since_availability": elapsed,
+                "availability_time_utc": observation.availability_time_utc,
+            }
+            if walk.final_status != PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED:
+                live_pois_list.append(observation)
+        else:
+            last_candle_time = (
+                new_candles[-1].availability_time_utc if new_candles else None
+            )
+            if last_candle_time is not None:
+                elapsed = last_candle_time - observation.availability_time_utc
+            else:
+                elapsed = (
+                    observation.availability_time_utc
+                    - observation.availability_time_utc
+                )
+            current_state_fields_by_poi[observation.record_id] = {
+                "symbol": observation.symbol,
+                "timeframe": observation.source_timeframe,
+                "poi_record_id": observation.record_id,
+                "poi_type": observation.poi_type,
+                "direction": observation.direction,
+                "poi_lifecycle_status": PoiLifecycleStatus.NOT_APPLICABLE,
+                "freshness_status": PoiFreshnessStatus.FRESH,
+                "tap_count": 0,
+                "tap_classification": None,
+                "age_start_time_utc": observation.availability_time_utc,
+                "age_in_confirmed_bars": 0,
+                "elapsed_time_since_availability": elapsed,
+                "availability_time_utc": observation.availability_time_utc,
+            }
+            live_pois_list.append(observation)
+
+    def transition_semantic_key(candidate: TransitionCandidate) -> tuple[str, ...]:
+        return (
+            candidate.symbol.value,
+            candidate.timeframe.value,
+            str(candidate.poi_record_id),
+            candidate.transition_type.value,
+            str(candidate.triggering_candle_record_id),
+            rule_version_text,
+        )
+
+    lifecycle_transitions = _finalize(
+        list(all_transitions),
+        DerivedOutputType.POI_LIFECYCLE_TRANSITION,
+        PoiLifecycleTransition,
+        transition_semantic_key,
+        lambda _c: {},
+        frozenset(),
+        configuration,
+        resolver,
+    )
+
+    latest_transition_by_poi: dict[UUID, UUID] = {}
+    for transition in lifecycle_transitions:
+        latest_transition_by_poi[transition.poi_record_id] = transition.record_id
+
+    current_states: list[CurrentPoiState] = []
+    for poi_record_id, state_fields in current_state_fields_by_poi.items():
+        symbol_value = state_fields["symbol"]
+        timeframe_value = state_fields["timeframe"]
+        poi_type_value = state_fields["poi_type"]
+        assert isinstance(symbol_value, InternalSymbol)
+        assert isinstance(timeframe_value, Timeframe)
+        assert isinstance(poi_type_value, PoiType)
+        semantic_key = (
+            symbol_value.value,
+            timeframe_value.value,
+            poi_type_value.value,
+            str(poi_record_id),
+            rule_version_text,
+        )
+        record_id = resolver.resolve(DerivedOutputType.CURRENT_POI_STATE, semantic_key)
+        provenance_id = resolver.resolve(
+            DerivedOutputType.CURRENT_POI_STATE, (*semantic_key, "provenance")
+        )
+        fields = dict(state_fields)
+        fields["latest_lifecycle_transition_id"] = latest_transition_by_poi.get(
+            poi_record_id
+        )
+        fields.update(
+            rule_version=configuration.rule_version,
+            contract_version=configuration.contract_version,
+            schema_version=configuration.schema_version,
+            evidence_classification=configuration.evidence_classification,
+            provenance_id=provenance_id,
+        )
+        content_fingerprint = _compute_content_fingerprint(fields)
+        current_states.append(
+            CurrentPoiState(
+                record_id=record_id,
+                content_fingerprint=content_fingerprint,
+                **fields,  # type: ignore[arg-type]
+            )
+        )
+
+    observations_sorted = tuple(
+        sorted(
+            observations,
+            key=lambda o: (
+                o.availability_time_utc,
+                o.source_timeframe.value,
+                o.family.value,
+                o.poi_type.value,
+                o.direction.value,
+                o.zone_bottom,
+                o.zone_top,
+                str(o.record_id),
+            ),
+        )
+    )
+    lifecycle_transitions_sorted = tuple(
+        sorted(
+            lifecycle_transitions,
+            key=lambda t: (
+                t.availability_time_utc,
+                t.event_time_utc,
+                t.transition_type.value,
+                str(t.poi_record_id),
+                str(t.record_id),
+            ),
+        )
+    )
+    current_states_sorted = tuple(
+        sorted(
+            current_states,
+            key=lambda s: (
+                s.symbol.value,
+                s.timeframe.value,
+                s.poi_type.value,
+                str(s.poi_record_id),
+            ),
+        )
+    )
+
+    return _PoiReplayState(
+        resolver=resolver,
+        rule_version_text=rule_version_text,
+        timeframe=candle.timeframe,
+        symbol=new_candles[0].symbol,
+        candles_so_far=new_candles,
+        lifecycle_states=new_lifecycle_states,
+        live_pois=tuple(live_pois_list),
+        current_states_by_poi=current_states_sorted,
+        poi_observations_so_far=observations_sorted,
+        poi_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
+    )
+
+
+def _poi_replay_state_to_analysis(state: _PoiReplayState) -> PoiAnalysis:
+    """Build the public PoiAnalysis from the incremental single-timeframe state,
+    matching analyze_pois's shape exactly — including the empty-input case.
+
+    Overlap relationships are (re)computed here rather than in the per-candle
+    advance: their ``evaluated_at_time_utc`` moves every candle, so a stored
+    per-candle value could never be reused, and the pairwise scan is O(obs^2).
+    Deferring it to materialization keeps the per-candle advance out of the
+    super-quadratic regime; under the historical-backtest FINAL_ONLY retention
+    the analysis is materialized once, so this O(obs^2) cost is paid once. The
+    result is identical to analyze_pois (compute_overlap_relationships re-sorts
+    each group internally, so the sorted-observation input is immaterial)."""
+    if not state.candles_so_far:
+        return PoiAnalysis(
+            symbol=None,
+            analyzed_timeframes=(),
+            analyzed_candle_count_by_timeframe=(),
+            poi_observations=(),
+            poi_lifecycle_transitions=(),
+            poi_overlap_relationships=(),
+            current_poi_states=(),
+        )
+    assert state.timeframe is not None
+    evaluated_at = state.candles_so_far[-1].availability_time_utc
+    overlap_relationships = tuple(
+        sorted(
+            compute_overlap_relationships(state.poi_observations_so_far, evaluated_at),
+            key=lambda r: (
+                r.evaluated_at_time_utc,
+                str(r.poi_a_record_id),
+                str(r.poi_b_record_id),
+            ),
+        )
+    )
+    return PoiAnalysis(
+        symbol=state.symbol,
+        analyzed_timeframes=(state.timeframe,),
+        analyzed_candle_count_by_timeframe=(len(state.candles_so_far),),
+        poi_observations=state.poi_observations_so_far,
+        poi_lifecycle_transitions=state.poi_lifecycle_transitions_so_far,
+        poi_overlap_relationships=overlap_relationships,
+        current_poi_states=state.current_states_by_poi,
     )

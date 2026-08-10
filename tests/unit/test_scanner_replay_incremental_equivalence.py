@@ -33,6 +33,19 @@ from btmm_ai_scanner.domain.swings import (
 )
 from btmm_ai_scanner.domain.trendlines import Trendline
 from btmm_ai_scanner.measurements.atr import compute_atr_series
+from btmm_ai_scanner.poi.analyzer import (
+    PoiAnalysis,
+    PoiTimeframeInput,
+    _advance_poi_replay_state,
+    _create_initial_poi_replay_state,
+    _poi_replay_state_to_analysis,
+    analyze_pois,
+)
+from btmm_ai_scanner.poi.configuration import PoiConfiguration
+from btmm_ai_scanner.poi.enums import (
+    PoiLifecycleStatus,
+    PoiLifecycleTransitionType,
+)
 from btmm_ai_scanner.structure.analyzer import (
     StructureAnalysis,
     _advance_structure_replay_state,
@@ -1471,3 +1484,384 @@ def test_structure_measurement_to_structure_handoff_matches_the_batch_oracle() -
     # confirmed swings, and a real transition was produced from them.
     assert result.final_state.confirmed_swings_so_far == result.swing_series[-1]  # type: ignore[attr-defined]
     assert len(result.final_state.structure_transitions_so_far) > 0  # type: ignore[attr-defined]
+
+
+# =====================================================================
+# Subsystem 2d: incremental POI state / lifecycle differential tests.
+# Every assertion compares the incremental POI engine
+# (_create_initial_poi_replay_state / _advance_poi_replay_state /
+# _poi_replay_state_to_analysis) against the UNMODIFIED batch oracle
+# analyze_pois((single_bundle,), ...) at every candle prefix — full PoiAnalysis
+# equality (observations, lifecycle transitions, overlap relationships, current
+# states; identities, fingerprints, ordering), never counts alone. The single
+# timeframe is the approved 2d unit (cross-timeframe merge is deferred to the
+# 2f kernel). Real measurement output is fed from the subsystem-2b measurement
+# replay, so these tests double as the measurement-to-POI handoff proof.
+# =====================================================================
+
+_POI_CONFIG = PoiConfiguration(minimum_price_tick=Decimal("0.01"))
+_POI_SEEDS = (42, 7, 34, 123)
+_POI_CANDLES = {
+    seed: _build(_random_walk_prices(120, seed=seed)) for seed in _POI_SEEDS
+}
+
+
+class _PoiDrivenResult:
+    def __init__(
+        self,
+        all_match: bool,
+        mismatched: list[int],
+        analysis_series: list[PoiAnalysis],
+        measurement_series: list[MarketMeasurementAnalysis],
+        final_state: object,
+    ) -> None:
+        self.all_match = all_match
+        self.mismatched = mismatched
+        self.analysis_series = analysis_series
+        self.measurement_series = measurement_series
+        self.final_state = final_state
+
+    def statuses_seen(self) -> set[PoiLifecycleStatus]:
+        return {
+            s.poi_lifecycle_status
+            for analysis in self.analysis_series
+            for s in analysis.current_poi_states
+        }
+
+    def transition_types(self) -> set[PoiLifecycleTransitionType]:
+        return {
+            t.transition_type
+            for t in self.analysis_series[-1].poi_lifecycle_transitions
+        }
+
+
+def _measurement_driven_poi(
+    candles: tuple[NormalizedCandle, ...],
+) -> _PoiDrivenResult:
+    """Advance the subsystem-2b measurement replay and the subsystem-2d POI
+    replay in lockstep, feeding real (non-append-changing) measurement output
+    into POI, and compare against analyze_pois((bundle,), ...) at every prefix."""
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    mismatched: list[int] = []
+    analysis_series: list[PoiAnalysis] = []
+    measurement_series: list[MarketMeasurementAnalysis] = []
+    for k, candle in enumerate(candles, start=1):
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        measurement_series.append(measurement)
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        incremental = _poi_replay_state_to_analysis(p_state)
+        analysis_series.append(incremental)
+        batch = analyze_pois(
+            (PoiTimeframeInput(candle.timeframe, candles[:k], measurement),),
+            _POI_CONFIG,
+            _HashIdentityProvider(),
+        )
+        if incremental != batch:
+            mismatched.append(k)
+    return _PoiDrivenResult(
+        len(mismatched) == 0,
+        mismatched,
+        analysis_series,
+        measurement_series,
+        p_state,
+    )
+
+
+_poi_driven_cache: dict[int, _PoiDrivenResult] = {}
+
+
+def _poi_driven(seed: int) -> _PoiDrivenResult:
+    if seed not in _poi_driven_cache:
+        _poi_driven_cache[seed] = _measurement_driven_poi(_POI_CANDLES[seed])
+    return _poi_driven_cache[seed]
+
+
+def test_poi_empty_state_matches_the_batch_oracle() -> None:
+    state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    incremental = _poi_replay_state_to_analysis(state)
+    batch = analyze_pois((), _POI_CONFIG, _HashIdentityProvider())
+    assert incremental == batch
+    assert incremental.poi_observations == ()
+    assert incremental.current_poi_states == ()
+
+
+def test_poi_observations_created_match_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    assert len(result.analysis_series[-1].poi_observations) > 0
+
+
+def test_poi_no_breach_lifecycle_matches_the_batch_oracle() -> None:
+    result = _poi_driven(123)
+    assert PoiLifecycleStatus.NO_BREACH in result.statuses_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_close_breach_candidate_matches_the_batch_oracle() -> None:
+    result = _poi_driven(123)
+    assert PoiLifecycleStatus.CLOSE_BREACH_CANDIDATE in result.statuses_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_reclaim_confirmed_transition_matches_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert PoiLifecycleTransitionType.RECLAIM_CONFIRMED in result.transition_types()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_displacement_after_reclaim_transition_matches_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert (
+        PoiLifecycleTransitionType.DISPLACEMENT_AFTER_RECLAIM_CONFIRMED
+        in result.transition_types()
+    )
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_false_invalidation_matches_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert PoiLifecycleStatus.FALSE_INVALIDATION_CONFIRMED in result.statuses_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_reclaim_without_displacement_matches_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert PoiLifecycleStatus.RECLAIM_WITHOUT_DISPLACEMENT in result.statuses_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_reclaim_failed_matches_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert PoiLifecycleStatus.RECLAIM_FAILED in result.statuses_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_genuine_invalidation_is_terminal_and_matches_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED in result.statuses_seen()
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    # Every POI whose current status is a genuine invalidation has a terminal,
+    # result-cached lifecycle walk in the final incremental state.
+    final = result.analysis_series[-1]
+    terminal_ids = {
+        s.poi_record_id
+        for s in final.current_poi_states
+        if s.poi_lifecycle_status == PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
+    }
+    assert terminal_ids
+    for record_id in terminal_ids:
+        assert result.final_state.lifecycle_states[record_id].terminal  # type: ignore[attr-defined]
+
+
+def test_poi_taps_and_freshness_match_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    final = result.analysis_series[-1]
+    interacted = [
+        s for s in final.current_poi_states if s.freshness_status.value == "INTERACTED"
+    ]
+    assert interacted, "fixture never produced an interacted (tapped) POI"
+    assert any(s.tap_count > 0 and s.tap_classification is not None for s in interacted)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_overlap_relationships_match_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    assert len(result.analysis_series[-1].poi_overlap_relationships) > 0
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_not_applicable_period_and_liquidity_match_the_batch_oracle() -> None:
+    result = _poi_driven(42)
+    final = result.analysis_series[-1]
+    not_applicable = [
+        s
+        for s in final.current_poi_states
+        if s.poi_lifecycle_status == PoiLifecycleStatus.NOT_APPLICABLE
+    ]
+    assert not_applicable, "fixture never produced a NOT_APPLICABLE POI"
+    period_or_liquidity = [
+        o
+        for o in final.poi_observations
+        if o.poi_type.value.endswith(("_HIGH", "_LOW"))
+        or o.poi_type.value.endswith("_LIQUIDITY")
+    ]
+    assert period_or_liquidity
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_reference_zone_from_measurement_matches_the_batch_oracle() -> None:
+    result = _poi_driven(34)
+    reference_zone_types = {
+        "SUPPORT_ZONE",
+        "RESISTANCE_ZONE",
+        "EQUAL_HIGHS_LIQUIDITY",
+        "EQUAL_LOWS_LIQUIDITY",
+    }
+    seen = {
+        o.poi_type.value
+        for o in result.analysis_series[-1].poi_observations
+        if o.poi_type.value in reference_zone_types
+    }
+    assert seen, "fixture never produced a measurement-sourced reference-zone POI"
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_non_append_measurement_frontier_matches_the_batch_oracle() -> None:
+    # The measurement engine's confirmed swings feed reference-zone POIs and can
+    # change non-append; the POI engine must re-derive the affected observations
+    # and still match the oracle at every prefix.
+    result = _poi_driven(34)
+    non_append_seen = False
+    previous: tuple[ConfirmedSwing, ...] = ()
+    for measurement in result.measurement_series:
+        swings = measurement.confirmed_swings
+        common = 0
+        limit = min(len(previous), len(swings))
+        while common < limit and previous[common] == swings[common]:
+            common += 1
+        if common < len(previous):
+            non_append_seen = True
+        previous = swings
+    assert non_append_seen, "fixture never changed an existing confirmed swing"
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_live_versus_terminal_ownership() -> None:
+    result = _poi_driven(42)
+    final = result.analysis_series[-1]
+    live_ids = {o.record_id for o in result.final_state.live_pois}  # type: ignore[attr-defined]
+    genuinely_invalidated = {
+        s.poi_record_id
+        for s in final.current_poi_states
+        if s.poi_lifecycle_status == PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
+    }
+    assert genuinely_invalidated
+    # A genuinely-invalidated POI is terminal and never counted as live.
+    assert not (live_ids & genuinely_invalidated)
+
+
+def test_poi_no_lookahead_observations_never_precede_availability() -> None:
+    candles = _POI_CANDLES[42]
+    result = _poi_driven(42)
+    for k, analysis in enumerate(result.analysis_series, start=1):
+        visible_cutoff = candles[k - 1].availability_time_utc
+        for observation in analysis.poi_observations:
+            assert observation.availability_time_utc <= visible_cutoff
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_ordering_matches_the_batch_oracle() -> None:
+    seed = 34
+    result = _poi_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    final_batch = analyze_pois(
+        (PoiTimeframeInput(Timeframe.M1, _POI_CANDLES[seed], measurement),),
+        _POI_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert [o.record_id for o in final_incremental.poi_observations] == [
+        o.record_id for o in final_batch.poi_observations
+    ]
+    assert [t.record_id for t in final_incremental.poi_lifecycle_transitions] == [
+        t.record_id for t in final_batch.poi_lifecycle_transitions
+    ]
+    assert [
+        r.evaluated_at_time_utc for r in final_incremental.poi_overlap_relationships
+    ] == [r.evaluated_at_time_utc for r in final_batch.poi_overlap_relationships]
+
+
+def test_poi_identity_equality_matches_the_batch_oracle() -> None:
+    seed = 42
+    result = _poi_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    final_batch = analyze_pois(
+        (PoiTimeframeInput(Timeframe.M1, _POI_CANDLES[seed], measurement),),
+        _POI_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert {o.record_id for o in final_incremental.poi_observations} == {
+        o.record_id for o in final_batch.poi_observations
+    }
+    assert {s.record_id for s in final_incremental.current_poi_states} == {
+        s.record_id for s in final_batch.current_poi_states
+    }
+    assert len(final_incremental.poi_observations) > 0
+
+
+def test_poi_fingerprint_equality_matches_the_batch_oracle() -> None:
+    seed = 42
+    result = _poi_driven(seed)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    measurement = result.measurement_series[-1]
+    final_batch = analyze_pois(
+        (PoiTimeframeInput(Timeframe.M1, _POI_CANDLES[seed], measurement),),
+        _POI_CONFIG,
+        _HashIdentityProvider(),
+    )
+    assert {
+        o.record_id: o.content_fingerprint for o in final_incremental.poi_observations
+    } == {o.record_id: o.content_fingerprint for o in final_batch.poi_observations}
+    assert {
+        s.record_id: s.content_fingerprint for s in final_incremental.current_poi_states
+    } == {s.record_id: s.content_fingerprint for s in final_batch.current_poi_states}
+
+
+@pytest.mark.parametrize("seed", _POI_SEEDS)
+def test_poi_complete_analysis_equality_at_every_prefix(seed: int) -> None:
+    result = _poi_driven(seed)
+    assert result.all_match, f"seed={seed} mismatched prefixes: {result.mismatched}"
+
+
+def test_poi_transaction_rollback_leaves_prior_state_untouched() -> None:
+    candles = _POI_CANDLES[42]
+    state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    for k in range(1, 41):
+        measurement = analyze_market_measurements(
+            candles[:k], _CONFIG, _HashIdentityProvider()
+        )
+        state = _advance_poi_replay_state(
+            state, candles[k - 1], measurement, _POI_CONFIG
+        )
+
+    lifecycle_states_before = state.lifecycle_states
+    candles_before = state.candles_so_far
+    observations_before = state.poi_observations_so_far
+
+    measurement = analyze_market_measurements(
+        candles[:40], _CONFIG, _HashIdentityProvider()
+    )
+    out_of_order = _candle(
+        9999,
+        100.0,
+        101.0,
+        99.0,
+        100.0,
+        event_time=candles[5].event_time_utc,
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        _advance_poi_replay_state(state, out_of_order, measurement, _POI_CONFIG)
+
+    # The prior state object — including the per-POI lifecycle dict (identity,
+    # not just equality) — survives the failed transition unchanged.
+    assert state.lifecycle_states is lifecycle_states_before
+    assert state.candles_so_far == candles_before
+    assert state.poi_observations_so_far == observations_before
+
+    resumed = _advance_poi_replay_state(state, candles[40], measurement, _POI_CONFIG)
+    assert len(resumed.candles_so_far) == len(candles_before) + 1
+
+
+def test_poi_measurement_to_poi_handoff_matches_the_batch_oracle() -> None:
+    # The measurement analyses that reached POI are exactly the subsystem-2b
+    # measurement replay's output, and real lifecycle transitions were produced.
+    result = _poi_driven(42)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    assert len(result.analysis_series[-1].poi_lifecycle_transitions) > 0
+    assert result.final_state.candles_so_far == _POI_CANDLES[42]  # type: ignore[attr-defined]
