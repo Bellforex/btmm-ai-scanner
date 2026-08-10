@@ -65,6 +65,19 @@ from btmm_ai_scanner.poi.enums import (
     PoiLifecycleStatus,
     PoiLifecycleTransitionType,
 )
+from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
+from btmm_ai_scanner.scanner.analyzer import scan_market
+from btmm_ai_scanner.scanner.configuration import (
+    ReplayConfiguration,
+    ScannerConfiguration,
+)
+from btmm_ai_scanner.scanner.enums import SnapshotRetentionPolicy
+from btmm_ai_scanner.scanner.replay import (
+    IncrementalReplayKernel,
+    ScannerReplayResult,
+    run_scanner_replay,
+)
+from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
 from btmm_ai_scanner.structure.analyzer import (
     StructureAnalysis,
     _advance_structure_replay_state,
@@ -2548,3 +2561,375 @@ def test_btmm_measurement_structure_poi_btmm_handoff_matches_the_oracle() -> Non
     assert result.all_match, f"mismatched prefixes: {result.mismatched}"
     assert len(result.analysis_series[-1].btmm_lifecycle_transitions) > 0
     assert result.final_state.candles_so_far == _BTMM_CANDLES[42]  # type: ignore[attr-defined]
+
+
+# =====================================================================
+# Subsystem 2f: IncrementalReplayKernel + event-ledger differential tests.
+# The FINAL_ONLY kernel path of run_scanner_replay is compared against the
+# UNMODIFIED batch oracle: scan_market over the full prefix, and the unchanged
+# ALL-retention loop (which calls scan_market per availability group). Never
+# the kernel against itself. Full ScannerAnalysis equality (identities,
+# fingerprints, ordering, warnings), retention semantics, and transaction
+# rollback are asserted, never counts alone.
+# =====================================================================
+
+
+def _scanner_candle(
+    index: int,
+    o: float,
+    h: float,
+    low: float,
+    c: float,
+    timeframe: Timeframe,
+    minutes: int,
+    offset: int,
+) -> NormalizedCandle:
+    event_time = _BASE_TIME + timedelta(minutes=minutes * index)
+    availability_time = event_time + timedelta(minutes=minutes)
+    return NormalizedCandle.model_validate(
+        {
+            "record_id": _record_id(offset + index),
+            "content_fingerprint": _FINGERPRINT,
+            "raw_candle_id": _RAW_CANDLE_ID,
+            "provider": "FXCM",
+            "source_reference": f"fxcm-xauusd-{timeframe.value.lower()}",
+            "source_symbol": "XAUUSD",
+            "source_timeframe": timeframe.value,
+            "symbol": InternalSymbol.XAUUSD,
+            "timeframe": timeframe,
+            "event_time_utc": event_time,
+            "availability_time_utc": availability_time,
+            "processing_time_utc": availability_time,
+            "original_event_time": event_time,
+            "original_availability_time": availability_time,
+            "original_timezone": "UTC",
+            "open": Decimal(str(o)),
+            "high": Decimal(str(h)),
+            "low": Decimal(str(low)),
+            "close": Decimal(str(c)),
+            "volume": Decimal("10"),
+            "volume_kind": CandleVolumeKind.TICK,
+            "completeness": CandleCompleteness.CONFIRMED_COMPLETE,
+            "rule_version": SemVer.parse("0.1.0"),
+            "contract_version": SemVer.parse("0.1.0"),
+            "schema_version": SemVer.parse("0.1.0"),
+            "provenance_id": _PROVENANCE_ID,
+        }
+    )
+
+
+def _scanner_build(
+    prices: list[tuple[float, float, float, float]],
+    timeframe: Timeframe,
+    minutes: int,
+    offset: int,
+) -> tuple[NormalizedCandle, ...]:
+    return tuple(
+        _scanner_candle(i, *p, timeframe, minutes, offset) for i, p in enumerate(prices)
+    )
+
+
+def _scanner_config(required_timeframes: frozenset[Timeframe]) -> ScannerConfiguration:
+    tick = Decimal("0.01")
+    return ScannerConfiguration(
+        measurement_configuration=MarketMeasurementConfiguration(
+            minimum_price_tick=tick
+        ),
+        structure_configuration=StructureConfiguration(),
+        poi_configuration=PoiConfiguration(minimum_price_tick=tick),
+        btmm_configuration=BtmmConfiguration(minimum_price_tick=tick),
+        required_timeframes=required_timeframes,
+        optional_timeframes=frozenset(),
+    )
+
+
+def _run(
+    inputs: tuple[ScannerTimeframeInput, ...],
+    config: ScannerConfiguration,
+    policy: SnapshotRetentionPolicy,
+    evidence: tuple[BtmmReviewedEvidence, ...] = (),
+    verify: bool = True,
+) -> ScannerReplayResult:
+    return run_scanner_replay(
+        inputs,
+        evidence,
+        config,
+        ReplayConfiguration(
+            snapshot_retention=policy, verify_against_direct_batch=verify
+        ),
+        _HashIdentityProvider(),
+    )
+
+
+_SINGLE_M15_INPUTS = (
+    ScannerTimeframeInput(
+        Timeframe.M15,
+        _scanner_build(_random_walk_prices(70, seed=42), Timeframe.M15, 15, 3_000_000),
+    ),
+)
+_SINGLE_M15_CONFIG = _scanner_config(frozenset({Timeframe.M15}))
+
+_MULTI_INPUTS = (
+    ScannerTimeframeInput(
+        Timeframe.M1,
+        _scanner_build(_random_walk_prices(60, seed=42), Timeframe.M1, 1, 1_000_000),
+    ),
+    ScannerTimeframeInput(
+        Timeframe.M5,
+        _scanner_build(_random_walk_prices(30, seed=7), Timeframe.M5, 5, 2_000_000),
+    ),
+)
+_MULTI_CONFIG = _scanner_config(frozenset({Timeframe.M1, Timeframe.M5}))
+
+
+def test_kernel_empty_replay_matches_the_batch_oracle() -> None:
+    config = _scanner_config(frozenset())
+    result = _run((), config, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market((), (), config, _HashIdentityProvider())
+    assert result.final_snapshot == batch
+    # The empty-inputs early return retains no snapshots (unchanged behavior).
+    assert result.snapshots == ()
+
+
+def test_kernel_single_group_matches_the_batch_oracle() -> None:
+    candles = _scanner_build(
+        _random_walk_prices(1, seed=1), Timeframe.M15, 15, 5_000_000
+    )
+    inputs = (ScannerTimeframeInput(Timeframe.M15, candles),)
+    config = _scanner_config(frozenset({Timeframe.M15}))
+    result = _run(inputs, config, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(inputs, (), config, _HashIdentityProvider())
+    assert result.final_snapshot == batch
+    assert len(result.snapshots) == 1
+
+
+def test_kernel_multiple_groups_final_matches_the_batch_oracle() -> None:
+    result = _run(
+        _SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY
+    )
+    batch = scan_market(
+        _SINGLE_M15_INPUTS, (), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+    )
+    assert result.final_snapshot == batch
+
+
+def test_kernel_multiple_timeframes_final_matches_the_batch_oracle() -> None:
+    result = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    assert result.final_snapshot == batch
+    assert len(result.final_snapshot.processed_timeframes) == 2
+
+
+def test_kernel_final_only_equals_all_loop_final_snapshot() -> None:
+    # The unchanged ALL-retention loop (scan_market per group) is the oracle.
+    final_only = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    all_policy = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.ALL)
+    assert final_only.final_snapshot == all_policy.final_snapshot
+
+
+def test_kernel_measurement_structure_poi_btmm_are_populated() -> None:
+    result = _run(
+        _SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY
+    )
+    snapshot = result.final_snapshot
+    assert len(snapshot.measurement_analyses) == 1
+    assert len(snapshot.structure_analyses) == 1
+    assert len(snapshot.measurement_analyses[0].confirmed_swings) > 0
+    assert len(snapshot.poi_analysis.poi_observations) > 0
+    assert len(snapshot.btmm_analysis.btmm_observations) > 0
+
+
+def test_kernel_cross_timeframe_poi_merge_matches_the_batch_oracle() -> None:
+    # Multi-timeframe cross-tf merge assigns merged_source_poi_record_ids; the
+    # kernel materializes it via the batch analyze_pois and must match.
+    result = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    assert (
+        result.final_snapshot.poi_analysis.poi_observations
+        == batch.poi_analysis.poi_observations
+    )
+
+
+def test_kernel_cross_timeframe_poi_overlap_matches_the_batch_oracle() -> None:
+    result = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    assert (
+        result.final_snapshot.poi_analysis.poi_overlap_relationships
+        == batch.poi_analysis.poi_overlap_relationships
+    )
+
+
+def test_kernel_multi_timeframe_btmm_matches_the_batch_oracle() -> None:
+    result = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    assert result.final_snapshot.btmm_analysis == batch.btmm_analysis
+
+
+def test_kernel_event_ledger_holds_semantic_records_not_snapshots() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    final = kernel.finalize(())
+    ledger = kernel.event_ledger()
+    # The ledger accumulates classification-A semantic records...
+    assert len(ledger.confirmed_swings) == len(
+        final.measurement_analyses[0].confirmed_swings
+    )
+    assert ledger.poi_observations == final.poi_analysis.poi_observations
+    assert ledger.btmm_observations == final.btmm_analysis.btmm_observations
+    # ...and never holds ScannerAnalysis snapshots.
+    for value in vars(ledger).values():
+        for item in value:
+            assert not isinstance(item, ScannerAnalysis)
+
+
+def test_kernel_warnings_preserved_as_empty() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+    )
+    for candle in _SINGLE_M15_INPUTS[0].candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    kernel.finalize(())
+    assert kernel.event_ledger().warnings == ()
+
+
+def test_kernel_final_only_retains_only_final_snapshot() -> None:
+    result = _run(
+        _SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY
+    )
+    assert len(result.snapshots) == 1
+    assert result.snapshots[0] == result.final_snapshot
+
+
+def test_kernel_all_retention_preserves_every_snapshot_unchanged() -> None:
+    result = _run(_SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.ALL)
+    assert len(result.snapshots) == len(_SINGLE_M15_INPUTS[0].candles)
+    assert result.snapshots[-1] == result.final_snapshot
+
+
+def test_kernel_changed_only_retention_semantics_unchanged() -> None:
+    changed = _run(
+        _SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.CHANGED_ONLY
+    )
+    all_policy = _run(
+        _SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.ALL
+    )
+    # CHANGED_ONLY is a de-duplicated subsequence of ALL's snapshots preserving
+    # the final snapshot; both share the identical final snapshot.
+    assert changed.final_snapshot == all_policy.final_snapshot
+    assert 0 < len(changed.snapshots) <= len(all_policy.snapshots)
+    assert changed.snapshots[-1] == changed.final_snapshot
+
+
+def test_kernel_scanner_replay_result_field_count_is_eleven() -> None:
+    assert len(ScannerReplayResult.model_fields) == 11
+    result = _run(
+        _SINGLE_M15_INPUTS, _SINGLE_M15_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY
+    )
+    assert isinstance(result, ScannerReplayResult)
+
+
+def test_kernel_complete_final_scanner_analysis_equality_identity_fingerprint() -> None:
+    result = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    # Whole-object equality subsumes identity + fingerprint + ordering equality.
+    assert result.final_snapshot == batch
+    assert [
+        o.record_id for o in result.final_snapshot.poi_analysis.poi_observations
+    ] == [o.record_id for o in batch.poi_analysis.poi_observations]
+    assert {
+        o.record_id: o.content_fingerprint
+        for o in result.final_snapshot.btmm_analysis.btmm_observations
+    } == {
+        o.record_id: o.content_fingerprint
+        for o in batch.btmm_analysis.btmm_observations
+    }
+
+
+def test_kernel_deterministic_rerun_equality() -> None:
+    first = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    second = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    assert first == second
+
+
+def test_kernel_no_lookahead_direct_batch_verification_finds_no_mismatch() -> None:
+    result = _run(
+        _MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY, verify=True
+    )
+    assert result.direct_batch_verified
+    assert result.detection_mismatches == ()
+
+
+def test_kernel_advance_group_transaction_rollback_leaves_state_untouched() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    for candle in candles[:10]:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+
+    state_before = kernel._state
+    ledger_before = kernel.event_ledger()
+    group_count_before = kernel.processed_group_count()
+
+    out_of_order = candles[5].model_copy(
+        update={"event_time_utc": candles[2].event_time_utc}
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        kernel.advance_group({Timeframe.M15: (out_of_order,)})
+
+    # No partial domain/ledger/snapshot state escaped: the prior kernel state
+    # object survives the failed group transition unchanged.
+    assert kernel._state is state_before
+    assert kernel.event_ledger() is ledger_before
+    assert kernel.processed_group_count() == group_count_before
+
+    kernel.advance_group({Timeframe.M15: (candles[10],)})
+    assert kernel.processed_group_count() == group_count_before + 1
+
+
+def test_kernel_same_group_cross_timeframe_visibility_matches_the_oracle() -> None:
+    # Two timeframes whose candles share availability instants must both become
+    # visible in the same group; equality against the batch oracle proves it.
+    m1 = _scanner_build(_random_walk_prices(40, seed=11), Timeframe.M1, 5, 6_000_000)
+    m5 = _scanner_build(_random_walk_prices(40, seed=13), Timeframe.M5, 5, 7_000_000)
+    inputs = (
+        ScannerTimeframeInput(Timeframe.M1, m1),
+        ScannerTimeframeInput(Timeframe.M5, m5),
+    )
+    config = _scanner_config(frozenset({Timeframe.M1, Timeframe.M5}))
+    result = _run(inputs, config, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(inputs, (), config, _HashIdentityProvider())
+    assert result.final_snapshot == batch
+
+
+@pytest.mark.parametrize("seed", (42, 7, 34, 123))
+def test_kernel_bounded_batch_replay_equivalence_across_seeds(seed: int) -> None:
+    candles = _scanner_build(
+        _random_walk_prices(80, seed=seed), Timeframe.M15, 15, 8_000_000 + seed * 1000
+    )
+    inputs = (ScannerTimeframeInput(Timeframe.M15, candles),)
+    config = _scanner_config(frozenset({Timeframe.M15}))
+    result = _run(inputs, config, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(inputs, (), config, _HashIdentityProvider())
+    assert result.final_snapshot == batch
+    assert result.snapshots == (result.final_snapshot,)
+
+
+def test_kernel_non_append_upstream_frontiers_still_match_the_oracle() -> None:
+    # A rich fixture exercises non-append measurement / structure / POI / BTMM
+    # frontiers within the replay; the kernel-materialized final snapshot must
+    # still equal the full-prefix batch oracle exactly.
+    candles = _scanner_build(
+        _random_walk_prices(90, seed=34), Timeframe.M15, 15, 9_500_000
+    )
+    inputs = (ScannerTimeframeInput(Timeframe.M15, candles),)
+    config = _scanner_config(frozenset({Timeframe.M15}))
+    result = _run(inputs, config, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(inputs, (), config, _HashIdentityProvider())
+    assert result.final_snapshot == batch
+    assert len(batch.poi_analysis.poi_lifecycle_transitions) > 0
+    assert len(batch.btmm_analysis.btmm_lifecycle_transitions) > 0
