@@ -9,6 +9,7 @@ import pytest
 
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
+from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
 from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolumeKind
 from btmm_ai_scanner.contracts.types import SemVer
 from btmm_ai_scanner.domain.analyzer import (
@@ -23,7 +24,7 @@ from btmm_ai_scanner.domain.analyzer import (
     analyze_market_measurements,
 )
 from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
-from btmm_ai_scanner.domain.enums import DerivedOutputType
+from btmm_ai_scanner.domain.enums import DerivedOutputType, SwingType
 from btmm_ai_scanner.domain.equal_levels import EqualLevelCluster
 from btmm_ai_scanner.domain.swings import (
     ConfirmedSwing,
@@ -32,6 +33,15 @@ from btmm_ai_scanner.domain.swings import (
 )
 from btmm_ai_scanner.domain.trendlines import Trendline
 from btmm_ai_scanner.measurements.atr import compute_atr_series
+from btmm_ai_scanner.structure.analyzer import (
+    StructureAnalysis,
+    _advance_structure_replay_state,
+    _create_initial_structure_replay_state,
+    _structure_replay_state_to_analysis,
+    analyze_structure_state,
+)
+from btmm_ai_scanner.structure.configuration import StructureConfiguration
+from btmm_ai_scanner.structure.enums import StructureDirection, StructureTransitionType
 
 _RAW_CANDLE_ID = UUID("0193f350-1234-7abc-8def-abcdefabcdaa")
 _PROVENANCE_ID = UUID("0193f350-1234-7abc-8def-abcdefabcdff")
@@ -847,3 +857,617 @@ def test_frontier_caches_roll_back_cleanly_on_a_domain_update_failure() -> None:
     assert state.trendline_caches is trendline_caches_before
     assert state.equal_level_clusters_so_far == clusters_before
     assert state.trendlines_so_far == trendlines_before
+
+
+# =====================================================================
+# Subsystem 2c: incremental structure state / transition differential tests.
+# Every assertion compares the incremental structure engine
+# (_create_initial_structure_replay_state / _advance_structure_replay_state /
+# _structure_replay_state_to_analysis) against the UNMODIFIED batch oracle
+# analyze_structure_state, at every controlled candle prefix — full
+# StructureAnalysis equality (identities, fingerprints, ordering, current
+# state), never counts alone. Two fixture styles are used: hand-built
+# (candles, swings) for deterministic BOS / CHoCH / priority / protected /
+# weak scenarios (mirroring test_break_and_transitions), and measurement-driven
+# real swings (reusing the subsystem-2b measurement replay) for the non-append
+# confirmed-swing frontier, supersession, and same-length content-change cases.
+# =====================================================================
+
+_STRUCT_CONFIG = StructureConfiguration()
+
+
+def _flat_candle(index: int, close: str) -> NormalizedCandle:
+    """A neutral candle whose close is `close` and whose wicks reach ±20, matching
+    the deterministic fixtures in test_break_and_transitions."""
+    value = float(close)
+    return _candle(index, value, value + 20, value - 20, value)
+
+
+def _flat_build(closes: list[str]) -> tuple[NormalizedCandle, ...]:
+    return tuple(_flat_candle(i, c) for i, c in enumerate(closes))
+
+
+def _hand_swing(
+    idx: int,
+    swing_type: SwingType,
+    price: str,
+    pivot_bar_index: int,
+    confirmation_bar_index: int,
+    candles: tuple[NormalizedCandle, ...],
+) -> ConfirmedSwing:
+    pivot_time = candles[pivot_bar_index].event_time_utc
+    confirmation_time = candles[confirmation_bar_index].availability_time_utc
+    return ConfirmedSwing(
+        record_id=_record_id(1000 + idx),
+        content_fingerprint="a" * 64,
+        symbol=InternalSymbol.XAUUSD,
+        timeframe=Timeframe.M1,
+        swing_type=swing_type,
+        pivot_price=Decimal(price),
+        pivot_bar_index=pivot_bar_index,
+        pivot_candle_record_ids=(candles[pivot_bar_index].record_id,),
+        pivot_start_time_utc=pivot_time,
+        pivot_end_time_utc=pivot_time,
+        local_confirmation_time_utc=pivot_time + timedelta(minutes=1),
+        meaningful_confirmation_time_utc=confirmation_time,
+        confirmation_candle_id=candles[confirmation_bar_index].record_id,
+        pivot_reference_atr=Decimal("1.0"),
+        pivot_tie_tolerance=Decimal("0.02"),
+        reversal_threshold=Decimal("0.5"),
+        reversal_excursion=Decimal("1"),
+        availability_time_utc=confirmation_time,
+        rule_version=SemVer.parse("1.0.0"),
+        contract_version=SemVer.parse("0.1.0"),
+        schema_version=SemVer.parse("0.1.0"),
+        evidence_classification=EvidenceClassification.ENGINEERING_PROVISIONAL,
+        provenance_id=_PROVENANCE_ID,
+    )
+
+
+def _bullish_bootstrap_swings(
+    candles: tuple[NormalizedCandle, ...],
+) -> tuple[ConfirmedSwing, ...]:
+    return (
+        _hand_swing(1, SwingType.SWING_LOW, "90", 0, 1, candles),
+        _hand_swing(2, SwingType.SWING_HIGH, "100", 2, 3, candles),
+        _hand_swing(3, SwingType.SWING_LOW, "91", 4, 5, candles),
+        _hand_swing(4, SwingType.SWING_HIGH, "101", 6, 7, candles),
+    )
+
+
+def _bearish_bootstrap_swings(
+    candles: tuple[NormalizedCandle, ...],
+) -> tuple[ConfirmedSwing, ...]:
+    return (
+        _hand_swing(1, SwingType.SWING_HIGH, "100", 0, 1, candles),
+        _hand_swing(2, SwingType.SWING_LOW, "90", 2, 3, candles),
+        _hand_swing(3, SwingType.SWING_HIGH, "99", 4, 5, candles),
+        _hand_swing(4, SwingType.SWING_LOW, "89", 6, 7, candles),
+    )
+
+
+def _swings_visible_at(
+    swings: tuple[ConfirmedSwing, ...], candle: NormalizedCandle
+) -> tuple[ConfirmedSwing, ...]:
+    """The confirmed swings a measurement engine would already expose at this
+    candle's availability instant (no look-ahead)."""
+    return tuple(
+        s
+        for s in swings
+        if s.meaningful_confirmation_time_utc <= candle.availability_time_utc
+    )
+
+
+def _hand_replay_matches_oracle(
+    candles: tuple[NormalizedCandle, ...],
+    swings: tuple[ConfirmedSwing, ...],
+) -> tuple[bool, list[int]]:
+    """Drive the incremental structure engine one candle at a time, feeding the
+    hand-built swings visible at each prefix, comparing the FULL StructureAnalysis
+    against the batch oracle at every prefix."""
+    state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    mismatched: list[int] = []
+    for k, candle in enumerate(candles, start=1):
+        visible = _swings_visible_at(swings, candle)
+        state = _advance_structure_replay_state(state, candle, visible, _STRUCT_CONFIG)
+        incremental = _structure_replay_state_to_analysis(state)
+        batch = analyze_structure_state(
+            candles[:k], visible, _STRUCT_CONFIG, _HashIdentityProvider()
+        )
+        if incremental != batch:
+            mismatched.append(k)
+    return len(mismatched) == 0, mismatched
+
+
+def _final_hand_analysis(
+    candles: tuple[NormalizedCandle, ...],
+    swings: tuple[ConfirmedSwing, ...],
+) -> StructureAnalysis:
+    return analyze_structure_state(
+        candles, swings, _STRUCT_CONFIG, _HashIdentityProvider()
+    )
+
+
+def _hand_replay_provider_matches_oracle(
+    candles: tuple[NormalizedCandle, ...],
+    provider: object,
+) -> tuple[bool, list[int], list[tuple[ConfirmedSwing, ...]]]:
+    """Like _hand_replay_matches_oracle but the confirmed-swing set at each
+    prefix is chosen by `provider(k, candles)`, letting a test drive a deliberate
+    same-length, existing-position content change (as a measurement supersession
+    would) and confirm the frontier reprocesses it to the oracle exactly."""
+    state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    mismatched: list[int] = []
+    swing_series: list[tuple[ConfirmedSwing, ...]] = []
+    for k, candle in enumerate(candles, start=1):
+        swings = provider(k, candles)  # type: ignore[operator]
+        swing_series.append(swings)
+        state = _advance_structure_replay_state(state, candle, swings, _STRUCT_CONFIG)
+        incremental = _structure_replay_state_to_analysis(state)
+        batch = analyze_structure_state(
+            candles[:k], swings, _STRUCT_CONFIG, _HashIdentityProvider()
+        )
+        if incremental != batch:
+            mismatched.append(k)
+    return len(mismatched) == 0, mismatched, swing_series
+
+
+class _MeasurementDrivenResult:
+    def __init__(
+        self,
+        all_match: bool,
+        mismatched: list[int],
+        swing_series: list[tuple[ConfirmedSwing, ...]],
+        analysis_series: list[StructureAnalysis],
+        final_state: object,
+    ) -> None:
+        self.all_match = all_match
+        self.mismatched = mismatched
+        self.swing_series = swing_series
+        self.analysis_series = analysis_series
+        self.final_state = final_state
+
+
+def _measurement_driven_structure(
+    candles: tuple[NormalizedCandle, ...],
+) -> _MeasurementDrivenResult:
+    """Advance the subsystem-2b measurement replay and the subsystem-2c
+    structure replay in lockstep, feeding real (non-append-changing) confirmed
+    swings into structure, and compare against the batch oracle at every
+    prefix."""
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    s_state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    mismatched: list[int] = []
+    swing_series: list[tuple[ConfirmedSwing, ...]] = []
+    analysis_series: list[StructureAnalysis] = []
+    for k, candle in enumerate(candles, start=1):
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        swings = m_state.confirmed_swings_so_far
+        swing_series.append(swings)
+        s_state = _advance_structure_replay_state(
+            s_state, candle, swings, _STRUCT_CONFIG
+        )
+        incremental = _structure_replay_state_to_analysis(s_state)
+        analysis_series.append(incremental)
+        batch = analyze_structure_state(
+            candles[:k], swings, _STRUCT_CONFIG, _HashIdentityProvider()
+        )
+        if incremental != batch:
+            mismatched.append(k)
+    return _MeasurementDrivenResult(
+        len(mismatched) == 0, mismatched, swing_series, analysis_series, s_state
+    )
+
+
+_STRUCT_FRONTIER_SEEDS = (42, 7, 99, 123, 34)
+_STRUCT_MEASUREMENT_CANDLES = {
+    seed: _build(_random_walk_prices(180, seed=seed)) for seed in _STRUCT_FRONTIER_SEEDS
+}
+
+
+def test_structure_empty_state_matches_the_batch_oracle() -> None:
+    state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    incremental = _structure_replay_state_to_analysis(state)
+    batch = analyze_structure_state((), (), _STRUCT_CONFIG, _HashIdentityProvider())
+    assert incremental == batch
+    assert incremental.current_state is None
+    assert incremental.analyzed_candle_count == 0
+
+
+def test_structure_initial_protected_high_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 9)
+    swings = _bearish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert final.current_state is not None
+    assert final.current_state.direction == StructureDirection.BEARISH
+    assert final.current_state.active_protected_high_swing_id == swings[2].record_id
+
+
+def test_structure_initial_protected_low_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 9)
+    swings = _bullish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert final.current_state is not None
+    assert final.current_state.direction == StructureDirection.BULLISH
+    assert final.current_state.active_protected_low_swing_id == swings[2].record_id
+
+
+def test_structure_initial_weak_high_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 9)
+    swings = _bullish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert final.current_state is not None
+    assert final.current_state.active_weak_high_swing_id == swings[3].record_id
+
+
+def test_structure_initial_weak_low_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 9)
+    swings = _bearish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert final.current_state is not None
+    assert final.current_state.active_weak_low_swing_id == swings[3].record_id
+
+
+def test_structure_bullish_bos_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 8 + ["110"])
+    swings = _bullish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert len(final.structure_transitions) == 1
+    assert final.structure_transitions[0].transition_type == (
+        StructureTransitionType.BULLISH_BOS
+    )
+
+
+def test_structure_bearish_bos_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 8 + ["70"])
+    swings = _bearish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert len(final.structure_transitions) == 1
+    assert final.structure_transitions[0].transition_type == (
+        StructureTransitionType.BEARISH_BOS
+    )
+
+
+def test_structure_bullish_choch_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 8 + ["150"])
+    swings = _bearish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert len(final.structure_transitions) == 1
+    transition = final.structure_transitions[0]
+    assert transition.transition_type == StructureTransitionType.BULLISH_CHOCH
+    assert final.current_state is not None
+    assert final.current_state.direction == StructureDirection.BULLISH
+
+
+def test_structure_bearish_choch_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 8 + ["30"])
+    swings = _bullish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert len(final.structure_transitions) == 1
+    transition = final.structure_transitions[0]
+    assert transition.transition_type == StructureTransitionType.BEARISH_CHOCH
+    assert final.current_state is not None
+    assert final.current_state.direction == StructureDirection.BEARISH
+
+
+def test_structure_bos_versus_choch_priority_matches_the_batch_oracle() -> None:
+    # weak_high (75) priced BELOW protected_low (91): a single close (80) breaches
+    # both; CHoCH must win, BOS must never also fire for the same candle.
+    candles = _flat_build(["95"] * 8 + ["80"])
+    swings = (
+        _hand_swing(1, SwingType.SWING_LOW, "90", 0, 1, candles),
+        _hand_swing(2, SwingType.SWING_HIGH, "70", 2, 3, candles),
+        _hand_swing(3, SwingType.SWING_LOW, "91", 4, 5, candles),
+        _hand_swing(4, SwingType.SWING_HIGH, "75", 6, 7, candles),
+    )
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert len(final.structure_transitions) == 1
+    assert final.structure_transitions[0].transition_type == (
+        StructureTransitionType.BEARISH_CHOCH
+    )
+
+
+def test_structure_one_transition_per_candle_matches_the_batch_oracle() -> None:
+    # 102 breaks weak_high (101) but does not cross protected_low (91): exactly
+    # one BOS, never two transitions, for the breaking candle.
+    candles = _flat_build(["95"] * 8 + ["102"])
+    swings = _bullish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    for candle in candles:
+        state = _advance_structure_replay_state(
+            state, candle, _swings_visible_at(swings, candle), _STRUCT_CONFIG
+        )
+    assert len(state.structure_transitions_so_far) == 1
+
+
+def test_structure_protected_level_replacement_matches_the_batch_oracle() -> None:
+    # A bullish CHoCH breaks the active protected_high and installs a fresh
+    # protected_low; the replacement must match the oracle at every prefix.
+    candles = _flat_build(["95"] * 8 + ["150"])
+    swings = _bearish_bootstrap_swings(candles)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert final.current_state is not None
+    assert final.current_state.active_protected_low_swing_id == swings[3].record_id
+    assert final.current_state.active_protected_high_swing_id is None
+
+
+def test_structure_weak_level_replacement_matches_the_batch_oracle() -> None:
+    # First BOS retires the initial weak_high; an intervening LOW keeps
+    # alternation; a replacement HIGH is later broken by a subsequent candle.
+    candles = _flat_build(["95"] * 8 + ["110", "95", "95", "95", "120", "95", "120"])
+    bootstrap = _bullish_bootstrap_swings(candles)
+    pullback_low = _hand_swing(5, SwingType.SWING_LOW, "93", 9, 10, candles)
+    replacement_high = _hand_swing(6, SwingType.SWING_HIGH, "115", 11, 12, candles)
+    swings = (*bootstrap, pullback_low, replacement_high)
+    matched, mismatched = _hand_replay_matches_oracle(candles, swings)
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, swings)
+    assert len(final.structure_transitions) == 2
+    assert final.structure_transitions[1].broken_swing_id == replacement_high.record_id
+
+
+def test_structure_swing_supersession_matches_the_batch_oracle() -> None:
+    # Supersession / out-of-order confirmation rewrites an already-emitted
+    # confirmed swing's content (a later resolution can insert or replace at a
+    # MIDDLE list position, changing an existing entry's value), which the
+    # structure frontier must invalidate and replay rather than treat as
+    # append-only. Detected as a full-value change at an existing index.
+    candles = _STRUCT_MEASUREMENT_CANDLES[34]
+    result = _measurement_driven_structure(candles)
+    superseded_seen = False
+    previous: tuple[ConfirmedSwing, ...] = ()
+    for swings in result.swing_series:
+        common = 0
+        limit = min(len(previous), len(swings))
+        while common < limit and previous[common] == swings[common]:
+            common += 1
+        if common < len(previous):
+            superseded_seen = True
+        previous = swings
+    assert superseded_seen, "fixture never rewrote a prior confirmed-swing entry"
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_structure_same_length_swing_content_replacement_matches_the_batch_oracle() -> (
+    None
+):
+    # A same-length, same-position content rewrite of an already-confirmed swing
+    # is a genuine but (per subsystem 2b) not-reliably-reproducible outcome of
+    # bounded synthetic measurement fixtures, so it is driven deterministically
+    # here: from candle 10 onward the open HIGH run's representative extends to a
+    # higher extreme (price 101 -> 104), rewriting confirmed swing #4 in place
+    # (same list length, same index 3). The frontier must reprocess from that
+    # event and still match the oracle at every prefix.
+    candles = _flat_build(["95"] * 8 + ["96", "97", "98", "97", "96", "97"])
+    base = _bullish_bootstrap_swings(candles)
+    raised = _hand_swing(7, SwingType.SWING_HIGH, "104", 6, 7, candles)
+
+    def provider(
+        k: int, cs: tuple[NormalizedCandle, ...]
+    ) -> tuple[ConfirmedSwing, ...]:
+        visible = _swings_visible_at(base, cs[k - 1])
+        if len(visible) == 4 and k >= 10:
+            visible = (*visible[:3], raised)
+        return visible
+
+    matched, mismatched, swing_series = _hand_replay_provider_matches_oracle(
+        candles, provider
+    )
+    same_length_change_seen = False
+    previous: tuple[ConfirmedSwing, ...] = ()
+    for swings in swing_series:
+        if len(swings) == len(previous) and swings != previous and previous != ():
+            same_length_change_seen = True
+        previous = swings
+    assert same_length_change_seen, (
+        "fixture never produced a same-length confirmed-swing content change"
+    )
+    assert matched, f"mismatched prefixes: {mismatched}"
+
+
+def test_structure_non_append_swing_frontier_matches_the_batch_oracle() -> None:
+    candles = _STRUCT_MEASUREMENT_CANDLES[7]
+    result = _measurement_driven_structure(candles)
+    non_append_seen = False
+    previous: tuple[ConfirmedSwing, ...] = ()
+    for swings in result.swing_series:
+        common = 0
+        limit = min(len(previous), len(swings))
+        while common < limit and previous[common] == swings[common]:
+            common += 1
+        if common < len(previous):
+            non_append_seen = True
+        previous = swings
+    assert non_append_seen, (
+        "fixture never changed an existing confirmed-swing entry (non-append)"
+    )
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+
+
+def test_structure_no_event_sequence_matches_the_batch_oracle() -> None:
+    candles = _flat_build(["95"] * 12)
+    matched, mismatched = _hand_replay_matches_oracle(candles, ())
+    assert matched, f"mismatched prefixes: {mismatched}"
+    final = _final_hand_analysis(candles, ())
+    assert final.structure_transitions == ()
+    assert final.current_state is not None
+    assert final.current_state.direction == StructureDirection.UNDETERMINED
+
+
+def test_structure_event_ordering_matches_the_batch_oracle() -> None:
+    candles = _STRUCT_MEASUREMENT_CANDLES[99]
+    result = _measurement_driven_structure(candles)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    final_batch = analyze_structure_state(
+        candles, result.swing_series[-1], _STRUCT_CONFIG, _HashIdentityProvider()
+    )
+    assert len(final_batch.structure_transitions) > 0, "fixture produced no transition"
+    assert [t.record_id for t in final_incremental.structure_transitions] == [
+        t.record_id for t in final_batch.structure_transitions
+    ]
+    assert [r.record_id for r in final_incremental.swing_relationships] == [
+        r.record_id for r in final_batch.swing_relationships
+    ]
+
+
+def test_structure_event_time_equality_against_the_batch_oracle() -> None:
+    candles = _STRUCT_MEASUREMENT_CANDLES[123]
+    result = _measurement_driven_structure(candles)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    final_batch = analyze_structure_state(
+        candles, result.swing_series[-1], _STRUCT_CONFIG, _HashIdentityProvider()
+    )
+    assert len(final_batch.structure_transitions) > 0
+    assert {
+        t.record_id: t.event_time_utc for t in final_incremental.structure_transitions
+    } == {t.record_id: t.event_time_utc for t in final_batch.structure_transitions}
+
+
+def test_structure_availability_time_equality_against_the_batch_oracle() -> None:
+    candles = _STRUCT_MEASUREMENT_CANDLES[123]
+    result = _measurement_driven_structure(candles)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    final_batch = analyze_structure_state(
+        candles, result.swing_series[-1], _STRUCT_CONFIG, _HashIdentityProvider()
+    )
+    assert {
+        t.record_id: t.availability_time_utc
+        for t in final_incremental.structure_transitions
+    } == {
+        t.record_id: t.availability_time_utc for t in final_batch.structure_transitions
+    }
+    assert final_incremental.current_state is not None
+    assert final_batch.current_state is not None
+    assert (
+        final_incremental.current_state.availability_time_utc
+        == final_batch.current_state.availability_time_utc
+    )
+
+
+def test_structure_identity_equality_against_the_batch_oracle() -> None:
+    candles = _STRUCT_MEASUREMENT_CANDLES[42]
+    result = _measurement_driven_structure(candles)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    final_batch = analyze_structure_state(
+        candles, result.swing_series[-1], _STRUCT_CONFIG, _HashIdentityProvider()
+    )
+    assert {t.record_id for t in final_incremental.structure_transitions} == {
+        t.record_id for t in final_batch.structure_transitions
+    }
+    assert final_incremental.current_state is not None
+    assert final_batch.current_state is not None
+    assert (
+        final_incremental.current_state.record_id == final_batch.current_state.record_id
+    )
+
+
+def test_structure_fingerprint_equality_against_the_batch_oracle() -> None:
+    candles = _STRUCT_MEASUREMENT_CANDLES[42]
+    result = _measurement_driven_structure(candles)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final_incremental = result.analysis_series[-1]
+    final_batch = analyze_structure_state(
+        candles, result.swing_series[-1], _STRUCT_CONFIG, _HashIdentityProvider()
+    )
+    assert {
+        t.record_id: t.content_fingerprint
+        for t in final_incremental.structure_transitions
+    } == {t.record_id: t.content_fingerprint for t in final_batch.structure_transitions}
+    assert final_incremental.current_state is not None
+    assert final_batch.current_state is not None
+    assert (
+        final_incremental.current_state.content_fingerprint
+        == final_batch.current_state.content_fingerprint
+    )
+
+
+@pytest.mark.parametrize("seed", _STRUCT_FRONTIER_SEEDS)
+def test_structure_complete_analysis_equality_at_every_prefix(seed: int) -> None:
+    result = _measurement_driven_structure(_STRUCT_MEASUREMENT_CANDLES[seed])
+    assert result.all_match, f"seed={seed} mismatched prefixes: {result.mismatched}"
+
+
+def test_structure_transaction_rollback_leaves_prior_state_untouched() -> None:
+    candles = _flat_build(["95"] * 8 + ["110", "95", "95"])
+    swings = _bullish_bootstrap_swings(candles)
+    state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    for candle in candles[:10]:
+        state = _advance_structure_replay_state(
+            state, candle, _swings_visible_at(swings, candle), _STRUCT_CONFIG
+        )
+
+    checkpoints_before = state.checkpoints
+    candles_before = state.candles_so_far
+    transitions_before = state.structure_transitions_so_far
+
+    replayed = _candle(
+        9999,
+        95.0,
+        115.0,
+        75.0,
+        95.0,
+        event_time=candles[5].event_time_utc,
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        _advance_structure_replay_state(
+            state, replayed, _swings_visible_at(swings, candles[9]), _STRUCT_CONFIG
+        )
+
+    # The prior state object is never mutated: the same checkpoint tuple object
+    # (identity, not just equality) survives the failed transition.
+    assert state.checkpoints is checkpoints_before
+    assert state.candles_so_far == candles_before
+    assert state.structure_transitions_so_far == transitions_before
+
+    resumed = _advance_structure_replay_state(
+        state, candles[10], _swings_visible_at(swings, candles[10]), _STRUCT_CONFIG
+    )
+    assert len(resumed.candles_so_far) == len(candles_before) + 1
+
+
+def test_structure_measurement_to_structure_handoff_matches_the_batch_oracle() -> None:
+    candles = _build(_random_walk_prices(200, seed=34))
+    result = _measurement_driven_structure(candles)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    # The swings that reached structure are exactly the measurement engine's
+    # confirmed swings, and a real transition was produced from them.
+    assert result.final_state.confirmed_swings_so_far == result.swing_series[-1]  # type: ignore[attr-defined]
+    assert len(result.final_state.structure_transitions_so_far) > 0  # type: ignore[attr-defined]
