@@ -2767,12 +2767,12 @@ def test_kernel_multi_timeframe_btmm_matches_the_batch_oracle() -> None:
 
 def test_kernel_event_ledger_holds_semantic_records_not_snapshots() -> None:
     kernel = IncrementalReplayKernel(
-        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
     )
     candles = _SINGLE_M15_INPUTS[0].candles
     for candle in candles:
         kernel.advance_group({Timeframe.M15: (candle,)})
-    final = kernel.finalize(())
+    final = kernel.finalize()
     ledger = kernel.event_ledger()
     # The ledger accumulates classification-A semantic records...
     assert len(ledger.confirmed_swings) == len(
@@ -2788,11 +2788,11 @@ def test_kernel_event_ledger_holds_semantic_records_not_snapshots() -> None:
 
 def test_kernel_warnings_preserved_as_empty() -> None:
     kernel = IncrementalReplayKernel(
-        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
     )
     for candle in _SINGLE_M15_INPUTS[0].candles:
         kernel.advance_group({Timeframe.M15: (candle,)})
-    kernel.finalize(())
+    kernel.finalize()
     assert kernel.event_ledger().warnings == ()
 
 
@@ -2865,7 +2865,7 @@ def test_kernel_no_lookahead_direct_batch_verification_finds_no_mismatch() -> No
 
 def test_kernel_advance_group_transaction_rollback_leaves_state_untouched() -> None:
     kernel = IncrementalReplayKernel(
-        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider()
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
     )
     candles = _SINGLE_M15_INPUTS[0].candles
     for candle in candles[:10]:
@@ -2933,3 +2933,181 @@ def test_kernel_non_append_upstream_frontiers_still_match_the_oracle() -> None:
     assert result.final_snapshot == batch
     assert len(batch.poi_analysis.poi_lifecycle_transitions) > 0
     assert len(batch.btmm_analysis.btmm_lifecycle_transitions) > 0
+
+
+# ---------------------------------------------------------------------
+# Subsystem 2f-a1: complete per-group orchestration + true incremental ledger.
+# ---------------------------------------------------------------------
+
+
+def test_kernel_btmm_advances_incrementally_per_group() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    setup_counts: list[int] = []
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+        btmm_state = kernel._state.btmm_states[Timeframe.M15]
+        setup_counts.append(len(btmm_state.btmm_observations_so_far))
+    # A per-group BTMM state exists after every eligible group and grows as
+    # setups are created; it is not recomputed from scratch at finalization.
+    assert setup_counts[-1] > 0
+    assert setup_counts[-1] >= setup_counts[len(setup_counts) // 2]
+    final = kernel.finalize()
+    assert len(final.btmm_analysis.btmm_observations) == setup_counts[-1]
+
+
+def test_kernel_replay_module_does_not_import_batch_analyzers() -> None:
+    import btmm_ai_scanner.scanner.replay as replay_module
+
+    # The kernel finalization uses the incremental combination, never the batch
+    # analyze_pois/analyze_btmm (oracle-only); the module does not import them.
+    assert not hasattr(replay_module, "analyze_pois")
+    assert not hasattr(replay_module, "analyze_btmm")
+
+
+def test_kernel_multi_tf_poi_current_states_match_oracle() -> None:
+    result = _run(_MULTI_INPUTS, _MULTI_CONFIG, SnapshotRetentionPolicy.FINAL_ONLY)
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    assert (
+        result.final_snapshot.poi_analysis.current_poi_states
+        == batch.poi_analysis.current_poi_states
+    )
+
+
+def test_kernel_ledger_updates_after_each_successful_group() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    distinct_ledger_sizes: set[int] = set()
+    changed = 0
+    previous_size = 0
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+        ledger = kernel.event_ledger()
+        size = sum(len(v) for v in vars(ledger).values())
+        distinct_ledger_sizes.add(size)
+        if size != previous_size:
+            changed += 1
+        previous_size = size
+    # Reconciled after every group, so it changes many times across the replay.
+    assert changed > 3
+    assert len(distinct_ledger_sizes) > 1
+
+
+def test_kernel_ledger_holds_no_duplicate_records_per_category() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+        ledger = kernel.event_ledger()
+        for name, records in vars(ledger).items():
+            if name == "warnings":
+                continue
+            record_ids = [r.record_id for r in records]
+            assert len(record_ids) == len(set(record_ids)), (
+                f"duplicate records in ledger category {name}"
+            )
+
+
+def test_kernel_ledger_reconciles_mutable_frontier_records() -> None:
+    # Measurement confirmed swings are a mutable frontier: supersession /
+    # out-of-order confirmation can replace or drop an already-emitted swing at
+    # an existing position (a non-append change in the record-id sequence). The
+    # ledger must reconcile it — replacing/removing the affected records — rather
+    # than appending, so it never accumulates duplicate or stale records.
+    candles = _btmm_build(_random_walk_prices(90, seed=34))
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    non_append_seen = False
+    previous_ids: tuple[UUID, ...] = ()
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+        current_ids = tuple(s.record_id for s in kernel.event_ledger().confirmed_swings)
+        common = 0
+        limit = min(len(previous_ids), len(current_ids))
+        while common < limit and previous_ids[common] == current_ids[common]:
+            common += 1
+        if common < len(previous_ids):
+            non_append_seen = True
+        previous_ids = current_ids
+    final = kernel.finalize()
+    final_swings = tuple(
+        s for a in final.measurement_analyses for s in a.confirmed_swings
+    )
+    # The ledger equals the current deduplicated set, never a cumulative append.
+    assert kernel.event_ledger().confirmed_swings == final_swings
+    assert non_append_seen, "fixture never exercised a mutable-frontier change"
+
+
+def test_kernel_ledger_semantic_identity_fingerprint_equal_final() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    final = kernel.finalize()
+    ledger = kernel.event_ledger()
+    # Single timeframe: no cross-timeframe merge, so the ledger record categories
+    # equal the final ScannerAnalysis (identity and fingerprint).
+    assert ledger.poi_observations == final.poi_analysis.poi_observations
+    assert (
+        ledger.poi_lifecycle_transitions == final.poi_analysis.poi_lifecycle_transitions
+    )
+    assert ledger.btmm_observations == final.btmm_analysis.btmm_observations
+    assert (
+        ledger.btmm_lifecycle_transitions
+        == final.btmm_analysis.btmm_lifecycle_transitions
+    )
+    assert {o.record_id: o.content_fingerprint for o in ledger.btmm_observations} == {
+        o.record_id: o.content_fingerprint
+        for o in final.btmm_analysis.btmm_observations
+    }
+
+
+def test_kernel_ledger_no_scanner_analysis_objects_retained() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in _SINGLE_M15_INPUTS[0].candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    kernel.finalize()
+    ledger = kernel.event_ledger()
+    for records in vars(ledger).values():
+        for item in records:
+            assert not isinstance(item, ScannerAnalysis)
+
+
+def test_kernel_full_transaction_rollback_preserves_ledger_and_state() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    for candle in candles[:12]:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+
+    state_before = kernel._state
+    ledger_before = kernel.event_ledger()
+    group_count_before = kernel.processed_group_count()
+
+    out_of_order = candles[6].model_copy(
+        update={"event_time_utc": candles[2].event_time_utc}
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        kernel.advance_group({Timeframe.M15: (out_of_order,)})
+
+    # No partial domain / combined-analysis / ledger / snapshot state escaped.
+    assert kernel._state is state_before
+    assert kernel.event_ledger() is ledger_before
+    assert kernel._state.combined_poi_analysis is state_before.combined_poi_analysis
+    assert kernel._state.combined_btmm_analysis is state_before.combined_btmm_analysis
+    assert kernel.processed_group_count() == group_count_before
+
+    kernel.advance_group({Timeframe.M15: (candles[12],)})
+    assert kernel.processed_group_count() == group_count_before + 1

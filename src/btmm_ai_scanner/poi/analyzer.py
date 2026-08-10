@@ -1336,3 +1336,147 @@ def _poi_replay_state_to_analysis(state: _PoiReplayState) -> PoiAnalysis:
         poi_overlap_relationships=overlap_relationships,
         current_poi_states=state.current_states_by_poi,
     )
+
+
+def _combine_poi_replay_states(
+    poi_states: dict[Timeframe, _PoiReplayState],
+    ordered_timeframes: tuple[Timeframe, ...],
+    *,
+    with_overlap: bool = True,
+) -> PoiAnalysis:
+    """Combine the per-timeframe incremental POI states (subsystem 2d) into the
+    multi-timeframe PoiAnalysis, reproducing analyze_pois's cross-timeframe
+    combination exactly: concatenate the per-timeframe observations, apply the
+    unchanged cross-timeframe resolve_merges (a no-op within one timeframe, so it
+    is skipped there), re-fingerprint merged observations, compute overlap, and
+    sort every output on analyze_pois's own keys. Per-timeframe detection and
+    lifecycle are already incremental; only the (bounded) cross-timeframe merge
+    runs here. `with_overlap=False` skips the O(obs^2) overlap computation for
+    callers (the per-group event-ledger reconciliation) that only need the
+    observation/transition/current-state records; the overlap is materialized
+    once at finalization. The unchanged batch analyze_pois over the full prefix
+    remains the differential oracle."""
+    active = tuple(tf for tf in ordered_timeframes if poi_states[tf].candles_so_far)
+    if not active:
+        return PoiAnalysis(
+            symbol=None,
+            analyzed_timeframes=(),
+            analyzed_candle_count_by_timeframe=(),
+            poi_observations=(),
+            poi_lifecycle_transitions=(),
+            poi_overlap_relationships=(),
+            current_poi_states=(),
+        )
+
+    per_timeframe = {
+        tf: _poi_replay_state_to_analysis(poi_states[tf]) for tf in ordered_timeframes
+    }
+
+    observations_list: list[PoiObservation] = [
+        observation
+        for tf in ordered_timeframes
+        for observation in per_timeframe[tf].poi_observations
+    ]
+    if len(active) > 1:
+        merged_children, effective_timeframe_overrides = resolve_merges(
+            tuple(observations_list)
+        )
+    else:
+        # Merge only ever pairs a child with a STRONGER-timeframe parent, so a
+        # single active timeframe can never merge: skip the O(obs^2) scan.
+        merged_children, effective_timeframe_overrides = {}, {}
+    updated_observations: list[PoiObservation] = []
+    for observation in observations_list:
+        update: dict[str, object] = {}
+        if observation.record_id in merged_children:
+            update["merged_source_poi_record_ids"] = merged_children[
+                observation.record_id
+            ]
+        if observation.record_id in effective_timeframe_overrides:
+            update["effective_timeframe"] = effective_timeframe_overrides[
+                observation.record_id
+            ]
+        if update:
+            observation = _refingerprint(observation.model_copy(update=update))
+        updated_observations.append(observation)
+
+    if with_overlap:
+        evaluated_at = max(
+            poi_states[tf].candles_so_far[-1].availability_time_utc for tf in active
+        )
+        overlap_relationships = compute_overlap_relationships(
+            tuple(updated_observations), evaluated_at
+        )
+    else:
+        overlap_relationships = ()
+    lifecycle_transitions = [
+        transition
+        for tf in ordered_timeframes
+        for transition in per_timeframe[tf].poi_lifecycle_transitions
+    ]
+    current_states = [
+        state
+        for tf in ordered_timeframes
+        for state in per_timeframe[tf].current_poi_states
+    ]
+
+    observations = tuple(
+        sorted(
+            updated_observations,
+            key=lambda o: (
+                o.availability_time_utc,
+                o.source_timeframe.value,
+                o.family.value,
+                o.poi_type.value,
+                o.direction.value,
+                o.zone_bottom,
+                o.zone_top,
+                str(o.record_id),
+            ),
+        )
+    )
+    lifecycle_transitions_sorted = tuple(
+        sorted(
+            lifecycle_transitions,
+            key=lambda t: (
+                t.availability_time_utc,
+                t.event_time_utc,
+                t.transition_type.value,
+                str(t.poi_record_id),
+                str(t.record_id),
+            ),
+        )
+    )
+    overlap_sorted = tuple(
+        sorted(
+            overlap_relationships,
+            key=lambda r: (
+                r.evaluated_at_time_utc,
+                str(r.poi_a_record_id),
+                str(r.poi_b_record_id),
+            ),
+        )
+    )
+    current_states_sorted = tuple(
+        sorted(
+            current_states,
+            key=lambda s: (
+                s.symbol.value,
+                s.timeframe.value,
+                s.poi_type.value,
+                str(s.poi_record_id),
+            ),
+        )
+    )
+
+    return PoiAnalysis(
+        symbol=poi_states[active[0]].symbol,
+        analyzed_timeframes=ordered_timeframes,
+        analyzed_candle_count_by_timeframe=tuple(
+            len(poi_states[tf].candles_so_far) for tf in ordered_timeframes
+        ),
+        poi_observations=observations,
+        poi_lifecycle_transitions=lifecycle_transitions_sorted,
+        poi_overlap_relationships=overlap_sorted,
+        current_poi_states=current_states_sorted,
+    )

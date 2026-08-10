@@ -956,3 +956,93 @@ def _btmm_replay_state_to_analysis(state: _BtmmReplayState) -> BtmmAnalysis:
         btmm_lifecycle_transitions=state.btmm_lifecycle_transitions_so_far,
         current_btmm_states=state.current_states_by_setup,
     )
+
+
+def _combine_btmm_replay_states(
+    btmm_states: dict[Timeframe, _BtmmReplayState],
+    ordered_btmm_timeframes: tuple[Timeframe, ...],
+    candle_counts: dict[Timeframe, int],
+    symbol: InternalSymbol | None,
+    combined_poi_observation_count: int,
+) -> BtmmAnalysis:
+    """Combine the per-BTMM-timeframe incremental states (subsystem 2e) into the
+    multi-timeframe BtmmAnalysis, reproducing analyze_btmm's shape exactly.
+    Setups partition by their source POI's timeframe, so concatenating the
+    per-timeframe states and re-sorting on analyze_btmm's own keys yields the
+    identical combined result. The unchanged batch analyze_btmm remains the
+    differential oracle; it is never used as the normal finalization path.
+
+    Empty guard mirrors analyze_btmm exactly: no BTMM-eligible timeframe input,
+    or no POI observations at all, => a fully empty analysis with
+    analyzed_timeframes == ()."""
+    if len(ordered_btmm_timeframes) == 0 or combined_poi_observation_count == 0:
+        return BtmmAnalysis(
+            symbol=None,
+            analyzed_timeframes=(),
+            analyzed_candle_count_by_timeframe=(),
+            btmm_observations=(),
+            btmm_lifecycle_transitions=(),
+            current_btmm_states=(),
+        )
+
+    observations = tuple(
+        observation
+        for tf in ordered_btmm_timeframes
+        for observation in btmm_states[tf].btmm_observations_so_far
+    )
+    lifecycle_transitions = tuple(
+        transition
+        for tf in ordered_btmm_timeframes
+        for transition in btmm_states[tf].btmm_lifecycle_transitions_so_far
+    )
+    current_states = tuple(
+        state
+        for tf in ordered_btmm_timeframes
+        for state in btmm_states[tf].current_states_by_setup
+    )
+
+    observations_sorted = tuple(
+        sorted(
+            observations,
+            key=lambda o: (
+                o.availability_time_utc,
+                o.source_timeframe.value,
+                o.btmm_direction.value,
+                str(o.source_poi_record_id),
+                str(o.record_id),
+            ),
+        )
+    )
+    lifecycle_transitions_sorted = tuple(
+        sorted(
+            lifecycle_transitions,
+            key=lambda t: (
+                t.availability_time_utc,
+                t.event_time_utc,
+                t.transition_type.value,
+                str(t.btmm_setup_record_id),
+                str(t.record_id),
+            ),
+        )
+    )
+    current_states_sorted = tuple(
+        sorted(
+            current_states,
+            key=lambda s: (
+                s.symbol.value,
+                s.timeframe.value,
+                str(s.btmm_setup_record_id),
+            ),
+        )
+    )
+
+    return BtmmAnalysis(
+        symbol=symbol,
+        analyzed_timeframes=ordered_btmm_timeframes,
+        analyzed_candle_count_by_timeframe=tuple(
+            candle_counts[tf] for tf in ordered_btmm_timeframes
+        ),
+        btmm_observations=observations_sorted,
+        btmm_lifecycle_transitions=lifecycle_transitions_sorted,
+        current_btmm_states=current_states_sorted,
+    )

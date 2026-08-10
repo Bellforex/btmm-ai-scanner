@@ -3,8 +3,15 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from btmm_ai_scanner.btmm.analyzer import BtmmTimeframeInput, analyze_btmm
+from btmm_ai_scanner.btmm.analyzer import (
+    BtmmAnalysis,
+    _advance_btmm_replay_state,
+    _BtmmReplayState,
+    _combine_btmm_replay_states,
+    _create_initial_btmm_replay_state,
+)
 from btmm_ai_scanner.btmm.lifecycle import BtmmLifecycleTransition
 from btmm_ai_scanner.btmm.observation import BtmmObservation
 from btmm_ai_scanner.btmm.reviewed_evidence import BtmmReviewedEvidence
@@ -30,11 +37,12 @@ from btmm_ai_scanner.domain.support_resistance import SupportResistanceZone
 from btmm_ai_scanner.domain.swings import ConfirmedSwing
 from btmm_ai_scanner.domain.trendlines import Trendline
 from btmm_ai_scanner.poi.analyzer import (
-    PoiTimeframeInput,
+    PoiAnalysis,
     _advance_poi_replay_state,
+    _combine_poi_replay_states,
     _create_initial_poi_replay_state,
+    _poi_replay_state_to_analysis,
     _PoiReplayState,
-    analyze_pois,
 )
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
 from btmm_ai_scanner.poi.observation import PoiObservation
@@ -453,37 +461,86 @@ class _ScannerEventLedger:
     warnings: tuple[str, ...] = ()
 
 
+def _reconcile_ledger_category(
+    prior: tuple[Any, ...], current: tuple[Any, ...]
+) -> tuple[Any, ...]:
+    """Reconcile one ledger category for a group by deterministic record
+    identity: unchanged records are retained (prior object), mutable-frontier
+    records whose content changed are replaced by the current record, genuinely
+    new records are added, and records no longer present are dropped. ``current``
+    is the authoritative per-record-id-deduplicated current set, so the result
+    never accumulates duplicate cumulative copies."""
+    prior_by_id = {record.record_id: record for record in prior}
+    reconciled: list[Any] = []
+    for record in current:
+        existing = prior_by_id.get(record.record_id)
+        if existing is not None and existing == record:
+            reconciled.append(existing)
+        else:
+            reconciled.append(record)
+    return tuple(reconciled)
+
+
 @dataclass
 class _ScannerOrchestrationReplayState:
     """Private per-replay kernel state (register §44U). Holds the per-timeframe
-    incremental domain states plus the accumulated visible candles — bounded by
-    real market output, never a tuple of full ScannerAnalysis snapshots."""
+    incremental measurement/structure/POI states, the per-BTMM-timeframe
+    incremental BTMM states, the accumulated visible candles, the current
+    combined multi-timeframe POI/BTMM analyses (one each, never one per group),
+    and the reconciled event ledger. Never a tuple of full ScannerAnalysis
+    snapshots."""
 
     measurement_states: dict[Timeframe, _MeasurementReplayState]
     structure_states: dict[Timeframe, _StructureReplayState]
     poi_states: dict[Timeframe, _PoiReplayState]
+    btmm_states: dict[Timeframe, _BtmmReplayState]
     visible_candles: dict[Timeframe, tuple[NormalizedCandle, ...]]
+    combined_poi_analysis: PoiAnalysis
+    combined_btmm_analysis: BtmmAnalysis
+    ledger: _ScannerEventLedger
 
 
 class IncrementalReplayKernel:
-    """Private single-pass availability-group replay engine (register §44P).
-    Not exported. Advances per-timeframe measurement→structure→POI incremental
-    states one availability group at a time; finalizes exactly one
-    ScannerAnalysis identical in public shape to scan_market over the full
-    prefix."""
+    """Private single-pass availability-group replay engine (register §44P). Not
+    exported. Advances the full domain chain measurement→structure→POI→BTMM one
+    availability group at a time, combines the cross-timeframe POI/BTMM output
+    from the incremental states, reconciles the event ledger, and finalizes
+    exactly one ScannerAnalysis — byte-identical to scan_market over the full
+    prefix — without ever calling batch analyze_pois/analyze_btmm."""
 
     def __init__(
         self,
         tracked_timeframes: tuple[Timeframe, ...],
         scanner_configuration: ScannerConfiguration,
         identity_provider: DerivedOutputIdentityProvider,
+        reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
     ) -> None:
         self._config = scanner_configuration
         self._identity_provider = identity_provider
         self._tracked = tracked_timeframes
+        self._reviewed_evidence = reviewed_evidence
+        self._btmm_eligible = (
+            scanner_configuration.btmm_configuration.formation_timeframes
+            | scanner_configuration.btmm_configuration.supporting_only_timeframes
+        )
+        self._ordered = tuple(
+            sorted(tracked_timeframes, key=lambda tf: _TIMEFRAME_RANK[tf])
+        )
+        self._btmm_timeframes = tuple(
+            tf for tf in self._ordered if tf in self._btmm_eligible
+        )
         measurement_cfg = scanner_configuration.measurement_configuration
         structure_cfg = scanner_configuration.structure_configuration
         poi_cfg = scanner_configuration.poi_configuration
+        btmm_cfg = scanner_configuration.btmm_configuration
+        poi_states = {
+            tf: _create_initial_poi_replay_state(identity_provider, poi_cfg)
+            for tf in tracked_timeframes
+        }
+        btmm_states = {
+            tf: _create_initial_btmm_replay_state(identity_provider, btmm_cfg)
+            for tf in self._btmm_timeframes
+        }
         self._state = _ScannerOrchestrationReplayState(
             measurement_states={
                 tf: _create_initial_measurement_replay_state(
@@ -497,31 +554,52 @@ class IncrementalReplayKernel:
                 )
                 for tf in tracked_timeframes
             },
-            poi_states={
-                tf: _create_initial_poi_replay_state(identity_provider, poi_cfg)
-                for tf in tracked_timeframes
-            },
+            poi_states=poi_states,
+            btmm_states=btmm_states,
             visible_candles=dict.fromkeys(tracked_timeframes, ()),
+            combined_poi_analysis=_combine_poi_replay_states(poi_states, self._ordered),
+            combined_btmm_analysis=_combine_btmm_replay_states(
+                btmm_states, self._btmm_timeframes, {}, None, 0
+            ),
+            ledger=_ScannerEventLedger(),
         )
         self._processed_group_count = 0
-        self._ledger = _ScannerEventLedger()
 
     def advance_group(
         self, new_candles_by_timeframe: dict[Timeframe, tuple[NormalizedCandle, ...]]
     ) -> None:
-        """Advance one availability group. Transactional: builds replacement
-        domain states in locals and publishes the new orchestration state only
-        after every timeframe and every candle succeeds, so a raised exception
-        (e.g. a domain failure) leaves the prior kernel state untouched."""
+        """Advance one availability group through measurement→structure→POI→BTMM,
+        combine the cross-timeframe POI/BTMM output, and reconcile the ledger.
+        Transactional: every replacement (domain states, combined analyses,
+        ledger) is built in locals and the new orchestration state is published
+        only after all six steps succeed, so any domain/ledger failure leaves the
+        prior kernel state, ledger, group count, and snapshots untouched."""
+        prior = self._state
         measurement_cfg = self._config.measurement_configuration
         structure_cfg = self._config.structure_configuration
         poi_cfg = self._config.poi_configuration
-        prior = self._state
+        btmm_cfg = self._config.btmm_configuration
 
         new_measurement = dict(prior.measurement_states)
         new_structure = dict(prior.structure_states)
         new_poi = dict(prior.poi_states)
+        new_btmm = dict(prior.btmm_states)
         new_visible = dict(prior.visible_candles)
+
+        group_candles = [
+            candle
+            for candles in new_candles_by_timeframe.values()
+            for candle in candles
+        ]
+        if group_candles:
+            group_availability = group_candles[0].availability_time_utc
+            gated_evidence = tuple(
+                evidence
+                for evidence in self._reviewed_evidence
+                if evidence.availability_time_utc <= group_availability
+            )
+        else:
+            gated_evidence = ()
 
         for timeframe in self._tracked:
             candles = new_candles_by_timeframe.get(timeframe, ())
@@ -531,6 +609,8 @@ class IncrementalReplayKernel:
             structure_state = prior.structure_states[timeframe]
             poi_state = prior.poi_states[timeframe]
             visible = prior.visible_candles[timeframe]
+            is_btmm_timeframe = timeframe in self._btmm_eligible
+            btmm_state = prior.btmm_states[timeframe] if is_btmm_timeframe else None
             for candle in candles:
                 measurement_state = _advance_measurement_replay_state(
                     measurement_state, candle, measurement_cfg
@@ -543,38 +623,144 @@ class IncrementalReplayKernel:
                     poi_state, candle, measurement, poi_cfg
                 )
                 visible = (*visible, candle)
+                if is_btmm_timeframe:
+                    assert btmm_state is not None
+                    per_timeframe_poi = _poi_replay_state_to_analysis(poi_state)
+                    btmm_state = _advance_btmm_replay_state(
+                        btmm_state, candle, per_timeframe_poi, gated_evidence, btmm_cfg
+                    )
             new_measurement[timeframe] = measurement_state
             new_structure[timeframe] = structure_state
             new_poi[timeframe] = poi_state
             new_visible[timeframe] = visible
+            if is_btmm_timeframe:
+                assert btmm_state is not None
+                new_btmm[timeframe] = btmm_state
+
+        # Overlap is a leaf output used only by the final ScannerAnalysis, never
+        # by the event ledger, so it is deferred to finalize() (materialized once)
+        # instead of recomputed O(obs^2) per availability group.
+        combined_poi = _combine_poi_replay_states(
+            new_poi, self._ordered, with_overlap=False
+        )
+
+        btmm_symbol: InternalSymbol | None = None
+        for timeframe in self._btmm_timeframes:
+            if new_visible[timeframe]:
+                btmm_symbol = new_visible[timeframe][0].symbol
+                break
+        if btmm_symbol is None and combined_poi.poi_observations:
+            btmm_symbol = combined_poi.poi_observations[0].symbol
+        combined_btmm = _combine_btmm_replay_states(
+            new_btmm,
+            self._btmm_timeframes,
+            {tf: len(new_visible[tf]) for tf in self._btmm_timeframes},
+            btmm_symbol,
+            len(combined_poi.poi_observations),
+        )
+
+        measurement_analyses = {
+            tf: _measurement_replay_state_to_analysis(new_measurement[tf])
+            for tf in self._ordered
+        }
+        structure_analyses = {
+            tf: _structure_replay_state_to_analysis(new_structure[tf])
+            for tf in self._ordered
+        }
+        new_ledger = _ScannerEventLedger(
+            confirmed_swings=_reconcile_ledger_category(
+                prior.ledger.confirmed_swings,
+                tuple(
+                    swing
+                    for tf in self._ordered
+                    for swing in measurement_analyses[tf].confirmed_swings
+                ),
+            ),
+            displacement_observations=_reconcile_ledger_category(
+                prior.ledger.displacement_observations,
+                tuple(
+                    observation
+                    for tf in self._ordered
+                    for observation in measurement_analyses[
+                        tf
+                    ].displacement_observations
+                ),
+            ),
+            equal_level_clusters=_reconcile_ledger_category(
+                prior.ledger.equal_level_clusters,
+                tuple(
+                    cluster
+                    for tf in self._ordered
+                    for cluster in measurement_analyses[tf].equal_level_clusters
+                ),
+            ),
+            support_resistance_zones=_reconcile_ledger_category(
+                prior.ledger.support_resistance_zones,
+                tuple(
+                    zone
+                    for tf in self._ordered
+                    for zone in measurement_analyses[tf].support_resistance_zones
+                ),
+            ),
+            trendlines=_reconcile_ledger_category(
+                prior.ledger.trendlines,
+                tuple(
+                    trendline
+                    for tf in self._ordered
+                    for trendline in measurement_analyses[tf].trendlines
+                ),
+            ),
+            structure_transitions=_reconcile_ledger_category(
+                prior.ledger.structure_transitions,
+                tuple(
+                    transition
+                    for tf in self._ordered
+                    for transition in structure_analyses[tf].structure_transitions
+                ),
+            ),
+            poi_observations=_reconcile_ledger_category(
+                prior.ledger.poi_observations, combined_poi.poi_observations
+            ),
+            poi_lifecycle_transitions=_reconcile_ledger_category(
+                prior.ledger.poi_lifecycle_transitions,
+                combined_poi.poi_lifecycle_transitions,
+            ),
+            btmm_observations=_reconcile_ledger_category(
+                prior.ledger.btmm_observations, combined_btmm.btmm_observations
+            ),
+            btmm_lifecycle_transitions=_reconcile_ledger_category(
+                prior.ledger.btmm_lifecycle_transitions,
+                combined_btmm.btmm_lifecycle_transitions,
+            ),
+            warnings=(),
+        )
 
         self._state = _ScannerOrchestrationReplayState(
             measurement_states=new_measurement,
             structure_states=new_structure,
             poi_states=new_poi,
+            btmm_states=new_btmm,
             visible_candles=new_visible,
+            combined_poi_analysis=combined_poi,
+            combined_btmm_analysis=combined_btmm,
+            ledger=new_ledger,
         )
         self._processed_group_count += 1
 
     def _ordered_active_timeframes(self) -> tuple[Timeframe, ...]:
-        return tuple(sorted(self._tracked, key=lambda tf: _TIMEFRAME_RANK[tf]))
+        return self._ordered
 
-    def finalize(
-        self, reviewed_evidence: tuple[BtmmReviewedEvidence, ...]
-    ) -> ScannerAnalysis:
+    def finalize(self) -> ScannerAnalysis:
         """Materialize exactly one ScannerAnalysis from the final incremental
-        measurement/structure states plus the unchanged batch analyze_pois /
-        analyze_btmm (the exact cross-timeframe oracle, run once). Byte-identical
-        in public shape to scan_market over the full prefix."""
+        measurement/structure states and the current combined POI/BTMM analyses
+        (never batch analyze_pois/analyze_btmm). Byte-identical in public shape to
+        scan_market over the full prefix."""
         state = self._state
         config = self._config
-        identity_provider = self._identity_provider
-
         if all(len(state.visible_candles[tf]) == 0 for tf in self._tracked):
-            self._ledger = _ScannerEventLedger()
-            return _empty_scanner_analysis(config, identity_provider)
+            return _empty_scanner_analysis(config, self._identity_provider)
 
-        ordered = self._ordered_active_timeframes()
+        ordered = self._ordered
         measurement_analyses = tuple(
             _measurement_replay_state_to_analysis(state.measurement_states[tf])
             for tf in ordered
@@ -583,100 +769,26 @@ class IncrementalReplayKernel:
             _structure_replay_state_to_analysis(state.structure_states[tf])
             for tf in ordered
         )
-
-        poi_inputs = tuple(
-            PoiTimeframeInput(
-                timeframe=tf,
-                candles=state.visible_candles[tf],
-                measurement_analysis=measurement_analyses[index],
-            )
-            for index, tf in enumerate(ordered)
+        # Materialize the cross-timeframe overlap once, here, from the final POI
+        # states (advance_group defers it — the ledger never needs overlap).
+        poi_analysis = _combine_poi_replay_states(
+            state.poi_states, ordered, with_overlap=True
         )
-        poi_analysis = analyze_pois(
-            poi_inputs, config.poi_configuration, identity_provider
-        )
-
-        btmm_eligible = (
-            config.btmm_configuration.formation_timeframes
-            | config.btmm_configuration.supporting_only_timeframes
-        )
+        btmm_analysis = state.combined_btmm_analysis
+        setup_summaries = _build_setup_summaries(poi_analysis, btmm_analysis)
         scanner_bundles = tuple(
             ScannerTimeframeInput(timeframe=tf, candles=state.visible_candles[tf])
             for tf in ordered
         )
-        max_candle_availability = _max_candle_availability(scanner_bundles)
-        gated_evidence = tuple(
-            evidence
-            for evidence in reviewed_evidence
-            if evidence.availability_time_utc <= max_candle_availability
-        )
-        btmm_inputs = tuple(
-            BtmmTimeframeInput(
-                timeframe=tf,
-                candles=state.visible_candles[tf],
-                measurement_analysis=measurement_analyses[index],
-            )
-            for index, tf in enumerate(ordered)
-            if tf in btmm_eligible
-        )
-        btmm_analysis = analyze_btmm(
-            btmm_inputs,
-            poi_analysis,
-            gated_evidence,
-            config.btmm_configuration,
-            identity_provider,
-        )
-
-        setup_summaries = _build_setup_summaries(poi_analysis, btmm_analysis)
-        symbol = _all_symbol(scanner_bundles)
-
-        self._ledger = _ScannerEventLedger(
-            confirmed_swings=tuple(
-                swing
-                for analysis in measurement_analyses
-                for swing in analysis.confirmed_swings
-            ),
-            displacement_observations=tuple(
-                observation
-                for analysis in measurement_analyses
-                for observation in analysis.displacement_observations
-            ),
-            equal_level_clusters=tuple(
-                cluster
-                for analysis in measurement_analyses
-                for cluster in analysis.equal_level_clusters
-            ),
-            support_resistance_zones=tuple(
-                zone
-                for analysis in measurement_analyses
-                for zone in analysis.support_resistance_zones
-            ),
-            trendlines=tuple(
-                trendline
-                for analysis in measurement_analyses
-                for trendline in analysis.trendlines
-            ),
-            structure_transitions=tuple(
-                transition
-                for analysis in structure_analyses
-                for transition in analysis.structure_transitions
-            ),
-            poi_observations=poi_analysis.poi_observations,
-            poi_lifecycle_transitions=poi_analysis.poi_lifecycle_transitions,
-            btmm_observations=btmm_analysis.btmm_observations,
-            btmm_lifecycle_transitions=btmm_analysis.btmm_lifecycle_transitions,
-            warnings=(),
-        )
-
         return ScannerAnalysis(
-            symbol=symbol,
+            symbol=_all_symbol(scanner_bundles),
             processed_timeframes=ordered,
             measurement_analyses=measurement_analyses,
             structure_analyses=structure_analyses,
             poi_analysis=poi_analysis,
             btmm_analysis=btmm_analysis,
             setup_summaries=setup_summaries,
-            availability_time_utc=max_candle_availability,
+            availability_time_utc=_max_candle_availability(scanner_bundles),
             evidence_classification=EvidenceClassification.ENGINEERING_PROVISIONAL,
             rule_version=config.rule_version,
             contract_version=config.contract_version,
@@ -684,7 +796,7 @@ class IncrementalReplayKernel:
         )
 
     def event_ledger(self) -> _ScannerEventLedger:
-        return self._ledger
+        return self._state.ledger
 
     def processed_group_count(self) -> int:
         return self._processed_group_count
@@ -754,7 +866,10 @@ def run_scanner_replay(
         # availability group at a time (never re-running scan_market over the
         # growing prefix) and materialize exactly one final ScannerAnalysis.
         kernel = IncrementalReplayKernel(
-            tracked_timeframes, scanner_configuration, identity_provider
+            tracked_timeframes,
+            scanner_configuration,
+            identity_provider,
+            reviewed_evidence,
         )
         index = 0
         total = len(flat_candles)
@@ -778,7 +893,7 @@ def run_scanner_replay(
                     for timeframe, candles in group_new_candles.items()
                 }
             )
-        final_snapshot = kernel.finalize(reviewed_evidence)
+        final_snapshot = kernel.finalize()
     else:
         index = 0
         total = len(flat_candles)
