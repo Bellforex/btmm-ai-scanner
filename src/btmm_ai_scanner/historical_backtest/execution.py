@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from time import perf_counter
+from time import monotonic, perf_counter
 from uuid import UUID, uuid4
 
 from btmm_ai_scanner.config.enums import InternalSymbol
@@ -28,6 +28,9 @@ _SYMBOL_ORDER: dict[InternalSymbol, int] = {
 # Run-level safety gates (register §44AF/§44AM, AUTHOR-APPROVED).
 _HOST_MEMORY_FLOOR_BYTES = 4 * 1024**3
 _UNSAFE_RETENTION_GROUP_CAP = 250
+# Matches the isolated worker's 90-minute ceiling (§44AN/§44AF); enforced here
+# on the in-process incremental replay, which the worker gate never covered.
+_INCREMENTAL_REPLAY_TIMEOUT_SECONDS = 5400.0
 _BOUNDED_RETENTION_POLICIES = frozenset(
     {SnapshotRetentionPolicy.ALL, SnapshotRetentionPolicy.CHANGED_ONLY}
 )
@@ -42,6 +45,58 @@ class InsufficientHostMemoryError(Exception):
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
+
+class IncrementalReplayAbortedError(Exception):
+    """Raised from the per-group replay gate when the in-process incremental
+    replay exceeds the 90-minute runtime ceiling or drops the host below the
+    4 GB available-RAM floor mid-run (register §44AF). The audit found the
+    isolated worker had a 90-minute gate but the incremental replay itself did
+    not; this closes that gap so a genuine attempt cannot run indefinitely. A
+    run that trips it publishes no report and no checksums."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class _IncrementalReplayGate:
+    """Per-availability-group cooperative abort boundary for the in-process
+    incremental replay. ``run_scanner_replay`` invokes ``__call__`` once before
+    each group; it samples the monotonic clock and host RAM (via the shared
+    ``process_metrics`` collector) and raises ``IncrementalReplayAbortedError``
+    the moment the runtime ceiling or host-RAM floor is breached. It also tracks
+    the minimum available RAM observed during the replay — operational metadata
+    only, never part of any scanner identity/fingerprint (§44Z)."""
+
+    def __init__(
+        self,
+        timeout_seconds: float = _INCREMENTAL_REPLAY_TIMEOUT_SECONDS,
+        host_memory_floor_bytes: int = _HOST_MEMORY_FLOOR_BYTES,
+    ) -> None:
+        self._deadline = monotonic() + timeout_seconds
+        self._floor = host_memory_floor_bytes
+        self.minimum_available_ram_bytes = process_metrics.available_system_ram_bytes()
+
+    def __call__(self) -> None:
+        available = process_metrics.available_system_ram_bytes()
+        if available is not None:
+            self.minimum_available_ram_bytes = (
+                available
+                if self.minimum_available_ram_bytes is None
+                else min(self.minimum_available_ram_bytes, available)
+            )
+            if available < self._floor:
+                raise IncrementalReplayAbortedError(
+                    f"available host RAM {available} bytes fell below the "
+                    f"{self._floor}-byte floor during incremental replay; "
+                    "aborting with no report."
+                )
+        if monotonic() > self._deadline:
+            raise IncrementalReplayAbortedError(
+                "incremental replay exceeded the "
+                f"{_INCREMENTAL_REPLAY_TIMEOUT_SECONDS}-second runtime ceiling; "
+                "aborting with no report."
+            )
 
 
 class HistoricalPerformanceMetrics(ContractModel):
@@ -165,11 +220,14 @@ def execute_scanner_backtest(
     )
     bundles_by_symbol = dict(dataset.timeframe_inputs_by_symbol)
 
-    # Run-level safety gates, both before any expensive replay work (§44AF).
-    minimum_available_ram = _enforce_host_memory_floor()
+    # Pre-replay run-level gate + retention cap (§44AF), before any expensive
+    # work. The per-group gate below then enforces the same 4 GB floor plus the
+    # 90-minute runtime ceiling *during* the replay itself.
+    _enforce_host_memory_floor()
     _enforce_retention_safety_cap(
         ordered_symbols, bundles_by_symbol, replay_configuration
     )
+    replay_gate = _IncrementalReplayGate()
 
     processed_group_count = 0
     retained_snapshot_count = 0
@@ -187,6 +245,7 @@ def execute_scanner_backtest(
             scanner_configuration,
             replay_configuration,
             identity_provider,
+            group_gate=replay_gate,
         )
         replay_elapsed_seconds += perf_counter() - replay_start
 
@@ -196,14 +255,6 @@ def execute_scanner_backtest(
         final_replay_result_bytes += len(
             replay_result.final_snapshot.model_dump_json().encode("utf-8")
         )
-
-        sampled_ram = process_metrics.available_system_ram_bytes()
-        if sampled_ram is not None:
-            minimum_available_ram = (
-                sampled_ram
-                if minimum_available_ram is None
-                else min(minimum_available_ram, sampled_ram)
-            )
 
         symbol_cases = tuple(
             case for case in dataset.reviewed_cases if case.symbol == symbol
@@ -234,7 +285,7 @@ def execute_scanner_backtest(
         processed_availability_group_count=processed_group_count,
         replay_elapsed_seconds=replay_elapsed_seconds,
         peak_working_set_bytes=process_metrics.peak_working_set_bytes(),
-        minimum_available_system_ram_bytes=minimum_available_ram,
+        minimum_available_system_ram_bytes=replay_gate.minimum_available_ram_bytes,
         retained_snapshot_count=retained_snapshot_count,
         final_replay_result_bytes=final_replay_result_bytes,
         metrics_platform=process_metrics.metrics_platform(),

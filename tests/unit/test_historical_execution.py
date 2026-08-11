@@ -1,5 +1,6 @@
 import json
 import socket
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -246,6 +247,7 @@ def test_execute_scanner_backtest_runs_one_replay_call_per_symbol(
         scanner_configuration: ScannerConfiguration,
         replay_configuration: ReplayConfiguration,
         identity_provider: ContentAddressedIdentityProvider,
+        group_gate: Callable[[], None] | None = None,
     ) -> ScannerReplayResult:
         symbol = historical_inputs[0].candles[0].symbol.value
         call_order.append(f"replay:{symbol}")
@@ -256,6 +258,7 @@ def test_execute_scanner_backtest_runs_one_replay_call_per_symbol(
             scanner_configuration,
             replay_configuration,
             identity_provider,
+            group_gate=group_gate,
         )
 
     def _evaluate_spy(
@@ -336,6 +339,7 @@ def test_replay_mismatch_surfaces_as_backtest_execution_failure(
         scanner_configuration: ScannerConfiguration,
         replay_configuration: ReplayConfiguration,
         identity_provider: ContentAddressedIdentityProvider,
+        group_gate: Callable[[], None] | None = None,
     ) -> ScannerReplayResult:
         real_result = real_run_scanner_replay(
             historical_inputs,
@@ -343,6 +347,7 @@ def test_replay_mismatch_surfaces_as_backtest_execution_failure(
             scanner_configuration,
             replay_configuration,
             identity_provider,
+            group_gate=group_gate,
         )
         return real_result.model_copy(update={"direct_batch_verified": False})
 
@@ -467,3 +472,47 @@ def test_performance_metrics_fall_back_to_null_on_an_unsupported_platform(
     assert summary["metrics_platform"] == "unsupported"
     # Missing environmental metrics never abort the run or the report write.
     assert summary["processed_availability_group_count"] == 5
+
+
+def test_incremental_replay_gate_aborts_past_the_runtime_ceiling() -> None:
+    gate = execution_module._IncrementalReplayGate(timeout_seconds=-1.0)
+    with pytest.raises(execution_module.IncrementalReplayAbortedError):
+        gate()
+
+
+def test_incremental_replay_gate_aborts_below_the_host_ram_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        process_metrics_module, "available_system_ram_bytes", lambda: 1 * 1024**3
+    )
+    gate = execution_module._IncrementalReplayGate(
+        timeout_seconds=3600.0, host_memory_floor_bytes=4 * 1024**3
+    )
+    with pytest.raises(execution_module.IncrementalReplayAbortedError):
+        gate()
+
+
+def test_execute_scanner_backtest_aborts_when_the_replay_gate_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = _dataset((InternalSymbol.XAUUSD,))
+
+    class _AlwaysAbort:
+        minimum_available_ram_bytes: int | None = None
+
+        def __call__(self) -> None:
+            raise execution_module.IncrementalReplayAbortedError(
+                "runtime ceiling breached mid-replay"
+            )
+
+    monkeypatch.setattr(
+        execution_module, "_IncrementalReplayGate", lambda: _AlwaysAbort()
+    )
+    with pytest.raises(execution_module.IncrementalReplayAbortedError):
+        execute_scanner_backtest(
+            dataset,
+            _scanner_configuration(),
+            ReplayConfiguration(snapshot_retention=SnapshotRetentionPolicy.FINAL_ONLY),
+            ContentAddressedIdentityProvider(),
+        )

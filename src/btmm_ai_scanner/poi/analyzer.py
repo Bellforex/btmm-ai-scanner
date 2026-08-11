@@ -1293,7 +1293,9 @@ def _advance_poi_replay_state(
     )
 
 
-def _poi_replay_state_to_analysis(state: _PoiReplayState) -> PoiAnalysis:
+def _poi_replay_state_to_analysis(
+    state: _PoiReplayState, *, with_overlap: bool = True
+) -> PoiAnalysis:
     """Build the public PoiAnalysis from the incremental single-timeframe state,
     matching analyze_pois's shape exactly — including the empty-input case.
 
@@ -1304,7 +1306,17 @@ def _poi_replay_state_to_analysis(state: _PoiReplayState) -> PoiAnalysis:
     super-quadratic regime; under the historical-backtest FINAL_ONLY retention
     the analysis is materialized once, so this O(obs^2) cost is paid once. The
     result is identical to analyze_pois (compute_overlap_relationships re-sorts
-    each group internally, so the sorted-observation input is immaterial)."""
+    each group internally, so the sorted-observation input is immaterial).
+
+    ``with_overlap=False`` returns the identical analysis except with an empty
+    ``poi_overlap_relationships`` tuple. It exists purely for internal callers
+    that provably never read the single-timeframe overlap —
+    ``_combine_poi_replay_states`` (which recomputes cross-timeframe overlap from
+    the merged observations and never consults the per-timeframe overlap) and the
+    per-candle BTMM feed (BTMM reads only ``poi_observations`` and
+    ``poi_lifecycle_transitions``). Skipping the discarded O(obs^2) scan there
+    removes it from the per-group and per-candle hot paths without changing any
+    published output."""
     if not state.candles_so_far:
         return PoiAnalysis(
             symbol=None,
@@ -1316,17 +1328,22 @@ def _poi_replay_state_to_analysis(state: _PoiReplayState) -> PoiAnalysis:
             current_poi_states=(),
         )
     assert state.timeframe is not None
-    evaluated_at = state.candles_so_far[-1].availability_time_utc
-    overlap_relationships = tuple(
-        sorted(
-            compute_overlap_relationships(state.poi_observations_so_far, evaluated_at),
-            key=lambda r: (
-                r.evaluated_at_time_utc,
-                str(r.poi_a_record_id),
-                str(r.poi_b_record_id),
-            ),
+    if with_overlap:
+        evaluated_at = state.candles_so_far[-1].availability_time_utc
+        overlap_relationships = tuple(
+            sorted(
+                compute_overlap_relationships(
+                    state.poi_observations_so_far, evaluated_at
+                ),
+                key=lambda r: (
+                    r.evaluated_at_time_utc,
+                    str(r.poi_a_record_id),
+                    str(r.poi_b_record_id),
+                ),
+            )
         )
-    )
+    else:
+        overlap_relationships = ()
     return PoiAnalysis(
         symbol=state.symbol,
         analyzed_timeframes=(state.timeframe,),
@@ -1368,8 +1385,12 @@ def _combine_poi_replay_states(
             current_poi_states=(),
         )
 
+    # Per-timeframe overlap is never read here (cross-timeframe overlap is
+    # recomputed below from the merged observations), so skip the discarded
+    # O(obs^2) single-timeframe scan on every group and at finalization.
     per_timeframe = {
-        tf: _poi_replay_state_to_analysis(poi_states[tf]) for tf in ordered_timeframes
+        tf: _poi_replay_state_to_analysis(poi_states[tf], with_overlap=False)
+        for tf in ordered_timeframes
     }
 
     observations_list: list[PoiObservation] = [

@@ -224,12 +224,28 @@ class ContentAddressedIdentityProvider:
     stable across processes and independent of call order, since it is a pure
     function of `(output_type, semantic_key)` only. It does not embed a genuine
     Unix-millisecond timestamp and carries no chronological-ordering guarantee.
+
+    A per-instance memo of `(output_type, semantic_key) -> UUID` makes repeated
+    identity resolution for the same derived output O(1). This is a pure cache:
+    the returned value is a total function of its key, so the memo changes only
+    runtime, never any identity. It is bounded by the number of distinct derived
+    outputs (never by candle count squared), so it introduces no memory
+    pathology.
     """
+
+    def __init__(self) -> None:
+        self._identity_memo: dict[tuple[DerivedOutputType, tuple[str, ...]], UUID] = {}
 
     def identify(
         self, *, output_type: DerivedOutputType, semantic_key: tuple[str, ...]
     ) -> UUID:
+        memo_key = (output_type, semantic_key)
+        cached = self._identity_memo.get(memo_key)
+        if cached is not None:
+            return cached
         canonical_bytes = _canonical_json_bytes(
             [_DERIVED_OUTPUT_IDENTITY_NAMESPACE, output_type.value, list(semantic_key)]
         )
-        return _uuid_from_canonical_bytes(canonical_bytes)
+        result = _uuid_from_canonical_bytes(canonical_bytes)
+        self._identity_memo[memo_key] = result
+        return result

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -625,7 +626,11 @@ class IncrementalReplayKernel:
                 visible = (*visible, candle)
                 if is_btmm_timeframe:
                     assert btmm_state is not None
-                    per_timeframe_poi = _poi_replay_state_to_analysis(poi_state)
+                    # BTMM reads only poi_observations + poi_lifecycle_transitions
+                    # (never overlap), so skip the per-candle O(obs^2) overlap.
+                    per_timeframe_poi = _poi_replay_state_to_analysis(
+                        poi_state, with_overlap=False
+                    )
                     btmm_state = _advance_btmm_replay_state(
                         btmm_state, candle, per_timeframe_poi, gated_evidence, btmm_cfg
                     )
@@ -808,7 +813,14 @@ def run_scanner_replay(
     scanner_configuration: ScannerConfiguration,
     replay_configuration: ReplayConfiguration,
     identity_provider: DerivedOutputIdentityProvider,
+    group_gate: Callable[[], None] | None = None,
 ) -> ScannerReplayResult:
+    # ``group_gate`` is an optional, backward-compatible per-availability-group
+    # hook: it is invoked once before each group is processed so a historical
+    # run-level policy (elapsed-time / host-RAM abort, see historical_backtest/
+    # execution.py) can raise and stop a long replay cooperatively. It is never
+    # invoked with any argument, is purely a control-flow gate, and — when
+    # ``None`` (every existing caller) — the replay behaves exactly as before.
     validate_configuration(scanner_configuration)
     minimum_price_tick = canonical_minimum_price_tick(scanner_configuration)
 
@@ -874,6 +886,8 @@ def run_scanner_replay(
         index = 0
         total = len(flat_candles)
         while index < total:
+            if group_gate is not None:
+                group_gate()
             group_availability = flat_candles[index][0]
             group_end = index
             group_new_candles: dict[Timeframe, list[NormalizedCandle]] = {
@@ -898,6 +912,8 @@ def run_scanner_replay(
         index = 0
         total = len(flat_candles)
         while index < total:
+            if group_gate is not None:
+                group_gate()
             group_availability = flat_candles[index][0]
             group_end = index
             while (

@@ -342,3 +342,29 @@ def test_cli_denies_publication_on_cross_engine_mismatch(
     exit_code = main(["--dataset", str(dataset_root), "--output", str(output_root)])
     assert exit_code == EXIT_REPLAY_FAILURE
     assert not list(output_root.rglob("checksums.json"))
+
+
+def test_cli_denies_publication_when_incremental_replay_is_aborted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from btmm_ai_scanner.historical_backtest import execution as execution_module
+
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    _build_valid_dataset(dataset_root)
+    output_root = tmp_path / "output"
+
+    class _AlwaysAbort:
+        minimum_available_ram_bytes: int | None = None
+
+        def __call__(self) -> None:
+            raise execution_module.IncrementalReplayAbortedError(
+                "runtime ceiling breached mid-replay"
+            )
+
+    monkeypatch.setattr(
+        execution_module, "_IncrementalReplayGate", lambda: _AlwaysAbort()
+    )
+    exit_code = main(["--dataset", str(dataset_root), "--output", str(output_root)])
+    assert exit_code == EXIT_REPLAY_FAILURE
+    assert not list(output_root.rglob("checksums.json"))

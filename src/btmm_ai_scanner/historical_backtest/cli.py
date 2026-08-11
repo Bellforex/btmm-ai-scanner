@@ -15,6 +15,7 @@ from btmm_ai_scanner.historical_backtest.direct_batch_worker import (
 )
 from btmm_ai_scanner.historical_backtest.execution import (
     HistoricalBacktestExecutionResult,
+    IncrementalReplayAbortedError,
     InsufficientHostMemoryError,
     execute_scanner_backtest,
 )
@@ -230,7 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except InvalidScannerConfigurationError:
         return EXIT_UNSAFE_RETENTION_POLICY
-    except InsufficientHostMemoryError:
+    except (InsufficientHostMemoryError, IncrementalReplayAbortedError):
         return EXIT_REPLAY_FAILURE
     except InvalidReviewedLabelError:
         return EXIT_REVIEWED_CASE_FAILURE
