@@ -1,6 +1,8 @@
+import json
 import socket
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -12,7 +14,11 @@ from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolumeKind
 from btmm_ai_scanner.contracts.types import SemVer
 from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
+from btmm_ai_scanner.historical_backtest import cli as cli_module
 from btmm_ai_scanner.historical_backtest import execution as execution_module
+from btmm_ai_scanner.historical_backtest import (
+    process_metrics as process_metrics_module,
+)
 from btmm_ai_scanner.historical_backtest.data_quality import HistoricalDataQualityReport
 from btmm_ai_scanner.historical_backtest.enums import (
     BacktestQualityGateStatus,
@@ -33,11 +39,16 @@ from btmm_ai_scanner.historical_backtest.manifest import (
     HeaderMappingEntry,
     HistoricalFileEntry,
 )
+from btmm_ai_scanner.historical_backtest.reporting import (
+    _PERFORMANCE_METRIC_KEYS,
+    write_backtest_report,
+)
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.scanner.configuration import (
     ReplayConfiguration,
     ScannerConfiguration,
 )
+from btmm_ai_scanner.scanner.enums import SnapshotRetentionPolicy
 from btmm_ai_scanner.scanner.evaluation import ScannerBacktestReport
 from btmm_ai_scanner.scanner.labels import ReviewedScannerCase
 from btmm_ai_scanner.scanner.replay import ScannerReplayResult
@@ -387,3 +398,72 @@ def test_execute_scanner_backtest_performs_no_file_io_of_its_own(
         )
     finally:
         monkeypatch.setattr("builtins.open", real_open)
+
+
+def test_historical_backtest_defaults_to_final_only_retention() -> None:
+    # The historical-backtest entry point defaults to FINAL_ONLY retention
+    # (register §44AA), while the general ReplayConfiguration default stays ALL.
+    parser = cli_module._build_parser()
+    parsed = parser.parse_args(["--dataset", "d", "--output", "o"])
+    assert parsed.snapshot_retention == "final-only"
+    assert (
+        cli_module._RETENTION_BY_CLI_VALUE[parsed.snapshot_retention]
+        is SnapshotRetentionPolicy.FINAL_ONLY
+    )
+    assert ReplayConfiguration().snapshot_retention is SnapshotRetentionPolicy.ALL
+
+
+def _execution_summary(
+    dataset: LoadedHistoricalDataset, output_root: Path
+) -> dict[str, object]:
+    result = execute_scanner_backtest(
+        dataset,
+        _scanner_configuration(),
+        ReplayConfiguration(snapshot_retention=SnapshotRetentionPolicy.FINAL_ONLY),
+        ContentAddressedIdentityProvider(),
+    )
+    write_result = write_backtest_report(result, output_root)
+    summary_path = Path(write_result.execution_directory) / "execution_summary.json"
+    parsed: dict[str, object] = json.loads(summary_path.read_text(encoding="utf-8"))
+    return parsed
+
+
+def test_execution_summary_includes_new_performance_metric_keys(
+    tmp_path: Path,
+) -> None:
+    summary = _execution_summary(_dataset((InternalSymbol.XAUUSD,)), tmp_path)
+    for key in _PERFORMANCE_METRIC_KEYS:
+        assert key in summary, key
+    # No nested duplicate is left behind; the metrics live flat.
+    assert "performance_metrics" not in summary
+
+
+def test_execution_summary_records_processed_availability_group_count(
+    tmp_path: Path,
+) -> None:
+    summary = _execution_summary(_dataset((InternalSymbol.XAUUSD,)), tmp_path)
+    # The fixture builds five M1 candles at consecutive availability times.
+    assert summary["processed_availability_group_count"] == 5
+    assert summary["retained_snapshot_count"] == 1
+
+
+def test_performance_metrics_fall_back_to_null_on_an_unsupported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        process_metrics_module,
+        "peak_working_set_bytes",
+        lambda pid=None: None,
+    )
+    monkeypatch.setattr(
+        process_metrics_module, "available_system_ram_bytes", lambda: None
+    )
+    monkeypatch.setattr(
+        process_metrics_module, "metrics_platform", lambda: "unsupported"
+    )
+    summary = _execution_summary(_dataset((InternalSymbol.XAUUSD,)), tmp_path)
+    assert summary["peak_working_set_bytes"] is None
+    assert summary["minimum_available_system_ram_bytes"] is None
+    assert summary["metrics_platform"] == "unsupported"
+    # Missing environmental metrics never abort the run or the report write.
+    assert summary["processed_availability_group_count"] == 5
