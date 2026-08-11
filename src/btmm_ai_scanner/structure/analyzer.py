@@ -1,7 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
@@ -130,7 +130,16 @@ def _finalize[ContractT: ContractModel](
     excluded_candidate_fields: frozenset[str],
     configuration: StructureConfiguration,
     resolver: _IdentityResolver,
+    *,
+    prior_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
+    new_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
 ) -> tuple[ContractT, ...]:
+    """A3-C: with ``prior_reuse``/``new_reuse`` (the incremental replay path) an
+    unchanged finalized record is reused verbatim (no SHA-256, no construction),
+    rebuilding only the genuinely dirty mutable-frontier records (structure
+    supports middle insertion / same-length replacement, all handled exactly by
+    the byte-level ``fields`` comparison). The batch oracle passes neither cache
+    and is byte-for-byte unchanged; ``new_reuse`` is published only on success."""
     results: list[ContractT] = []
     for candidate in candidates:
         semantic_key = semantic_key_fn(candidate)
@@ -148,6 +157,21 @@ def _finalize[ContractT: ContractModel](
             evidence_classification=configuration.evidence_classification,
             provenance_id=provenance_id,
         )
+
+        if prior_reuse is not None:
+            cached = prior_reuse.get(record_id)
+            if cached is not None and cached[0] == fields:
+                record = cached[1]
+            else:
+                record = contract_class(  # type: ignore[call-arg]
+                    record_id=record_id,
+                    content_fingerprint=_compute_content_fingerprint(fields),
+                    **fields,
+                )
+            if new_reuse is not None:
+                new_reuse[record_id] = (fields, record)
+            results.append(record)  # type: ignore[arg-type]
+            continue
 
         content_fingerprint = _compute_content_fingerprint(fields)
         results.append(
@@ -914,6 +938,14 @@ class _StructureReplayState:
     active_protected_low_swing: ConfirmedSwing | None = None
     active_weak_high_swing: ConfirmedSwing | None = None
     active_weak_low_swing: ConfirmedSwing | None = None
+    # A3-C: shared finalized-record reuse cache (record_id -> (fields, object))
+    # for swing relationships + structure transitions. record_ids are globally
+    # unique across categories, so one map is exact. _finalize reuses the object
+    # for any record whose fields are unchanged, rebuilding only the genuinely
+    # dirty suffix (middle insertion / same-length replacement handled exactly).
+    finalize_reuse_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
+        default_factory=dict
+    )
 
 
 def _create_initial_structure_replay_state(
@@ -934,6 +966,9 @@ def _finalize_structure_outputs(
     resolver: _IdentityResolver,
     configuration: StructureConfiguration,
     rule_version_text: str,
+    *,
+    prior_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
+    new_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
 ) -> tuple[
     tuple[SwingRelationship, ...],
     tuple[StructureTransition, ...],
@@ -969,6 +1004,8 @@ def _finalize_structure_outputs(
         frozenset({"current_swing", "predecessor_swing"}),
         configuration,
         resolver,
+        prior_reuse=prior_reuse,
+        new_reuse=new_reuse,
     )
 
     transitions_sorted = sorted(
@@ -997,6 +1034,8 @@ def _finalize_structure_outputs(
         frozenset(),
         configuration,
         resolver,
+        prior_reuse=prior_reuse,
+        new_reuse=new_reuse,
     )
 
     latest_transition_id = (
@@ -1148,6 +1187,11 @@ def _advance_structure_replay_state(
         analyzed_swing_count=len(confirmed_swings),
     )
 
+    # A3-C: local reuse cache carried forward from the prior state (a copy, so a
+    # raised advance never mutates the caller's cache), published only on success.
+    new_finalize_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] = dict(
+        state.finalize_reuse_cache
+    )
     swing_relationships, structure_transitions, current_state = (
         _finalize_structure_outputs(
             new_candles,
@@ -1157,6 +1201,8 @@ def _advance_structure_replay_state(
             state.resolver,
             configuration,
             state.rule_version_text,
+            prior_reuse=state.finalize_reuse_cache,
+            new_reuse=new_finalize_reuse,
         )
     )
 
@@ -1177,6 +1223,7 @@ def _advance_structure_replay_state(
         active_protected_low_swing=final_checkpoint.protected_low,
         active_weak_high_swing=final_checkpoint.weak_high,
         active_weak_low_swing=final_checkpoint.weak_low,
+        finalize_reuse_cache=new_finalize_reuse,
     )
 
 

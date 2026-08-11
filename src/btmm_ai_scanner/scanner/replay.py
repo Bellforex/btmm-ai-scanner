@@ -475,7 +475,13 @@ def _reconcile_ledger_category(
     reconciled: list[Any] = []
     for record in current:
         existing = prior_by_id.get(record.record_id)
-        if existing is not None and existing == record:
+        # A3-D: the incremental domains now reuse the identical finalized object
+        # for an unchanged record (immutable-object + fingerprint caches), so the
+        # common case is caught by the O(1) identity check `existing is record`,
+        # avoiding the deep strict-pydantic __eq__ for every record every group.
+        # The deep equality is still evaluated for genuinely distinct instances,
+        # so the reconciled result is byte-identical to the prior behaviour.
+        if existing is not None and (existing is record or existing == record):
             reconciled.append(existing)
         else:
             reconciled.append(record)
@@ -627,9 +633,10 @@ class IncrementalReplayKernel:
                 if is_btmm_timeframe:
                     assert btmm_state is not None
                     # BTMM reads only poi_observations + poi_lifecycle_transitions
-                    # (never overlap), so skip the per-candle O(obs^2) overlap.
+                    # (never overlap, never current_poi_states), so skip both the
+                    # per-candle O(obs^2) overlap and the CurrentPoiState build.
                     per_timeframe_poi = _poi_replay_state_to_analysis(
-                        poi_state, with_overlap=False
+                        poi_state, with_overlap=False, with_current_states=False
                     )
                     btmm_state = _advance_btmm_replay_state(
                         btmm_state, candle, per_timeframe_poi, gated_evidence, btmm_cfg
@@ -656,12 +663,17 @@ class IncrementalReplayKernel:
                 break
         if btmm_symbol is None and combined_poi.poi_observations:
             btmm_symbol = combined_poi.poi_observations[0].symbol
+        # A3-B: the per-group combined BTMM analysis feeds only the event ledger,
+        # which reconciles btmm_observations + btmm_lifecycle_transitions and
+        # never current_btmm_states. Defer the CurrentBtmmState materialization to
+        # finalize (rebuilt there with with_current_states=True).
         combined_btmm = _combine_btmm_replay_states(
             new_btmm,
             self._btmm_timeframes,
             {tf: len(new_visible[tf]) for tf in self._btmm_timeframes},
             btmm_symbol,
             len(combined_poi.poi_observations),
+            with_current_states=False,
         )
 
         measurement_analyses = {
@@ -779,7 +791,25 @@ class IncrementalReplayKernel:
         poi_analysis = _combine_poi_replay_states(
             state.poi_states, ordered, with_overlap=True
         )
-        btmm_analysis = state.combined_btmm_analysis
+        # A3-B: rebuild the combined BTMM analysis here so its CurrentBtmmState
+        # objects (deferred out of the per-group hot path) are materialized once.
+        # Observations/transitions are identical to the stored per-group combine;
+        # only current_btmm_states, unused per-group, are added at this boundary.
+        btmm_symbol: InternalSymbol | None = None
+        for tf in self._btmm_timeframes:
+            if state.visible_candles[tf]:
+                btmm_symbol = state.visible_candles[tf][0].symbol
+                break
+        if btmm_symbol is None and poi_analysis.poi_observations:
+            btmm_symbol = poi_analysis.poi_observations[0].symbol
+        btmm_analysis = _combine_btmm_replay_states(
+            state.btmm_states,
+            self._btmm_timeframes,
+            {tf: len(state.visible_candles[tf]) for tf in self._btmm_timeframes},
+            btmm_symbol,
+            len(poi_analysis.poi_observations),
+            with_current_states=True,
+        )
         setup_summaries = _build_setup_summaries(poi_analysis, btmm_analysis)
         scanner_bundles = tuple(
             ScannerTimeframeInput(timeframe=tf, candles=state.visible_candles[tf])

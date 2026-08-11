@@ -155,7 +155,15 @@ def _finalize[ContractT: ContractModel](
     excluded_candidate_fields: frozenset[str],
     configuration: BtmmConfiguration,
     resolver: _IdentityResolver,
+    *,
+    prior_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
+    new_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
 ) -> tuple[ContractT, ...]:
+    """A3-C: with ``prior_reuse``/``new_reuse`` (the incremental replay path) an
+    unchanged finalized record is reused verbatim (no SHA-256, no construction).
+    BTMM lifecycle transitions are immutable once emitted, so this is a permanent
+    reuse; the batch oracle passes neither cache and is byte-for-byte unchanged.
+    ``new_reuse`` is a caller-owned local published only on a successful advance."""
     results: list[ContractT] = []
     for candidate in candidates:
         semantic_key = semantic_key_fn(candidate)
@@ -173,6 +181,21 @@ def _finalize[ContractT: ContractModel](
             evidence_classification=configuration.evidence_classification,
             provenance_id=provenance_id,
         )
+
+        if prior_reuse is not None:
+            cached = prior_reuse.get(record_id)
+            if cached is not None and cached[0] == fields:
+                record = cached[1]
+            else:
+                record = contract_class(  # type: ignore[call-arg]
+                    record_id=record_id,
+                    content_fingerprint=_compute_content_fingerprint(fields),
+                    **fields,
+                )
+            if new_reuse is not None:
+                new_reuse[record_id] = (fields, record)
+            results.append(record)  # type: ignore[arg-type]
+            continue
 
         content_fingerprint = _compute_content_fingerprint(fields)
         results.append(
@@ -630,9 +653,31 @@ class _BtmmReplayState:
     candles_so_far: tuple[NormalizedCandle, ...] = ()
     frozen_walks: dict[UUID, LifecycleWalkResult] = field(default_factory=dict)
     live_setups: tuple[BtmmObservation, ...] = ()
-    current_states_by_setup: tuple[CurrentBtmmState, ...] = ()
+    # A3-B: CurrentBtmmState is a public leaf output consumed only at the
+    # snapshot / finalization boundary (the per-group event ledger reconciles
+    # only btmm_observations + btmm_lifecycle_transitions). Its fingerprint moves
+    # as a setup progresses, so it can never be reused; instead of paying the
+    # SHA-256 + strict-pydantic construction for every setup every candle, the
+    # advance stores the fully-resolved (record_id, fields) materials and the
+    # objects are constructed once, on demand, at materialization.
+    current_state_materials: tuple[tuple[UUID, dict[str, object]], ...] = ()
     btmm_observations_so_far: tuple[BtmmObservation, ...] = ()
     btmm_lifecycle_transitions_so_far: tuple[BtmmLifecycleTransition, ...] = ()
+    # A3-B: immutable-observation reuse cache keyed by setup record_id ->
+    # (fingerprint-determining fields, finalized object). A BtmmObservation is
+    # fully immutable per setup, so on every later candle the reconstructed
+    # fields are byte-identical and the cached object (and its fingerprint) is
+    # reused verbatim. Published only on a successful advance (transactional).
+    observation_cache: dict[UUID, tuple[dict[str, object], BtmmObservation]] = field(
+        default_factory=dict
+    )
+    # A3-C: immutable-lifecycle-transition reuse cache (record_id ->
+    # (fields, finalized transition)). A BtmmLifecycleTransition never changes
+    # once emitted, so _finalize reuses it verbatim on every later candle instead
+    # of rebuilding + re-fingerprinting the cumulative transition set.
+    transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
+        default_factory=dict
+    )
 
 
 def _create_initial_btmm_replay_state(
@@ -689,9 +734,11 @@ def _advance_btmm_replay_state(
             candles_so_far=new_candles,
             frozen_walks=state.frozen_walks,
             live_setups=(),
-            current_states_by_setup=(),
+            current_state_materials=(),
             btmm_observations_so_far=(),
             btmm_lifecycle_transitions_so_far=(),
+            observation_cache=state.observation_cache,
+            transition_cache=state.transition_cache,
         )
 
     symbol = new_candles[0].symbol
@@ -717,6 +764,8 @@ def _advance_btmm_replay_state(
     }
 
     new_frozen_walks = dict(state.frozen_walks)
+    prior_obs_cache = state.observation_cache
+    new_obs_cache: dict[UUID, tuple[dict[str, object], BtmmObservation]] = {}
     observations_list: list[BtmmObservation] = []
     all_transitions: list[TransitionCandidate] = []
     current_state_fields_by_setup: dict[UUID, Any] = {}
@@ -753,14 +802,20 @@ def _advance_btmm_replay_state(
             "evidence_classification": configuration.evidence_classification,
             "provenance_id": provenance_id,
         }
-        content_fingerprint = _compute_content_fingerprint(observation_fields)
-        observations_list.append(
-            BtmmObservation(
+        # A3-B: reuse the immutable finalized observation (and its fingerprint)
+        # when its fields are byte-identical to the cached ones; a BtmmObservation
+        # never changes over a setup's life, so this is a permanent reuse.
+        cached_obs = prior_obs_cache.get(record_id)
+        if cached_obs is not None and cached_obs[0] == observation_fields:
+            observation = cached_obs[1]
+        else:
+            observation = BtmmObservation(
                 record_id=record_id,
-                content_fingerprint=content_fingerprint,
+                content_fingerprint=_compute_content_fingerprint(observation_fields),
                 **observation_fields,  # type: ignore[arg-type]
             )
-        )
+        new_obs_cache[record_id] = (observation_fields, observation)
+        observations_list.append(observation)
 
         bundle_candles = (
             new_candles if source_poi.source_timeframe == candle.timeframe else ()
@@ -814,6 +869,7 @@ def _advance_btmm_replay_state(
             rule_version_text,
         )
 
+    new_transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = {}
     lifecycle_transitions = _finalize(
         list(all_transitions),
         DerivedOutputType.BTMM_LIFECYCLE_TRANSITION,
@@ -823,6 +879,8 @@ def _advance_btmm_replay_state(
         frozenset(),
         configuration,
         resolver,
+        prior_reuse=state.transition_cache,
+        new_reuse=new_transition_cache,
     )
 
     latest_transition_by_setup: dict[UUID, UUID] = {}
@@ -831,7 +889,11 @@ def _advance_btmm_replay_state(
             finalized_transition.record_id
         )
 
-    current_states: list[CurrentBtmmState] = []
+    # A3-B: resolve identities and assemble the full CurrentBtmmState field dicts
+    # here (cheap, memoized), but defer the SHA-256 fingerprint and strict-pydantic
+    # construction to the materialization boundary, which builds them only when a
+    # public snapshot actually needs them.
+    current_state_materials_list: list[tuple[UUID, dict[str, object]]] = []
     live_setups_list: list[BtmmObservation] = []
     for observation in observations_list:
         setup_id = observation.record_id
@@ -885,14 +947,7 @@ def _advance_btmm_replay_state(
             "evidence_classification": configuration.evidence_classification,
             "provenance_id": provenance_id,
         }
-        content_fingerprint = _compute_content_fingerprint(fields)
-        current_states.append(
-            CurrentBtmmState(
-                record_id=record_id,
-                content_fingerprint=content_fingerprint,
-                **fields,  # type: ignore[arg-type]
-            )
-        )
+        current_state_materials_list.append((record_id, fields))
 
     observations = tuple(
         sorted(
@@ -918,17 +973,6 @@ def _advance_btmm_replay_state(
             ),
         )
     )
-    current_states_sorted = tuple(
-        sorted(
-            current_states,
-            key=lambda s: (
-                s.symbol.value,
-                s.timeframe.value,
-                str(s.btmm_setup_record_id),
-            ),
-        )
-    )
-
     return _BtmmReplayState(
         resolver=resolver,
         rule_version_text=rule_version_text,
@@ -938,23 +982,61 @@ def _advance_btmm_replay_state(
         candles_so_far=new_candles,
         frozen_walks=new_frozen_walks,
         live_setups=tuple(live_setups_list),
-        current_states_by_setup=current_states_sorted,
+        current_state_materials=tuple(current_state_materials_list),
         btmm_observations_so_far=observations,
         btmm_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
+        observation_cache=new_obs_cache,
+        transition_cache=new_transition_cache,
     )
 
 
-def _btmm_replay_state_to_analysis(state: _BtmmReplayState) -> BtmmAnalysis:
+def _materialize_current_btmm_states(
+    state: _BtmmReplayState,
+) -> tuple[CurrentBtmmState, ...]:
+    """A3-B: construct the CurrentBtmmState public objects from the deferred
+    (record_id, fields) materials, computing each fingerprint exactly once here
+    instead of once per setup per candle. Byte-identical to analyze_btmm's
+    objects — same identities, same fingerprints, same canonical ordering."""
+    return tuple(
+        sorted(
+            (
+                CurrentBtmmState(
+                    record_id=record_id,
+                    content_fingerprint=_compute_content_fingerprint(fields),
+                    **fields,  # type: ignore[arg-type]
+                )
+                for record_id, fields in state.current_state_materials
+            ),
+            key=lambda s: (
+                s.symbol.value,
+                s.timeframe.value,
+                str(s.btmm_setup_record_id),
+            ),
+        )
+    )
+
+
+def _btmm_replay_state_to_analysis(
+    state: _BtmmReplayState, *, with_current_states: bool = True
+) -> BtmmAnalysis:
     """Build the public BtmmAnalysis from the incremental state, matching
     analyze_btmm's shape exactly — including the empty-input case (no candles or
-    no eligible POI observations => fully empty, analyzed_timeframes == ())."""
+    no eligible POI observations => fully empty, analyzed_timeframes == ()).
+
+    ``with_current_states=False`` returns the identical analysis except with an
+    empty ``current_btmm_states`` tuple, for callers (the per-group event-ledger
+    reconciliation) that provably never read it; the objects are materialized
+    once at the snapshot boundary."""
+    current_btmm_states = (
+        _materialize_current_btmm_states(state) if with_current_states else ()
+    )
     return BtmmAnalysis(
         symbol=state.symbol,
         analyzed_timeframes=state.analyzed_timeframes,
         analyzed_candle_count_by_timeframe=state.analyzed_candle_count_by_timeframe,
         btmm_observations=state.btmm_observations_so_far,
         btmm_lifecycle_transitions=state.btmm_lifecycle_transitions_so_far,
-        current_btmm_states=state.current_states_by_setup,
+        current_btmm_states=current_btmm_states,
     )
 
 
@@ -964,6 +1046,8 @@ def _combine_btmm_replay_states(
     candle_counts: dict[Timeframe, int],
     symbol: InternalSymbol | None,
     combined_poi_observation_count: int,
+    *,
+    with_current_states: bool = True,
 ) -> BtmmAnalysis:
     """Combine the per-BTMM-timeframe incremental states (subsystem 2e) into the
     multi-timeframe BtmmAnalysis, reproducing analyze_btmm's shape exactly.
@@ -995,10 +1079,17 @@ def _combine_btmm_replay_states(
         for tf in ordered_btmm_timeframes
         for transition in btmm_states[tf].btmm_lifecycle_transitions_so_far
     )
-    current_states = tuple(
-        state
-        for tf in ordered_btmm_timeframes
-        for state in btmm_states[tf].current_states_by_setup
+    # A3-B: CurrentBtmmState objects are materialized (and fingerprinted) only
+    # when this combine will publish them (finalization). The per-group ledger
+    # path passes with_current_states=False and never reads them.
+    current_states = (
+        tuple(
+            state
+            for tf in ordered_btmm_timeframes
+            for state in _materialize_current_btmm_states(btmm_states[tf])
+        )
+        if with_current_states
+        else ()
     )
 
     observations_sorted = tuple(

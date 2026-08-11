@@ -212,7 +212,18 @@ def _finalize[ContractT: ContractModel](
     excluded_candidate_fields: frozenset[str],
     configuration: PoiConfiguration,
     resolver: _IdentityResolver,
+    *,
+    prior_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
+    new_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
 ) -> tuple[ContractT, ...]:
+    """A3-C: when ``prior_reuse``/``new_reuse`` are supplied (the incremental
+    replay path), a finalized record whose fingerprint-determining fields are
+    byte-identical to the cached ones is reused verbatim — no SHA-256, no
+    strict-pydantic construction — and the surviving object is recorded in
+    ``new_reuse`` for the next advance. Lifecycle transitions are immutable once
+    emitted, so this is a permanent reuse; the batch oracle passes neither cache
+    and is byte-for-byte unchanged. ``new_reuse`` is a caller-owned local dict
+    published only on a successful advance (transactional)."""
     results: list[ContractT] = []
     for candidate in candidates:
         semantic_key = semantic_key_fn(candidate)
@@ -230,6 +241,21 @@ def _finalize[ContractT: ContractModel](
             evidence_classification=configuration.evidence_classification,
             provenance_id=provenance_id,
         )
+
+        if prior_reuse is not None:
+            cached = prior_reuse.get(record_id)
+            if cached is not None and cached[0] == fields:
+                record = cached[1]
+            else:
+                record = contract_class(  # type: ignore[call-arg]
+                    record_id=record_id,
+                    content_fingerprint=_compute_content_fingerprint(fields),
+                    **fields,
+                )
+            if new_reuse is not None:
+                new_reuse[record_id] = (fields, record)
+            results.append(record)  # type: ignore[arg-type]
+            continue
 
         content_fingerprint = _compute_content_fingerprint(fields)
         results.append(
@@ -1000,9 +1026,34 @@ class _PoiReplayState:
     candles_so_far: tuple[NormalizedCandle, ...] = ()
     lifecycle_states: dict[UUID, _PoiLifecycleWalkState] = field(default_factory=dict)
     live_pois: tuple[PoiObservation, ...] = ()
-    current_states_by_poi: tuple[CurrentPoiState, ...] = ()
+    # A3-A: CurrentPoiState is a public leaf output consumed only at the snapshot
+    # / finalization boundary (BTMM and the per-group ledger read only
+    # poi_observations + poi_lifecycle_transitions). Its fingerprint moves every
+    # candle (age/tap/elapsed), so it can never be reused; instead of paying the
+    # SHA-256 + strict-pydantic construction for every POI every candle, the
+    # advance stores the fully-resolved (record_id, fields) materials and
+    # _poi_replay_state_to_analysis constructs the objects once, on demand.
+    current_state_materials: tuple[tuple[UUID, dict[str, object]], ...] = ()
     poi_observations_so_far: tuple[PoiObservation, ...] = ()
     poi_lifecycle_transitions_so_far: tuple[PoiLifecycleTransition, ...] = ()
+    # A3-A: immutable-observation reuse cache keyed by record_id ->
+    # (fingerprint-determining fields, finalized object). Within one timeframe a
+    # PoiObservation is immutable, so on every later candle the detected fields
+    # for an already-seen record_id are byte-identical and the cached object
+    # (and its fingerprint) is reused verbatim; only genuinely changed fields
+    # trigger a rebuild. Published only on a successful advance, so a raised
+    # advance leaves the prior cache intact (transactional).
+    observation_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
+        default_factory=dict
+    )
+    # A3-C: immutable-lifecycle-transition reuse cache (record_id ->
+    # (fields, finalized transition)). A PoiLifecycleTransition is a historical
+    # event that never changes once emitted, so _finalize reuses it verbatim on
+    # every later candle instead of rebuilding + re-fingerprinting the entire
+    # cumulative transition set. Published only on a successful advance.
+    transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
+        default_factory=dict
+    )
 
 
 def _create_initial_poi_replay_state(
@@ -1051,6 +1102,8 @@ def _advance_poi_replay_state(
     # helpers; single-timeframe merge is a no-op but is still applied for exact
     # parity with analyze_pois).
     all_candidates = _detect_bundle_candidates(bundle, configuration)
+    prior_cache = state.observation_cache
+    new_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
     observations_list: list[PoiObservation] = []
     for candidate in all_candidates:
         semantic_key = _semantic_key_for_candidate(candidate, rule_version_text)
@@ -1066,32 +1119,28 @@ def _advance_poi_replay_state(
             evidence_classification=configuration.evidence_classification,
             provenance_id=provenance_id,
         )
-        content_fingerprint = _compute_content_fingerprint(fields)
-        observations_list.append(
-            PoiObservation(
+        # A3-A: reuse the immutable finalized object (and its fingerprint) when
+        # the fingerprint-determining fields are byte-identical to the cached
+        # ones; only a genuine field change pays the SHA-256 + construction.
+        cached = prior_cache.get(record_id)
+        if cached is not None and cached[0] == fields:
+            observation = cached[1]
+        else:
+            observation = PoiObservation(
                 record_id=record_id,
-                content_fingerprint=content_fingerprint,
+                content_fingerprint=_compute_content_fingerprint(fields),
                 **fields,  # type: ignore[arg-type]
             )
-        )
+        new_cache[record_id] = (fields, observation)
+        observations_list.append(observation)
     observations = tuple(observations_list)
 
-    merged_children, effective_timeframe_overrides = resolve_merges(observations)
-    updated_observations: list[PoiObservation] = []
-    for observation in observations:
-        update: dict[str, object] = {}
-        if observation.record_id in merged_children:
-            update["merged_source_poi_record_ids"] = merged_children[
-                observation.record_id
-            ]
-        if observation.record_id in effective_timeframe_overrides:
-            update["effective_timeframe"] = effective_timeframe_overrides[
-                observation.record_id
-            ]
-        if update:
-            observation = _refingerprint(observation.model_copy(update=update))
-        updated_observations.append(observation)
-    observations = tuple(updated_observations)
+    # A3-A/A3-D: resolve_merges only ever pairs a child POI with a STRONGER-
+    # timeframe parent, and _advance_poi_replay_state always processes exactly one
+    # timeframe's bundle, so the merge is a proven no-op here (identical to the
+    # single-active-timeframe skip in _combine_poi_replay_states). Skipping it
+    # removes an O(obs^2) scan from the per-candle hot path with no output change;
+    # cross-timeframe merges are still applied in _combine_poi_replay_states.
 
     atr_values = compute_atr_series(new_candles, 14)
 
@@ -1186,6 +1235,7 @@ def _advance_poi_replay_state(
             rule_version_text,
         )
 
+    new_transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = {}
     lifecycle_transitions = _finalize(
         list(all_transitions),
         DerivedOutputType.POI_LIFECYCLE_TRANSITION,
@@ -1195,13 +1245,20 @@ def _advance_poi_replay_state(
         frozenset(),
         configuration,
         resolver,
+        prior_reuse=state.transition_cache,
+        new_reuse=new_transition_cache,
     )
 
     latest_transition_by_poi: dict[UUID, UUID] = {}
     for transition in lifecycle_transitions:
         latest_transition_by_poi[transition.poi_record_id] = transition.record_id
 
-    current_states: list[CurrentPoiState] = []
+    # A3-A: resolve identities and assemble the full CurrentPoiState field dicts
+    # here (cheap, memoized), but defer the SHA-256 fingerprint and strict-pydantic
+    # construction to _poi_replay_state_to_analysis, which builds them only when a
+    # public snapshot actually needs them. The advance no longer pays P
+    # constructions + P SHA-256 digests per candle.
+    current_state_materials_list: list[tuple[UUID, dict[str, object]]] = []
     for poi_record_id, state_fields in current_state_fields_by_poi.items():
         symbol_value = state_fields["symbol"]
         timeframe_value = state_fields["timeframe"]
@@ -1231,14 +1288,7 @@ def _advance_poi_replay_state(
             evidence_classification=configuration.evidence_classification,
             provenance_id=provenance_id,
         )
-        content_fingerprint = _compute_content_fingerprint(fields)
-        current_states.append(
-            CurrentPoiState(
-                record_id=record_id,
-                content_fingerprint=content_fingerprint,
-                **fields,  # type: ignore[arg-type]
-            )
-        )
+        current_state_materials_list.append((record_id, fields))
 
     observations_sorted = tuple(
         sorted(
@@ -1267,9 +1317,40 @@ def _advance_poi_replay_state(
             ),
         )
     )
-    current_states_sorted = tuple(
+    return _PoiReplayState(
+        resolver=resolver,
+        rule_version_text=rule_version_text,
+        timeframe=candle.timeframe,
+        symbol=new_candles[0].symbol,
+        candles_so_far=new_candles,
+        lifecycle_states=new_lifecycle_states,
+        live_pois=tuple(live_pois_list),
+        current_state_materials=tuple(current_state_materials_list),
+        poi_observations_so_far=observations_sorted,
+        poi_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
+        observation_cache=new_cache,
+        transition_cache=new_transition_cache,
+    )
+
+
+def _materialize_current_poi_states(
+    state: _PoiReplayState,
+) -> tuple[CurrentPoiState, ...]:
+    """A3-A: construct the CurrentPoiState public objects from the deferred
+    (record_id, fields) materials, computing each fingerprint exactly once here
+    (at the snapshot boundary) instead of once per POI per candle. Byte-identical
+    to the objects analyze_pois builds — same identities, same fingerprints, same
+    canonical ordering."""
+    return tuple(
         sorted(
-            current_states,
+            (
+                CurrentPoiState(
+                    record_id=record_id,
+                    content_fingerprint=_compute_content_fingerprint(fields),
+                    **fields,  # type: ignore[arg-type]
+                )
+                for record_id, fields in state.current_state_materials
+            ),
             key=lambda s: (
                 s.symbol.value,
                 s.timeframe.value,
@@ -1279,22 +1360,12 @@ def _advance_poi_replay_state(
         )
     )
 
-    return _PoiReplayState(
-        resolver=resolver,
-        rule_version_text=rule_version_text,
-        timeframe=candle.timeframe,
-        symbol=new_candles[0].symbol,
-        candles_so_far=new_candles,
-        lifecycle_states=new_lifecycle_states,
-        live_pois=tuple(live_pois_list),
-        current_states_by_poi=current_states_sorted,
-        poi_observations_so_far=observations_sorted,
-        poi_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
-    )
-
 
 def _poi_replay_state_to_analysis(
-    state: _PoiReplayState, *, with_overlap: bool = True
+    state: _PoiReplayState,
+    *,
+    with_overlap: bool = True,
+    with_current_states: bool = True,
 ) -> PoiAnalysis:
     """Build the public PoiAnalysis from the incremental single-timeframe state,
     matching analyze_pois's shape exactly — including the empty-input case.
@@ -1344,6 +1415,9 @@ def _poi_replay_state_to_analysis(
         )
     else:
         overlap_relationships = ()
+    current_poi_states = (
+        _materialize_current_poi_states(state) if with_current_states else ()
+    )
     return PoiAnalysis(
         symbol=state.symbol,
         analyzed_timeframes=(state.timeframe,),
@@ -1351,7 +1425,7 @@ def _poi_replay_state_to_analysis(
         poi_observations=state.poi_observations_so_far,
         poi_lifecycle_transitions=state.poi_lifecycle_transitions_so_far,
         poi_overlap_relationships=overlap_relationships,
-        current_poi_states=state.current_states_by_poi,
+        current_poi_states=current_poi_states,
     )
 
 
@@ -1388,8 +1462,14 @@ def _combine_poi_replay_states(
     # Per-timeframe overlap is never read here (cross-timeframe overlap is
     # recomputed below from the merged observations), so skip the discarded
     # O(obs^2) single-timeframe scan on every group and at finalization.
+    # A3-A: CurrentPoiState is only materialized when this combine will publish
+    # it (with_overlap=True, i.e. finalization). The per-group ledger path
+    # (with_overlap=False) never reads current_poi_states, so their construction
+    # is deferred out of the per-group hot path entirely.
     per_timeframe = {
-        tf: _poi_replay_state_to_analysis(poi_states[tf], with_overlap=False)
+        tf: _poi_replay_state_to_analysis(
+            poi_states[tf], with_overlap=False, with_current_states=with_overlap
+        )
         for tf in ordered_timeframes
     }
 

@@ -206,7 +206,19 @@ def _finalize[ContractT: ContractModel](
     excluded_candidate_fields: frozenset[str],
     configuration: MarketMeasurementConfiguration,
     resolver: _IdentityResolver,
+    *,
+    prior_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
+    new_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] | None = None,
 ) -> tuple[ContractT, ...]:
+    """A3-C: with ``prior_reuse``/``new_reuse`` (the incremental replay path) a
+    finalized record whose fingerprint-determining fields are byte-identical to
+    the cached ones is reused verbatim — no SHA-256, no strict-pydantic
+    construction — and recorded in ``new_reuse`` for the next advance. This is an
+    exact mutable-frontier reuse: unchanged prefix records keep their object,
+    genuinely changed records (supersession / middle insertion) differ in
+    ``fields`` and are rebuilt. The batch oracle passes neither cache and is
+    byte-for-byte unchanged; ``new_reuse`` is a caller-owned local published only
+    on a successful advance."""
     results: list[ContractT] = []
     for candidate in candidates:
         semantic_key = semantic_key_fn(candidate)
@@ -225,10 +237,25 @@ def _finalize[ContractT: ContractModel](
             provenance_id=provenance_id,
         )
 
-        content_fingerprint = _compute_content_fingerprint(fields)
         # A generic TypeVar call site cannot statically see the concrete
         # subclass's fields; every one of the 5 contract classes passed here
         # genuinely accepts record_id/content_fingerprint plus **fields.
+        if prior_reuse is not None:
+            cached = prior_reuse.get(record_id)
+            if cached is not None and cached[0] == fields:
+                record = cached[1]
+            else:
+                record = contract_class(  # type: ignore[call-arg]
+                    record_id=record_id,
+                    content_fingerprint=_compute_content_fingerprint(fields),
+                    **fields,
+                )
+            if new_reuse is not None:
+                new_reuse[record_id] = (fields, record)
+            results.append(record)  # type: ignore[arg-type]
+            continue
+
+        content_fingerprint = _compute_content_fingerprint(fields)
         results.append(
             contract_class(  # type: ignore[call-arg]
                 record_id=record_id,
@@ -1543,6 +1570,15 @@ class _MeasurementReplayState:
     trendline_caches: dict[TrendlineOrientation, _TrendlineOrientationCache] = field(
         default_factory=dict
     )
+    # A3-C: shared finalized-record reuse cache (record_id -> (fields, object))
+    # spanning confirmed swings / clusters / zones / trendlines. record_ids are
+    # globally unique across categories (derived from output_type + semantic_key),
+    # so one map is exact. _finalize reuses the object for any record whose
+    # fingerprint-determining fields are unchanged, rebuilding only the genuinely
+    # dirty mutable-frontier records. Published only on a successful advance.
+    finalize_reuse_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
+        default_factory=dict
+    )
 
 
 def _create_initial_measurement_replay_state(
@@ -1576,6 +1612,15 @@ def _advance_measurement_replay_state(
             raise UnsortedCandleSequenceError(
                 "candles must be canonically ordered by (event_time_utc, record_id)."
             )
+
+    # A3-C: reuse cache carried forward from the prior state (a local copy, so a
+    # raised advance never mutates the caller's cache) and updated in place by
+    # each _finalize below. Carrying it forward preserves reuse for categories
+    # that are not re-finalized on this candle (e.g. swings when they did not
+    # change), while re-finalized categories overwrite their entries.
+    new_finalize_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] = dict(
+        state.finalize_reuse_cache
+    )
 
     new_candles_so_far = [*state.candles_so_far, candle]
     absolute_index = len(new_candles_so_far) - 1
@@ -1637,6 +1682,8 @@ def _advance_measurement_replay_state(
             frozenset(),
             configuration,
             state.resolver,
+            prior_reuse=state.finalize_reuse_cache,
+            new_reuse=new_finalize_reuse,
         )
 
     new_equal_level_clusters = state.equal_level_clusters_so_far
@@ -1677,6 +1724,8 @@ def _advance_measurement_replay_state(
             frozenset({"first_seed_swing_id", "second_seed_swing_id"}),
             configuration,
             state.resolver,
+            prior_reuse=state.finalize_reuse_cache,
+            new_reuse=new_finalize_reuse,
         )
 
         new_trendline_caches, trendline_candidates = _advance_trendlines_incremental(
@@ -1696,6 +1745,8 @@ def _advance_measurement_replay_state(
             frozenset(),
             configuration,
             state.resolver,
+            prior_reuse=state.finalize_reuse_cache,
+            new_reuse=new_finalize_reuse,
         )
 
     # Unlike equal-levels/trendlines, a support/resistance zone's reaction
@@ -1728,6 +1779,8 @@ def _advance_measurement_replay_state(
         frozenset(),
         configuration,
         state.resolver,
+        prior_reuse=state.finalize_reuse_cache,
+        new_reuse=new_finalize_reuse,
     )
 
     new_displacement_observations = state.displacement_observations_so_far
@@ -1771,6 +1824,7 @@ def _advance_measurement_replay_state(
         equal_level_cache_high=new_equal_level_cache_high,
         equal_level_cache_low=new_equal_level_cache_low,
         trendline_caches=new_trendline_caches,
+        finalize_reuse_cache=new_finalize_reuse,
     )
 
 
