@@ -42,7 +42,6 @@ from btmm_ai_scanner.poi.analyzer import (
     _advance_poi_replay_state,
     _combine_poi_replay_states,
     _create_initial_poi_replay_state,
-    _poi_replay_state_to_analysis,
     _PoiReplayState,
 )
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
@@ -632,14 +631,21 @@ class IncrementalReplayKernel:
                 visible = (*visible, candle)
                 if is_btmm_timeframe:
                     assert btmm_state is not None
-                    # BTMM reads only poi_observations + poi_lifecycle_transitions
-                    # (never overlap, never current_poi_states), so skip both the
-                    # per-candle O(obs^2) overlap and the CurrentPoiState build.
-                    per_timeframe_poi = _poi_replay_state_to_analysis(
-                        poi_state, with_overlap=False, with_current_states=False
-                    )
+                    assert poi_state.scheduler is not None
+                    # A6-B2-C: feed BTMM the POI engine's own bounded per-candle
+                    # delta (new/changed/removed BTMM-eligible source POIs) and
+                    # its scheduler's bounded last_walks — never a full POI
+                    # snapshot scan (no _poi_replay_state_to_analysis call here).
                     btmm_state = _advance_btmm_replay_state(
-                        btmm_state, candle, per_timeframe_poi, gated_evidence, btmm_cfg
+                        btmm_state,
+                        candle,
+                        poi_state.new_pois_for_btmm,
+                        poi_state.changed_pois_for_btmm,
+                        poi_state.removed_poi_ids_for_btmm,
+                        poi_state.scheduler.last_walks,
+                        gated_evidence,
+                        btmm_cfg,
+                        poi_observation_count=len(poi_state.poi_observations_so_far),
                     )
             new_measurement[timeframe] = measurement_state
             new_structure[timeframe] = structure_state

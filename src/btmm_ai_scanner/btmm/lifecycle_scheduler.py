@@ -284,6 +284,17 @@ def _reconcile(
     # immediate re-materialization even while price is still open.
     stage = None if has_genuine_invalidation else _price_stage(cursor)
 
+    # materialize_btmm_cursor is a fixed-cost (O(1), no candle scan) function of
+    # the cursor's currently-cached price-stage results plus the known evidence/
+    # transition inputs -- it is exact and cheap at ANY stage, not only once
+    # price is fully resolved. ENTERED_FORMING and ACCURACY_GATE_CONFIRMED (and
+    # any evidence-triggered transitions) can already be present while the
+    # cursor is still mid-price-scan, so last_walks must capture them here,
+    # every reconcile, not only in the price-resolved branch below.
+    evidence = mut.reviewed_evidence.get(source_poi_record_id.int)
+    walk = materialize_btmm_cursor(cursor, poi_transitions, evidence, configuration)
+    last_walks[setup_id] = walk
+
     if stage in (BtmmSchedulerStage.WAIT_FORMING, BtmmSchedulerStage.WAIT_INTERACTION):
         if stage is BtmmSchedulerStage.WAIT_FORMING:
             key = _time_key(cursor.candidate_availability_time_utc)
@@ -339,12 +350,8 @@ def _reconcile(
         )
         return
 
-    # Price-resolved (naturally or forced by a genuine invalidation): the outcome
-    # depends only on the fixed-cost materialize call, never another candle scan.
-    evidence = mut.reviewed_evidence.get(source_poi_record_id.int)
-    walk = materialize_btmm_cursor(cursor, poi_transitions, evidence, configuration)
-    last_walks[setup_id] = walk
-
+    # Price-resolved (naturally or forced by a genuine invalidation): walk was
+    # already materialized and captured above.
     poi_terminal = any(
         t.transition_type in _RELEVANT_POI_TRANSITION_TYPES for t in poi_transitions
     )
@@ -559,6 +566,17 @@ def advance_btmm_scheduler(
     # 7. Drop the consumed due bucket for this bar.
     new_due = mut.due.delete(m)
 
+    # woken_ids names every setup actually reconciled this candle -- price/
+    # event wakes plus new/changed setups (built and reconciled in step 6),
+    # so a caller can trust it as the exact "touched this candle" set (e.g.
+    # for a wake-differential check) without a separate accounting pass.
+    touched_ids = (
+        price_wake
+        | poi_event_wake
+        | {spec.setup_record_id for spec in setup_delta.changed_setups}
+        | {spec.setup_record_id for spec in setup_delta.new_setups}
+    )
+
     return BtmmSetupEventScheduler(
         configuration=config,
         total_count=next_bar,
@@ -572,7 +590,7 @@ def advance_btmm_scheduler(
         reviewed_evidence=mut.reviewed_evidence,
         poi_to_setup=mut.poi_to_setup,
         max_availability=new_max_availability,
-        woken_ids=frozenset(price_wake | poi_event_wake),
+        woken_ids=frozenset(touched_ids),
         rebuilt=rebuilt,
         last_walks=last_walks,
     )

@@ -1062,6 +1062,16 @@ class _PoiReplayState:
     detector_frontier: _DetectorFrontierState = field(
         default_factory=create_initial_detector_frontier_state
     )
+    # A6-B2-C: the exact bounded per-candle BTMM-eligible-subset delta, exposed
+    # for the BTMM incremental engine to consume directly instead of re-deriving
+    # it from a full poi_observations scan. Zero new computation: these are the
+    # SAME PoiObservation objects already built above (read back via new_cache,
+    # itself already built) for the SAME bounded new_specs/changed_specs the
+    # scheduler itself consumes, plus the same removed_ids. Never read by
+    # analyze_pois or any POI-only path; POI's own output/behavior is unchanged.
+    new_pois_for_btmm: tuple[PoiObservation, ...] = ()
+    changed_pois_for_btmm: tuple[PoiObservation, ...] = ()
+    removed_poi_ids_for_btmm: tuple[UUID, ...] = ()
 
 
 def _create_initial_poi_replay_state(
@@ -1213,6 +1223,13 @@ def _advance_poi_replay_state(
         removed_ids=removed_ids,
     )
 
+    # A6-B2-C: bounded BTMM-facing delta -- O(delta), reads back the same
+    # PoiObservation objects new_cache already holds for these same record_ids.
+    new_pois_for_btmm = tuple(new_cache[spec.record_id][1] for spec in new_specs)
+    changed_pois_for_btmm = tuple(
+        new_cache[spec.record_id][1] for spec in changed_specs
+    )
+
     # A6-B1-B7: the per-candle advance no longer assembles lifecycle transitions
     # or CurrentPoiState — that O(P) work is deferred to
     # ``_build_lifecycle_outputs`` at the snapshot/finalization boundary (lazy).
@@ -1243,6 +1260,9 @@ def _advance_poi_replay_state(
         poi_observations_so_far=observations_sorted,
         observation_cache=new_cache,
         detector_frontier=new_detector_frontier,
+        new_pois_for_btmm=new_pois_for_btmm,
+        changed_pois_for_btmm=changed_pois_for_btmm,
+        removed_poi_ids_for_btmm=tuple(removed_ids),
     )
 
 

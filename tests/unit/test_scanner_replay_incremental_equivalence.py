@@ -25,6 +25,8 @@ from btmm_ai_scanner.btmm.enums import (
     BtmmSessionStatus,
     BtmmVolumePillarStatus,
 )
+from btmm_ai_scanner.btmm.lifecycle_cursor import BtmmLifecycleCursor
+from btmm_ai_scanner.btmm.lifecycle_scheduler import BtmmSchedulerStage
 from btmm_ai_scanner.btmm.reviewed_evidence import BtmmReviewedEvidence
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
@@ -2076,8 +2078,17 @@ def _measurement_poi_btmm_driven(
             if with_evidence
             else ()
         )
+        assert p_state.scheduler is not None
         b_state = _advance_btmm_replay_state(
-            b_state, candle, poi_analysis, evidence, _BTMM_CONFIG
+            b_state,
+            candle,
+            p_state.new_pois_for_btmm,
+            p_state.changed_pois_for_btmm,
+            p_state.removed_poi_ids_for_btmm,
+            p_state.scheduler.last_walks,
+            evidence,
+            _BTMM_CONFIG,
+            poi_observation_count=len(p_state.poi_observations_so_far),
         )
         incremental = _btmm_replay_state_to_analysis(b_state)
         analysis_series.append(incremental)
@@ -2248,7 +2259,9 @@ def test_btmm_reaction_speed_failed_matches_the_oracle() -> None:
 def test_btmm_active_setups_preserved_and_non_terminal() -> None:
     result = _btmm_driven(42)
     final = result.analysis_series[-1]
-    live_ids = {o.record_id for o in result.final_state.live_setups}  # type: ignore[attr-defined]
+    scheduler = result.final_state.scheduler  # type: ignore[attr-defined]
+    assert scheduler is not None
+    all_setup_ids = set(result.final_state.observation_cache)  # type: ignore[attr-defined]
     terminal_ids = {
         s.btmm_setup_record_id
         for s in final.current_btmm_states
@@ -2256,6 +2269,12 @@ def test_btmm_active_setups_preserved_and_non_terminal() -> None:
         in (BtmmLifecycleStatus.BTMM_CONFIRMED, BtmmLifecycleStatus.BTMM_CANCELLED)
     }
     assert terminal_ids
+    live_ids = {
+        sid
+        for sid in all_setup_ids
+        if scheduler.materialize_walk(sid).final_fields.primary_state
+        not in (BtmmLifecycleStatus.BTMM_CONFIRMED, BtmmLifecycleStatus.BTMM_CANCELLED)
+    }
     # No terminal (confirmed/cancelled) setup is counted as live.
     assert not (live_ids & terminal_ids)
 
@@ -2275,8 +2294,20 @@ def test_btmm_terminal_setups_preserved_in_public_output() -> None:
     observation_setup_ids = {o.record_id for o in final.btmm_observations}
     for state in terminal:
         assert state.btmm_setup_record_id in observation_setup_ids
-    # A genuinely-invalidated setup is frozen (cached) in the final state.
-    assert result.final_state.frozen_walks  # type: ignore[attr-defined]
+    # A genuinely-invalidated setup is frozen (no longer watched) in the final
+    # scheduler state.
+    scheduler = result.final_state.scheduler  # type: ignore[attr-defined]
+    assert scheduler is not None
+    rejected_setup_ids = {
+        t.btmm_setup_record_id
+        for t in final.btmm_lifecycle_transitions
+        if t.transition_type == BtmmLifecycleTransitionType.POI_REJECTED
+    }
+    assert rejected_setup_ids
+    assert any(
+        scheduler.stage_of(sid) == BtmmSchedulerStage.FROZEN
+        for sid in rejected_setup_ids
+    )
 
 
 def test_btmm_transition_priority_confirmed_from_full_gate_sequence() -> None:
@@ -2513,50 +2544,66 @@ def test_btmm_complete_analysis_equality_at_every_prefix_without_evidence(
 
 def test_btmm_transaction_rollback_leaves_prior_state_untouched() -> None:
     candles = _BTMM_CANDLES[42]
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
     state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
     for k in range(1, 41):
-        measurement = analyze_market_measurements(
-            candles[:k], _CONFIG, _HashIdentityProvider()
+        candle = candles[k - 1]
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        assert p_state.scheduler is not None
+        evidence = _aligned_evidence(
+            _poi_replay_state_to_analysis(p_state), candle.availability_time_utc
         )
-        poi_analysis = analyze_pois(
-            (PoiTimeframeInput(Timeframe.M15, candles[:k], measurement),),
-            _POI_CONFIG,
-            _HashIdentityProvider(),
-        )
-        evidence = _aligned_evidence(poi_analysis, candles[k - 1].availability_time_utc)
         state = _advance_btmm_replay_state(
-            state, candles[k - 1], poi_analysis, evidence, _BTMM_CONFIG
+            state,
+            candle,
+            p_state.new_pois_for_btmm,
+            p_state.changed_pois_for_btmm,
+            p_state.removed_poi_ids_for_btmm,
+            p_state.scheduler.last_walks,
+            evidence,
+            _BTMM_CONFIG,
+            poi_observation_count=len(p_state.poi_observations_so_far),
         )
 
-    frozen_before = state.frozen_walks
+    scheduler_before = state.scheduler
     candles_before = state.candles_so_far
-    observations_before = state.btmm_observations_so_far
+    observation_cache_before = state.observation_cache
 
-    measurement = analyze_market_measurements(
-        candles[:40], _CONFIG, _HashIdentityProvider()
-    )
-    poi_analysis = analyze_pois(
-        (PoiTimeframeInput(Timeframe.M15, candles[:40], measurement),),
-        _POI_CONFIG,
-        _HashIdentityProvider(),
-    )
-    evidence = _aligned_evidence(poi_analysis, candles[39].availability_time_utc)
     replayed = _btmm_candle(9999, 100.0, 101.0, 99.0, 100.0).model_copy(
         update={"event_time_utc": candles[5].event_time_utc}
     )
     with pytest.raises(UnsortedCandleSequenceError):
         _advance_btmm_replay_state(
-            state, replayed, poi_analysis, evidence, _BTMM_CONFIG
+            state, replayed, (), (), (), {}, (), _BTMM_CONFIG, poi_observation_count=0
         )
 
-    # The prior state object — including the per-setup frozen cache (identity,
+    # The prior state object — including the persistent scheduler (identity,
     # not just equality) — survives the failed transition unchanged.
-    assert state.frozen_walks is frozen_before
+    assert state.scheduler is scheduler_before
     assert state.candles_so_far == candles_before
-    assert state.btmm_observations_so_far == observations_before
+    assert state.observation_cache == observation_cache_before
 
+    candle_41 = candles[40]
+    m_state = _advance_measurement_replay_state(m_state, candle_41, _CONFIG)
+    measurement = _measurement_replay_state_to_analysis(m_state)
+    p_state = _advance_poi_replay_state(p_state, candle_41, measurement, _POI_CONFIG)
+    assert p_state.scheduler is not None
+    evidence = _aligned_evidence(
+        _poi_replay_state_to_analysis(p_state), candle_41.availability_time_utc
+    )
     resumed = _advance_btmm_replay_state(
-        state, candles[40], poi_analysis, evidence, _BTMM_CONFIG
+        state,
+        candle_41,
+        p_state.new_pois_for_btmm,
+        p_state.changed_pois_for_btmm,
+        p_state.removed_poi_ids_for_btmm,
+        p_state.scheduler.last_walks,
+        evidence,
+        _BTMM_CONFIG,
+        poi_observation_count=len(p_state.poi_observations_so_far),
     )
     assert len(resumed.candles_so_far) == len(candles_before) + 1
 
@@ -2956,7 +3003,7 @@ def test_kernel_btmm_advances_incrementally_per_group() -> None:
     for candle in candles:
         kernel.advance_group({Timeframe.M15: (candle,)})
         btmm_state = kernel._state.btmm_states[Timeframe.M15]
-        setup_counts.append(len(btmm_state.btmm_observations_so_far))
+        setup_counts.append(len(btmm_state.observation_cache))
     # A per-group BTMM state exists after every eligible group and grows as
     # setups are created; it is not recomputed from scratch at finalization.
     assert setup_counts[-1] > 0
@@ -3118,3 +3165,187 @@ def test_kernel_full_transaction_rollback_preserves_ledger_and_state() -> None:
 
     kernel.advance_group({Timeframe.M15: (candles[12],)})
     assert kernel.processed_group_count() == group_count_before + 1
+
+
+# =====================================================================
+# A6-B2-C: production wake differential + non-woken identity reuse.
+#
+# The BTMM every-prefix / scanner differential tests above already prove
+# output-level exactness against the batch oracle for the full production
+# path (_advance_btmm_replay_state driven from the real POI engine's own
+# bounded delta). These tests add the operation-level guarantees specific to
+# B2-C: the production scheduler's woken_ids has zero false negatives against
+# a brute-force "did this setup's semantic cursor state change" oracle, and a
+# setup untouched this candle keeps its prior cursor object by identity (no
+# O(S) rebuild).
+# =====================================================================
+
+
+def _btmm_cursor_semantic_snapshot(cursor: BtmmLifecycleCursor) -> tuple[object, ...]:
+    return (
+        cursor.entered_forming_index,
+        cursor.interaction_index,
+        cursor.interaction_class,
+        cursor.reaction_start_index,
+        cursor.reaction_anchor,
+        len(cursor.window_candles),
+        cursor.tier_result,
+        cursor.window_close_candle,
+    )
+
+
+def test_btmm_production_wake_differential_zero_false_negatives() -> None:
+    """At every candle, any setup whose cursor semantic snapshot actually
+    changes must appear in scheduler.woken_ids -- driven through the real
+    production path (_advance_btmm_replay_state fed by the real POI engine's
+    bounded delta), not a standalone harness."""
+    candles = _BTMM_CANDLES[42]
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    s_state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    b_state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
+
+    prior_snapshots: dict[UUID, tuple[object, ...]] = {}
+    checks = 0
+    for candle in candles:
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        s_state = _advance_structure_replay_state(
+            s_state, candle, measurement.confirmed_swings, _STRUCT_CONFIG
+        )
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        assert p_state.scheduler is not None
+        poi_analysis = _poi_replay_state_to_analysis(p_state)
+        evidence = _aligned_evidence(poi_analysis, candle.availability_time_utc)
+
+        b_state = _advance_btmm_replay_state(
+            b_state,
+            candle,
+            p_state.new_pois_for_btmm,
+            p_state.changed_pois_for_btmm,
+            p_state.removed_poi_ids_for_btmm,
+            p_state.scheduler.last_walks,
+            evidence,
+            _BTMM_CONFIG,
+            poi_observation_count=len(p_state.poi_observations_so_far),
+        )
+        assert b_state.scheduler is not None
+
+        # Compare THIS candle's post-advance snapshot against the PRIOR
+        # candle's post-advance snapshot (both taken after their own advance
+        # call) -- not a before/after pair straddling a single advance, which
+        # would silently skip checking the effect of the previous candle.
+        current_snapshots = {
+            cursor.setup_record_id: _btmm_cursor_semantic_snapshot(cursor)
+            for _key, cursor in b_state.scheduler.cursors.items()
+        }
+        for setup_id, new_snapshot in current_snapshots.items():
+            prior_snapshot = prior_snapshots.get(setup_id)
+            if prior_snapshot is not None and new_snapshot != prior_snapshot:
+                assert setup_id in b_state.scheduler.woken_ids, (
+                    f"missed wake for setup {setup_id} at candle"
+                    f" {candle.availability_time_utc}"
+                )
+                checks += 1
+
+        prior_snapshots = current_snapshots
+    assert checks > 0
+
+
+def test_btmm_non_woken_setup_cursor_identity_reused() -> None:
+    """A setup not in woken_ids this candle keeps the exact same cursor object
+    (identity, not just equality) -- structural reuse, no O(S) rebuild."""
+    candles = _BTMM_CANDLES[42]
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    s_state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    b_state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
+
+    reuse_checks = 0
+    for candle in candles:
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        s_state = _advance_structure_replay_state(
+            s_state, candle, measurement.confirmed_swings, _STRUCT_CONFIG
+        )
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        assert p_state.scheduler is not None
+        poi_analysis = _poi_replay_state_to_analysis(p_state)
+        evidence = _aligned_evidence(poi_analysis, candle.availability_time_utc)
+
+        assert b_state.scheduler is not None
+        prior_cursors = {
+            cursor.setup_record_id: cursor
+            for _key, cursor in b_state.scheduler.cursors.items()
+        }
+
+        b_state = _advance_btmm_replay_state(
+            b_state,
+            candle,
+            p_state.new_pois_for_btmm,
+            p_state.changed_pois_for_btmm,
+            p_state.removed_poi_ids_for_btmm,
+            p_state.scheduler.last_walks,
+            evidence,
+            _BTMM_CONFIG,
+            poi_observation_count=len(p_state.poi_observations_so_far),
+        )
+        assert b_state.scheduler is not None
+
+        for setup_id, prior_cursor in prior_cursors.items():
+            if setup_id in b_state.scheduler.woken_ids:
+                continue
+            new_cursor = b_state.scheduler.cursors.get(setup_id.int)
+            if new_cursor is not None:
+                assert new_cursor is prior_cursor, (
+                    f"non-woken setup {setup_id} cursor was rebuilt unnecessarily"
+                )
+                reuse_checks += 1
+    assert reuse_checks > 0
+
+
+def test_btmm_no_new_poi_activity_produces_no_rebuild() -> None:
+    """A candle with zero new/changed BTMM-eligible POIs never rebuilds any
+    setup cursor from scratch (scheduler.rebuilt == 0), regardless of how many
+    historical setups already exist."""
+    candles = _BTMM_CANDLES[42]
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    s_state = _create_initial_structure_replay_state(
+        _HashIdentityProvider(), _STRUCT_CONFIG
+    )
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    b_state = _create_initial_btmm_replay_state(_HashIdentityProvider(), _BTMM_CONFIG)
+
+    saw_zero_delta_candle = False
+    for candle in candles:
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        s_state = _advance_structure_replay_state(
+            s_state, candle, measurement.confirmed_swings, _STRUCT_CONFIG
+        )
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        assert p_state.scheduler is not None
+        poi_analysis = _poi_replay_state_to_analysis(p_state)
+        evidence = _aligned_evidence(poi_analysis, candle.availability_time_utc)
+
+        b_state = _advance_btmm_replay_state(
+            b_state,
+            candle,
+            p_state.new_pois_for_btmm,
+            p_state.changed_pois_for_btmm,
+            p_state.removed_poi_ids_for_btmm,
+            p_state.scheduler.last_walks,
+            evidence,
+            _BTMM_CONFIG,
+            poi_observation_count=len(p_state.poi_observations_so_far),
+        )
+        assert b_state.scheduler is not None
+
+        if not p_state.new_pois_for_btmm and not p_state.changed_pois_for_btmm:
+            saw_zero_delta_candle = True
+            assert b_state.scheduler.rebuilt == 0
+    assert saw_zero_delta_candle

@@ -1,26 +1,30 @@
 import hashlib
 import json
-from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, timedelta
 from decimal import Decimal
 from enum import Enum
 from itertools import pairwise
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 from uuid import UUID
 
 from btmm_ai_scanner.btmm.configuration import BtmmConfiguration, validate_configuration
 from btmm_ai_scanner.btmm.current_state import CurrentBtmmState
-from btmm_ai_scanner.btmm.enums import BtmmDirection, BtmmLifecycleStatus
+from btmm_ai_scanner.btmm.enums import BtmmDirection
 from btmm_ai_scanner.btmm.lifecycle import (
     BtmmLifecycleTransition,
-    LifecycleWalkResult,
     TransitionCandidate,
     run_btmm_lifecycle,
 )
+from btmm_ai_scanner.btmm.lifecycle_scheduler import (
+    BtmmSetupEventScheduler,
+    advance_btmm_scheduler,
+    create_btmm_scheduler,
+)
 from btmm_ai_scanner.btmm.observation import BtmmObservation
 from btmm_ai_scanner.btmm.reviewed_evidence import BtmmReviewedEvidence
+from btmm_ai_scanner.btmm.setup_delta import derive_btmm_setup_delta, is_btmm_eligible
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.contracts.types import ContractModel, SemVer
@@ -33,10 +37,17 @@ from btmm_ai_scanner.domain import (
     UnsortedCandleSequenceError,
 )
 from btmm_ai_scanner.domain.enums import DerivedOutputType
-from btmm_ai_scanner.measurements.atr import compute_atr_series
+from btmm_ai_scanner.measurements.atr import (
+    IncrementalAtrState,
+    advance_incremental_atr,
+    compute_atr_series,
+    initial_incremental_atr_state,
+)
 from btmm_ai_scanner.poi.analyzer import PoiAnalysis
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiLifecycleTransitionType
+from btmm_ai_scanner.poi.lifecycle import LifecycleWalkResult as PoiLifecycleWalkResult
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
+from btmm_ai_scanner.poi.lifecycle import TransitionCandidate as PoiTransitionCandidate
 from btmm_ai_scanner.poi.observation import PoiObservation
 
 _TIMEFRAME_STRENGTH_RANK: dict[Timeframe, int] = {
@@ -596,88 +607,146 @@ def analyze_btmm(
 
 
 # =====================================================================
-# Subsystem 2e: private incremental BTMM replay state (single timeframe).
+# Subsystem 2e / A6-B2-C: private incremental BTMM replay state (single
+# timeframe), wired to the accepted B2-A resumable cursor
+# (btmm.lifecycle_cursor, via the B2-B persistent event-driven scheduler in
+# btmm.lifecycle_scheduler). The public analyze_btmm above is preserved
+# byte-for-byte and remains the sole semantic oracle; run_btmm_lifecycle is
+# never called from the incremental hot path below.
 #
-# The public analyze_btmm above is preserved byte-for-byte and remains the sole
-# semantic oracle. This section adds a private incremental engine that
-# reproduces analyze_btmm((single_bundle,), poi_analysis, reviewed_evidence, ...)
-# EXACTLY at every candle prefix while making the per-setup lifecycle walk
-# incremental instead of re-walking every setup from scratch on every candle.
+# BTMM creates exactly one setup per BTMM-eligible source POI (keyed by the
+# POI's own stable record_id). Setup construction, source-POI-transition
+# routing, and reviewed-evidence routing are all driven by BOUNDED per-candle
+# deltas -- never a scan of the full historical POI or setup universe:
+#   * new/changed/removed POIs arrive as the POI incremental engine's own
+#     bounded per-candle delta (exposed on _PoiReplayState as
+#     new_pois_for_btmm / changed_pois_for_btmm / removed_poi_ids_for_btmm --
+#     see poi.analyzer, A6-B2-C; zero new POI-side computation).
+#   * newly-relevant source-POI lifecycle transitions (GENUINE_INVALIDATION_
+#     CONFIRMED / FALSE_INVALIDATION_CONFIRMED -- the only two types
+#     materialize_btmm_cursor ever reads) arrive via the POI scheduler's own
+#     bounded scheduler.last_walks for this candle.
+#   * reviewed evidence arrives as the externally-supplied set, diffed against
+#     what this state has already relayed.
+# advance_btmm_scheduler (B2-B, unmodified) turns these into the exact wake
+# set and advances only those setups' B2-A cursors; every other setup is
+# carried forward by reference.
 #
-# BTMM creates exactly one setup per eligible source POI (keyed by the POI's
-# record_id, which is stable), then runs run_btmm_lifecycle per setup. Two
-# properties make this incremental exactly:
-#   * run_btmm_lifecycle consumes poi_lifecycle_transitions ONLY for its own
-#     source POI (both internal uses filter on poi_record_id), so passing each
-#     setup its pre-filtered transitions is identical to passing them all.
-#   * once a setup's source POI has a GENUINE_INVALIDATION_CONFIRMED transition,
-#     the walk truncates at the invalidation and the POI (being terminal in POI
-#     land) emits no further transitions, and later candles fall after the
-#     invalidation time and are truncated out — so the walk result is frozen and
-#     cached; subsequent prefixes never re-run it.
-#
-# Detection of eligible setups, observation/transition finalization, current-
-# state building, and sorting all reuse the unchanged batch logic, so they are
-# exact by construction; only the per-setup lifecycle re-run is avoided where
-# the result is provably frozen. Pinned by permanent per-prefix differential
-# tests against the batch oracle. Cross-timeframe combination is owned by the
-# 2f orchestration kernel (BTMM spans its formation/supporting timeframes there,
-# per register §44T/§44U); this engine is the single-timeframe unit.
+# Observations and lifecycle transitions are held in content-addressed caches
+# (observation_cache / transition_cache) so the per-candle work is exactly
+# proportional to the bounded delta, not the historical setup count; the
+# public BtmmAnalysis -- including CurrentBtmmState (A6-B2-C item 14) -- is
+# materialized only when actually requested (_btmm_replay_state_to_analysis /
+# _combine_btmm_replay_states), never inside the advance itself.
 # =====================================================================
+
+
+_RELEVANT_POI_TRANSITION_TYPES: frozenset[PoiLifecycleTransitionType] = frozenset(
+    {
+        PoiLifecycleTransitionType.GENUINE_INVALIDATION_CONFIRMED,
+        PoiLifecycleTransitionType.FALSE_INVALIDATION_CONFIRMED,
+    }
+)
+
+
+def _relay_poi_transition(
+    candidate: PoiTransitionCandidate,
+    resolver: _IdentityResolver,
+    configuration: BtmmConfiguration,
+) -> PoiLifecycleTransition:
+    """A valid, internally-consistent PoiLifecycleTransition carrying exactly
+    the fields materialize_btmm_cursor reads (poi_record_id, transition_type,
+    availability_time_utc, triggering_candle_record_id, event_time_utc).
+    Its record_id / content_fingerprint are BTMM-internal identities (resolved
+    through BTMM's own resolver, under DerivedOutputType.POI_LIFECYCLE_
+    TRANSITION reused only as an identity-space tag) — never published in any
+    BtmmAnalysis output, so they need not match the id the POI engine's own
+    (lazy, snapshot-only) finalization would eventually assign the same
+    transition."""
+    semantic_key = (
+        candidate.symbol.value,
+        candidate.timeframe.value,
+        str(candidate.poi_record_id),
+        candidate.transition_type.value,
+        str(candidate.triggering_candle_record_id),
+        "btmm-relay",
+    )
+    record_id = resolver.resolve(
+        DerivedOutputType.POI_LIFECYCLE_TRANSITION, semantic_key
+    )
+    provenance_id = resolver.resolve(
+        DerivedOutputType.POI_LIFECYCLE_TRANSITION, (*semantic_key, "provenance")
+    )
+    fields: dict[str, object] = {
+        "symbol": candidate.symbol,
+        "timeframe": candidate.timeframe,
+        "poi_record_id": candidate.poi_record_id,
+        "transition_type": candidate.transition_type,
+        "triggering_candle_record_id": candidate.triggering_candle_record_id,
+        "event_time_utc": candidate.event_time_utc,
+        "availability_time_utc": candidate.availability_time_utc,
+        "rule_version": configuration.rule_version,
+        "contract_version": configuration.contract_version,
+        "schema_version": configuration.schema_version,
+        "evidence_classification": configuration.evidence_classification,
+        "provenance_id": provenance_id,
+    }
+    return PoiLifecycleTransition(
+        record_id=record_id,
+        content_fingerprint=_compute_content_fingerprint(fields),
+        **fields,  # type: ignore[arg-type]
+    )
 
 
 @dataclass
 class _BtmmReplayState:
-    """Private incremental BTMM state for subsystem 2e. Not part of the public
-    contract surface; owned exclusively by the scanner replay path. analyze_btmm
-    (and run_btmm_lifecycle) remain the unmodified batch oracle.
-
-    §44T names two fields: live_setups (full BtmmObservation records for
-    currently non-terminal setups — required because CurrentBtmmState carries
-    only ids, not the source_poi/candidate context needed to re-evaluate future
-    gate transitions) and current_states_by_setup. The remaining fields are
-    proven-necessary private additions mirroring the 2b/2c/2d precedent (the
-    not-yet-built §44U event ledger will later subsume the accumulated public
-    outputs): candles_so_far rebuilds the single-timeframe bundle each advance;
-    frozen_walks caches the finalized walk of each genuinely-invalidated setup;
-    the *_so_far tuples plus analyzed_* hold the finalized public output shape.
+    """Private incremental BTMM state (A6-B2-C). Not part of the public
+    contract surface; owned exclusively by the scanner replay path.
+    analyze_btmm (and run_btmm_lifecycle) remain the unmodified batch oracle.
 
     Treated immutably: _advance_btmm_replay_state never mutates an existing
     instance, so a raised exception leaves the caller's state intact."""
 
     resolver: _IdentityResolver
+    identity_provider: DerivedOutputIdentityProvider
     rule_version_text: str
     symbol: InternalSymbol | None = None
     analyzed_timeframes: tuple[Timeframe, ...] = ()
     analyzed_candle_count_by_timeframe: tuple[int, ...] = ()
     candles_so_far: tuple[NormalizedCandle, ...] = ()
-    frozen_walks: dict[UUID, LifecycleWalkResult] = field(default_factory=dict)
-    live_setups: tuple[BtmmObservation, ...] = ()
-    # A3-B: CurrentBtmmState is a public leaf output consumed only at the
-    # snapshot / finalization boundary (the per-group event ledger reconciles
-    # only btmm_observations + btmm_lifecycle_transitions). Its fingerprint moves
-    # as a setup progresses, so it can never be reused; instead of paying the
-    # SHA-256 + strict-pydantic construction for every setup every candle, the
-    # advance stores the fully-resolved (record_id, fields) materials and the
-    # objects are constructed once, on demand, at materialization.
-    current_state_materials: tuple[tuple[UUID, dict[str, object]], ...] = ()
-    btmm_observations_so_far: tuple[BtmmObservation, ...] = ()
-    btmm_lifecycle_transitions_so_far: tuple[BtmmLifecycleTransition, ...] = ()
+    atr_state: IncrementalAtrState = field(
+        default_factory=lambda: initial_incremental_atr_state(14)
+    )
+    atr_values_so_far: tuple[Decimal | None, ...] = ()
+    # A6-B2-B: the persistent event-driven setup scheduler. Carried between
+    # candles with structural sharing; only woken/new/changed/event-affected
+    # setup cursors advance, the rest are reused by reference.
+    scheduler: BtmmSetupEventScheduler | None = None
     # A3-B: immutable-observation reuse cache keyed by setup record_id ->
     # (fingerprint-determining fields, finalized object). A BtmmObservation is
-    # fully immutable per setup, so on every later candle the reconstructed
-    # fields are byte-identical and the cached object (and its fingerprint) is
-    # reused verbatim. Published only on a successful advance (transactional).
+    # immutable per setup, so the same object is reused verbatim for as long
+    # as the setup exists; deleted on removal. Also the sole source of truth
+    # for "which setups currently have a published observation" — no separate
+    # growing tuple to keep in sync.
     observation_cache: dict[UUID, tuple[dict[str, object], BtmmObservation]] = field(
         default_factory=dict
     )
-    # A3-C: immutable-lifecycle-transition reuse cache (record_id ->
-    # (fields, finalized transition)). A BtmmLifecycleTransition never changes
-    # once emitted, so _finalize reuses it verbatim on every later candle instead
-    # of rebuilding + re-fingerprinting the cumulative transition set.
+    # A3-C: immutable-lifecycle-transition reuse cache (record_id -> (fields,
+    # finalized transition)). A BtmmLifecycleTransition never changes once
+    # emitted, so it is reused verbatim; new entries are merged in only for
+    # setups whose materialized walk was touched this candle (bounded).
     transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
         default_factory=dict
     )
+    # A6-B2-C: which source POIs have already had a relevant (genuine/false
+    # invalidation) transition relayed into the scheduler — both types are
+    # terminal and emitted at most once per POI, so once relayed a POI's
+    # further (e.g. tap-driven) scheduler wakes never re-relay it.
+    relayed_relevant_poi_transitions: frozenset[UUID] = frozenset()
+    # A6-B2-C: which source POIs' reviewed evidence has already been fed to
+    # the scheduler — duplicate reviewed evidence per source POI is rejected
+    # upstream, so this only ever grows by genuinely new arrivals.
+    relayed_reviewed_evidence: frozenset[UUID] = frozenset()
 
 
 def _create_initial_btmm_replay_state(
@@ -686,31 +755,61 @@ def _create_initial_btmm_replay_state(
 ) -> _BtmmReplayState:
     return _BtmmReplayState(
         resolver=_IdentityResolver(identity_provider),
+        identity_provider=identity_provider,
         rule_version_text=str(configuration.rule_version),
+        scheduler=create_btmm_scheduler(configuration),
     )
 
 
-_TERMINAL_BTMM_STATES: frozenset[BtmmLifecycleStatus] = frozenset(
-    {BtmmLifecycleStatus.BTMM_CONFIRMED, BtmmLifecycleStatus.BTMM_CANCELLED}
-)
+def _all_lifecycle_transitions_sorted(
+    state: _BtmmReplayState,
+) -> tuple[BtmmLifecycleTransition, ...]:
+    transitions = [
+        cast(BtmmLifecycleTransition, t)
+        for _fields, t in state.transition_cache.values()
+    ]
+    return tuple(
+        sorted(
+            transitions,
+            key=lambda t: (
+                t.availability_time_utc,
+                t.event_time_utc,
+                t.transition_type.value,
+                str(t.btmm_setup_record_id),
+                str(t.record_id),
+            ),
+        )
+    )
 
 
 def _advance_btmm_replay_state(
     state: _BtmmReplayState,
     candle: NormalizedCandle,
-    poi_analysis: PoiAnalysis,
-    reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
+    new_pois: Sequence[PoiObservation],
+    changed_pois: Sequence[PoiObservation],
+    removed_poi_ids: Sequence[UUID],
+    poi_scheduler_last_walks: Mapping[UUID, PoiLifecycleWalkResult],
+    reviewed_evidence: Sequence[BtmmReviewedEvidence],
     configuration: BtmmConfiguration,
+    *,
+    poi_observation_count: int,
 ) -> _BtmmReplayState:
     """Advance the incremental BTMM state by exactly one new candle plus the
-    current single-timeframe POI analysis (from the 2d POI replay) and the
-    current gated reviewed evidence. Transactional: every value is built from
-    locals and the replacement _BtmmReplayState is constructed only at the very
-    end, so a raised exception (out-of-order candle) leaves the caller's state —
-    including its frozen_walks cache — untouched. Reproduces
-    analyze_btmm((bundle,), poi_analysis, reviewed_evidence, ...) exactly while
-    re-running each setup's lifecycle only until its source POI genuinely
-    invalidates (after which its finalized walk is cached, never re-run)."""
+    exact bounded per-candle POI delta (new/changed/removed BTMM-eligible
+    source POIs), the POI scheduler's own bounded ``last_walks`` for this
+    candle (source of newly-relevant source-POI transitions), and the current
+    reviewed-evidence set. ``poi_observation_count`` is the O(1) current length
+    of the POI engine's own ``poi_observations_so_far`` (not a scan) — it
+    reproduces analyze_btmm's own empty guard exactly (``len(poi_analysis.
+    poi_observations) == 0``), which fires on ANY POI observation existing
+    (e.g. period levels, present from the first candle), not merely a BTMM-
+    eligible one. Transactional: every value is built from locals and the
+    replacement _BtmmReplayState is constructed only at the very end, so a
+    raised exception (out-of-order candle) leaves the caller's state —
+    including its scheduler and caches — untouched. Reproduces
+    ``analyze_btmm((bundle,), poi_analysis, reviewed_evidence, ...)`` exactly,
+    never calling run_btmm_lifecycle and never scanning the historical POI or
+    setup universe."""
     if state.candles_so_far:
         previous_candle = state.candles_so_far[-1]
         if candle.event_time_utc <= previous_candle.event_time_utc:
@@ -719,95 +818,73 @@ def _advance_btmm_replay_state(
                 " event_time_utc."
             )
 
-    new_candles = (*state.candles_so_far, candle)
     resolver = state.resolver
+    identity_provider = state.identity_provider
     rule_version_text = state.rule_version_text
+    assert state.scheduler is not None
+    prior_scheduler = state.scheduler
 
-    # analyze_btmm's empty guard: no POI observations => fully empty analysis.
-    if len(poi_analysis.poi_observations) == 0:
-        return _BtmmReplayState(
-            resolver=resolver,
-            rule_version_text=rule_version_text,
-            symbol=None,
-            analyzed_timeframes=(),
-            analyzed_candle_count_by_timeframe=(),
-            candles_so_far=new_candles,
-            frozen_walks=state.frozen_walks,
-            live_setups=(),
-            current_state_materials=(),
-            btmm_observations_so_far=(),
-            btmm_lifecycle_transitions_so_far=(),
-            observation_cache=state.observation_cache,
-            transition_cache=state.transition_cache,
-        )
-
+    new_atr_state, atr_value = advance_incremental_atr(state.atr_state, candle)
+    new_candles = (*state.candles_so_far, candle)
+    new_atr_values = (*state.atr_values_so_far, atr_value)
     symbol = new_candles[0].symbol
-    atr_values = compute_atr_series(new_candles, 14)
-    supported_timeframes = (
-        configuration.formation_timeframes | configuration.supporting_only_timeframes
+
+    setup_delta = derive_btmm_setup_delta(
+        new_pois,
+        changed_pois,
+        removed_poi_ids,
+        identity_provider,
+        rule_version_text,
+        configuration,
     )
 
-    # Per-POI pre-indexing of lifecycle transitions (run_btmm_lifecycle only ever
-    # consults transitions for its own source POI) and the set of genuinely
-    # invalidated POIs used to freeze finished setups.
-    poi_transitions_by_poi: dict[UUID, list[PoiLifecycleTransition]] = defaultdict(list)
-    for transition in poi_analysis.poi_lifecycle_transitions:
-        poi_transitions_by_poi[transition.poi_record_id].append(transition)
-    genuinely_invalidated_pois = {
-        transition.poi_record_id
-        for transition in poi_analysis.poi_lifecycle_transitions
-        if transition.transition_type
-        == PoiLifecycleTransitionType.GENUINE_INVALIDATION_CONFIRMED
-    }
-    reviewed_evidence_by_poi: dict[UUID, BtmmReviewedEvidence] = {
-        evidence.source_poi_record_id: evidence for evidence in reviewed_evidence
-    }
+    # Observation cache: reuse-or-create for every BTMM-eligible new/changed
+    # POI (bounded); remove entries whose source POI disappeared. A "changed"
+    # POI (zone drift only, for SUPPORT_ZONE/RESISTANCE_ZONE) never actually
+    # changes any BtmmObservation field (zone bounds are not part of it), so
+    # its observation is always reused verbatim via the fields-equality check.
+    new_obs_cache = dict(state.observation_cache)
+    removed_setup_ids: list[UUID] = []
+    for poi_id in setup_delta.removed_source_poi_ids:
+        removed_setup_id = prior_scheduler.poi_to_setup.get(poi_id.int)
+        if removed_setup_id is not None:
+            removed_setup_ids.append(removed_setup_id)
+            new_obs_cache.pop(removed_setup_id, None)
 
-    new_frozen_walks = dict(state.frozen_walks)
-    prior_obs_cache = state.observation_cache
-    new_obs_cache: dict[UUID, tuple[dict[str, object], BtmmObservation]] = {}
-    observations_list: list[BtmmObservation] = []
-    all_transitions: list[TransitionCandidate] = []
-    current_state_fields_by_setup: dict[UUID, Any] = {}
-
-    for source_poi in poi_analysis.poi_observations:
-        if source_poi.poi_type not in configuration.eligible_poi_types:
-            continue
-        if source_poi.source_timeframe not in supported_timeframes:
-            continue
-
+    eligible_touched_pois = [
+        poi
+        for poi in (*new_pois, *changed_pois)
+        if is_btmm_eligible(poi, configuration)
+    ]
+    for poi in eligible_touched_pois:
         semantic_key = (
             symbol.value,
-            source_poi.source_timeframe.value,
-            str(source_poi.record_id),
+            poi.source_timeframe.value,
+            str(poi.record_id),
             rule_version_text,
         )
         record_id = resolver.resolve(DerivedOutputType.BTMM_OBSERVATION, semantic_key)
         provenance_id = resolver.resolve(
             DerivedOutputType.BTMM_OBSERVATION, (*semantic_key, "provenance")
         )
-
         observation_fields: dict[str, object] = {
-            "symbol": source_poi.symbol,
-            "source_timeframe": source_poi.source_timeframe,
-            "btmm_direction": _DIRECTION_MAP[source_poi.direction],
-            "source_poi_record_id": source_poi.record_id,
-            "source_poi_type": source_poi.poi_type,
-            "source_poi_direction": source_poi.direction,
-            "candidate_event_time_utc": source_poi.confirmation_time_utc,
-            "availability_time_utc": source_poi.availability_time_utc,
+            "symbol": poi.symbol,
+            "source_timeframe": poi.source_timeframe,
+            "btmm_direction": _DIRECTION_MAP[poi.direction],
+            "source_poi_record_id": poi.record_id,
+            "source_poi_type": poi.poi_type,
+            "source_poi_direction": poi.direction,
+            "candidate_event_time_utc": poi.confirmation_time_utc,
+            "availability_time_utc": poi.availability_time_utc,
             "rule_version": configuration.rule_version,
             "contract_version": configuration.contract_version,
             "schema_version": configuration.schema_version,
             "evidence_classification": configuration.evidence_classification,
             "provenance_id": provenance_id,
         }
-        # A3-B: reuse the immutable finalized observation (and its fingerprint)
-        # when its fields are byte-identical to the cached ones; a BtmmObservation
-        # never changes over a setup's life, so this is a permanent reuse.
-        cached_obs = prior_obs_cache.get(record_id)
-        if cached_obs is not None and cached_obs[0] == observation_fields:
-            observation = cached_obs[1]
+        cached = new_obs_cache.get(record_id)
+        if cached is not None and cached[0] == observation_fields:
+            observation = cached[1]
         else:
             observation = BtmmObservation(
                 record_id=record_id,
@@ -815,38 +892,48 @@ def _advance_btmm_replay_state(
                 **observation_fields,  # type: ignore[arg-type]
             )
         new_obs_cache[record_id] = (observation_fields, observation)
-        observations_list.append(observation)
 
-        bundle_candles = (
-            new_candles if source_poi.source_timeframe == candle.timeframe else ()
-        )
-        bundle_atr = (
-            atr_values if source_poi.source_timeframe == candle.timeframe else ()
-        )
+    # New POI-transition events: relay only the two relevant, terminal types,
+    # and only once per source POI (bounded by poi_scheduler_last_walks, which
+    # itself only names POIs actually advanced by the POI scheduler this
+    # candle).
+    new_relayed_transitions = set(state.relayed_relevant_poi_transitions)
+    new_poi_transitions: list[PoiLifecycleTransition] = []
+    for poi_record_id, poi_walk in poi_scheduler_last_walks.items():
+        if poi_record_id in new_relayed_transitions:
+            continue
+        for poi_candidate in poi_walk.transitions:
+            if poi_candidate.transition_type in _RELEVANT_POI_TRANSITION_TYPES:
+                new_poi_transitions.append(
+                    _relay_poi_transition(poi_candidate, resolver, configuration)
+                )
+                new_relayed_transitions.add(poi_record_id)
+                break
 
-        cached = new_frozen_walks.get(record_id)
-        if cached is not None:
-            walk = cached
-        else:
-            walk = run_btmm_lifecycle(
-                symbol=source_poi.symbol,
-                source_timeframe=source_poi.source_timeframe,
-                btmm_setup_record_id=record_id,
-                source_poi=source_poi,
-                candidate_availability_time_utc=source_poi.availability_time_utc,
-                bundle_candles=bundle_candles,
-                atr_values=bundle_atr,
-                poi_lifecycle_transitions=poi_transitions_by_poi.get(
-                    source_poi.record_id, []
-                ),
-                reviewed_evidence=reviewed_evidence_by_poi.get(source_poi.record_id),
-                configuration=configuration,
-            )
-            if source_poi.record_id in genuinely_invalidated_pois:
-                new_frozen_walks[record_id] = walk
+    # New reviewed-evidence events: only genuinely new source-POI arrivals.
+    new_relayed_evidence = set(state.relayed_reviewed_evidence)
+    new_reviewed_evidence: list[BtmmReviewedEvidence] = []
+    for evidence in reviewed_evidence:
+        if evidence.source_poi_record_id not in new_relayed_evidence:
+            new_reviewed_evidence.append(evidence)
+            new_relayed_evidence.add(evidence.source_poi_record_id)
 
-        all_transitions.extend(walk.transitions)
-        current_state_fields_by_setup[record_id] = walk.final_fields
+    new_scheduler = advance_btmm_scheduler(
+        prior_scheduler,
+        new_candles,
+        new_atr_values,
+        setup_delta=setup_delta,
+        new_poi_transitions=tuple(new_poi_transitions),
+        new_reviewed_evidence=tuple(new_reviewed_evidence),
+    )
+
+    # Transitions: finalize only the bounded set of setups the scheduler
+    # actually advanced/reconciled this candle (new_scheduler.last_walks);
+    # every other setup's previously-finalized transitions are carried
+    # forward untouched via the merged cache (immutable once emitted).
+    touched_candidates: list[TransitionCandidate] = []
+    for walk in new_scheduler.last_walks.values():
+        touched_candidates.extend(walk.transitions)
 
     def transition_semantic_key(candidate: TransitionCandidate) -> tuple[str, ...]:
         trigger_reference = (
@@ -869,9 +956,9 @@ def _advance_btmm_replay_state(
             rule_version_text,
         )
 
-    new_transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = {}
-    lifecycle_transitions = _finalize(
-        list(all_transitions),
+    touched_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] = {}
+    _finalize(
+        touched_candidates,
         DerivedOutputType.BTMM_LIFECYCLE_TRANSITION,
         BtmmLifecycleTransition,
         transition_semantic_key,
@@ -880,26 +967,80 @@ def _advance_btmm_replay_state(
         configuration,
         resolver,
         prior_reuse=state.transition_cache,
-        new_reuse=new_transition_cache,
+        new_reuse=touched_reuse,
+    )
+    new_transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = {
+        **state.transition_cache,
+        **touched_reuse,
+    }
+    if removed_setup_ids:
+        removed_setup_id_set = set(removed_setup_ids)
+        new_transition_cache = {
+            record_id: entry
+            for record_id, entry in new_transition_cache.items()
+            if getattr(entry[1], "btmm_setup_record_id", None)
+            not in removed_setup_id_set
+        }
+
+    has_any_poi_observation = poi_observation_count > 0
+
+    return _BtmmReplayState(
+        resolver=resolver,
+        identity_provider=identity_provider,
+        rule_version_text=rule_version_text,
+        symbol=symbol if has_any_poi_observation else None,
+        analyzed_timeframes=(candle.timeframe,) if has_any_poi_observation else (),
+        analyzed_candle_count_by_timeframe=(
+            (len(new_candles),) if has_any_poi_observation else ()
+        ),
+        candles_so_far=new_candles,
+        atr_state=new_atr_state,
+        atr_values_so_far=new_atr_values,
+        scheduler=new_scheduler,
+        observation_cache=new_obs_cache,
+        transition_cache=new_transition_cache,
+        relayed_relevant_poi_transitions=frozenset(new_relayed_transitions),
+        relayed_reviewed_evidence=frozenset(new_relayed_evidence),
     )
 
+
+def _materialize_current_btmm_states(
+    state: _BtmmReplayState,
+) -> tuple[CurrentBtmmState, ...]:
+    """A6-B2-C: build CurrentBtmmState lazily, on demand, from the persistent
+    scheduler + observation cache — O(S) (S = live setup count) paid only when
+    actually called (never inside the per-candle advance), matching
+    analyze_btmm's own objects exactly (same identities, fingerprints,
+    canonical ordering)."""
+    assert state.scheduler is not None
+    scheduler = state.scheduler
+    resolver = state.resolver
+    rule_version_text = state.rule_version_text
+    configuration = scheduler.configuration
+
+    # analyze_btmm computes latest_transition_by_setup by "last write wins" over
+    # lifecycle_transitions in its PRE-sort (natural walk-emission) order -- the
+    # public canonical sort (by availability_time_utc, event_time_utc,
+    # transition_type.value, ...) happens strictly AFTER that reduction, so two
+    # same-timestamp transitions (e.g. ENTERED_FORMING and ACCURACY_GATE_
+    # CONFIRMED emitted on the same candle) must be reduced in emission order,
+    # not alphabetical-by-type sorted order. state.transition_cache preserves
+    # insertion order (a transition's dict position is fixed the first time it
+    # is created, and _finalize's own per-candle candidate order mirrors each
+    # setup's walk.transitions emission order exactly), so iterating its values
+    # directly reproduces batch's pre-sort order.
     latest_transition_by_setup: dict[UUID, UUID] = {}
-    for finalized_transition in lifecycle_transitions:
-        latest_transition_by_setup[finalized_transition.btmm_setup_record_id] = (
-            finalized_transition.record_id
+    for _fields, raw_transition in state.transition_cache.values():
+        transition = cast(BtmmLifecycleTransition, raw_transition)
+        latest_transition_by_setup[transition.btmm_setup_record_id] = (
+            transition.record_id
         )
 
-    # A3-B: resolve identities and assemble the full CurrentBtmmState field dicts
-    # here (cheap, memoized), but defer the SHA-256 fingerprint and strict-pydantic
-    # construction to the materialization boundary, which builds them only when a
-    # public snapshot actually needs them.
-    current_state_materials_list: list[tuple[UUID, dict[str, object]]] = []
-    live_setups_list: list[BtmmObservation] = []
-    for observation in observations_list:
-        setup_id = observation.record_id
-        state_fields = current_state_fields_by_setup[setup_id]
-        if state_fields.primary_state not in _TERMINAL_BTMM_STATES:
-            live_setups_list.append(observation)
+    current_states: list[CurrentBtmmState] = []
+    for setup_id, (_fields, observation) in state.observation_cache.items():
+        walk = scheduler.materialize_walk(setup_id)
+        assert walk is not None
+        state_fields = walk.final_fields
 
         semantic_key = (
             observation.symbol.value,
@@ -911,7 +1052,6 @@ def _advance_btmm_replay_state(
         provenance_id = resolver.resolve(
             DerivedOutputType.CURRENT_BTMM_STATE, (*semantic_key, "provenance")
         )
-
         fields: dict[str, object] = {
             "symbol": observation.symbol,
             "timeframe": observation.source_timeframe,
@@ -947,66 +1087,17 @@ def _advance_btmm_replay_state(
             "evidence_classification": configuration.evidence_classification,
             "provenance_id": provenance_id,
         }
-        current_state_materials_list.append((record_id, fields))
-
-    observations = tuple(
-        sorted(
-            observations_list,
-            key=lambda o: (
-                o.availability_time_utc,
-                o.source_timeframe.value,
-                o.btmm_direction.value,
-                str(o.source_poi_record_id),
-                str(o.record_id),
-            ),
+        current_states.append(
+            CurrentBtmmState(
+                record_id=record_id,
+                content_fingerprint=_compute_content_fingerprint(fields),
+                **fields,  # type: ignore[arg-type]
+            )
         )
-    )
-    lifecycle_transitions_sorted = tuple(
-        sorted(
-            lifecycle_transitions,
-            key=lambda t: (
-                t.availability_time_utc,
-                t.event_time_utc,
-                t.transition_type.value,
-                str(t.btmm_setup_record_id),
-                str(t.record_id),
-            ),
-        )
-    )
-    return _BtmmReplayState(
-        resolver=resolver,
-        rule_version_text=rule_version_text,
-        symbol=symbol,
-        analyzed_timeframes=(candle.timeframe,),
-        analyzed_candle_count_by_timeframe=(len(new_candles),),
-        candles_so_far=new_candles,
-        frozen_walks=new_frozen_walks,
-        live_setups=tuple(live_setups_list),
-        current_state_materials=tuple(current_state_materials_list),
-        btmm_observations_so_far=observations,
-        btmm_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
-        observation_cache=new_obs_cache,
-        transition_cache=new_transition_cache,
-    )
 
-
-def _materialize_current_btmm_states(
-    state: _BtmmReplayState,
-) -> tuple[CurrentBtmmState, ...]:
-    """A3-B: construct the CurrentBtmmState public objects from the deferred
-    (record_id, fields) materials, computing each fingerprint exactly once here
-    instead of once per setup per candle. Byte-identical to analyze_btmm's
-    objects — same identities, same fingerprints, same canonical ordering."""
     return tuple(
         sorted(
-            (
-                CurrentBtmmState(
-                    record_id=record_id,
-                    content_fingerprint=_compute_content_fingerprint(fields),
-                    **fields,  # type: ignore[arg-type]
-                )
-                for record_id, fields in state.current_state_materials
-            ),
+            current_states,
             key=lambda s: (
                 s.symbol.value,
                 s.timeframe.value,
@@ -1020,13 +1111,25 @@ def _btmm_replay_state_to_analysis(
     state: _BtmmReplayState, *, with_current_states: bool = True
 ) -> BtmmAnalysis:
     """Build the public BtmmAnalysis from the incremental state, matching
-    analyze_btmm's shape exactly — including the empty-input case (no candles or
-    no eligible POI observations => fully empty, analyzed_timeframes == ()).
-
-    ``with_current_states=False`` returns the identical analysis except with an
-    empty ``current_btmm_states`` tuple, for callers (the per-group event-ledger
-    reconciliation) that provably never read it; the objects are materialized
-    once at the snapshot boundary."""
+    analyze_btmm's shape exactly — including the empty-input case (no candles
+    or no eligible POI observations => fully empty, analyzed_timeframes ==
+    ()). ``with_current_states=False`` returns the identical analysis except
+    with an empty ``current_btmm_states`` tuple, for callers (the per-group
+    event-ledger reconciliation) that provably never read it; the objects are
+    materialized once at the snapshot boundary."""
+    observations = tuple(
+        sorted(
+            (obs for _fields, obs in state.observation_cache.values()),
+            key=lambda o: (
+                o.availability_time_utc,
+                o.source_timeframe.value,
+                o.btmm_direction.value,
+                str(o.source_poi_record_id),
+                str(o.record_id),
+            ),
+        )
+    )
+    lifecycle_transitions = _all_lifecycle_transitions_sorted(state)
     current_btmm_states = (
         _materialize_current_btmm_states(state) if with_current_states else ()
     )
@@ -1034,8 +1137,8 @@ def _btmm_replay_state_to_analysis(
         symbol=state.symbol,
         analyzed_timeframes=state.analyzed_timeframes,
         analyzed_candle_count_by_timeframe=state.analyzed_candle_count_by_timeframe,
-        btmm_observations=state.btmm_observations_so_far,
-        btmm_lifecycle_transitions=state.btmm_lifecycle_transitions_so_far,
+        btmm_observations=observations,
+        btmm_lifecycle_transitions=lifecycle_transitions,
         current_btmm_states=current_btmm_states,
     )
 
@@ -1049,15 +1152,16 @@ def _combine_btmm_replay_states(
     *,
     with_current_states: bool = True,
 ) -> BtmmAnalysis:
-    """Combine the per-BTMM-timeframe incremental states (subsystem 2e) into the
-    multi-timeframe BtmmAnalysis, reproducing analyze_btmm's shape exactly.
-    Setups partition by their source POI's timeframe, so concatenating the
-    per-timeframe states and re-sorting on analyze_btmm's own keys yields the
-    identical combined result. The unchanged batch analyze_btmm remains the
-    differential oracle; it is never used as the normal finalization path.
+    """Combine the per-BTMM-timeframe incremental states (subsystem 2e) into
+    the multi-timeframe BtmmAnalysis, reproducing analyze_btmm's shape
+    exactly. Setups partition by their source POI's timeframe, so
+    concatenating the per-timeframe states and re-sorting on analyze_btmm's
+    own keys yields the identical combined result. The unchanged batch
+    analyze_btmm remains the differential oracle; it is never used as the
+    normal finalization path.
 
-    Empty guard mirrors analyze_btmm exactly: no BTMM-eligible timeframe input,
-    or no POI observations at all, => a fully empty analysis with
+    Empty guard mirrors analyze_btmm exactly: no BTMM-eligible timeframe
+    input, or no POI observations at all, => a fully empty analysis with
     analyzed_timeframes == ()."""
     if len(ordered_btmm_timeframes) == 0 or combined_poi_observation_count == 0:
         return BtmmAnalysis(
@@ -1072,12 +1176,12 @@ def _combine_btmm_replay_states(
     observations = tuple(
         observation
         for tf in ordered_btmm_timeframes
-        for observation in btmm_states[tf].btmm_observations_so_far
+        for _fields, observation in btmm_states[tf].observation_cache.values()
     )
     lifecycle_transitions = tuple(
         transition
         for tf in ordered_btmm_timeframes
-        for transition in btmm_states[tf].btmm_lifecycle_transitions_so_far
+        for transition in _all_lifecycle_transitions_sorted(btmm_states[tf])
     )
     # A3-B: CurrentBtmmState objects are materialized (and fingerprinted) only
     # when this combine will publish them (finalization). The per-group ledger
