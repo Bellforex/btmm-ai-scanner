@@ -51,6 +51,11 @@ from btmm_ai_scanner.poi.lifecycle import (
     _zone_reference_atr,
     run_poi_lifecycle,
 )
+from btmm_ai_scanner.poi.lifecycle_cursor import (
+    PoiLifecycleCursor,
+    advance_poi_cursor,
+    create_poi_lifecycle_cursor,
+)
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
 from btmm_ai_scanner.poi.overlap import (
@@ -1029,7 +1034,7 @@ class _PoiReplayState:
     timeframe: Timeframe | None = None
     symbol: InternalSymbol | None = None
     candles_so_far: tuple[NormalizedCandle, ...] = ()
-    lifecycle_states: dict[UUID, _PoiLifecycleWalkState] = field(default_factory=dict)
+    lifecycle_states: dict[UUID, PoiLifecycleCursor] = field(default_factory=dict)
     live_pois: tuple[PoiObservation, ...] = ()
     # A3-A: CurrentPoiState is a public leaf output consumed only at the snapshot
     # / finalization boundary (BTMM and the per-group ledger read only
@@ -1152,31 +1157,53 @@ def _advance_poi_replay_state(
     # removes an O(obs^2) scan from the per-candle hot path with no output change;
     # cross-timeframe merges are still applied in _combine_poi_replay_states.
 
-    # Lifecycle: incremental per-POI walk, carried by record_id.
-    new_lifecycle_states: dict[UUID, _PoiLifecycleWalkState] = {}
+    # Lifecycle: A6-B1 resumable per-POI cursor, carried by record_id. Each
+    # cursor advances by exactly the newly appended candle(s) — never a
+    # history-tail replay of run_poi_lifecycle. A cursor is (re)initialized and
+    # fed the candles it has not yet consumed when a POI first appears or when a
+    # mutable (reference-zone) POI's zone/direction/availability changes; an
+    # unchanged POI is advanced by exactly one candle.
+    new_lifecycle_states: dict[UUID, PoiLifecycleCursor] = {}
     all_transitions: list[TransitionCandidate] = []
     current_state_fields_by_poi: dict[UUID, dict[str, object]] = {}
     live_pois_list: list[PoiObservation] = []
 
     for observation in observations:
         if observation.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
-            prev_walk = state.lifecycle_states.get(
-                observation.record_id, _create_poi_lifecycle_walk_state()
-            )
-            new_walk, walk = _advance_poi_lifecycle(
-                prev_walk,
-                new_candles,
-                atr_values,
-                observation.symbol,
-                observation.source_timeframe,
-                observation.record_id,
-                observation.direction,
+            cursor = state.lifecycle_states.get(observation.record_id)
+            if cursor is None or (
+                cursor.zone_top,
+                cursor.zone_bottom,
+                cursor.direction,
+                cursor.availability_time_utc,
+            ) != (
                 observation.zone_top,
                 observation.zone_bottom,
+                observation.direction,
                 observation.availability_time_utc,
-                configuration,
-            )
-            new_lifecycle_states[observation.record_id] = new_walk
+            ):
+                cursor = create_poi_lifecycle_cursor(
+                    observation.symbol,
+                    observation.source_timeframe,
+                    observation.record_id,
+                    observation.direction,
+                    observation.zone_top,
+                    observation.zone_bottom,
+                    observation.availability_time_utc,
+                )
+                feed_from = 0
+            else:
+                feed_from = cursor.total_count
+            walk: LifecycleWalkResult | None = None
+            for feed_index in range(feed_from, len(new_candles)):
+                cursor, walk = advance_poi_cursor(
+                    cursor,
+                    new_candles[feed_index],
+                    atr_values[feed_index],
+                    configuration,
+                )
+            assert walk is not None
+            new_lifecycle_states[observation.record_id] = cursor
             all_transitions.extend(walk.transitions)
             if walk.last_seen_candle is not None:
                 elapsed = (
