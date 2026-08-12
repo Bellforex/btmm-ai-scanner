@@ -463,3 +463,39 @@ def test_incremental_hot_path_never_calls_full_prefix_detection_or_atr(
         # Would raise via the monkeypatched stubs if the hot path called either.
         state = _advance_poi_replay_state(state, candles[k - 1], measurement, _PCONFIG)
     assert state.poi_observations_so_far is not None
+
+
+def test_incremental_advance_defers_all_lifecycle_output_assembly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-B1-B7 operation-count gate: the per-candle advance must perform NO
+    # lifecycle-output assembly — no historical POI lifecycle discovery loop, no
+    # CurrentPoiState materialization, no run_poi_lifecycle, no cursor->walk
+    # reconstruction. All of that is deferred to _poi_replay_state_to_analysis
+    # (the snapshot boundary). Under FINAL_ONLY retention that is materialized
+    # once, not per candle.
+    from btmm_ai_scanner.poi import analyzer as analyzer_module
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            "lifecycle-output assembly must be deferred out of the per-candle "
+            "advance hot path"
+        )
+
+    monkeypatch.setattr(analyzer_module, "_build_lifecycle_outputs", _boom)
+    monkeypatch.setattr(analyzer_module, "cursor_walk_result", _boom)
+    monkeypatch.setattr(analyzer_module, "_materialize_current_poi_states", _boom)
+    monkeypatch.setattr(analyzer_module, "run_poi_lifecycle", _boom)
+
+    candles = _random_walk(40, seed=6)
+    idp = _HashIdentityProvider()
+    state = _create_initial_poi_replay_state(idp, _PCONFIG)
+    for k in range(1, len(candles) + 1):
+        prefix = tuple(candles[:k])
+        measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
+        # Advancing must NOT trigger any deferred lifecycle assembly.
+        state = _advance_poi_replay_state(state, candles[k - 1], measurement, _PCONFIG)
+
+    # ...and the deferred assembly genuinely happens at materialization.
+    with pytest.raises(AssertionError):
+        _poi_replay_state_to_analysis(state)

@@ -51,10 +51,11 @@ from btmm_ai_scanner.poi.lifecycle import (
     _zone_reference_atr,
     run_poi_lifecycle,
 )
-from btmm_ai_scanner.poi.lifecycle_cursor import (
-    PoiLifecycleCursor,
-    advance_poi_cursor,
-    create_poi_lifecycle_cursor,
+from btmm_ai_scanner.poi.lifecycle_scheduler import (
+    PoiEventScheduler,
+    PoiSpec,
+    advance_scheduler,
+    create_scheduler,
 )
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
@@ -67,6 +68,7 @@ from btmm_ai_scanner.poi.period_levels import detect_period_levels
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
+from btmm_ai_scanner.poi.scheduler_walk import cursor_walk_result
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
 from btmm_ai_scanner.poi.three_candle_stars import detect_three_candle_stars
 
@@ -1034,18 +1036,15 @@ class _PoiReplayState:
     timeframe: Timeframe | None = None
     symbol: InternalSymbol | None = None
     candles_so_far: tuple[NormalizedCandle, ...] = ()
-    lifecycle_states: dict[UUID, PoiLifecycleCursor] = field(default_factory=dict)
-    live_pois: tuple[PoiObservation, ...] = ()
-    # A3-A: CurrentPoiState is a public leaf output consumed only at the snapshot
-    # / finalization boundary (BTMM and the per-group ledger read only
-    # poi_observations + poi_lifecycle_transitions). Its fingerprint moves every
-    # candle (age/tap/elapsed), so it can never be reused; instead of paying the
-    # SHA-256 + strict-pydantic construction for every POI every candle, the
-    # advance stores the fully-resolved (record_id, fields) materials and
-    # _poi_replay_state_to_analysis constructs the objects once, on demand.
-    current_state_materials: tuple[tuple[UUID, dict[str, object]], ...] = ()
+    # A6-B1-B: the persistent event-driven lifecycle scheduler replaces the
+    # per-candle cursor dict. Carried between candles with structural sharing;
+    # only woken/new/changed cursors advance, the rest are reused by reference.
+    scheduler: PoiEventScheduler | None = None
     poi_observations_so_far: tuple[PoiObservation, ...] = ()
-    poi_lifecycle_transitions_so_far: tuple[PoiLifecycleTransition, ...] = ()
+    # A6-B1-B7: lifecycle transitions and CurrentPoiState are no longer stored per
+    # candle — they are (re)built on demand at the snapshot boundary by
+    # _build_lifecycle_outputs from the scheduler + observations. The per-candle
+    # advance does zero lifecycle-output assembly.
     # A3-A: immutable-observation reuse cache keyed by record_id ->
     # (fingerprint-determining fields, finalized object). Within one timeframe a
     # PoiObservation is immutable, so on every later candle the detected fields
@@ -1054,14 +1053,6 @@ class _PoiReplayState:
     # trigger a rebuild. Published only on a successful advance, so a raised
     # advance leaves the prior cache intact (transactional).
     observation_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
-        default_factory=dict
-    )
-    # A3-C: immutable-lifecycle-transition reuse cache (record_id ->
-    # (fields, finalized transition)). A PoiLifecycleTransition is a historical
-    # event that never changes once emitted, so _finalize reuses it verbatim on
-    # every later candle instead of rebuilding + re-fingerprinting the entire
-    # cumulative transition set. Published only on a successful advance.
-    transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
         default_factory=dict
     )
     # A6-A: private incremental detection frontier. Replaces the per-candle
@@ -1080,6 +1071,7 @@ def _create_initial_poi_replay_state(
     return _PoiReplayState(
         resolver=_IdentityResolver(identity_provider),
         rule_version_text=str(configuration.rule_version),
+        scheduler=create_scheduler(configuration),
     )
 
 
@@ -1157,53 +1149,133 @@ def _advance_poi_replay_state(
     # removes an O(obs^2) scan from the per-candle hot path with no output change;
     # cross-timeframe merges are still applied in _combine_poi_replay_states.
 
-    # Lifecycle: A6-B1 resumable per-POI cursor, carried by record_id. Each
-    # cursor advances by exactly the newly appended candle(s) — never a
-    # history-tail replay of run_poi_lifecycle. A cursor is (re)initialized and
-    # fed the candles it has not yet consumed when a POI first appears or when a
-    # mutable (reference-zone) POI's zone/direction/availability changes; an
-    # unchanged POI is advanced by exactly one candle.
-    new_lifecycle_states: dict[UUID, PoiLifecycleCursor] = {}
+    # Lifecycle: A6-B1 event-driven scheduler. Advance the persistent scheduler by
+    # exactly this candle plus the exact frontier NEW/CHANGED/REMOVED deltas — no
+    # O(P) diff of the full observation set. Only woken/new/changed cursors advance
+    # (their exact walk is captured in ``last_walks``); a dormant POI's cursor is
+    # carried by reference and its walk reconstructed from its materialized state.
+    assert state.scheduler is not None
+    delta = new_detector_frontier.last_delta
+    symbol_value_text = new_candles[0].symbol.value
+    timeframe_value_text = candle.timeframe.value
+
+    def _delta_specs(candidates: tuple[Any, ...]) -> list[PoiSpec]:
+        # Built directly from the bounded delta candidates (each carries its
+        # zone/direction/availability); no O(P) scan of the observation set. The
+        # observation record_id is the resolver's content-addressed id for the
+        # candidate's semantic key — identical to the id assigned in the
+        # observation build above.
+        specs: list[PoiSpec] = []
+        for candidate in candidates:
+            if candidate.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
+                rid = resolver.resolve(
+                    DerivedOutputType.POI_OBSERVATION,
+                    _semantic_key_for_candidate(candidate, rule_version_text),
+                )
+                specs.append(
+                    PoiSpec(
+                        record_id=rid,
+                        symbol=candidate.symbol,
+                        timeframe=candidate.timeframe,
+                        direction=candidate.direction,
+                        zone_top=candidate.zone_top,
+                        zone_bottom=candidate.zone_bottom,
+                        availability_time_utc=candidate.availability_time_utc,
+                    )
+                )
+        return specs
+
+    new_specs = _delta_specs(delta.new_candidates)
+    changed_specs = _delta_specs(delta.changed_candidates)
+    removed_ids: list[UUID] = []
+    for identity in delta.removed_identities:
+        # Only reference SR zones (identity tag "R") are lifecycle-eligible mutable
+        # POIs that can be removed; append-only families are never removed and
+        # period/EL families are NOT_APPLICABLE.
+        if identity[0] in LIFECYCLE_ELIGIBLE_POI_TYPES and identity[1] == "R":
+            removed_key = (
+                symbol_value_text,
+                timeframe_value_text,
+                identity[0].value,
+                str(identity[2]),
+                rule_version_text,
+            )
+            removed_ids.append(
+                resolver.resolve(DerivedOutputType.POI_OBSERVATION, removed_key)
+            )
+
+    new_scheduler = advance_scheduler(
+        state.scheduler,
+        new_candles,
+        atr_values,
+        new_pois=new_specs,
+        changed_pois=changed_specs,
+        removed_ids=removed_ids,
+    )
+
+    # A6-B1-B7: the per-candle advance no longer assembles lifecycle transitions
+    # or CurrentPoiState — that O(P) work is deferred to
+    # ``_build_lifecycle_outputs`` at the snapshot/finalization boundary (lazy).
+    # The advance stores only the incremental scheduler + the sorted observations;
+    # under FINAL_ONLY retention the lifecycle outputs are materialized once.
+    observations_sorted = tuple(
+        sorted(
+            observations,
+            key=lambda o: (
+                o.availability_time_utc,
+                o.source_timeframe.value,
+                o.family.value,
+                o.poi_type.value,
+                o.direction.value,
+                o.zone_bottom,
+                o.zone_top,
+                str(o.record_id),
+            ),
+        )
+    )
+    return _PoiReplayState(
+        resolver=resolver,
+        rule_version_text=rule_version_text,
+        timeframe=candle.timeframe,
+        symbol=new_candles[0].symbol,
+        candles_so_far=new_candles,
+        scheduler=new_scheduler,
+        poi_observations_so_far=observations_sorted,
+        observation_cache=new_cache,
+        detector_frontier=new_detector_frontier,
+    )
+
+
+def _build_lifecycle_outputs(
+    state: _PoiReplayState,
+) -> tuple[
+    tuple[PoiLifecycleTransition, ...],
+    tuple[tuple[UUID, dict[str, object]], ...],
+]:
+    """A6-B1-B7: build the sorted lifecycle transitions and the CurrentPoiState
+    materials from the stored scheduler + observations, on demand at the snapshot
+    boundary (never in the per-candle advance). Byte-identical to what the batch
+    ``analyze_pois`` produces. Each present lifecycle POI's exact walk comes from
+    the scheduler's captured ``last_walks`` (woken/new/changed this candle) or is
+    reconstructed from its dormant cursor's materialized state."""
+    assert state.scheduler is not None
+    scheduler = state.scheduler
+    configuration = scheduler.configuration
+    resolver = state.resolver
+    rule_version_text = state.rule_version_text
+    candle = state.candles_so_far[-1]
+    last_candle_time = candle.availability_time_utc
+
     all_transitions: list[TransitionCandidate] = []
     current_state_fields_by_poi: dict[UUID, dict[str, object]] = {}
-    live_pois_list: list[PoiObservation] = []
 
-    for observation in observations:
+    for observation in state.poi_observations_so_far:
         if observation.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
-            cursor = state.lifecycle_states.get(observation.record_id)
-            if cursor is None or (
-                cursor.zone_top,
-                cursor.zone_bottom,
-                cursor.direction,
-                cursor.availability_time_utc,
-            ) != (
-                observation.zone_top,
-                observation.zone_bottom,
-                observation.direction,
-                observation.availability_time_utc,
-            ):
-                cursor = create_poi_lifecycle_cursor(
-                    observation.symbol,
-                    observation.source_timeframe,
-                    observation.record_id,
-                    observation.direction,
-                    observation.zone_top,
-                    observation.zone_bottom,
-                    observation.availability_time_utc,
-                )
-                feed_from = 0
-            else:
-                feed_from = cursor.total_count
-            walk: LifecycleWalkResult | None = None
-            for feed_index in range(feed_from, len(new_candles)):
-                cursor, walk = advance_poi_cursor(
-                    cursor,
-                    new_candles[feed_index],
-                    atr_values[feed_index],
-                    configuration,
-                )
-            assert walk is not None
-            new_lifecycle_states[observation.record_id] = cursor
+            walk = scheduler.last_walks.get(observation.record_id)
+            if walk is None:
+                cursor = scheduler.materialize_cursor(observation.record_id)
+                assert cursor is not None
+                walk = cursor_walk_result(cursor, candle, configuration)
             all_transitions.extend(walk.transitions)
             if walk.last_seen_candle is not None:
                 elapsed = (
@@ -1230,19 +1302,8 @@ def _advance_poi_replay_state(
                 "elapsed_time_since_availability": elapsed,
                 "availability_time_utc": observation.availability_time_utc,
             }
-            if walk.final_status != PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED:
-                live_pois_list.append(observation)
         else:
-            last_candle_time = (
-                new_candles[-1].availability_time_utc if new_candles else None
-            )
-            if last_candle_time is not None:
-                elapsed = last_candle_time - observation.availability_time_utc
-            else:
-                elapsed = (
-                    observation.availability_time_utc
-                    - observation.availability_time_utc
-                )
+            elapsed = last_candle_time - observation.availability_time_utc
             current_state_fields_by_poi[observation.record_id] = {
                 "symbol": observation.symbol,
                 "timeframe": observation.source_timeframe,
@@ -1258,7 +1319,6 @@ def _advance_poi_replay_state(
                 "elapsed_time_since_availability": elapsed,
                 "availability_time_utc": observation.availability_time_utc,
             }
-            live_pois_list.append(observation)
 
     def transition_semantic_key(candidate: TransitionCandidate) -> tuple[str, ...]:
         return (
@@ -1270,7 +1330,6 @@ def _advance_poi_replay_state(
             rule_version_text,
         )
 
-    new_transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = {}
     lifecycle_transitions = _finalize(
         list(all_transitions),
         DerivedOutputType.POI_LIFECYCLE_TRANSITION,
@@ -1280,19 +1339,24 @@ def _advance_poi_replay_state(
         frozenset(),
         configuration,
         resolver,
-        prior_reuse=state.transition_cache,
-        new_reuse=new_transition_cache,
+    )
+    lifecycle_transitions_sorted = tuple(
+        sorted(
+            lifecycle_transitions,
+            key=lambda t: (
+                t.availability_time_utc,
+                t.event_time_utc,
+                t.transition_type.value,
+                str(t.poi_record_id),
+                str(t.record_id),
+            ),
+        )
     )
 
     latest_transition_by_poi: dict[UUID, UUID] = {}
-    for transition in lifecycle_transitions:
+    for transition in lifecycle_transitions_sorted:
         latest_transition_by_poi[transition.poi_record_id] = transition.record_id
 
-    # A3-A: resolve identities and assemble the full CurrentPoiState field dicts
-    # here (cheap, memoized), but defer the SHA-256 fingerprint and strict-pydantic
-    # construction to _poi_replay_state_to_analysis, which builds them only when a
-    # public snapshot actually needs them. The advance no longer pays P
-    # constructions + P SHA-256 digests per candle.
     current_state_materials_list: list[tuple[UUID, dict[str, object]]] = []
     for poi_record_id, state_fields in current_state_fields_by_poi.items():
         symbol_value = state_fields["symbol"]
@@ -1325,52 +1389,11 @@ def _advance_poi_replay_state(
         )
         current_state_materials_list.append((record_id, fields))
 
-    observations_sorted = tuple(
-        sorted(
-            observations,
-            key=lambda o: (
-                o.availability_time_utc,
-                o.source_timeframe.value,
-                o.family.value,
-                o.poi_type.value,
-                o.direction.value,
-                o.zone_bottom,
-                o.zone_top,
-                str(o.record_id),
-            ),
-        )
-    )
-    lifecycle_transitions_sorted = tuple(
-        sorted(
-            lifecycle_transitions,
-            key=lambda t: (
-                t.availability_time_utc,
-                t.event_time_utc,
-                t.transition_type.value,
-                str(t.poi_record_id),
-                str(t.record_id),
-            ),
-        )
-    )
-    return _PoiReplayState(
-        resolver=resolver,
-        rule_version_text=rule_version_text,
-        timeframe=candle.timeframe,
-        symbol=new_candles[0].symbol,
-        candles_so_far=new_candles,
-        lifecycle_states=new_lifecycle_states,
-        live_pois=tuple(live_pois_list),
-        current_state_materials=tuple(current_state_materials_list),
-        poi_observations_so_far=observations_sorted,
-        poi_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
-        observation_cache=new_cache,
-        transition_cache=new_transition_cache,
-        detector_frontier=new_detector_frontier,
-    )
+    return lifecycle_transitions_sorted, tuple(current_state_materials_list)
 
 
 def _materialize_current_poi_states(
-    state: _PoiReplayState,
+    materials: tuple[tuple[UUID, dict[str, object]], ...],
 ) -> tuple[CurrentPoiState, ...]:
     """A3-A: construct the CurrentPoiState public objects from the deferred
     (record_id, fields) materials, computing each fingerprint exactly once here
@@ -1385,7 +1408,7 @@ def _materialize_current_poi_states(
                     content_fingerprint=_compute_content_fingerprint(fields),
                     **fields,  # type: ignore[arg-type]
                 )
-                for record_id, fields in state.current_state_materials
+                for record_id, fields in materials
             ),
             key=lambda s: (
                 s.symbol.value,
@@ -1451,15 +1474,20 @@ def _poi_replay_state_to_analysis(
         )
     else:
         overlap_relationships = ()
+    lifecycle_transitions_sorted, current_state_materials = _build_lifecycle_outputs(
+        state
+    )
     current_poi_states = (
-        _materialize_current_poi_states(state) if with_current_states else ()
+        _materialize_current_poi_states(current_state_materials)
+        if with_current_states
+        else ()
     )
     return PoiAnalysis(
         symbol=state.symbol,
         analyzed_timeframes=(state.timeframe,),
         analyzed_candle_count_by_timeframe=(len(state.candles_so_far),),
         poi_observations=state.poi_observations_so_far,
-        poi_lifecycle_transitions=state.poi_lifecycle_transitions_so_far,
+        poi_lifecycle_transitions=lifecycle_transitions_sorted,
         poi_overlap_relationships=overlap_relationships,
         current_poi_states=current_poi_states,
     )

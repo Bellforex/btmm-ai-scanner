@@ -37,7 +37,7 @@ performs on first appearance.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -47,6 +47,7 @@ from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.cursor_fast_forward import fast_forward_poi_cursor
 from btmm_ai_scanner.poi.enums import PoiDirection
+from btmm_ai_scanner.poi.lifecycle import LifecycleWalkResult
 from btmm_ai_scanner.poi.lifecycle_cursor import (
     PoiLifecycleCursor,
     advance_poi_cursor,
@@ -117,6 +118,12 @@ class PoiEventScheduler:
     # new/changed cursors (re)built from history this candle.
     woken_ids: frozenset[UUID] = frozenset()
     rebuilt: int = 0
+    # The exact LifecycleWalkResult produced this advance for each cursor that was
+    # advanced (woken + new/changed rebuilt). A dormant cursor is absent here; its
+    # walk is reconstructed on read from its materialized state (its last_seen is
+    # the current candle), which the walk adapter does exactly. Transient
+    # per-advance output; not part of the persistent state.
+    last_walks: dict[UUID, LifecycleWalkResult] = field(default_factory=dict)
 
     def materialize_cursor(self, record_id: UUID) -> PoiLifecycleCursor | None:
         """The cursor for ``record_id`` reconciled to the current candle count —
@@ -253,12 +260,15 @@ def advance_scheduler(
     # due_wake may name POIs removed earlier this candle or already gone.
     wake = {rid for rid in wake if rid.int in mut.cursors}
 
+    last_walks: dict[UUID, LifecycleWalkResult] = {}
+
     # 3. Advance each woken (surviving, pre-existing) cursor exactly once.
     for rid in wake:
         cursor = mut.cursors.get(rid.int)
         assert cursor is not None
         cursor = fast_forward_poi_cursor(cursor, m)
-        cursor, _walk = advance_poi_cursor(cursor, candle, atr, config)
+        cursor, walk = advance_poi_cursor(cursor, candle, atr, config)
+        last_walks[rid] = walk
         mut._reregister(rid, cursor)
         mut._schedule_due(rid, cursor, next_bar)
 
@@ -281,12 +291,17 @@ def advance_scheduler(
         )
         is_new = spec.record_id not in changed_ids
         if is_new and spec.availability_time_utc >= new_max_availability:
+            # Pre-start on-time POI: its walk is the empty pre-start walk, which the
+            # read-time adapter reconstructs exactly, so no capture is needed.
             cursor = fast_forward_poi_cursor(cursor, next_bar)
         else:
+            feed_walk: LifecycleWalkResult | None = None
             for idx in range(0, m + 1):
-                cursor, _walk = advance_poi_cursor(
+                cursor, feed_walk = advance_poi_cursor(
                     cursor, candles[idx], atr_values[idx], config
                 )
+            if feed_walk is not None:
+                last_walks[spec.record_id] = feed_walk
         mut._reregister(spec.record_id, cursor)
         mut._schedule_due(spec.record_id, cursor, next_bar)
 
@@ -304,4 +319,5 @@ def advance_scheduler(
         max_availability=new_max_availability,
         woken_ids=frozenset(wake),
         rebuilt=len(changed_ids) + len(new_pois),
+        last_walks=last_walks,
     )

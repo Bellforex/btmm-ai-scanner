@@ -1684,7 +1684,9 @@ def test_poi_genuine_invalidation_is_terminal_and_matches_the_batch_oracle() -> 
     }
     assert terminal_ids
     for record_id in terminal_ids:
-        assert result.final_state.lifecycle_states[record_id].terminal  # type: ignore[attr-defined]
+        scheduler = result.final_state.scheduler  # type: ignore[attr-defined]
+        cursor = scheduler.materialize_cursor(record_id)
+        assert cursor is not None and cursor.terminal
 
 
 def test_poi_taps_and_freshness_match_the_batch_oracle() -> None:
@@ -1763,7 +1765,12 @@ def test_poi_non_append_measurement_frontier_matches_the_batch_oracle() -> None:
 def test_poi_live_versus_terminal_ownership() -> None:
     result = _poi_driven(42)
     final = result.analysis_series[-1]
-    live_ids = {o.record_id for o in result.final_state.live_pois}  # type: ignore[attr-defined]
+    # live == every POI whose lifecycle status is not GENUINE_INVALIDATION.
+    live_ids = {
+        s.poi_record_id
+        for s in final.current_poi_states
+        if s.poi_lifecycle_status != PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
+    }
     genuinely_invalidated = {
         s.poi_record_id
         for s in final.current_poi_states
@@ -1862,7 +1869,7 @@ def test_poi_transaction_rollback_leaves_prior_state_untouched() -> None:
             state, candles[k - 1], measurement, _POI_CONFIG
         )
 
-    lifecycle_states_before = state.lifecycle_states
+    scheduler_before = state.scheduler
     candles_before = state.candles_so_far
     observations_before = state.poi_observations_so_far
 
@@ -1882,7 +1889,7 @@ def test_poi_transaction_rollback_leaves_prior_state_untouched() -> None:
 
     # The prior state object — including the per-POI lifecycle dict (identity,
     # not just equality) — survives the failed transition unchanged.
-    assert state.lifecycle_states is lifecycle_states_before
+    assert state.scheduler is scheduler_before
     assert state.candles_so_far == candles_before
     assert state.poi_observations_so_far == observations_before
 
