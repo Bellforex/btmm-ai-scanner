@@ -25,6 +25,11 @@ from btmm_ai_scanner.measurements.atr import compute_atr_series
 from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration, validate_configuration
 from btmm_ai_scanner.poi.current_state import CurrentPoiState
+from btmm_ai_scanner.poi.detector_frontier import (
+    _DetectorFrontierState,
+    advance_detector_frontier,
+    create_initial_detector_frontier_state,
+)
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import (
     LIFECYCLE_ELIGIBLE_POI_TYPES,
@@ -1054,6 +1059,13 @@ class _PoiReplayState:
     transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
         default_factory=dict
     )
+    # A6-A: private incremental detection frontier. Replaces the per-candle
+    # _detect_bundle_candidates(full_prefix) + compute_atr_series(full_prefix, 14)
+    # with exact append-only/running frontiers. Immutable; published only on a
+    # successful advance (transactional).
+    detector_frontier: _DetectorFrontierState = field(
+        default_factory=create_initial_detector_frontier_state
+    )
 
 
 def _create_initial_poi_replay_state(
@@ -1092,16 +1104,14 @@ def _advance_poi_replay_state(
     rule_version_text = state.rule_version_text
     resolver = state.resolver
 
-    bundle = PoiTimeframeInput(
-        timeframe=candle.timeframe,
-        candles=new_candles,
-        measurement_analysis=measurement_analysis,
+    # A6-A: advance the incremental detection frontier by exactly this candle
+    # instead of rerunning _detect_bundle_candidates over the whole prefix. The
+    # returned candidate universe is the identical set (after the shared
+    # enabled_poi_types filter), and atr_series is the exact full-prefix Wilder
+    # ATR-14 the lifecycle walk requires (never recomputed from a suffix).
+    new_detector_frontier, all_candidates, atr_values = advance_detector_frontier(
+        state.detector_frontier, candle, measurement_analysis, configuration
     )
-
-    # Detection + base observation finalization (reuses the unchanged batch
-    # helpers; single-timeframe merge is a no-op but is still applied for exact
-    # parity with analyze_pois).
-    all_candidates = _detect_bundle_candidates(bundle, configuration)
     prior_cache = state.observation_cache
     new_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
     observations_list: list[PoiObservation] = []
@@ -1141,8 +1151,6 @@ def _advance_poi_replay_state(
     # single-active-timeframe skip in _combine_poi_replay_states). Skipping it
     # removes an O(obs^2) scan from the per-candle hot path with no output change;
     # cross-timeframe merges are still applied in _combine_poi_replay_states.
-
-    atr_values = compute_atr_series(new_candles, 14)
 
     # Lifecycle: incremental per-POI walk, carried by record_id.
     new_lifecycle_states: dict[UUID, _PoiLifecycleWalkState] = {}
@@ -1330,6 +1338,7 @@ def _advance_poi_replay_state(
         poi_lifecycle_transitions_so_far=lifecycle_transitions_sorted,
         observation_cache=new_cache,
         transition_cache=new_transition_cache,
+        detector_frontier=new_detector_frontier,
     )
 
 
