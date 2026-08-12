@@ -88,6 +88,57 @@ class _PeriodGranularityState:
 
 
 @dataclass(frozen=True)
+class PoiFrontierDelta:
+    """A6-AΔ: the exact per-candle change to the candidate universe, computed
+    from the frontier's own knowledge — never by diffing the full historical
+    candidate list. ``new_candidates`` first appear this candle, ``changed_candidates``
+    keep their identity but change content, ``removed_identities`` disappear.
+    Applying (prev universe + new + changed - removed) reproduces the current
+    filtered universe exactly (proven by the permanent delta differential).
+
+    Append-only families contribute NEW only (this candle's ``step_candidates``);
+    reference zones and period levels are the only mutable families, and their
+    deltas are diffed over BOUNDED current sets (active SR/EL, <=12 period
+    candidates), so there is no O(P) historical scan."""
+
+    new_candidates: tuple[Any, ...] = ()
+    changed_candidates: tuple[Any, ...] = ()
+    removed_identities: tuple[Any, ...] = ()
+
+
+_EMPTY_DELTA = PoiFrontierDelta()
+
+
+def _candidate_identity(candidate: Any) -> Any:
+    """Stable identity matching the observation semantic key's distinctions:
+    period by (poi_type, window), reference by (poi_type, source zone id),
+    append-only by (poi_type, source candles)."""
+    if hasattr(candidate, "period_start_time_utc"):
+        return (
+            candidate.poi_type,
+            "P",
+            candidate.period_start_time_utc,
+            candidate.period_end_time_utc,
+        )
+    if hasattr(candidate, "source_zone_record_id"):
+        return (candidate.poi_type, "R", candidate.source_zone_record_id)
+    return (candidate.poi_type, "A", candidate.source_candle_record_ids)
+
+
+def _diff_bounded(
+    old: tuple[Any, ...], new: tuple[Any, ...]
+) -> tuple[list[Any], list[Any], list[Any]]:
+    """NEW / CHANGED / REMOVED-identity over two BOUNDED candidate sets (reference
+    or period), by identity + content equality."""
+    old_by = {_candidate_identity(c): c for c in old}
+    new_by = {_candidate_identity(c): c for c in new}
+    new_c = [c for k, c in new_by.items() if k not in old_by]
+    changed = [c for k, c in new_by.items() if k in old_by and old_by[k] != c]
+    removed = [k for k in old_by if k not in new_by]
+    return new_c, changed, removed
+
+
+@dataclass(frozen=True)
 class _DetectorFrontierState:
     """Private per-timeframe incremental detection state. Immutable; a new
     instance is produced each advance so a raised advance leaves the caller's
@@ -105,6 +156,11 @@ class _DetectorFrontierState:
     # candidates themselves. Unchanged upstream => the identical tuple is reused.
     reference_signature: tuple[Any, ...] = ()
     reference_candidates: tuple[Any, ...] = ()
+    # A6-AΔ: the previous candle's period candidates (bounded <=12), kept so the
+    # next advance can diff them; and the delta emitted by the advance that
+    # produced this state (transient per-advance output, consumed by the caller).
+    period_candidates: tuple[Any, ...] = ()
+    last_delta: PoiFrontierDelta = _EMPTY_DELTA
 
 
 def create_initial_detector_frontier_state() -> _DetectorFrontierState:
@@ -520,6 +576,34 @@ def advance_detector_frontier(
             )
         )
 
+    # A6-AΔ: exact bounded delta. Append-only families contribute this candle's
+    # step_candidates as NEW (no history scan). Reference and period levels are
+    # the only mutable families; diff their BOUNDED current sets. When the
+    # reference signature is unchanged the tuple is reused verbatim => no ref delta.
+    enabled = configuration.enabled_poi_types
+    ref_new: list[Any] = []
+    ref_changed: list[Any] = []
+    ref_removed: list[Any] = []
+    if new_reference_candidates is not state.reference_candidates:
+        ref_new, ref_changed, ref_removed = _diff_bounded(
+            state.reference_candidates, new_reference_candidates
+        )
+    period_new, period_changed, period_removed = _diff_bounded(
+        state.period_candidates, tuple(period_candidates)
+    )
+
+    def _en(cands: list[Any]) -> tuple[Any, ...]:
+        return tuple(c for c in cands if c.poi_type in enabled)
+
+    def _en_ident(idents: list[Any]) -> tuple[Any, ...]:
+        return tuple(i for i in idents if i[0] in enabled)
+
+    delta = PoiFrontierDelta(
+        new_candidates=(*_en(step_candidates), *_en(ref_new), *_en(period_new)),
+        changed_candidates=(*_en(ref_changed), *_en(period_changed)),
+        removed_identities=(*_en_ident(ref_removed), *_en_ident(period_removed)),
+    )
+
     new_state = _DetectorFrontierState(
         atr_state=new_atr_state,
         atr_series=new_atr_series,
@@ -528,6 +612,8 @@ def advance_detector_frontier(
         period_states=new_period_states,
         reference_signature=new_signature,
         reference_candidates=new_reference_candidates,
+        period_candidates=tuple(period_candidates),
+        last_delta=delta,
     )
 
     universe: list[Any] = [
@@ -535,6 +621,5 @@ def advance_detector_frontier(
         *new_reference_candidates,
         *period_candidates,
     ]
-    enabled = configuration.enabled_poi_types
     filtered = [c for c in universe if c.poi_type in enabled]
     return new_state, filtered, new_atr_series
