@@ -3241,6 +3241,76 @@ def test_f2_advance_uses_bounded_unvalidated_measurement_view_per_candle(
     assert calls["view"] == len(candles)
 
 
+def _count_calls_over_replay(
+    monkeypatch: pytest.MonkeyPatch, module: object, name: str, candle_count: int
+) -> int:
+    real = getattr(module, name)
+    counter = {"n": 0}
+
+    def _wrapper(*args: object, **kwargs: object) -> object:
+        counter["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, _wrapper)
+    candles = _scanner_build(
+        _random_walk_prices(candle_count, seed=20260813), Timeframe.M15, 15, 3_000_000
+    )
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    kernel.finalize()
+    return counter["n"]
+
+
+def test_f3a_poi_observation_assembly_is_subquadratic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F3-A operation-count gate. The per-candle POI observation assembly must
+    # resolve/normalize only the newly appended append-only suffix plus the
+    # bounded reference/period sets -- NOT re-resolve the entire cumulative
+    # candidate universe every candle. _normalize_candidate_fields is called
+    # exactly once per (re)built observation, so its total call count over a
+    # replay scales ~linearly with the candle count; the pre-F3-A full-universe
+    # rescan made it grow ~quadratically. Doubling the candle count must far less
+    # than quadruple the calls (quadratic would be ~4x; linear ~2x).
+    from btmm_ai_scanner.poi import analyzer as poi_mod
+
+    with monkeypatch.context() as m:
+        n_small = _count_calls_over_replay(
+            m, poi_mod, "_normalize_candidate_fields", 80
+        )
+    with monkeypatch.context() as m:
+        n_large = _count_calls_over_replay(
+            m, poi_mod, "_normalize_candidate_fields", 160
+        )
+    # Linear ~2.0x; quadratic ~4.0x. A comfortable sub-quadratic ceiling.
+    assert n_large < 2.6 * n_small, (n_small, n_large)
+
+
+def test_f3b_append_only_candle_skips_structure_stream_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F3-B operation-count gate. On an append-only candle (confirmed_swings
+    # unchanged) the structure advance must NOT rebuild + re-sort the whole
+    # O(history) event stream: it reuses the prior sorted identities/checkpoints
+    # and walks only this candle's single appended event. So
+    # _build_sorted_structure_events runs strictly fewer times than the candle
+    # count -- only on the (minority) candles that genuinely change the
+    # confirmed-swing frontier. This is a constant-factor reduction, NOT an
+    # asymptotic one: a swing-frontier change still pays a full O(history)
+    # rebuild + identity re-hash, which remains a measured floor documented in
+    # the F3 report.
+    from btmm_ai_scanner.structure import analyzer as struct_mod
+
+    candle_count = 120
+    calls = _count_calls_over_replay(
+        monkeypatch, struct_mod, "_build_sorted_structure_events", candle_count
+    )
+    assert 0 < calls < candle_count, (calls, candle_count)
+
+
 # =====================================================================
 # A6-B2-C: production wake differential + non-woken identity reuse.
 #

@@ -1072,6 +1072,17 @@ class _PoiReplayState:
     new_pois_for_btmm: tuple[PoiObservation, ...] = ()
     changed_pois_for_btmm: tuple[PoiObservation, ...] = ()
     removed_poi_ids_for_btmm: tuple[UUID, ...] = ()
+    # A6-F3-A: the append-only slice of ``observation_cache`` (local + base +
+    # reversal families). These candidates are strictly append-only (never
+    # changed, never removed), so once resolved/normalized/finalized their
+    # observation is immutable and reused by reference for the rest of the
+    # replay. Carrying this slice lets the per-candle advance resolve + normalize
+    # + fingerprint only the *new* append-only suffix and the bounded reference/
+    # period sets, instead of re-resolving the entire cumulative candidate
+    # universe every candle (the O(history)-per-candle -> O(N^2) advance cost).
+    append_only_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
+        default_factory=dict
+    )
 
 
 def _create_initial_poi_replay_state(
@@ -1131,14 +1142,17 @@ def _advance_poi_replay_state(
     # returned candidate universe is the identical set (after the shared
     # enabled_poi_types filter), and atr_series is the exact full-prefix Wilder
     # ATR-14 the lifecycle walk requires (never recomputed from a suffix).
-    new_detector_frontier, all_candidates, atr_values = advance_detector_frontier(
+    new_detector_frontier, _all_candidates, atr_values = advance_detector_frontier(
         state.detector_frontier, candle, measurement_analysis, configuration
     )
     prior_cache = state.observation_cache
-    new_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
-    observations_list: list[PoiObservation] = []
+    enabled = configuration.enabled_poi_types
     unchanged_ids: set[UUID] = set()
-    for candidate in all_candidates:
+    touched: list[PoiObservation] = []
+
+    def _resolve_observation(
+        candidate: Any,
+    ) -> tuple[UUID, dict[str, object], PoiObservation, bool]:
         semantic_key = _semantic_key_for_candidate(candidate, rule_version_text)
         record_id = resolver.resolve(DerivedOutputType.POI_OBSERVATION, semantic_key)
         provenance_id = resolver.resolve(
@@ -1157,16 +1171,57 @@ def _advance_poi_replay_state(
         # ones; only a genuine field change pays the SHA-256 + construction.
         cached = prior_cache.get(record_id)
         if cached is not None and cached[0] == fields:
-            observation = cached[1]
-            unchanged_ids.add(record_id)
-        else:
-            observation = PoiObservation(
+            return record_id, fields, cached[1], True
+        return (
+            record_id,
+            fields,
+            PoiObservation(
                 record_id=record_id,
                 content_fingerprint=_compute_content_fingerprint(fields),
                 **fields,  # type: ignore[arg-type]
-            )
-        new_cache[record_id] = (fields, observation)
-        observations_list.append(observation)
+            ),
+            False,
+        )
+
+    # A6-F3-A: the append-only families (local / base / reversal) are strictly
+    # append-only in the detector frontier -- new candidates are appended to the
+    # tail, never mutated or removed. So the prior append-only observation slice
+    # is immutable and carried by reference; only this candle's newly appended
+    # suffix is resolved/normalized/fingerprinted (O(new), not O(history)). This
+    # replaces the per-candle re-resolution of the entire cumulative candidate
+    # universe -- the dominant O(N^2) advance-hot-path cost.
+    prior_append_only = state.detector_frontier.append_only_candidates
+    all_append_only = new_detector_frontier.append_only_candidates
+    new_append_only_cache = dict(state.append_only_cache)
+    unchanged_ids.update(state.append_only_cache)
+    for candidate in all_append_only[len(prior_append_only) :]:
+        if candidate.poi_type not in enabled:
+            continue
+        record_id, fields, observation, _reused = _resolve_observation(candidate)
+        new_append_only_cache[record_id] = (fields, observation)
+        touched.append(observation)
+
+    # Reference (measurement SR/EL projection) and period families are BOUNDED
+    # mutable sets: rebuild them each candle from the current bounded candidates
+    # (O(bounded)), reusing unchanged immutable objects via A3-A. Prior entries
+    # are intentionally not carried -- a removed reference/period candidate then
+    # simply does not reappear, exactly matching the full-universe rebuild it
+    # replaces.
+    bounded_entries: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
+    for candidate in (
+        *new_detector_frontier.reference_candidates,
+        *new_detector_frontier.period_candidates,
+    ):
+        if candidate.poi_type not in enabled:
+            continue
+        record_id, fields, observation, reused = _resolve_observation(candidate)
+        bounded_entries[record_id] = (fields, observation)
+        if reused:
+            unchanged_ids.add(record_id)
+        else:
+            touched.append(observation)
+
+    new_cache = {**new_append_only_cache, **bounded_entries}
 
     # A3-A/A3-D: resolve_merges only ever pairs a child POI with a STRONGER-
     # timeframe parent, and _advance_poi_replay_state always processes exactly one
@@ -1267,17 +1322,12 @@ def _advance_poi_replay_state(
     # This never assumes where touched items belong in the final order (that
     # would be fragile); `sorted()` always produces the exact correct order
     # regardless, only the constant-factor comparison cost improves.
-    if (
-        len(unchanged_ids)
-        == len(observations_list)
-        == len(state.poi_observations_so_far)
-    ):
+    if len(unchanged_ids) == len(new_cache) == len(state.poi_observations_so_far):
         observations_sorted = state.poi_observations_so_far
     else:
         retained = tuple(
             o for o in state.poi_observations_so_far if o.record_id in unchanged_ids
         )
-        touched = [o for o in observations_list if o.record_id not in unchanged_ids]
         observations_sorted = tuple(
             sorted(retained + tuple(touched), key=_observation_sort_key)
         )
@@ -1294,6 +1344,7 @@ def _advance_poi_replay_state(
         new_pois_for_btmm=new_pois_for_btmm,
         changed_pois_for_btmm=changed_pois_for_btmm,
         removed_poi_ids_for_btmm=tuple(removed_ids),
+        append_only_cache=new_append_only_cache,
     )
 
 

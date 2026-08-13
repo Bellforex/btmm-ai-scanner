@@ -1140,25 +1140,46 @@ def _advance_structure_replay_state(
 
     if confirmed_swings == state.confirmed_swings_so_far:
         relationship_candidates = state.relationship_candidates
+        # A6-F3-B: append-only fast path. With confirmed_swings unchanged, the
+        # swing and relationship events are identical to the prior stream and no
+        # swing/relationship is confirmed by THIS candle, so every prior event's
+        # sort time (prior candle availabilities, and swing/relationship times
+        # confirmed by earlier candles) is strictly less than this candle's
+        # availability_time_utc. The new candle event therefore sorts strictly
+        # last: the new stream is exactly the prior stream + [candle event].
+        # Reuse the prior sorted identities + checkpoints verbatim and walk only
+        # the single appended event -- O(1) instead of rebuilding + re-hashing
+        # the whole O(history) event stream and diffing it every candle.
+        candle_event: tuple[datetime, int, tuple[object, ...], object] = (
+            candle.availability_time_utc,
+            _EVENT_CANDLE,
+            (candle.event_time_utc, str(candle.record_id)),
+            candle,
+        )
+        events_suffix = [candle_event]
+        identities = (
+            *state.event_identities,
+            _structure_event_identity(_EVENT_CANDLE, candle),
+        )
+        common_prefix = len(state.event_identities)
     else:
         relationship_candidates = detect_swing_relationships(
             confirmed_swings, configuration
         )
-
-    events = _build_sorted_structure_events(
-        new_candles, confirmed_swings, relationship_candidates
-    )
-    identities = tuple(
-        _structure_event_identity(kind, payload) for _, kind, _, payload in events
-    )
-
-    common_prefix = 0
-    limit = min(len(state.event_identities), len(identities))
-    while (
-        common_prefix < limit
-        and state.event_identities[common_prefix] == identities[common_prefix]
-    ):
-        common_prefix += 1
+        events = _build_sorted_structure_events(
+            new_candles, confirmed_swings, relationship_candidates
+        )
+        identities = tuple(
+            _structure_event_identity(kind, payload) for _, kind, _, payload in events
+        )
+        common_prefix = 0
+        limit = min(len(state.event_identities), len(identities))
+        while (
+            common_prefix < limit
+            and state.event_identities[common_prefix] == identities[common_prefix]
+        ):
+            common_prefix += 1
+        events_suffix = events[common_prefix:]
 
     candle_index_by_id = {c.record_id: index for index, c in enumerate(new_candles)}
 
@@ -1166,7 +1187,7 @@ def _advance_structure_replay_state(
     current_checkpoint = (
         reused_checkpoints[-1] if reused_checkpoints else _INITIAL_STRUCTURE_CHECKPOINT
     )
-    for _, kind, _, payload in events[common_prefix:]:
+    for _, kind, _, payload in events_suffix:
         current_checkpoint = _process_structure_event(
             current_checkpoint, kind, payload, candle_index_by_id
         )
