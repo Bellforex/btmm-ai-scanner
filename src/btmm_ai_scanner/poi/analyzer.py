@@ -1098,7 +1098,11 @@ def _create_initial_poi_replay_state(
 
 def _observation_sort_key(
     o: PoiObservation,
-) -> tuple[datetime, str, str, str, str, Decimal, Decimal, str]:
+) -> tuple[datetime, str, str, str, str, Decimal, Decimal, UUID]:
+    # A6-F4: sort by the UUID object, not str(record_id). A canonical lowercase-
+    # hex UUID string sorts identically to the 128-bit int UUID.__lt__ compares,
+    # so the order is byte-identical while avoiding ~1 uuid.__str__ per record per
+    # sort (a top hot-path cost). Proven equivalent by the scanner differential.
     return (
         o.availability_time_utc,
         o.source_timeframe.value,
@@ -1107,7 +1111,7 @@ def _observation_sort_key(
         o.direction.value,
         o.zone_bottom,
         o.zone_top,
-        str(o.record_id),
+        o.record_id,
     )
 
 

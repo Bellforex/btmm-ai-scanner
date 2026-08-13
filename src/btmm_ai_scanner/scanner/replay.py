@@ -463,32 +463,6 @@ class _ScannerEventLedger:
     warnings: tuple[str, ...] = ()
 
 
-def _reconcile_ledger_category(
-    prior: tuple[Any, ...], current: tuple[Any, ...]
-) -> tuple[Any, ...]:
-    """Reconcile one ledger category for a group by deterministic record
-    identity: unchanged records are retained (prior object), mutable-frontier
-    records whose content changed are replaced by the current record, genuinely
-    new records are added, and records no longer present are dropped. ``current``
-    is the authoritative per-record-id-deduplicated current set, so the result
-    never accumulates duplicate cumulative copies."""
-    prior_by_id = {record.record_id: record for record in prior}
-    reconciled: list[Any] = []
-    for record in current:
-        existing = prior_by_id.get(record.record_id)
-        # A3-D: the incremental domains now reuse the identical finalized object
-        # for an unchanged record (immutable-object + fingerprint caches), so the
-        # common case is caught by the O(1) identity check `existing is record`,
-        # avoiding the deep strict-pydantic __eq__ for every record every group.
-        # The deep equality is still evaluated for genuinely distinct instances,
-        # so the reconciled result is byte-identical to the prior behaviour.
-        if existing is not None and (existing is record or existing == record):
-            reconciled.append(existing)
-        else:
-            reconciled.append(record)
-    return tuple(reconciled)
-
-
 @dataclass
 class _ScannerOrchestrationReplayState:
     """Private per-replay kernel state (register §44U). Holds the per-timeframe
@@ -710,79 +684,63 @@ class IncrementalReplayKernel:
             validated=False,
         )
 
-        # A6-F2: the per-group ledger reconciliation reads only the cumulative
-        # measurement/structure record tuples, which the incremental states
-        # already hold verbatim. Read them directly instead of materializing
-        # (and, before A6-F2, fully re-validating) a public MarketMeasurement"
-        # Analysis / StructureAnalysis per timeframe per group. Full cumulative
-        # measurement/structure public materializations per group are now 0;
-        # the validated public analyses are built once, in finalize().
+        # A6-F2/F4-B: each ledger category is exactly the current authoritative,
+        # per-record-id-deduplicated set the incremental states already hold
+        # (measurement/structure cumulative tuples; the combined POI/BTMM sets).
+        # The previous per-group _reconcile_ledger_category rebuilt a full
+        # {record_id: record} map over the entire cumulative history every group
+        # (an O(history)-per-group -> O(N^2) cost) only to swap in prior objects
+        # for records that compare equal. But the domains already reuse the
+        # identical immutable object for an unchanged record across candles, so
+        # the current set is already identity-stable AND element-wise byte-
+        # identical (record ids / fingerprints / ordering) to what the reconcile
+        # returned. Assigning the current set directly is therefore exact and
+        # removes the whole historical-map reconstruction. Single timeframe: the
+        # generator is the one state tuple; multi-timeframe: the ordered cross-
+        # timeframe concatenation, unchanged.
+        # A6-F4-B: for a single tracked timeframe (the historical-backtest case)
+        # each measurement/structure category IS the one state's cumulative tuple
+        # -- reference it directly (O(1)) instead of copying it into a new tuple
+        # every group. Multi-timeframe keeps the exact ordered cross-timeframe
+        # concatenation.
+        ordered = self._ordered
+        single_tf = ordered[0] if len(ordered) == 1 else None
+
+        def _measure_cat(attr: str) -> tuple[Any, ...]:
+            if single_tf is not None:
+                return getattr(new_measurement[single_tf], attr)  # type: ignore[no-any-return]
+            return tuple(
+                record
+                for tf in ordered
+                for record in getattr(new_measurement[tf], attr)
+            )
+
+        if single_tf is not None:
+            structure_transitions = new_structure[
+                single_tf
+            ].structure_transitions_so_far
+        else:
+            structure_transitions = tuple(
+                transition
+                for tf in ordered
+                for transition in new_structure[tf].structure_transitions_so_far
+            )
+
         new_ledger = _ScannerEventLedger(
-            confirmed_swings=_reconcile_ledger_category(
-                prior.ledger.confirmed_swings,
-                tuple(
-                    swing
-                    for tf in self._ordered
-                    for swing in new_measurement[tf].confirmed_swings_so_far
-                ),
-            ),
-            displacement_observations=_reconcile_ledger_category(
-                prior.ledger.displacement_observations,
-                tuple(
-                    observation
-                    for tf in self._ordered
-                    for observation in new_measurement[
-                        tf
-                    ].displacement_observations_so_far
-                ),
-            ),
-            equal_level_clusters=_reconcile_ledger_category(
-                prior.ledger.equal_level_clusters,
-                tuple(
-                    cluster
-                    for tf in self._ordered
-                    for cluster in new_measurement[tf].equal_level_clusters_so_far
-                ),
-            ),
-            support_resistance_zones=_reconcile_ledger_category(
-                prior.ledger.support_resistance_zones,
-                tuple(
-                    zone
-                    for tf in self._ordered
-                    for zone in new_measurement[tf].support_resistance_zones_so_far
-                ),
-            ),
-            trendlines=_reconcile_ledger_category(
-                prior.ledger.trendlines,
-                tuple(
-                    trendline
-                    for tf in self._ordered
-                    for trendline in new_measurement[tf].trendlines_so_far
-                ),
-            ),
-            structure_transitions=_reconcile_ledger_category(
-                prior.ledger.structure_transitions,
-                tuple(
-                    transition
-                    for tf in self._ordered
-                    for transition in new_structure[tf].structure_transitions_so_far
-                ),
-            ),
-            poi_observations=_reconcile_ledger_category(
-                prior.ledger.poi_observations, combined_poi.poi_observations
-            ),
+            confirmed_swings=_measure_cat("confirmed_swings_so_far"),
+            displacement_observations=_measure_cat("displacement_observations_so_far"),
+            equal_level_clusters=_measure_cat("equal_level_clusters_so_far"),
+            support_resistance_zones=_measure_cat("support_resistance_zones_so_far"),
+            trendlines=_measure_cat("trendlines_so_far"),
+            structure_transitions=structure_transitions,
+            poi_observations=combined_poi.poi_observations,
             # Deferred: the per-group combine runs with_lifecycle=False, so the
             # POI lifecycle transitions are not materialized here. They are
-            # reconciled once in finalize() from the single materialized final
+            # materialized once in finalize() from the single materialized final
             # analysis (the only place the ledger's transitions are ever read).
             poi_lifecycle_transitions=(),
-            btmm_observations=_reconcile_ledger_category(
-                prior.ledger.btmm_observations, combined_btmm.btmm_observations
-            ),
-            btmm_lifecycle_transitions=_reconcile_ledger_category(
-                prior.ledger.btmm_lifecycle_transitions,
-                combined_btmm.btmm_lifecycle_transitions,
-            ),
+            btmm_observations=combined_btmm.btmm_observations,
+            btmm_lifecycle_transitions=combined_btmm.btmm_lifecycle_transitions,
             warnings=(),
         )
 
@@ -851,12 +809,12 @@ class IncrementalReplayKernel:
             len(poi_analysis.poi_observations),
             with_current_states=True,
         )
-        # Reconcile the ledger's deferred POI lifecycle transitions once, from
+        # Materialize the ledger's deferred POI lifecycle transitions once, from
         # this single materialized final analysis (advance_group left them empty).
-        # state.ledger.poi_lifecycle_transitions is (), so the reconciliation
-        # yields exactly poi_analysis.poi_lifecycle_transitions; the stored ledger
-        # is republished so event_ledger() reflects the finalized transitions
-        # (register §44U2 fidelity, unchanged from the pre-lazy behaviour).
+        # state.ledger.poi_lifecycle_transitions is (), and the final analysis set
+        # is the authoritative per-record-id set, so it is assigned directly; the
+        # stored ledger is republished so event_ledger() reflects the finalized
+        # transitions (register §44U2 fidelity, unchanged from prior behaviour).
         if (
             state.ledger.poi_lifecycle_transitions
             != poi_analysis.poi_lifecycle_transitions
@@ -865,10 +823,7 @@ class IncrementalReplayKernel:
                 state,
                 ledger=replace(
                     state.ledger,
-                    poi_lifecycle_transitions=_reconcile_ledger_category(
-                        state.ledger.poi_lifecycle_transitions,
-                        poi_analysis.poi_lifecycle_transitions,
-                    ),
+                    poi_lifecycle_transitions=poi_analysis.poi_lifecycle_transitions,
                 ),
             )
         setup_summaries = _build_setup_summaries(poi_analysis, btmm_analysis)

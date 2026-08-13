@@ -775,8 +775,8 @@ def _all_lifecycle_transitions_sorted(
                 t.availability_time_utc,
                 t.event_time_utc,
                 t.transition_type.value,
-                str(t.btmm_setup_record_id),
-                str(t.record_id),
+                t.btmm_setup_record_id,
+                t.record_id,
             ),
         )
     )
@@ -1197,6 +1197,8 @@ def _combine_btmm_replay_states(
         else ()
     )
 
+    # A6-F4: sort by UUID objects, not str(record_id) -- byte-identical order
+    # (canonical hex sorts as the 128-bit int) at a fraction of the cost.
     observations_sorted = tuple(
         sorted(
             observations,
@@ -1204,8 +1206,8 @@ def _combine_btmm_replay_states(
                 o.availability_time_utc,
                 o.source_timeframe.value,
                 o.btmm_direction.value,
-                str(o.source_poi_record_id),
-                str(o.record_id),
+                o.source_poi_record_id,
+                o.record_id,
             ),
         )
     )
@@ -1216,8 +1218,8 @@ def _combine_btmm_replay_states(
                 t.availability_time_utc,
                 t.event_time_utc,
                 t.transition_type.value,
-                str(t.btmm_setup_record_id),
-                str(t.record_id),
+                t.btmm_setup_record_id,
+                t.record_id,
             ),
         )
     )
@@ -1227,7 +1229,7 @@ def _combine_btmm_replay_states(
             key=lambda s: (
                 s.symbol.value,
                 s.timeframe.value,
-                str(s.btmm_setup_record_id),
+                s.btmm_setup_record_id,
             ),
         )
     )
