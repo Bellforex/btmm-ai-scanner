@@ -1085,6 +1085,21 @@ def _create_initial_poi_replay_state(
     )
 
 
+def _observation_sort_key(
+    o: PoiObservation,
+) -> tuple[datetime, str, str, str, str, Decimal, Decimal, str]:
+    return (
+        o.availability_time_utc,
+        o.source_timeframe.value,
+        o.family.value,
+        o.poi_type.value,
+        o.direction.value,
+        o.zone_bottom,
+        o.zone_top,
+        str(o.record_id),
+    )
+
+
 def _advance_poi_replay_state(
     state: _PoiReplayState,
     candle: NormalizedCandle,
@@ -1122,6 +1137,7 @@ def _advance_poi_replay_state(
     prior_cache = state.observation_cache
     new_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
     observations_list: list[PoiObservation] = []
+    unchanged_ids: set[UUID] = set()
     for candidate in all_candidates:
         semantic_key = _semantic_key_for_candidate(candidate, rule_version_text)
         record_id = resolver.resolve(DerivedOutputType.POI_OBSERVATION, semantic_key)
@@ -1142,6 +1158,7 @@ def _advance_poi_replay_state(
         cached = prior_cache.get(record_id)
         if cached is not None and cached[0] == fields:
             observation = cached[1]
+            unchanged_ids.add(record_id)
         else:
             observation = PoiObservation(
                 record_id=record_id,
@@ -1150,7 +1167,6 @@ def _advance_poi_replay_state(
             )
         new_cache[record_id] = (fields, observation)
         observations_list.append(observation)
-    observations = tuple(observations_list)
 
     # A3-A/A3-D: resolve_merges only ever pairs a child POI with a STRONGER-
     # timeframe parent, and _advance_poi_replay_state always processes exactly one
@@ -1235,21 +1251,36 @@ def _advance_poi_replay_state(
     # ``_build_lifecycle_outputs`` at the snapshot/finalization boundary (lazy).
     # The advance stores only the incremental scheduler + the sorted observations;
     # under FINAL_ONLY retention the lifecycle outputs are materialized once.
-    observations_sorted = tuple(
-        sorted(
-            observations,
-            key=lambda o: (
-                o.availability_time_utc,
-                o.source_timeframe.value,
-                o.family.value,
-                o.poi_type.value,
-                o.direction.value,
-                o.zone_bottom,
-                o.zone_top,
-                str(o.record_id),
-            ),
+    #
+    # A6-C: avoid a full O(P log P) re-sort of the entire observation history
+    # every candle. `all_candidates` is already the complete O(P) frontier
+    # rebuild (accepted baseline, unchanged here); what used to also cost
+    # O(P log P) comparisons on top of that is now reduced to O(P) in the
+    # common case. If literally nothing changed (every observation reused its
+    # cached object, and no observation was added/removed), the prior sorted
+    # tuple is reused verbatim. Otherwise the prior sorted tuple is filtered
+    # down to the still-unchanged entries (preserving their relative order --
+    # a sorted sequence stays sorted after removing elements) and only the
+    # small new/changed subset is merged back in; a single `sorted()` call
+    # over [retained-ascending-run] + [small-touched-run] lets Timsort merge
+    # the two runs in near-linear time instead of re-sorting from scratch.
+    # This never assumes where touched items belong in the final order (that
+    # would be fragile); `sorted()` always produces the exact correct order
+    # regardless, only the constant-factor comparison cost improves.
+    if (
+        len(unchanged_ids)
+        == len(observations_list)
+        == len(state.poi_observations_so_far)
+    ):
+        observations_sorted = state.poi_observations_so_far
+    else:
+        retained = tuple(
+            o for o in state.poi_observations_so_far if o.record_id in unchanged_ids
         )
-    )
+        touched = [o for o in observations_list if o.record_id not in unchanged_ids]
+        observations_sorted = tuple(
+            sorted(retained + tuple(touched), key=_observation_sort_key)
+        )
     return _PoiReplayState(
         resolver=resolver,
         rule_version_text=rule_version_text,
@@ -1513,12 +1544,31 @@ def _poi_replay_state_to_analysis(
     )
 
 
+@dataclass(frozen=True)
+class _PoiMergeCache:
+    """A6-D: caches the expensive product of the cross-timeframe POI merge --
+    resolve_merges's O(group_size^2) all-pairs scan, the per-observation
+    re-fingerprint, and the final canonical sort -- keyed by an identity
+    signature of the per-timeframe observation tuples that fed it. Per-timeframe
+    PoiObservation tuples are immutable and only ever replaced wholesale by
+    ``_advance_poi_replay_state`` (never mutated in place), so an unchanged
+    ``id()`` for every active timeframe's tuple proves the merge input -- and
+    therefore its output -- is byte-identical to the cached one. This is a
+    correctness-transparent memoization: on a signature miss the exact same
+    computation runs as before, so the result is always identical to a full
+    recompute."""
+
+    signature: tuple[tuple[Timeframe, int], ...]
+    observations: tuple[PoiObservation, ...]
+
+
 def _combine_poi_replay_states(
     poi_states: dict[Timeframe, _PoiReplayState],
     ordered_timeframes: tuple[Timeframe, ...],
     *,
     with_overlap: bool = True,
-) -> PoiAnalysis:
+    merge_cache: _PoiMergeCache | None = None,
+) -> tuple[PoiAnalysis, _PoiMergeCache | None]:
     """Combine the per-timeframe incremental POI states (subsystem 2d) into the
     multi-timeframe PoiAnalysis, reproducing analyze_pois's cross-timeframe
     combination exactly: concatenate the per-timeframe observations, apply the
@@ -1530,17 +1580,24 @@ def _combine_poi_replay_states(
     callers (the per-group event-ledger reconciliation) that only need the
     observation/transition/current-state records; the overlap is materialized
     once at finalization. The unchanged batch analyze_pois over the full prefix
-    remains the differential oracle."""
+    remains the differential oracle.
+
+    Returns the analysis plus the (possibly reused, possibly freshly computed)
+    merge cache for the caller to carry forward -- never mutated in place, so a
+    caller that discards a failed attempt leaves its prior cache untouched."""
     active = tuple(tf for tf in ordered_timeframes if poi_states[tf].candles_so_far)
     if not active:
-        return PoiAnalysis(
-            symbol=None,
-            analyzed_timeframes=(),
-            analyzed_candle_count_by_timeframe=(),
-            poi_observations=(),
-            poi_lifecycle_transitions=(),
-            poi_overlap_relationships=(),
-            current_poi_states=(),
+        return (
+            PoiAnalysis(
+                symbol=None,
+                analyzed_timeframes=(),
+                analyzed_candle_count_by_timeframe=(),
+                poi_observations=(),
+                poi_lifecycle_transitions=(),
+                poi_overlap_relationships=(),
+                current_poi_states=(),
+            ),
+            None,
         )
 
     # Per-timeframe overlap is never read here (cross-timeframe overlap is
@@ -1557,40 +1614,59 @@ def _combine_poi_replay_states(
         for tf in ordered_timeframes
     }
 
-    observations_list: list[PoiObservation] = [
-        observation
-        for tf in ordered_timeframes
-        for observation in per_timeframe[tf].poi_observations
-    ]
-    if len(active) > 1:
-        merged_children, effective_timeframe_overrides = resolve_merges(
-            tuple(observations_list)
-        )
+    # A6-D: per_timeframe[tf].poi_observations is state.poi_observations_so_far
+    # passed through unchanged (never copied), so its id() is a valid proxy for
+    # "this timeframe's observation set is byte-identical to last call". If
+    # every active timeframe's tuple identity matches the cached signature, the
+    # ordinary bounded delta this call represents touched no observation this
+    # combine cares about, and the full cross-TF merge rebuild is skipped
+    # entirely -- not just the O(obs^2) resolve_merges scan, but also the
+    # per-observation re-fingerprint loop and the final canonical sort.
+    signature = tuple((tf, id(poi_states[tf].poi_observations_so_far)) for tf in active)
+    if merge_cache is not None and merge_cache.signature == signature:
+        observations = merge_cache.observations
+        new_merge_cache = merge_cache
     else:
-        # Merge only ever pairs a child with a STRONGER-timeframe parent, so a
-        # single active timeframe can never merge: skip the O(obs^2) scan.
-        merged_children, effective_timeframe_overrides = {}, {}
-    updated_observations: list[PoiObservation] = []
-    for observation in observations_list:
-        update: dict[str, object] = {}
-        if observation.record_id in merged_children:
-            update["merged_source_poi_record_ids"] = merged_children[
-                observation.record_id
-            ]
-        if observation.record_id in effective_timeframe_overrides:
-            update["effective_timeframe"] = effective_timeframe_overrides[
-                observation.record_id
-            ]
-        if update:
-            observation = _refingerprint(observation.model_copy(update=update))
-        updated_observations.append(observation)
+        observations_list: list[PoiObservation] = [
+            observation
+            for tf in ordered_timeframes
+            for observation in per_timeframe[tf].poi_observations
+        ]
+        if len(active) > 1:
+            merged_children, effective_timeframe_overrides = resolve_merges(
+                tuple(observations_list)
+            )
+        else:
+            # Merge only ever pairs a child with a STRONGER-timeframe parent, so
+            # a single active timeframe can never merge: skip the O(obs^2) scan.
+            merged_children, effective_timeframe_overrides = {}, {}
+        updated_observations: list[PoiObservation] = []
+        for observation in observations_list:
+            update: dict[str, object] = {}
+            if observation.record_id in merged_children:
+                update["merged_source_poi_record_ids"] = merged_children[
+                    observation.record_id
+                ]
+            if observation.record_id in effective_timeframe_overrides:
+                update["effective_timeframe"] = effective_timeframe_overrides[
+                    observation.record_id
+                ]
+            if update:
+                observation = _refingerprint(observation.model_copy(update=update))
+            updated_observations.append(observation)
+        observations = tuple(sorted(updated_observations, key=_observation_sort_key))
+        new_merge_cache = _PoiMergeCache(signature=signature, observations=observations)
 
     if with_overlap:
         evaluated_at = max(
             poi_states[tf].candles_so_far[-1].availability_time_utc for tf in active
         )
+        # compute_overlap_relationships re-sorts each (symbol, direction) group
+        # internally by record_id, so feeding it the already-merged/sorted
+        # `observations` (instead of the pre-sort updated_observations list) is
+        # immaterial to its result.
         overlap_relationships = compute_overlap_relationships(
-            tuple(updated_observations), evaluated_at
+            observations, evaluated_at
         )
     else:
         overlap_relationships = ()
@@ -1605,21 +1681,6 @@ def _combine_poi_replay_states(
         for state in per_timeframe[tf].current_poi_states
     ]
 
-    observations = tuple(
-        sorted(
-            updated_observations,
-            key=lambda o: (
-                o.availability_time_utc,
-                o.source_timeframe.value,
-                o.family.value,
-                o.poi_type.value,
-                o.direction.value,
-                o.zone_bottom,
-                o.zone_top,
-                str(o.record_id),
-            ),
-        )
-    )
     lifecycle_transitions_sorted = tuple(
         sorted(
             lifecycle_transitions,
@@ -1654,14 +1715,17 @@ def _combine_poi_replay_states(
         )
     )
 
-    return PoiAnalysis(
-        symbol=poi_states[active[0]].symbol,
-        analyzed_timeframes=ordered_timeframes,
-        analyzed_candle_count_by_timeframe=tuple(
-            len(poi_states[tf].candles_so_far) for tf in ordered_timeframes
+    return (
+        PoiAnalysis(
+            symbol=poi_states[active[0]].symbol,
+            analyzed_timeframes=ordered_timeframes,
+            analyzed_candle_count_by_timeframe=tuple(
+                len(poi_states[tf].candles_so_far) for tf in ordered_timeframes
+            ),
+            poi_observations=observations,
+            poi_lifecycle_transitions=lifecycle_transitions_sorted,
+            poi_overlap_relationships=overlap_sorted,
+            current_poi_states=current_states_sorted,
         ),
-        poi_observations=observations,
-        poi_lifecycle_transitions=lifecycle_transitions_sorted,
-        poi_overlap_relationships=overlap_sorted,
-        current_poi_states=current_states_sorted,
+        new_merge_cache,
     )

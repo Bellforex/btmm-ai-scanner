@@ -42,6 +42,7 @@ from btmm_ai_scanner.poi.analyzer import (
     _advance_poi_replay_state,
     _combine_poi_replay_states,
     _create_initial_poi_replay_state,
+    _PoiMergeCache,
     _PoiReplayState,
 )
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
@@ -504,6 +505,10 @@ class _ScannerOrchestrationReplayState:
     combined_poi_analysis: PoiAnalysis
     combined_btmm_analysis: BtmmAnalysis
     ledger: _ScannerEventLedger
+    # A6-D: the cross-timeframe POI merge cache, carried by reference (never
+    # mutated in place -- see _PoiMergeCache), so a failed advance_group leaves
+    # the prior kernel state's cache untouched exactly like every other field.
+    poi_merge_cache: _PoiMergeCache | None = None
 
 
 class IncrementalReplayKernel:
@@ -547,6 +552,9 @@ class IncrementalReplayKernel:
             tf: _create_initial_btmm_replay_state(identity_provider, btmm_cfg)
             for tf in self._btmm_timeframes
         }
+        initial_poi_analysis, initial_merge_cache = _combine_poi_replay_states(
+            poi_states, self._ordered
+        )
         self._state = _ScannerOrchestrationReplayState(
             measurement_states={
                 tf: _create_initial_measurement_replay_state(
@@ -563,11 +571,12 @@ class IncrementalReplayKernel:
             poi_states=poi_states,
             btmm_states=btmm_states,
             visible_candles=dict.fromkeys(tracked_timeframes, ()),
-            combined_poi_analysis=_combine_poi_replay_states(poi_states, self._ordered),
+            combined_poi_analysis=initial_poi_analysis,
             combined_btmm_analysis=_combine_btmm_replay_states(
                 btmm_states, self._btmm_timeframes, {}, None, 0
             ),
             ledger=_ScannerEventLedger(),
+            poi_merge_cache=initial_merge_cache,
         )
         self._processed_group_count = 0
 
@@ -658,8 +667,11 @@ class IncrementalReplayKernel:
         # Overlap is a leaf output used only by the final ScannerAnalysis, never
         # by the event ledger, so it is deferred to finalize() (materialized once)
         # instead of recomputed O(obs^2) per availability group.
-        combined_poi = _combine_poi_replay_states(
-            new_poi, self._ordered, with_overlap=False
+        combined_poi, new_merge_cache = _combine_poi_replay_states(
+            new_poi,
+            self._ordered,
+            with_overlap=False,
+            merge_cache=prior.poi_merge_cache,
         )
 
         btmm_symbol: InternalSymbol | None = None
@@ -767,6 +779,7 @@ class IncrementalReplayKernel:
             combined_poi_analysis=combined_poi,
             combined_btmm_analysis=combined_btmm,
             ledger=new_ledger,
+            poi_merge_cache=new_merge_cache,
         )
         self._processed_group_count += 1
 
@@ -794,8 +807,13 @@ class IncrementalReplayKernel:
         )
         # Materialize the cross-timeframe overlap once, here, from the final POI
         # states (advance_group defers it — the ledger never needs overlap).
-        poi_analysis = _combine_poi_replay_states(
-            state.poi_states, ordered, with_overlap=True
+        # The merge cache is not written back to self._state: finalize() never
+        # mutates kernel state (it only reads it to build the public snapshot).
+        poi_analysis, _ = _combine_poi_replay_states(
+            state.poi_states,
+            ordered,
+            with_overlap=True,
+            merge_cache=state.poi_merge_cache,
         )
         # A3-B: rebuild the combined BTMM analysis here so its CurrentBtmmState
         # objects (deferred out of the per-group hot path) are materialized once.

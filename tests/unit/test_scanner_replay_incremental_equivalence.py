@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import random
 from datetime import UTC, datetime, timedelta
@@ -58,15 +59,22 @@ from btmm_ai_scanner.poi.analyzer import (
     PoiAnalysis,
     PoiTimeframeInput,
     _advance_poi_replay_state,
+    _combine_poi_replay_states,
     _create_initial_poi_replay_state,
     _poi_replay_state_to_analysis,
+    _PoiMergeCache,
+    _PoiReplayState,
     analyze_pois,
 )
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import (
+    PoiDirection,
+    PoiFamily,
     PoiLifecycleStatus,
     PoiLifecycleTransitionType,
+    PoiType,
 )
+from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
 from btmm_ai_scanner.scanner.analyzer import scan_market
 from btmm_ai_scanner.scanner.configuration import (
@@ -3349,3 +3357,271 @@ def test_btmm_no_new_poi_activity_produces_no_rebuild() -> None:
             saw_zero_delta_candle = True
             assert b_state.scheduler.rebuilt == 0
     assert saw_zero_delta_candle
+
+
+# =====================================================================
+# A6-C + A6-D + A6-E: performance cleanup differential + rollback tests.
+# A6-C: the per-candle poi_observations_so_far sort is replaced by a
+# reuse-when-unchanged / retained-plus-touched merge; every existing
+# batch-oracle differential above (144 POI tests, the full kernel suite)
+# already re-verifies the public ordering is unaffected. The tests below
+# add direct proof that the fast path is actually exercised.
+# A6-D: the cross-timeframe POI merge (_combine_poi_replay_states) is
+# memoized behind an identity signature of the per-timeframe observation
+# tuples (_PoiMergeCache). These tests exercise resolve_merges's exact
+# merge semantics (new/changed/removed, overlap/non-overlap, strong-TF
+# override, multiple-overlapping-TFs) directly, plus the cache hit/miss/
+# rollback behavior that wraps it.
+# =====================================================================
+
+_MERGE_POI_CONFIG = PoiConfiguration(minimum_price_tick=Decimal("0.01"))
+
+
+def _merge_observation(
+    index: int,
+    timeframe: Timeframe,
+    *,
+    direction: PoiDirection = PoiDirection.BULLISH,
+    poi_type: PoiType = PoiType.PREVIOUS_DAY_HIGH,
+    zone_top: str,
+    zone_bottom: str,
+    availability_time: datetime | None = None,
+) -> PoiObservation:
+    # PREVIOUS_DAY_HIGH is not in LIFECYCLE_ELIGIBLE_POI_TYPES, so a
+    # synthetic _PoiReplayState carrying only these observations never
+    # touches the scheduler's per-POI cursor machinery.
+    when = availability_time or _BASE_TIME
+    return PoiObservation(
+        record_id=_record_id(index),
+        content_fingerprint=_FINGERPRINT,
+        symbol=InternalSymbol.XAUUSD,
+        source_timeframe=timeframe,
+        effective_timeframe=timeframe,
+        family=PoiFamily.STRUCTURAL,
+        poi_type=poi_type,
+        direction=direction,
+        zone_top=Decimal(zone_top),
+        zone_bottom=Decimal(zone_bottom),
+        representative_price=None,
+        strength_tier=None,
+        source_candle_record_ids=(),
+        source_measurement_record_ids=(),
+        merged_source_poi_record_ids=(),
+        candidate_event_time_utc=when,
+        confirmation_time_utc=when,
+        availability_time_utc=when,
+        rule_version=SemVer.parse("0.1.0"),
+        contract_version=SemVer.parse("0.1.0"),
+        schema_version=SemVer.parse("0.1.0"),
+        evidence_classification=EvidenceClassification.ENGINEERING_PROVISIONAL,
+        provenance_id=_PROVENANCE_ID,
+    )
+
+
+def _merge_poi_state(
+    timeframe: Timeframe, observations: tuple[PoiObservation, ...]
+) -> _PoiReplayState:
+    base = _create_initial_poi_replay_state(_HashIdentityProvider(), _MERGE_POI_CONFIG)
+    return dataclasses.replace(
+        base,
+        timeframe=timeframe,
+        symbol=InternalSymbol.XAUUSD,
+        candles_so_far=(_candle(0, 100.0, 101.0, 99.0, 100.5),),
+        poi_observations_so_far=observations,
+    )
+
+
+def test_a6d_merge_pairs_overlapping_stronger_timeframe_parent() -> None:
+    child = _merge_observation(1, Timeframe.M1, zone_top="101", zone_bottom="100")
+    parent = _merge_observation(2, Timeframe.M15, zone_top="102", zone_bottom="99")
+    poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child,)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (parent,)),
+    }
+    analysis, cache = _combine_poi_replay_states(
+        poi_states, (Timeframe.M1, Timeframe.M15)
+    )
+    by_id = {o.record_id: o for o in analysis.poi_observations}
+    assert by_id[child.record_id].effective_timeframe == Timeframe.M15
+    assert child.record_id in by_id[parent.record_id].merged_source_poi_record_ids
+    assert isinstance(cache, _PoiMergeCache)
+
+
+def test_a6d_no_merge_for_non_overlapping_zones() -> None:
+    child = _merge_observation(3, Timeframe.M1, zone_top="101", zone_bottom="100")
+    parent = _merge_observation(4, Timeframe.M15, zone_top="201", zone_bottom="200")
+    poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child,)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (parent,)),
+    }
+    analysis, _ = _combine_poi_replay_states(poi_states, (Timeframe.M1, Timeframe.M15))
+    by_id = {o.record_id: o for o in analysis.poi_observations}
+    assert by_id[child.record_id].effective_timeframe == Timeframe.M1
+    assert by_id[child.record_id].merged_source_poi_record_ids == ()
+    assert by_id[parent.record_id].merged_source_poi_record_ids == ()
+
+
+def test_a6d_strongest_of_multiple_overlapping_parents_wins() -> None:
+    child = _merge_observation(5, Timeframe.M1, zone_top="101", zone_bottom="100")
+    weak_parent = _merge_observation(6, Timeframe.M5, zone_top="102", zone_bottom="99")
+    strong_parent = _merge_observation(
+        7, Timeframe.M15, zone_top="103", zone_bottom="98"
+    )
+    poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child,)),
+        Timeframe.M5: _merge_poi_state(Timeframe.M5, (weak_parent,)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (strong_parent,)),
+    }
+    analysis, _ = _combine_poi_replay_states(
+        poi_states, (Timeframe.M1, Timeframe.M5, Timeframe.M15)
+    )
+    by_id = {o.record_id: o for o in analysis.poi_observations}
+    assert by_id[child.record_id].effective_timeframe == Timeframe.M15
+    assert (
+        child.record_id in by_id[strong_parent.record_id].merged_source_poi_record_ids
+    )
+    assert by_id[weak_parent.record_id].merged_source_poi_record_ids == ()
+
+
+def test_a6d_multiple_children_merge_into_same_stronger_parent() -> None:
+    child_a = _merge_observation(8, Timeframe.M1, zone_top="101", zone_bottom="100")
+    child_b = _merge_observation(9, Timeframe.M5, zone_top="101.5", zone_bottom="100.5")
+    parent = _merge_observation(10, Timeframe.M15, zone_top="103", zone_bottom="98")
+    poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child_a,)),
+        Timeframe.M5: _merge_poi_state(Timeframe.M5, (child_b,)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (parent,)),
+    }
+    analysis, _ = _combine_poi_replay_states(
+        poi_states, (Timeframe.M1, Timeframe.M5, Timeframe.M15)
+    )
+    by_id = {o.record_id: o for o in analysis.poi_observations}
+    merged = set(by_id[parent.record_id].merged_source_poi_record_ids)
+    assert merged == {child_a.record_id, child_b.record_id}
+
+
+def test_a6d_merge_cache_hit_reuses_result_when_observations_unchanged() -> None:
+    child = _merge_observation(11, Timeframe.M1, zone_top="101", zone_bottom="100")
+    parent = _merge_observation(12, Timeframe.M15, zone_top="102", zone_bottom="99")
+    poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child,)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (parent,)),
+    }
+    first_analysis, first_cache = _combine_poi_replay_states(
+        poi_states, (Timeframe.M1, Timeframe.M15)
+    )
+    # Same poi_states dict (same per-timeframe observation tuple identities):
+    # the merge cache must be reused verbatim, not recomputed.
+    second_analysis, second_cache = _combine_poi_replay_states(
+        poi_states, (Timeframe.M1, Timeframe.M15), merge_cache=first_cache
+    )
+    assert second_cache is first_cache
+    assert second_analysis.poi_observations == first_analysis.poi_observations
+
+
+def test_a6d_merge_cache_miss_recomputes_and_matches_a_full_recompute() -> None:
+    child = _merge_observation(13, Timeframe.M1, zone_top="101", zone_bottom="100")
+    parent = _merge_observation(14, Timeframe.M15, zone_top="102", zone_bottom="99")
+    poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child,)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (parent,)),
+    }
+    _, stale_cache = _combine_poi_replay_states(
+        poi_states, (Timeframe.M1, Timeframe.M15)
+    )
+    # A genuinely new/changed observation set (new tuple identity for M1)
+    # must miss the stale cache and recompute -- byte-identical to a fresh
+    # (uncached) call over the same new input.
+    new_child = _merge_observation(15, Timeframe.M1, zone_top="101", zone_bottom="100")
+    changed_poi_states = {
+        Timeframe.M1: _merge_poi_state(Timeframe.M1, (child, new_child)),
+        Timeframe.M15: _merge_poi_state(Timeframe.M15, (parent,)),
+    }
+    with_stale_cache, new_cache = _combine_poi_replay_states(
+        changed_poi_states, (Timeframe.M1, Timeframe.M15), merge_cache=stale_cache
+    )
+    fresh, _ = _combine_poi_replay_states(
+        changed_poi_states, (Timeframe.M1, Timeframe.M15)
+    )
+    assert new_cache is not stale_cache
+    assert with_stale_cache.poi_observations == fresh.poi_observations
+    assert with_stale_cache.poi_lifecycle_transitions == fresh.poi_lifecycle_transitions
+
+
+def test_a6d_merge_cache_matches_batch_oracle_across_prefixes() -> None:
+    # End-to-end proof (through the real kernel, real detector-driven
+    # observations, not synthetic ones) that caching the cross-TF merge never
+    # diverges from the unmodified batch oracle at any bounded prefix.
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M1, Timeframe.M5), _MULTI_CONFIG, _HashIdentityProvider(), ()
+    )
+    m1_candles = _MULTI_INPUTS[0].candles
+    m5_candles = _MULTI_INPUTS[1].candles
+    for i in range(max(len(m1_candles), len(m5_candles))):
+        group: dict[Timeframe, tuple[NormalizedCandle, ...]] = {}
+        if i < len(m1_candles):
+            group[Timeframe.M1] = (m1_candles[i],)
+        if i < len(m5_candles):
+            group[Timeframe.M5] = (m5_candles[i],)
+        kernel.advance_group(group)
+    final = kernel.finalize()
+    batch = scan_market(_MULTI_INPUTS, (), _MULTI_CONFIG, _HashIdentityProvider())
+    assert final.poi_analysis.poi_observations == batch.poi_analysis.poi_observations
+    assert (
+        final.poi_analysis.poi_overlap_relationships
+        == batch.poi_analysis.poi_overlap_relationships
+    )
+
+
+def test_a6d_merge_cache_rollback_leaves_prior_cache_untouched() -> None:
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    candles = _SINGLE_M15_INPUTS[0].candles
+    for candle in candles[:10]:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+
+    cache_before = kernel._state.poi_merge_cache
+
+    out_of_order = candles[5].model_copy(
+        update={"event_time_utc": candles[2].event_time_utc}
+    )
+    with pytest.raises(UnsortedCandleSequenceError):
+        kernel.advance_group({Timeframe.M15: (out_of_order,)})
+
+    assert kernel._state.poi_merge_cache is cache_before
+
+    kernel.advance_group({Timeframe.M15: (candles[10],)})
+    assert kernel._state.poi_merge_cache is not None
+
+
+def test_a6c_unchanged_individual_observations_keep_their_object_identity() -> None:
+    # A6-C's retained+touched merge pulls unchanged entries directly from the
+    # prior sorted tuple (never rebuilding them), so any observation whose
+    # content is byte-identical to the previous candle must be the exact same
+    # object -- not merely an equal one -- in the new poi_observations_so_far.
+    # This guards against a regression where the rewrite silently stopped
+    # reusing A3-A's cached objects for retained (unchanged) entries.
+    candles = _POI_CANDLES[42]
+    m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
+    p_state = _create_initial_poi_replay_state(_HashIdentityProvider(), _POI_CONFIG)
+    saw_reuse = False
+    for candle in candles:
+        m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
+        measurement = _measurement_replay_state_to_analysis(m_state)
+        prior_by_id = {o.record_id: o for o in p_state.poi_observations_so_far}
+        p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
+        for observation in p_state.poi_observations_so_far:
+            prior = prior_by_id.get(observation.record_id)
+            if prior is not None and prior == observation:
+                assert prior is observation
+                saw_reuse = True
+    assert saw_reuse
+
+
+def test_a6c_advance_poi_replay_state_matches_the_batch_oracle_every_prefix() -> None:
+    # Re-verifies the A6-C incremental-sort rewrite is byte-identical (order
+    # included) to the unmodified batch oracle at every prefix, on a fixture
+    # already known to produce a rich, changing POI set.
+    result = _poi_driven(42)
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
