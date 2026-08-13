@@ -1,7 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -667,10 +667,17 @@ class IncrementalReplayKernel:
         # Overlap is a leaf output used only by the final ScannerAnalysis, never
         # by the event ledger, so it is deferred to finalize() (materialized once)
         # instead of recomputed O(obs^2) per availability group.
+        # with_lifecycle=False: the per-group combine no longer materializes the
+        # POI lifecycle transitions (the O(obs) _build_lifecycle_outputs walk that
+        # re-validated/re-fingerprinted every historical transition every group --
+        # the O(N^2) advance-hot-path pathology). The only consumer, the event
+        # ledger below, reconciles poi_lifecycle_transitions once at finalize from
+        # the single materialized final analysis; nothing reads them per group.
         combined_poi, new_merge_cache = _combine_poi_replay_states(
             new_poi,
             self._ordered,
             with_overlap=False,
+            with_lifecycle=False,
             merge_cache=prior.poi_merge_cache,
         )
 
@@ -756,10 +763,11 @@ class IncrementalReplayKernel:
             poi_observations=_reconcile_ledger_category(
                 prior.ledger.poi_observations, combined_poi.poi_observations
             ),
-            poi_lifecycle_transitions=_reconcile_ledger_category(
-                prior.ledger.poi_lifecycle_transitions,
-                combined_poi.poi_lifecycle_transitions,
-            ),
+            # Deferred: the per-group combine runs with_lifecycle=False, so the
+            # POI lifecycle transitions are not materialized here. They are
+            # reconciled once in finalize() from the single materialized final
+            # analysis (the only place the ledger's transitions are ever read).
+            poi_lifecycle_transitions=(),
             btmm_observations=_reconcile_ledger_category(
                 prior.ledger.btmm_observations, combined_btmm.btmm_observations
             ),
@@ -805,10 +813,11 @@ class IncrementalReplayKernel:
             _structure_replay_state_to_analysis(state.structure_states[tf])
             for tf in ordered
         )
-        # Materialize the cross-timeframe overlap once, here, from the final POI
-        # states (advance_group defers it — the ledger never needs overlap).
-        # The merge cache is not written back to self._state: finalize() never
-        # mutates kernel state (it only reads it to build the public snapshot).
+        # Materialize the cross-timeframe overlap AND the POI lifecycle
+        # transitions once, here, from the final POI states (advance_group defers
+        # both — the ledger's transitions are reconciled once, below, from this
+        # single materialized analysis). The merge cache is not written back to
+        # self._state; only the ledger's deferred transition field is finalized.
         poi_analysis, _ = _combine_poi_replay_states(
             state.poi_states,
             ordered,
@@ -834,6 +843,26 @@ class IncrementalReplayKernel:
             len(poi_analysis.poi_observations),
             with_current_states=True,
         )
+        # Reconcile the ledger's deferred POI lifecycle transitions once, from
+        # this single materialized final analysis (advance_group left them empty).
+        # state.ledger.poi_lifecycle_transitions is (), so the reconciliation
+        # yields exactly poi_analysis.poi_lifecycle_transitions; the stored ledger
+        # is republished so event_ledger() reflects the finalized transitions
+        # (register §44U2 fidelity, unchanged from the pre-lazy behaviour).
+        if (
+            state.ledger.poi_lifecycle_transitions
+            != poi_analysis.poi_lifecycle_transitions
+        ):
+            self._state = replace(
+                state,
+                ledger=replace(
+                    state.ledger,
+                    poi_lifecycle_transitions=_reconcile_ledger_category(
+                        state.ledger.poi_lifecycle_transitions,
+                        poi_analysis.poi_lifecycle_transitions,
+                    ),
+                ),
+            )
         setup_summaries = _build_setup_summaries(poi_analysis, btmm_analysis)
         scanner_bundles = tuple(
             ScannerTimeframeInput(timeframe=tf, candles=state.visible_candles[tf])

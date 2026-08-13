@@ -1476,6 +1476,7 @@ def _poi_replay_state_to_analysis(
     *,
     with_overlap: bool = True,
     with_current_states: bool = True,
+    with_lifecycle_transitions: bool = True,
 ) -> PoiAnalysis:
     """Build the public PoiAnalysis from the incremental single-timeframe state,
     matching analyze_pois's shape exactly — including the empty-input case.
@@ -1497,7 +1498,21 @@ def _poi_replay_state_to_analysis(
     per-candle BTMM feed (BTMM reads only ``poi_observations`` and
     ``poi_lifecycle_transitions``). Skipping the discarded O(obs^2) scan there
     removes it from the per-group and per-candle hot paths without changing any
-    published output."""
+    published output.
+
+    ``with_lifecycle_transitions=False`` additionally skips
+    ``_build_lifecycle_outputs`` -- the O(obs) walk that re-derives (and, via
+    ``_finalize``, re-validates and re-fingerprints) every historical POI
+    lifecycle transition -- and returns an empty ``poi_lifecycle_transitions``
+    tuple. It exists for the per-group FINAL_ONLY orchestration combine, whose
+    only consumer of the transitions (the private event ledger) reconciles them
+    once at finalize from the single materialized final analysis, never per
+    group. Combined with ``with_current_states=False`` this removes the entire
+    lifecycle-output materialization from the per-group advance hot path, so the
+    O(obs) walk is no longer paid once per availability group (the O(N^2)
+    cumulative pathology). The full canonical tuple is still materialized -- once
+    -- at snapshot/finalization, where ``with_lifecycle_transitions`` defaults to
+    True, so every published output is byte-identical to before."""
     if not state.candles_so_far:
         return PoiAnalysis(
             symbol=None,
@@ -1525,9 +1540,15 @@ def _poi_replay_state_to_analysis(
         )
     else:
         overlap_relationships = ()
-    lifecycle_transitions_sorted, current_state_materials = _build_lifecycle_outputs(
-        state
-    )
+    if with_lifecycle_transitions or with_current_states:
+        lifecycle_transitions_sorted, current_state_materials = (
+            _build_lifecycle_outputs(state)
+        )
+    else:
+        # Per-group FINAL_ONLY combine: neither the sorted transitions nor the
+        # current-state materials are consumed, so the O(obs) historical walk is
+        # skipped entirely (deferred to finalization).
+        lifecycle_transitions_sorted, current_state_materials = (), ()
     current_poi_states = (
         _materialize_current_poi_states(current_state_materials)
         if with_current_states
@@ -1538,7 +1559,9 @@ def _poi_replay_state_to_analysis(
         analyzed_timeframes=(state.timeframe,),
         analyzed_candle_count_by_timeframe=(len(state.candles_so_far),),
         poi_observations=state.poi_observations_so_far,
-        poi_lifecycle_transitions=lifecycle_transitions_sorted,
+        poi_lifecycle_transitions=(
+            lifecycle_transitions_sorted if with_lifecycle_transitions else ()
+        ),
         poi_overlap_relationships=overlap_relationships,
         current_poi_states=current_poi_states,
     )
@@ -1567,6 +1590,7 @@ def _combine_poi_replay_states(
     ordered_timeframes: tuple[Timeframe, ...],
     *,
     with_overlap: bool = True,
+    with_lifecycle: bool = True,
     merge_cache: _PoiMergeCache | None = None,
 ) -> tuple[PoiAnalysis, _PoiMergeCache | None]:
     """Combine the per-timeframe incremental POI states (subsystem 2d) into the
@@ -1579,8 +1603,14 @@ def _combine_poi_replay_states(
     runs here. `with_overlap=False` skips the O(obs^2) overlap computation for
     callers (the per-group event-ledger reconciliation) that only need the
     observation/transition/current-state records; the overlap is materialized
-    once at finalization. The unchanged batch analyze_pois over the full prefix
-    remains the differential oracle.
+    once at finalization. `with_lifecycle=False` additionally skips the per-
+    timeframe ``_build_lifecycle_outputs`` walk (see
+    ``_poi_replay_state_to_analysis``), returning an empty
+    ``poi_lifecycle_transitions``; the per-group orchestration passes it because
+    the only consumer -- the private event ledger -- reconciles the transitions
+    once at finalize from the single materialized final analysis, never per
+    group. The unchanged batch analyze_pois over the full prefix remains the
+    differential oracle.
 
     Returns the analysis plus the (possibly reused, possibly freshly computed)
     merge cache for the caller to carry forward -- never mutated in place, so a
@@ -1609,7 +1639,10 @@ def _combine_poi_replay_states(
     # is deferred out of the per-group hot path entirely.
     per_timeframe = {
         tf: _poi_replay_state_to_analysis(
-            poi_states[tf], with_overlap=False, with_current_states=with_overlap
+            poi_states[tf],
+            with_overlap=False,
+            with_current_states=with_overlap,
+            with_lifecycle_transitions=with_lifecycle,
         )
         for tf in ordered_timeframes
     }
