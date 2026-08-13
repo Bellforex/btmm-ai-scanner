@@ -1151,6 +1151,7 @@ def _combine_btmm_replay_states(
     combined_poi_observation_count: int,
     *,
     with_current_states: bool = True,
+    validated: bool = True,
 ) -> BtmmAnalysis:
     """Combine the per-BTMM-timeframe incremental states (subsystem 2e) into
     the multi-timeframe BtmmAnalysis, reproducing analyze_btmm's shape
@@ -1231,7 +1232,14 @@ def _combine_btmm_replay_states(
         )
     )
 
-    return BtmmAnalysis(
+    # A6-F2: the FINAL_ONLY advance hot path passes validated=False. The combined
+    # analysis is a pure re-projection of already-validated per-timeframe records
+    # (observations/transitions built and validated by _advance_btmm_replay_state);
+    # model_construct skips ContractModel's revalidate_instances="always"
+    # re-validation of the whole cumulative BTMM set every availability group (the
+    # O(history)-per-group cost). The public finalize() combine keeps validated=True.
+    builder = BtmmAnalysis if validated else BtmmAnalysis.model_construct
+    return builder(
         symbol=symbol,
         analyzed_timeframes=ordered_btmm_timeframes,
         analyzed_candle_count_by_timeframe=tuple(

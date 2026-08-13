@@ -3175,6 +3175,72 @@ def test_kernel_full_transaction_rollback_preserves_ledger_and_state() -> None:
     assert kernel.processed_group_count() == group_count_before + 1
 
 
+def test_f2_advance_defers_all_public_measurement_structure_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F2 operation-count gate. advance_group must NOT materialize a full,
+    # fully re-validated public MarketMeasurementAnalysis or StructureAnalysis
+    # per availability group. Under ContractModel's revalidate_instances=
+    # "always", building those per candle/group re-validated the entire
+    # cumulative record set every group -- the O(history)-per-group -> O(N^2)
+    # advance-hot-path cost. F2 instead feeds structure/POI an O(1) unvalidated
+    # measurement *view* (model_construct) and reconciles the per-group ledger
+    # directly from the incremental state's cumulative record tuples. The
+    # validated public analyses are materialized exactly once, at finalize().
+    from btmm_ai_scanner.scanner import replay as replay_module
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            "full public measurement/structure analysis materialization must be "
+            "deferred out of the per-candle / per-group advance hot path"
+        )
+
+    monkeypatch.setattr(replay_module, "_measurement_replay_state_to_analysis", _boom)
+    monkeypatch.setattr(replay_module, "_structure_replay_state_to_analysis", _boom)
+
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in _SINGLE_M15_INPUTS[0].candles:
+        # Would raise via the boobytrapped builders if advance materialized either
+        # the full validated measurement or structure public analysis.
+        kernel.advance_group({Timeframe.M15: (candle,)})
+
+    # ...and the deferred materialization genuinely happens once, at finalize().
+    with pytest.raises(AssertionError):
+        kernel.finalize()
+
+
+def test_f2_advance_uses_bounded_unvalidated_measurement_view_per_candle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F2 positive gate: the per-candle structure/POI feed is the O(1)
+    # model_construct measurement view, invoked once per candle, never the
+    # validated public builder. Proves the bounded-view path is live.
+    from btmm_ai_scanner.domain.analyzer import _measurement_replay_state_to_view
+    from btmm_ai_scanner.scanner import replay as replay_module
+
+    calls = {"view": 0}
+
+    def _counting_view(state: object) -> object:
+        calls["view"] += 1
+        return _measurement_replay_state_to_view(state)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        replay_module, "_measurement_replay_state_to_view", _counting_view
+    )
+
+    candles = _SINGLE_M15_INPUTS[0].candles
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+
+    # Exactly one bounded view per candle (single timeframe, one candle/group).
+    assert calls["view"] == len(candles)
+
+
 # =====================================================================
 # A6-B2-C: production wake differential + non-woken identity reuse.
 #

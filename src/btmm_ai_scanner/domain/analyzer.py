@@ -1843,3 +1843,37 @@ def _measurement_replay_state_to_analysis(
         support_resistance_zones=state.support_resistance_zones_so_far,
         trendlines=state.trendlines_so_far,
     )
+
+
+def _measurement_replay_state_to_view(
+    state: _MeasurementReplayState,
+) -> MarketMeasurementAnalysis:
+    """O(1) unvalidated projection for the FINAL_ONLY advance hot path (A6-F2).
+
+    Field-identical to :func:`_measurement_replay_state_to_analysis`, but built
+    via ``model_construct`` so it skips ``ContractModel``'s
+    ``revalidate_instances="always"`` re-validation of every historical nested
+    record. That per-candle re-validation of the whole cumulative measurement
+    analysis (all confirmed swings / displacements / equal levels / SR zones /
+    trendlines, each re-running UUIDv7 + fingerprint + cross-field validators)
+    is the O(history)-per-candle -> O(N^2) advance-hot-path cost.
+
+    Safe because every field is an already-validated immutable record pulled
+    straight from the incremental state (nothing to normalise or coerce), and
+    the public ``finalize()`` boundary still constructs the fully-validated
+    analysis. The two builders produce byte-identical models (same field
+    values, ``==``, serialization, and content fingerprint), proven by the
+    scan_market differential across every bounded prefix.
+    """
+    symbol = state.candles_so_far[0].symbol if state.candles_so_far else None
+    timeframe = state.candles_so_far[0].timeframe if state.candles_so_far else None
+    return MarketMeasurementAnalysis.model_construct(
+        symbol=symbol,
+        timeframe=timeframe,
+        analyzed_candle_count=len(state.candles_so_far),
+        confirmed_swings=state.confirmed_swings_so_far,
+        displacement_observations=state.displacement_observations_so_far,
+        equal_level_clusters=state.equal_level_clusters_so_far,
+        support_resistance_zones=state.support_resistance_zones_so_far,
+        trendlines=state.trendlines_so_far,
+    )

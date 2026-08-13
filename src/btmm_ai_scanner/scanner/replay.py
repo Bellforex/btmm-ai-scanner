@@ -30,6 +30,7 @@ from btmm_ai_scanner.domain.analyzer import (
     _advance_measurement_replay_state,
     _create_initial_measurement_replay_state,
     _measurement_replay_state_to_analysis,
+    _measurement_replay_state_to_view,
     _MeasurementReplayState,
 )
 from btmm_ai_scanner.domain.displacement import DisplacementObservation
@@ -630,7 +631,13 @@ class IncrementalReplayKernel:
                 measurement_state = _advance_measurement_replay_state(
                     measurement_state, candle, measurement_cfg
                 )
-                measurement = _measurement_replay_state_to_analysis(measurement_state)
+                # A6-F2: feed structure/POI an O(1) unvalidated measurement view
+                # (model_construct) instead of the fully re-validated public
+                # analysis. The nested records are already validated in the
+                # incremental state; re-validating the whole cumulative analysis
+                # every candle was an O(history)-per-candle -> O(N^2) cost. The
+                # public analysis is still materialized (validated) at finalize.
+                measurement = _measurement_replay_state_to_view(measurement_state)
                 structure_state = _advance_structure_replay_state(
                     structure_state, candle, measurement.confirmed_swings, structure_cfg
                 )
@@ -678,6 +685,7 @@ class IncrementalReplayKernel:
             self._ordered,
             with_overlap=False,
             with_lifecycle=False,
+            validated=False,
             merge_cache=prior.poi_merge_cache,
         )
 
@@ -699,23 +707,23 @@ class IncrementalReplayKernel:
             btmm_symbol,
             len(combined_poi.poi_observations),
             with_current_states=False,
+            validated=False,
         )
 
-        measurement_analyses = {
-            tf: _measurement_replay_state_to_analysis(new_measurement[tf])
-            for tf in self._ordered
-        }
-        structure_analyses = {
-            tf: _structure_replay_state_to_analysis(new_structure[tf])
-            for tf in self._ordered
-        }
+        # A6-F2: the per-group ledger reconciliation reads only the cumulative
+        # measurement/structure record tuples, which the incremental states
+        # already hold verbatim. Read them directly instead of materializing
+        # (and, before A6-F2, fully re-validating) a public MarketMeasurement"
+        # Analysis / StructureAnalysis per timeframe per group. Full cumulative
+        # measurement/structure public materializations per group are now 0;
+        # the validated public analyses are built once, in finalize().
         new_ledger = _ScannerEventLedger(
             confirmed_swings=_reconcile_ledger_category(
                 prior.ledger.confirmed_swings,
                 tuple(
                     swing
                     for tf in self._ordered
-                    for swing in measurement_analyses[tf].confirmed_swings
+                    for swing in new_measurement[tf].confirmed_swings_so_far
                 ),
             ),
             displacement_observations=_reconcile_ledger_category(
@@ -723,9 +731,9 @@ class IncrementalReplayKernel:
                 tuple(
                     observation
                     for tf in self._ordered
-                    for observation in measurement_analyses[
+                    for observation in new_measurement[
                         tf
-                    ].displacement_observations
+                    ].displacement_observations_so_far
                 ),
             ),
             equal_level_clusters=_reconcile_ledger_category(
@@ -733,7 +741,7 @@ class IncrementalReplayKernel:
                 tuple(
                     cluster
                     for tf in self._ordered
-                    for cluster in measurement_analyses[tf].equal_level_clusters
+                    for cluster in new_measurement[tf].equal_level_clusters_so_far
                 ),
             ),
             support_resistance_zones=_reconcile_ledger_category(
@@ -741,7 +749,7 @@ class IncrementalReplayKernel:
                 tuple(
                     zone
                     for tf in self._ordered
-                    for zone in measurement_analyses[tf].support_resistance_zones
+                    for zone in new_measurement[tf].support_resistance_zones_so_far
                 ),
             ),
             trendlines=_reconcile_ledger_category(
@@ -749,7 +757,7 @@ class IncrementalReplayKernel:
                 tuple(
                     trendline
                     for tf in self._ordered
-                    for trendline in measurement_analyses[tf].trendlines
+                    for trendline in new_measurement[tf].trendlines_so_far
                 ),
             ),
             structure_transitions=_reconcile_ledger_category(
@@ -757,7 +765,7 @@ class IncrementalReplayKernel:
                 tuple(
                     transition
                     for tf in self._ordered
-                    for transition in structure_analyses[tf].structure_transitions
+                    for transition in new_structure[tf].structure_transitions_so_far
                 ),
             ),
             poi_observations=_reconcile_ledger_category(

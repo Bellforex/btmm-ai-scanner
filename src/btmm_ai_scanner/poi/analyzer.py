@@ -1591,6 +1591,7 @@ def _combine_poi_replay_states(
     *,
     with_overlap: bool = True,
     with_lifecycle: bool = True,
+    validated: bool = True,
     merge_cache: _PoiMergeCache | None = None,
 ) -> tuple[PoiAnalysis, _PoiMergeCache | None]:
     """Combine the per-timeframe incremental POI states (subsystem 2d) into the
@@ -1748,8 +1749,14 @@ def _combine_poi_replay_states(
         )
     )
 
+    # A6-F2: the FINAL_ONLY advance hot path passes validated=False. This combined
+    # analysis is a pure re-projection of already-validated per-timeframe records;
+    # model_construct skips ContractModel's revalidate_instances="always"
+    # re-validation of the whole cumulative POI set every availability group. The
+    # public finalize() combine (with_overlap=True) keeps validated=True.
+    builder = PoiAnalysis if validated else PoiAnalysis.model_construct
     return (
-        PoiAnalysis(
+        builder(
             symbol=poi_states[active[0]].symbol,
             analyzed_timeframes=ordered_timeframes,
             analyzed_candle_count_by_timeframe=tuple(
