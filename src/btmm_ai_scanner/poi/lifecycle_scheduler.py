@@ -77,15 +77,6 @@ class PoiSpec:
     availability_time_utc: datetime
 
 
-@dataclass(frozen=True)
-class _Reg:
-    direction: PoiDirection
-    zone_top: Decimal
-    zone_bottom: Decimal
-    in_touch: bool
-    in_breach: bool
-
-
 def _in_touch(cursor: PoiLifecycleCursor) -> bool:
     return cursor.start_index is not None
 
@@ -98,6 +89,22 @@ def _due_next(cursor: PoiLifecycleCursor) -> bool:
     return cursor.start_index is None or cursor.in_tap or len(cursor.candle_buffer) > 0
 
 
+@dataclass
+class _SchedulerOps:
+    """Permanent per-advance operation counters (A6-F6E). Not part of any
+    published contract; they prove the delta-driven behaviour (a no-event candle
+    touches zero history-proportional structures) and feed the benchmark. The
+    prior registration state each candle is derived from the stored cursor, so a
+    woken POI whose registration is unchanged incurs no touch/breach index write
+    at all -- only its cursor (which genuinely advanced) is rewritten."""
+
+    cursor_writes: int = 0
+    cursor_deletes: int = 0
+    touch_index_writes: int = 0
+    breach_index_writes: int = 0
+    due_writes: int = 0
+
+
 @dataclass(frozen=True)
 class PoiEventScheduler:
     configuration: PoiConfiguration
@@ -105,7 +112,6 @@ class PoiEventScheduler:
     touch_index: PersistentIntervalTouchIndex
     breach_index: PersistentBreachIndex
     cursors: PersistentMap[PoiLifecycleCursor]
-    regs: PersistentMap[_Reg]
     due: PersistentMap[frozenset[UUID]]
     # Max availability_time over all candles processed so far. A new POI whose
     # availability is >= this is pre-start w.r.t. every candle seen (no candle is
@@ -124,6 +130,8 @@ class PoiEventScheduler:
     # the current candle), which the walk adapter does exactly. Transient
     # per-advance output; not part of the persistent state.
     last_walks: dict[UUID, LifecycleWalkResult] = field(default_factory=dict)
+    # Per-advance operation counts (A6-F6E instrumentation; see _SchedulerOps).
+    ops: _SchedulerOps = field(default_factory=lambda: _SchedulerOps())
 
     def materialize_cursor(self, record_id: UUID) -> PoiLifecycleCursor | None:
         """The cursor for ``record_id`` reconciled to the current candle count —
@@ -142,7 +150,6 @@ def create_scheduler(configuration: PoiConfiguration) -> PoiEventScheduler:
         touch_index=create_persistent_interval_index(),
         breach_index=create_persistent_breach_index(configuration),
         cursors=PersistentMap(),
-        regs=PersistentMap(),
         due=PersistentMap(),
     )
 
@@ -155,47 +162,60 @@ class _Mut:
     touch_index: PersistentIntervalTouchIndex
     breach_index: PersistentBreachIndex
     cursors: PersistentMap[PoiLifecycleCursor]
-    regs: PersistentMap[_Reg]
     due: PersistentMap[frozenset[UUID]]
+    ops: _SchedulerOps = field(default_factory=_SchedulerOps)
 
     def _unregister(self, record_id: UUID) -> None:
-        reg = self.regs.get(record_id.int)
-        if reg is None:
+        # Registration state is derived from the stored cursor rather than a
+        # parallel ``regs`` map: start_index / terminal / zone are all invariant
+        # under fast_forward, so a lazily-stale stored cursor reports the exact
+        # registration that is live in the indexes.
+        cursor = self.cursors.get(record_id.int)
+        if cursor is None:
             return
-        if reg.in_touch:
-            self.touch_index = self.touch_index.remove(record_id, reg.zone_bottom)
-        if reg.in_breach:
+        if _in_touch(cursor):
+            self.touch_index = self.touch_index.remove(record_id, cursor.zone_bottom)
+            self.ops.touch_index_writes += 1
+        if _in_breach(cursor):
             self.breach_index = self.breach_index.unregister(
-                record_id, reg.direction, reg.zone_top, reg.zone_bottom
+                record_id, cursor.direction, cursor.zone_top, cursor.zone_bottom
             )
-        self.regs = self.regs.delete(record_id.int)
+            self.ops.breach_index_writes += 1
         self.cursors = self.cursors.delete(record_id.int)
+        self.ops.cursor_deletes += 1
 
     def _reregister(self, record_id: UUID, cursor: PoiLifecycleCursor) -> None:
-        """Diff the cursor's desired registration against its current one and
-        apply the minimal index changes (zone taken from the cursor, which is the
-        registered zone for a normal advance)."""
-        prev = self.regs.get(record_id.int)
-        prev_touch = prev.in_touch if prev is not None else False
-        prev_breach = prev.in_breach if prev is not None else False
+        """Apply only the minimal index changes for this advance. The previous
+        registration is read from the previously stored cursor (still present in
+        ``self.cursors`` until the set below), so an unchanged registration writes
+        NOTHING to the touch/breach indexes -- the old ``regs`` map (unchanged in
+        92-97% of advances) is gone entirely. Only the cursor, which genuinely
+        advanced this candle, is rewritten."""
+        prev_cursor = self.cursors.get(record_id.int)
+        prev_touch = _in_touch(prev_cursor) if prev_cursor is not None else False
+        prev_breach = _in_breach(prev_cursor) if prev_cursor is not None else False
         nt = _in_touch(cursor)
         nb = _in_breach(cursor)
         zt = cursor.zone_top
         zb = cursor.zone_bottom
         if nt and not prev_touch:
             self.touch_index = self.touch_index.insert(record_id, zb, zt)
+            self.ops.touch_index_writes += 1
         elif prev_touch and not nt:
             self.touch_index = self.touch_index.remove(record_id, zb)
+            self.ops.touch_index_writes += 1
         if nb and not prev_breach:
             self.breach_index = self.breach_index.register(
                 record_id, cursor.direction, zt, zb
             )
+            self.ops.breach_index_writes += 1
         elif prev_breach and not nb:
             self.breach_index = self.breach_index.unregister(
                 record_id, cursor.direction, zt, zb
             )
-        self.regs = self.regs.set(record_id.int, _Reg(cursor.direction, zt, zb, nt, nb))
+            self.ops.breach_index_writes += 1
         self.cursors = self.cursors.set(record_id.int, cursor)
+        self.ops.cursor_writes += 1
 
     def _schedule_due(
         self, record_id: UUID, cursor: PoiLifecycleCursor, next_bar: int
@@ -204,6 +224,7 @@ class _Mut:
             bucket = self.due.get(next_bar, frozenset())
             assert bucket is not None
             self.due = self.due.set(next_bar, bucket | {record_id})
+            self.ops.due_writes += 1
 
 
 def advance_scheduler(
@@ -238,7 +259,6 @@ def advance_scheduler(
         touch_index=scheduler.touch_index,
         breach_index=scheduler.breach_index,
         cursors=scheduler.cursors,
-        regs=scheduler.regs,
         due=scheduler.due,
     )
 
@@ -314,10 +334,10 @@ def advance_scheduler(
         touch_index=mut.touch_index,
         breach_index=mut.breach_index,
         cursors=mut.cursors,
-        regs=mut.regs,
         due=new_due,
         max_availability=new_max_availability,
         woken_ids=frozenset(wake),
         rebuilt=len(changed_ids) + len(new_pois),
         last_walks=last_walks,
+        ops=mut.ops,
     )
