@@ -1115,6 +1115,23 @@ class _SupportResistanceFrontier:
         default_factory=dict
     )
     origin_zone: dict[UUID, SupportResistanceType] = field(default_factory=dict)
+    # Zone-price routing index (A6-F6D-M2R): a persistent price-ordered map of
+    # origins per zone type, so a newly appended same-type touch is routed only
+    # to the origins whose zone band its price actually enters (one O(log A + k)
+    # stabbing query) instead of every prior same-type origin (the O(A^2)
+    # resume-call path M2 disclosed). Keys are composite ``price_ticks * STRIDE +
+    # seq`` ints so distinct origins at the same price stay distinct and price
+    # order is preserved; ``origin_price_key`` remembers each key for removal.
+    # ``zone_max_upper`` / ``zone_max_pierce`` are the running max band half-
+    # widths used to bound the pivot-price window (they only grow, so the window
+    # is always a valid superset -- exact ``_sr_geometric_ok`` filters the rest).
+    zone_price_index: dict[SupportResistanceType, PersistentMap[UUID]] = field(
+        default_factory=dict
+    )
+    origin_price_key: dict[UUID, int] = field(default_factory=dict)
+    zone_max_upper: dict[SupportResistanceType, Decimal] = field(default_factory=dict)
+    zone_max_pierce: dict[SupportResistanceType, Decimal] = field(default_factory=dict)
+    zone_next_seq: dict[SupportResistanceType, int] = field(default_factory=dict)
 
 
 _SR_ZONE_SPECS = (
@@ -1149,16 +1166,97 @@ def _sr_zone_geometry(
     return zone_top, zone_bottom, zone_depth, touch_tolerance, pierce_tolerance
 
 
-def _sr_geometric_ok(state: _SrOriginState, touch: ConfirmedSwing) -> bool:
+# Stride between price-ticks in a composite routing key: price_ticks * STRIDE +
+# seq. 2**32 leaves room for >4e9 distinct origins per exact tick before two
+# origins could collide, far beyond any replay (a few thousand swings), while
+# keeping strict price ordering across ticks.
+_SR_PRICE_KEY_STRIDE = 1 << 32
+
+
+def _sr_price_ticks(price: Decimal, min_tick: Decimal) -> int:
+    return int(price // min_tick)
+
+
+def _sr_stab_older_origins(
+    price_index: PersistentMap[UUID],
+    max_upper: Decimal,
+    max_pierce: Decimal,
+    is_support: bool,
+    price: Decimal,
+    min_tick: Decimal,
+    states: dict[tuple[SupportResistanceType, UUID], _SrOriginState],
+    zone_type: SupportResistanceType,
+    before_pos: int,
+) -> list[UUID]:
+    """Route a new same-type touch at ``price`` to only the origins whose zone
+    band actually contains it. A support origin i is entered iff
+    ``pivot_i - pierce_i <= price <= pivot_i + depth_i + touch_i``, i.e.
+    ``price - (depth_i+touch_i) <= pivot_i <= price + pierce_i``; resistance is
+    mirrored. Bounding ``depth_i+touch_i`` by ``max_upper`` and ``pierce_i`` by
+    ``max_pierce`` gives a pivot-price window that is a superset of the true
+    hits; the exact ``_sr_geometric_ok`` check then removes the extras. Only
+    origins strictly older than ``before_pos`` can gain this swing as a touch."""
+    if is_support:
+        lo_price = price - max_upper
+        hi_price = price + max_pierce
+    else:
+        lo_price = price - max_pierce
+        hi_price = price + max_upper
+    # Pad one tick each side so integer truncation never drops a boundary hit.
+    lo_ticks = _sr_price_ticks(lo_price, min_tick) - 1
+    hi_ticks = _sr_price_ticks(hi_price, min_tick) + 1
+    klo = max(0, lo_ticks) * _SR_PRICE_KEY_STRIDE
+    khi = (hi_ticks + 1) * _SR_PRICE_KEY_STRIDE
+    marked: list[UUID] = []
+    for _key, oid in price_index.range(klo, khi):
+        state = states.get((zone_type, oid))
+        if state is None or state.origin_pos >= before_pos:
+            continue
+        # The window is a superset; confirm exact band membership (same predicate
+        # the per-touch walk uses) before marking the origin dirty.
+        if _sr_price_in_band(state, price):
+            marked.append(oid)
+    return marked
+
+
+def _sr_has_opposite_between(
+    opposite_times: tuple[datetime, ...],
+    last_time: datetime,
+    touch_time: datetime,
+) -> bool:
+    """True iff some opposite-type confirmed swing falls STRICTLY between
+    ``last_time`` and ``touch_time`` -- the exact ``last_time < s < touch_time``
+    predicate the oracle expresses as ``any(...)`` over all confirmed swings,
+    answered here in O(log A) against the pre-sorted opposite-time index.
+
+    ``bisect_left(touch_time)`` counts opposites strictly < touch_time (so an
+    opposite exactly AT touch_time is excluded, matching ``s < touch_time``);
+    ``bisect_right(last_time)`` counts opposites <= last_time (so an opposite
+    exactly AT last_time is excluded, matching ``last_time < s``). Their
+    difference is the count strictly inside the open interval."""
+    return bisect.bisect_left(opposite_times, touch_time) > bisect.bisect_right(
+        opposite_times, last_time
+    )
+
+
+def _sr_price_in_band(state: _SrOriginState, price: Decimal) -> bool:
+    """Exact zone-band membership: whether ``price`` falls inside the origin's
+    tolerance-padded zone (touch tolerance on the zone-facing side, pierce
+    tolerance on the far side). The single source of truth shared by the walk's
+    ``_sr_geometric_ok`` and the routing index's superset filter."""
     if state.is_support:
         return (
-            touch.pivot_price <= state.zone_top + state.touch_tolerance
-            and touch.pivot_price >= state.zone_bottom - state.pierce_tolerance
+            price <= state.zone_top + state.touch_tolerance
+            and price >= state.zone_bottom - state.pierce_tolerance
         )
     return (
-        touch.pivot_price >= state.zone_bottom - state.touch_tolerance
-        and touch.pivot_price <= state.zone_top + state.pierce_tolerance
+        price >= state.zone_bottom - state.touch_tolerance
+        and price <= state.zone_top + state.pierce_tolerance
     )
+
+
+def _sr_geometric_ok(state: _SrOriginState, touch: ConfirmedSwing) -> bool:
+    return _sr_price_in_band(state, touch.pivot_price)
 
 
 def _sr_build_candidate(
@@ -1218,8 +1316,13 @@ def _sr_resume_origin(
     origin_id = state.origin.record_id
     ck = state.ck
     qualifying = state.qualifying
-    last_time = ck.get(from_pos)
-    assert last_time is not None
+    # Entering last_touch_time. With routing, intermediate geometric-miss touches
+    # are never processed for this origin, so ck is sparse -- but a miss never
+    # changes last_touch_time, so the checkpoint carried into ``from_pos`` is
+    # exactly the value at the greatest stored position <= from_pos.
+    floor = ck.floor_item(from_pos)
+    assert floor is not None
+    last_time = floor[1]
     j = from_pos
     while j < registry_len:
         touch = registry.get(j)
@@ -1231,9 +1334,9 @@ def _sr_resume_origin(
             if touch_time > last_time:
                 touch_index = candle_index_by_id[touch.pivot_candle_record_ids[-1]]
                 if touch_index + 1 < n:
-                    has_opp = bisect.bisect_left(
-                        opposite_times, touch_time
-                    ) > bisect.bisect_right(opposite_times, last_time)
+                    has_opp = _sr_has_opposite_between(
+                        opposite_times, last_time, touch_time
+                    )
                     if has_opp:
                         touch_key = (origin_id, touch.record_id)
                         tracker = new_touch_trackers.get(touch_key)
@@ -1343,7 +1446,13 @@ def _advance_sr_frontier(
     new_pos_by_id = {z: dict(m) for z, m in prior.zone_pos_by_id.items()}
     new_opp = dict(prior.zone_opposite_times)
     new_origin_zone = dict(prior.origin_zone)
+    new_price_index = dict(prior.zone_price_index)
+    new_origin_price_key = dict(prior.origin_price_key)
+    new_max_upper = dict(prior.zone_max_upper)
+    new_max_pierce = dict(prior.zone_max_pierce)
+    new_next_seq = dict(prior.zone_next_seq)
     new_swing_ids = prior.swing_ids
+    min_tick = configuration.minimum_price_tick
 
     if swings_changed:
         new_swing_ids = frozenset(s.record_id for s in confirmed_swings)
@@ -1351,18 +1460,38 @@ def _advance_sr_frontier(
         removed_ids = prior.swing_ids - new_swing_ids
         by_id = {s.record_id: s for s in confirmed_swings}
         for zone_type, origin_type, opposite_type in _SR_ZONE_SPECS:
+            is_support = zone_type == SupportResistanceType.SUPPORT
             registry: PersistentMap[ConfirmedSwing] = new_registry.get(
                 zone_type, PersistentMap()
             )
             reg_len = new_registry_len.get(zone_type, 0)
             pos_by_id = new_pos_by_id.setdefault(zone_type, {})
+            price_index = new_price_index.get(zone_type, PersistentMap[UUID]())
+            max_upper = new_max_upper.get(zone_type, Decimal(0))
+            max_pierce = new_max_pierce.get(zone_type, Decimal(0))
             for rid in removed_ids:
                 pos = pos_by_id.pop(rid, None)
                 if pos is not None:
                     registry = registry.delete(pos)
-                    for (z, oid2), st in new_states.items():
-                        if z == zone_type and st.origin_pos < pos:
-                            _mark((z, oid2), pos)
+                    removed_state = new_states.get((zone_type, rid))
+                    if removed_state is not None:
+                        # Only earlier origins whose band contained the removed
+                        # swing's price could have used it as a touch.
+                        for oid2 in _sr_stab_older_origins(
+                            price_index,
+                            max_upper,
+                            max_pierce,
+                            is_support,
+                            removed_state.origin.pivot_price,
+                            min_tick,
+                            new_states,
+                            zone_type,
+                            pos,
+                        ):
+                            _mark((zone_type, oid2), pos)
+                    pk = new_origin_price_key.pop(rid, None)
+                    if pk is not None:
+                        price_index = price_index.delete(pk)
                 new_states.pop((zone_type, rid), None)
                 new_origin_zone.pop(rid, None)
             added_same = sorted(
@@ -1379,11 +1508,28 @@ def _advance_sr_frontier(
                 pos_by_id[swing.record_id] = pos
                 reg_len += 1
                 new_origin_zone[swing.record_id] = zone_type
-                for (z, oid2), st in new_states.items():
-                    if z == zone_type and st.origin_pos < pos:
-                        _mark((z, oid2), pos)
-                is_support = zone_type == SupportResistanceType.SUPPORT
                 zt, zb, zd, tt, pt = _sr_zone_geometry(swing, is_support, configuration)
+                upper_width = zd + tt
+                if upper_width > max_upper:
+                    max_upper = upper_width
+                if pt > max_pierce:
+                    max_pierce = pt
+                # Route this new touch only to the older origins whose zone band
+                # its price enters (one stabbing query), instead of every prior
+                # same-type origin. price_index holds all older + earlier-in-batch
+                # origins; the new swing is added below so it never stabs itself.
+                for oid2 in _sr_stab_older_origins(
+                    price_index,
+                    max_upper,
+                    max_pierce,
+                    is_support,
+                    swing.pivot_price,
+                    min_tick,
+                    new_states,
+                    zone_type,
+                    pos,
+                ):
+                    _mark((zone_type, oid2), pos)
                 new_states[(zone_type, swing.record_id)] = _SrOriginState(
                     origin=swing,
                     is_support=is_support,
@@ -1400,9 +1546,21 @@ def _advance_sr_frontier(
                     qualifying=PersistentMap[ConfirmedSwing](),
                     candidate=None,
                 )
+                seq = new_next_seq.get(zone_type, 0)
+                new_next_seq[zone_type] = seq + 1
+                price_key = (
+                    _sr_price_ticks(swing.pivot_price, min_tick)
+                    * (_SR_PRICE_KEY_STRIDE)
+                    + seq
+                )
+                price_index = price_index.set(price_key, swing.record_id)
+                new_origin_price_key[swing.record_id] = price_key
                 _mark((zone_type, swing.record_id), pos + 1)
             new_registry[zone_type] = registry
             new_registry_len[zone_type] = reg_len
+            new_price_index[zone_type] = price_index
+            new_max_upper[zone_type] = max_upper
+            new_max_pierce[zone_type] = max_pierce
             new_opp[zone_type] = tuple(
                 sorted(
                     s.meaningful_confirmation_time_utc
@@ -1515,6 +1673,11 @@ def _advance_sr_frontier(
         zone_pos_by_id=new_pos_by_id,
         zone_opposite_times=new_opp,
         origin_zone=new_origin_zone,
+        zone_price_index=new_price_index,
+        origin_price_key=new_origin_price_key,
+        zone_max_upper=new_max_upper,
+        zone_max_pierce=new_max_pierce,
+        zone_next_seq=new_next_seq,
     )
     return tuple(results), new_frontier
 

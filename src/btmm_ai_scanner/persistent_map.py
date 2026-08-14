@@ -92,6 +92,35 @@ def _items[V](node: _Node[V] | None, out: list[tuple[int, V]]) -> None:
     _items(node.right, out)
 
 
+def _floor[V](node: _Node[V] | None, key: int) -> _Node[V] | None:
+    # Greatest node whose key is <= ``key`` (predecessor-or-equal), O(log n).
+    best: _Node[V] | None = None
+    while node is not None:
+        if node.key == key:
+            return node
+        if node.key < key:
+            best = node
+            node = node.right
+        else:
+            node = node.left
+    return best
+
+
+def _range[V](
+    node: _Node[V] | None, lo: int, hi: int, out: list[tuple[int, V]]
+) -> None:
+    # In-order collect of every entry with lo <= key <= hi, pruning subtrees that
+    # cannot contain an in-range key -> O(log n + k) for k results.
+    if node is None:
+        return
+    if node.key > lo:
+        _range(node.left, lo, hi, out)
+    if lo <= node.key <= hi:
+        out.append((node.key, node.value))
+    if node.key < hi:
+        _range(node.right, lo, hi, out)
+
+
 @dataclass(frozen=True)
 class PersistentMap[V]:
     """Immutable ordered map with integer keys; every mutation returns a new map
@@ -125,4 +154,20 @@ class PersistentMap[V]:
     def items(self) -> list[tuple[int, V]]:
         out: list[tuple[int, V]] = []
         _items(self._root, out)
+        return out
+
+    def floor_item(self, key: int) -> tuple[int, V] | None:
+        """The (key, value) of the greatest stored key <= ``key`` (None if the
+        map has no such key). O(log n). Used to read the checkpoint carried into
+        a resume position when intermediate positions were never stored (a
+        geometric-miss touch never changes the sequential state, so the last
+        stored checkpoint is exactly the entering value)."""
+        node = _floor(self._root, key)
+        return (node.key, node.value) if node is not None else None
+
+    def range(self, lo: int, hi: int) -> list[tuple[int, V]]:
+        """Every (key, value) with ``lo <= key <= hi`` in ascending key order,
+        visiting only O(log n + k) nodes for k results."""
+        out: list[tuple[int, V]] = []
+        _range(self._root, lo, hi, out)
         return out
