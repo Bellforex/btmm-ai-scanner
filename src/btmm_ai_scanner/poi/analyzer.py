@@ -65,6 +65,8 @@ from btmm_ai_scanner.poi.overlap import (
     resolve_merges,
 )
 from btmm_ai_scanner.poi.period_levels import detect_period_levels
+from btmm_ai_scanner.poi.persistent_map import PersistentMap
+from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
@@ -1040,7 +1042,15 @@ class _PoiReplayState:
     # per-candle cursor dict. Carried between candles with structural sharing;
     # only woken/new/changed cursors advance, the rest are reused by reference.
     scheduler: PoiEventScheduler | None = None
-    poi_observations_so_far: tuple[PoiObservation, ...] = ()
+    # A6-F6A: canonical-ordered POI observations as a persistent ordered map
+    # keyed by the exact _observation_sort_key, value = observation. Per-candle
+    # advance inserts new / re-keys changed / deletes removed records in
+    # O(delta log P) with structural sharing -- no full retained-tuple rebuild or
+    # O(P log P) re-sort every candle. The public ordered tuple is materialized
+    # (ordered_values) only when an accessor/finalize/snapshot needs it.
+    observations_ordered: PersistentOrderedMap[Any, PoiObservation] = field(
+        default_factory=PersistentOrderedMap
+    )
     # A6-B1-B7: lifecycle transitions and CurrentPoiState are no longer stored per
     # candle — they are (re)built on demand at the snapshot boundary by
     # _build_lifecycle_outputs from the scheduler + observations. The per-candle
@@ -1052,7 +1062,10 @@ class _PoiReplayState:
     # (and its fingerprint) is reused verbatim; only genuinely changed fields
     # trigger a rebuild. Published only on a successful advance, so a raised
     # advance leaves the prior cache intact (transactional).
-    observation_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
+    # A6-F6A: the bounded (reference SR/EL + period) observation slice only --
+    # a small dict rebuilt each candle. The A3-A reuse cache for mutable-frontier
+    # records; append-only records live in ``append_only_by_id`` instead.
+    bounded_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
         default_factory=dict
     )
     # A6-A: private incremental detection frontier. Replaces the per-candle
@@ -1080,8 +1093,8 @@ class _PoiReplayState:
     # + fingerprint only the *new* append-only suffix and the bounded reference/
     # period sets, instead of re-resolving the entire cumulative candidate
     # universe every candle (the O(history)-per-candle -> O(N^2) advance cost).
-    append_only_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
-        default_factory=dict
+    append_only_by_id: PersistentMap[tuple[dict[str, object], PoiObservation]] = field(
+        default_factory=PersistentMap
     )
 
 
@@ -1149,13 +1162,12 @@ def _advance_poi_replay_state(
     new_detector_frontier, _all_candidates, atr_values = advance_detector_frontier(
         state.detector_frontier, candle, measurement_analysis, configuration
     )
-    prior_cache = state.observation_cache
     enabled = configuration.enabled_poi_types
-    unchanged_ids: set[UUID] = set()
-    touched: list[PoiObservation] = []
+    prior_bounded = state.bounded_cache
 
     def _resolve_observation(
         candidate: Any,
+        reuse_from: dict[UUID, tuple[dict[str, object], PoiObservation]],
     ) -> tuple[UUID, dict[str, object], PoiObservation, bool]:
         semantic_key = _semantic_key_for_candidate(candidate, rule_version_text)
         record_id = resolver.resolve(DerivedOutputType.POI_OBSERVATION, semantic_key)
@@ -1173,7 +1185,7 @@ def _advance_poi_replay_state(
         # A3-A: reuse the immutable finalized object (and its fingerprint) when
         # the fingerprint-determining fields are byte-identical to the cached
         # ones; only a genuine field change pays the SHA-256 + construction.
-        cached = prior_cache.get(record_id)
+        cached = reuse_from.get(record_id)
         if cached is not None and cached[0] == fields:
             return record_id, fields, cached[1], True
         return (
@@ -1187,45 +1199,58 @@ def _advance_poi_replay_state(
             False,
         )
 
-    # A6-F3-A: the append-only families (local / base / reversal) are strictly
-    # append-only in the detector frontier -- new candidates are appended to the
-    # tail, never mutated or removed. So the prior append-only observation slice
-    # is immutable and carried by reference; only this candle's newly appended
-    # suffix is resolved/normalized/fingerprinted (O(new), not O(history)). This
-    # replaces the per-candle re-resolution of the entire cumulative candidate
-    # universe -- the dominant O(N^2) advance-hot-path cost.
+    # A6-F6A: maintain the canonical-ordered observation set as a persistent
+    # ordered map (keyed by _observation_sort_key), updated by exact deltas --
+    # never rebuilt/re-sorted per candle. ``touched_by_id`` maps every record
+    # this candle exposes (new append-only + all current bounded) to its object
+    # so the bounded BTMM delta can read them back in O(delta).
+    new_ordered = state.observations_ordered
+    new_append_by_id = state.append_only_by_id
+    touched_by_id: dict[UUID, PoiObservation] = {}
+
+    # A6-F3-A/F6A: append-only families (local / base / reversal) are strictly
+    # append-only -- the prior slice is carried by reference (structural sharing
+    # in the persistent id-map and ordered map); only this candle's newly
+    # appended suffix is resolved/normalized/fingerprinted and inserted.
     prior_append_only = state.detector_frontier.append_only_candidates
     all_append_only = new_detector_frontier.append_only_candidates
-    new_append_only_cache = dict(state.append_only_cache)
-    unchanged_ids.update(state.append_only_cache)
     for candidate in all_append_only[len(prior_append_only) :]:
         if candidate.poi_type not in enabled:
             continue
-        record_id, fields, observation, _reused = _resolve_observation(candidate)
-        new_append_only_cache[record_id] = (fields, observation)
-        touched.append(observation)
+        record_id, _fields, observation, _reused = _resolve_observation(candidate, {})
+        new_append_by_id = new_append_by_id.set(record_id.int, (_fields, observation))
+        new_ordered = new_ordered.insert(
+            _observation_sort_key(observation), record_id.int, observation
+        )
+        touched_by_id[record_id] = observation
 
     # Reference (measurement SR/EL projection) and period families are BOUNDED
-    # mutable sets: rebuild them each candle from the current bounded candidates
-    # (O(bounded)), reusing unchanged immutable objects via A3-A. Prior entries
-    # are intentionally not carried -- a removed reference/period candidate then
-    # simply does not reappear, exactly matching the full-universe rebuild it
-    # replaces.
-    bounded_entries: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
+    # mutable sets: rebuild the current bounded slice (O(bounded)) reusing
+    # unchanged immutable objects via A3-A, then apply the exact NEW / CHANGED
+    # (re-key by new sort key) / REMOVED delta to the persistent ordered map.
+    new_bounded: dict[UUID, tuple[dict[str, object], PoiObservation]] = {}
     for candidate in (
         *new_detector_frontier.reference_candidates,
         *new_detector_frontier.period_candidates,
     ):
         if candidate.poi_type not in enabled:
             continue
-        record_id, fields, observation, reused = _resolve_observation(candidate)
-        bounded_entries[record_id] = (fields, observation)
-        if reused:
-            unchanged_ids.add(record_id)
-        else:
-            touched.append(observation)
-
-    new_cache = {**new_append_only_cache, **bounded_entries}
+        record_id, fields, observation, reused = _resolve_observation(
+            candidate, prior_bounded
+        )
+        new_bounded[record_id] = (fields, observation)
+        touched_by_id[record_id] = observation
+        prior_entry = prior_bounded.get(record_id)
+        if reused and prior_entry is not None and prior_entry[1] is observation:
+            continue  # unchanged: already in the ordered map at the same key
+        if prior_entry is not None:
+            new_ordered = new_ordered.delete(_observation_sort_key(prior_entry[1]))
+        new_ordered = new_ordered.insert(
+            _observation_sort_key(observation), record_id.int, observation
+        )
+    for removed_record_id, prior_entry in prior_bounded.items():
+        if removed_record_id not in new_bounded:
+            new_ordered = new_ordered.delete(_observation_sort_key(prior_entry[1]))
 
     # A3-A/A3-D: resolve_merges only ever pairs a child POI with a STRONGER-
     # timeframe parent, and _advance_poi_replay_state always processes exactly one
@@ -1299,42 +1324,17 @@ def _advance_poi_replay_state(
     )
 
     # A6-B2-C: bounded BTMM-facing delta -- O(delta), reads back the same
-    # PoiObservation objects new_cache already holds for these same record_ids.
-    new_pois_for_btmm = tuple(new_cache[spec.record_id][1] for spec in new_specs)
+    # PoiObservation objects built this candle for these same record_ids.
+    new_pois_for_btmm = tuple(touched_by_id[spec.record_id] for spec in new_specs)
     changed_pois_for_btmm = tuple(
-        new_cache[spec.record_id][1] for spec in changed_specs
+        touched_by_id[spec.record_id] for spec in changed_specs
     )
 
-    # A6-B1-B7: the per-candle advance no longer assembles lifecycle transitions
-    # or CurrentPoiState — that O(P) work is deferred to
-    # ``_build_lifecycle_outputs`` at the snapshot/finalization boundary (lazy).
-    # The advance stores only the incremental scheduler + the sorted observations;
-    # under FINAL_ONLY retention the lifecycle outputs are materialized once.
-    #
-    # A6-C: avoid a full O(P log P) re-sort of the entire observation history
-    # every candle. `all_candidates` is already the complete O(P) frontier
-    # rebuild (accepted baseline, unchanged here); what used to also cost
-    # O(P log P) comparisons on top of that is now reduced to O(P) in the
-    # common case. If literally nothing changed (every observation reused its
-    # cached object, and no observation was added/removed), the prior sorted
-    # tuple is reused verbatim. Otherwise the prior sorted tuple is filtered
-    # down to the still-unchanged entries (preserving their relative order --
-    # a sorted sequence stays sorted after removing elements) and only the
-    # small new/changed subset is merged back in; a single `sorted()` call
-    # over [retained-ascending-run] + [small-touched-run] lets Timsort merge
-    # the two runs in near-linear time instead of re-sorting from scratch.
-    # This never assumes where touched items belong in the final order (that
-    # would be fragile); `sorted()` always produces the exact correct order
-    # regardless, only the constant-factor comparison cost improves.
-    if len(unchanged_ids) == len(new_cache) == len(state.poi_observations_so_far):
-        observations_sorted = state.poi_observations_so_far
-    else:
-        retained = tuple(
-            o for o in state.poi_observations_so_far if o.record_id in unchanged_ids
-        )
-        observations_sorted = tuple(
-            sorted(retained + tuple(touched), key=_observation_sort_key)
-        )
+    # A6-B1-B7 / A6-F6A: the per-candle advance assembles no lifecycle transitions
+    # or CurrentPoiState (deferred to _build_lifecycle_outputs at the snapshot
+    # boundary) and no full observation tuple. The canonical order is carried in
+    # the persistent ordered map, updated above in O(delta log P); the public
+    # sorted tuple is materialized only when an accessor/finalize requests it.
     return _PoiReplayState(
         resolver=resolver,
         rule_version_text=rule_version_text,
@@ -1342,13 +1342,13 @@ def _advance_poi_replay_state(
         symbol=new_candles[0].symbol,
         candles_so_far=new_candles,
         scheduler=new_scheduler,
-        poi_observations_so_far=observations_sorted,
-        observation_cache=new_cache,
+        observations_ordered=new_ordered,
+        bounded_cache=new_bounded,
         detector_frontier=new_detector_frontier,
         new_pois_for_btmm=new_pois_for_btmm,
         changed_pois_for_btmm=changed_pois_for_btmm,
         removed_poi_ids_for_btmm=tuple(removed_ids),
-        append_only_cache=new_append_only_cache,
+        append_only_by_id=new_append_by_id,
     )
 
 
@@ -1375,7 +1375,7 @@ def _build_lifecycle_outputs(
     all_transitions: list[TransitionCandidate] = []
     current_state_fields_by_poi: dict[UUID, dict[str, object]] = {}
 
-    for observation in state.poi_observations_so_far:
+    for observation in state.observations_ordered.ordered_values():
         if observation.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
             walk = scheduler.last_walks.get(observation.record_id)
             if walk is None:
@@ -1579,13 +1579,15 @@ def _poi_replay_state_to_analysis(
             current_poi_states=(),
         )
     assert state.timeframe is not None
+    # A6-F6A: materialize the canonical ordered tuple once from the persistent
+    # ordered map (this is the explicit public-accessor boundary permitted to pay
+    # O(P); the FINAL_ONLY advance never reaches here).
+    observations_tuple = state.observations_ordered.ordered_values()
     if with_overlap:
         evaluated_at = state.candles_so_far[-1].availability_time_utc
         overlap_relationships = tuple(
             sorted(
-                compute_overlap_relationships(
-                    state.poi_observations_so_far, evaluated_at
-                ),
+                compute_overlap_relationships(observations_tuple, evaluated_at),
                 key=lambda r: (
                     r.evaluated_at_time_utc,
                     str(r.poi_a_record_id),
@@ -1613,7 +1615,7 @@ def _poi_replay_state_to_analysis(
         symbol=state.symbol,
         analyzed_timeframes=(state.timeframe,),
         analyzed_candle_count_by_timeframe=(len(state.candles_so_far),),
-        poi_observations=state.poi_observations_so_far,
+        poi_observations=observations_tuple,
         poi_lifecycle_transitions=(
             lifecycle_transitions_sorted if with_lifecycle_transitions else ()
         ),
@@ -1703,15 +1705,16 @@ def _combine_poi_replay_states(
         for tf in ordered_timeframes
     }
 
-    # A6-D: per_timeframe[tf].poi_observations is state.poi_observations_so_far
-    # passed through unchanged (never copied), so its id() is a valid proxy for
-    # "this timeframe's observation set is byte-identical to last call". If
-    # every active timeframe's tuple identity matches the cached signature, the
-    # ordinary bounded delta this call represents touched no observation this
-    # combine cares about, and the full cross-TF merge rebuild is skipped
-    # entirely -- not just the O(obs^2) resolve_merges scan, but also the
-    # per-observation re-fingerprint loop and the final canonical sort.
-    signature = tuple((tf, id(poi_states[tf].poi_observations_so_far)) for tf in active)
+    # A6-D/F6A: the persistent ``observations_ordered`` map is carried by
+    # reference (structural sharing) and only re-created when this timeframe's
+    # observation set actually changed, so its id() is a valid proxy for "this
+    # timeframe's observation set is byte-identical to last call". If every active
+    # timeframe's map identity matches the cached signature, the ordinary bounded
+    # delta this call represents touched no observation this combine cares about,
+    # and the full cross-TF merge rebuild is skipped entirely -- not just the
+    # O(obs^2) resolve_merges scan, but also the per-observation re-fingerprint
+    # loop and the final canonical sort.
+    signature = tuple((tf, id(poi_states[tf].observations_ordered)) for tf in active)
     if merge_cache is not None and merge_cache.signature == signature:
         observations = merge_cache.observations
         new_merge_cache = merge_cache

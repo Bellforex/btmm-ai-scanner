@@ -462,7 +462,7 @@ def test_incremental_hot_path_never_calls_full_prefix_detection_or_atr(
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         # Would raise via the monkeypatched stubs if the hot path called either.
         state = _advance_poi_replay_state(state, candles[k - 1], measurement, _PCONFIG)
-    assert state.poi_observations_so_far is not None
+    assert state.observations_ordered is not None
 
 
 def test_incremental_advance_defers_all_lifecycle_output_assembly(

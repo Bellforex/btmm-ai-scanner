@@ -61,6 +61,7 @@ from btmm_ai_scanner.poi.analyzer import (
     _advance_poi_replay_state,
     _combine_poi_replay_states,
     _create_initial_poi_replay_state,
+    _observation_sort_key,
     _poi_replay_state_to_analysis,
     _PoiMergeCache,
     _PoiReplayState,
@@ -75,6 +76,7 @@ from btmm_ai_scanner.poi.enums import (
     PoiType,
 )
 from btmm_ai_scanner.poi.observation import PoiObservation
+from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
 from btmm_ai_scanner.scanner.analyzer import scan_market
 from btmm_ai_scanner.scanner.configuration import (
@@ -1881,7 +1883,7 @@ def test_poi_transaction_rollback_leaves_prior_state_untouched() -> None:
 
     scheduler_before = state.scheduler
     candles_before = state.candles_so_far
-    observations_before = state.poi_observations_so_far
+    observations_before = state.observations_ordered
 
     measurement = analyze_market_measurements(
         candles[:40], _CONFIG, _HashIdentityProvider()
@@ -1901,7 +1903,7 @@ def test_poi_transaction_rollback_leaves_prior_state_untouched() -> None:
     # not just equality) — survives the failed transition unchanged.
     assert state.scheduler is scheduler_before
     assert state.candles_so_far == candles_before
-    assert state.poi_observations_so_far == observations_before
+    assert state.observations_ordered == observations_before
 
     resumed = _advance_poi_replay_state(state, candles[40], measurement, _POI_CONFIG)
     assert len(resumed.candles_so_far) == len(candles_before) + 1
@@ -2096,7 +2098,7 @@ def _measurement_poi_btmm_driven(
             p_state.scheduler.last_walks,
             evidence,
             _BTMM_CONFIG,
-            poi_observation_count=len(p_state.poi_observations_so_far),
+            poi_observation_count=len(p_state.observations_ordered),
         )
         incremental = _btmm_replay_state_to_analysis(b_state)
         analysis_series.append(incremental)
@@ -2573,7 +2575,7 @@ def test_btmm_transaction_rollback_leaves_prior_state_untouched() -> None:
             p_state.scheduler.last_walks,
             evidence,
             _BTMM_CONFIG,
-            poi_observation_count=len(p_state.poi_observations_so_far),
+            poi_observation_count=len(p_state.observations_ordered),
         )
 
     scheduler_before = state.scheduler
@@ -2611,7 +2613,7 @@ def test_btmm_transaction_rollback_leaves_prior_state_untouched() -> None:
         p_state.scheduler.last_walks,
         evidence,
         _BTMM_CONFIG,
-        poi_observation_count=len(p_state.poi_observations_so_far),
+        poi_observation_count=len(p_state.observations_ordered),
     )
     assert len(resumed.candles_so_far) == len(candles_before) + 1
 
@@ -3164,11 +3166,12 @@ def test_kernel_full_transaction_rollback_preserves_ledger_and_state() -> None:
     with pytest.raises(UnsortedCandleSequenceError):
         kernel.advance_group({Timeframe.M15: (out_of_order,)})
 
-    # No partial domain / combined-analysis / ledger / snapshot state escaped.
+    # No partial domain / ledger / snapshot state escaped. A6-F6A: the kernel is
+    # lazy, so the observable rollback contract is that the whole domain state
+    # object is unchanged and the (cached) event ledger is byte-identical by
+    # object identity across the failed advance.
     assert kernel._state is state_before
     assert kernel.event_ledger() is ledger_before
-    assert kernel._state.combined_poi_analysis is state_before.combined_poi_analysis
-    assert kernel._state.combined_btmm_analysis is state_before.combined_btmm_analysis
     assert kernel.processed_group_count() == group_count_before
 
     kernel.advance_group({Timeframe.M15: (candles[12],)})
@@ -3311,6 +3314,84 @@ def test_f3b_append_only_candle_skips_structure_stream_rebuild(
     assert 0 < calls < candle_count, (calls, candle_count)
 
 
+def test_f6a_final_only_advance_is_lazy_no_combine_no_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F6A kernel operation-count gate. Under FINAL_ONLY, advance_group must NOT
+    # eagerly build the combined POI/BTMM analyses or the event-ledger tuples
+    # (the O(history)-per-group materialization). Those are produced lazily only
+    # when event_ledger()/finalize() is actually called.
+    from btmm_ai_scanner.btmm.analyzer import (
+        _combine_btmm_replay_states as real_btmm,
+    )
+    from btmm_ai_scanner.poi.analyzer import _combine_poi_replay_states as real_poi
+    from btmm_ai_scanner.scanner import replay as replay_module
+
+    counts = {"poi_combine": 0, "btmm_combine": 0}
+
+    def _poi(*args: object, **kwargs: object) -> object:
+        counts["poi_combine"] += 1
+        return real_poi(*args, **kwargs)  # type: ignore[arg-type]
+
+    def _btmm(*args: object, **kwargs: object) -> object:
+        counts["btmm_combine"] += 1
+        return real_btmm(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(replay_module, "_combine_poi_replay_states", _poi)
+    monkeypatch.setattr(replay_module, "_combine_btmm_replay_states", _btmm)
+
+    candles = _SINGLE_M15_INPUTS[0].candles
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    # No combine over the whole replay's advances (init no longer combines either).
+    assert counts["poi_combine"] == 0
+    assert counts["btmm_combine"] == 0
+    # event_ledger() materializes on demand...
+    kernel.event_ledger()
+    assert counts["poi_combine"] == 1
+    assert counts["btmm_combine"] == 1
+    # ...and is cached (a second call does not re-combine).
+    kernel.event_ledger()
+    assert counts["poi_combine"] == 1
+    # finalize() materializes the final public analyses.
+    kernel.finalize()
+    assert counts["poi_combine"] == 2
+
+
+def test_f6a_poi_advance_does_not_materialize_observation_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F6A POI operation-count gate. The FINAL_ONLY per-candle POI advance must
+    # NOT materialize the full canonical observation tuple (ordered_values) -- the
+    # persistent ordered map is updated in place (structural sharing) and the
+    # tuple is materialized only at the explicit combine/finalize boundary.
+    from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
+
+    calls = {"n": 0}
+    real = PersistentOrderedMap.ordered_values
+
+    def _counting(self: object) -> object:
+        calls["n"] += 1
+        return real(self)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PersistentOrderedMap, "ordered_values", _counting)
+
+    candles = _SINGLE_M15_INPUTS[0].candles
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    # Zero full-tuple materializations across every advance (persistent updates).
+    assert calls["n"] == 0
+    # The public tuple is materialized only when finalize() requests it.
+    kernel.finalize()
+    assert calls["n"] > 0
+
+
 # =====================================================================
 # A6-B2-C: production wake differential + non-woken identity reuse.
 #
@@ -3373,7 +3454,7 @@ def test_btmm_production_wake_differential_zero_false_negatives() -> None:
             p_state.scheduler.last_walks,
             evidence,
             _BTMM_CONFIG,
-            poi_observation_count=len(p_state.poi_observations_so_far),
+            poi_observation_count=len(p_state.observations_ordered),
         )
         assert b_state.scheduler is not None
 
@@ -3436,7 +3517,7 @@ def test_btmm_non_woken_setup_cursor_identity_reused() -> None:
             p_state.scheduler.last_walks,
             evidence,
             _BTMM_CONFIG,
-            poi_observation_count=len(p_state.poi_observations_so_far),
+            poi_observation_count=len(p_state.observations_ordered),
         )
         assert b_state.scheduler is not None
 
@@ -3485,7 +3566,7 @@ def test_btmm_no_new_poi_activity_produces_no_rebuild() -> None:
             p_state.scheduler.last_walks,
             evidence,
             _BTMM_CONFIG,
-            poi_observation_count=len(p_state.poi_observations_so_far),
+            poi_observation_count=len(p_state.observations_ordered),
         )
         assert b_state.scheduler is not None
 
@@ -3558,12 +3639,17 @@ def _merge_poi_state(
     timeframe: Timeframe, observations: tuple[PoiObservation, ...]
 ) -> _PoiReplayState:
     base = _create_initial_poi_replay_state(_HashIdentityProvider(), _MERGE_POI_CONFIG)
+    ordered: PersistentOrderedMap[object, PoiObservation] = PersistentOrderedMap()
+    for observation in observations:
+        ordered = ordered.insert(
+            _observation_sort_key(observation), observation.record_id.int, observation
+        )
     return dataclasses.replace(
         base,
         timeframe=timeframe,
         symbol=InternalSymbol.XAUUSD,
         candles_so_far=(_candle(0, 100.0, 101.0, 99.0, 100.5),),
-        poi_observations_so_far=observations,
+        observations_ordered=ordered,
     )
 
 
@@ -3709,7 +3795,14 @@ def test_a6d_merge_cache_matches_batch_oracle_across_prefixes() -> None:
     )
 
 
-def test_a6d_merge_cache_rollback_leaves_prior_cache_untouched() -> None:
+def test_a6d_merge_cache_rollback_leaves_prior_state_untouched() -> None:
+    # A6-F6A: the cross-timeframe POI merge cache is no longer threaded through
+    # the kernel per group (advance_group is lazy and does not combine); the
+    # single merge runs at event_ledger()/finalize(). The meaningful rollback
+    # contract remains: a failed advance leaves the whole prior domain state
+    # untouched and a subsequent good advance proceeds, and finalize() still
+    # produces the exact cross-timeframe-merged analysis (proven by the a6d merge
+    # differentials above).
     kernel = IncrementalReplayKernel(
         (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
     )
@@ -3717,7 +3810,7 @@ def test_a6d_merge_cache_rollback_leaves_prior_cache_untouched() -> None:
     for candle in candles[:10]:
         kernel.advance_group({Timeframe.M15: (candle,)})
 
-    cache_before = kernel._state.poi_merge_cache
+    state_before = kernel._state
 
     out_of_order = candles[5].model_copy(
         update={"event_time_utc": candles[2].event_time_utc}
@@ -3725,10 +3818,10 @@ def test_a6d_merge_cache_rollback_leaves_prior_cache_untouched() -> None:
     with pytest.raises(UnsortedCandleSequenceError):
         kernel.advance_group({Timeframe.M15: (out_of_order,)})
 
-    assert kernel._state.poi_merge_cache is cache_before
+    assert kernel._state is state_before
 
     kernel.advance_group({Timeframe.M15: (candles[10],)})
-    assert kernel._state.poi_merge_cache is not None
+    assert kernel._state is not state_before
 
 
 def test_a6c_unchanged_individual_observations_keep_their_object_identity() -> None:
@@ -3745,9 +3838,11 @@ def test_a6c_unchanged_individual_observations_keep_their_object_identity() -> N
     for candle in candles:
         m_state = _advance_measurement_replay_state(m_state, candle, _CONFIG)
         measurement = _measurement_replay_state_to_analysis(m_state)
-        prior_by_id = {o.record_id: o for o in p_state.poi_observations_so_far}
+        prior_by_id = {
+            o.record_id: o for o in p_state.observations_ordered.ordered_values()
+        }
         p_state = _advance_poi_replay_state(p_state, candle, measurement, _POI_CONFIG)
-        for observation in p_state.poi_observations_so_far:
+        for observation in p_state.observations_ordered.ordered_values():
             prior = prior_by_id.get(observation.record_id)
             if prior is not None and prior == observation:
                 assert prior is observation
