@@ -458,11 +458,12 @@ def test_delayed_support_resistance_candidate_catch_up_matches_the_batch_oracle(
     state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)
     saw_delayed_creation = False
     for candle in _RICH_SWING_CANDLES:
-        before_origins = set(state.sr_origin_trackers)
+        # A6-F6D: the SR reaction trackers now live inside the incremental frontier.
+        before_origins = set(state.sr_frontier.origin_trackers)
         state = _advance_measurement_replay_state(state, candle, _CONFIG)
-        new_origin_keys = set(state.sr_origin_trackers) - before_origins
+        new_origin_keys = set(state.sr_frontier.origin_trackers) - before_origins
         if any(
-            state.sr_origin_trackers[key].reaction_start_index is not None
+            state.sr_frontier.origin_trackers[key].reaction_start_index is not None
             for key in new_origin_keys
         ):
             saw_delayed_creation = True

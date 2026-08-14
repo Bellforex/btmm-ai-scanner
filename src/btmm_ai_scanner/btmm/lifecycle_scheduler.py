@@ -64,13 +64,13 @@ from btmm_ai_scanner.btmm.lifecycle_cursor import (
 from btmm_ai_scanner.btmm.reviewed_evidence import BtmmReviewedEvidence
 from btmm_ai_scanner.btmm.setup_delta import BtmmSetupDelta
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
+from btmm_ai_scanner.persistent_map import PersistentMap
 from btmm_ai_scanner.poi.enums import PoiLifecycleTransitionType
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
 from btmm_ai_scanner.poi.persistent_interval_index import (
     PersistentIntervalTouchIndex,
     create_persistent_interval_index,
 )
-from btmm_ai_scanner.poi.persistent_map import PersistentMap
 
 _NEG_INF = Decimal("-Infinity")
 _EMPTY_SETUP_DELTA = BtmmSetupDelta()

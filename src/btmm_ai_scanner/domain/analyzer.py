@@ -52,6 +52,7 @@ from btmm_ai_scanner.domain.trendlines import (
 )
 from btmm_ai_scanner.measurements.atr import _true_range
 from btmm_ai_scanner.measurements.legs import measure_leg
+from btmm_ai_scanner.persistent_map import PersistentMap
 
 
 class MixedSymbolAnalysisError(ValueError):
@@ -1057,20 +1058,37 @@ def _derive_support_resistance_zone_candidates(
 
 
 # =====================================================================
-# A6-F6D: incremental support/resistance replay frontier.
+# A6-F6D-M2: incremental support/resistance replay frontier.
 #
 # _derive_support_resistance_zone_candidates above stays the UNMODIFIED
-# semantic oracle. The frontier below produces a byte-identical candidate tuple
-# at every prefix while avoiding the O(A_swings^2) origin x touch rediscovery on
-# every candle: a per-origin candidate is recomputed only when the confirmed
-# swings changed OR one of the reaction trackers the origin's walk reads changed
-# its confirming_candle_index this candle (which only happens while that tracker
-# is non-permanent, i.e. inside its bounded reaction window). Ordinary no-new-
-# swing candles therefore re-walk only the handful of origins whose trackers
-# actually advanced, not all A^2 pairs. The old sequential last_touch_time
-# coupling is preserved exactly because a dirty origin is re-walked in full with
-# the identical inner-loop logic (never partially updated).
+# semantic oracle. This frontier produces a byte-identical candidate tuple at
+# every prefix while resuming each origin's walk from the earliest touch whose
+# reaction tracker changed (never from touch zero) and stopping as soon as the
+# sequential state (last_touch_time) re-converges. The confirmed-swing stream is
+# append-only in confirmation-availability order with only rare removals (proven
+# by test_sr_frontier_append_only), so: same-type additions append one touch to
+# a shared per-zone registry (positions never shift); appended opposite swings
+# never fall inside any existing has_opposite interval (no routing needed); only
+# rare removals invalidate existing origins. Per-origin checkpoints live in a
+# PersistentMap[int, datetime] keyed by registry position -- O(log n) set/get
+# with structural sharing, so no O(m) tuple copy and no ancestor mutation.
 # =====================================================================
+
+
+@dataclass(frozen=True)
+class _SrOriginState:
+    origin: ConfirmedSwing
+    is_support: bool
+    zone_top: Decimal
+    zone_bottom: Decimal
+    zone_depth: Decimal
+    touch_tolerance: Decimal
+    pierce_tolerance: Decimal
+    origin_pos: int
+    origin_confirmed: bool
+    ck: PersistentMap[datetime]
+    qualifying: PersistentMap[ConfirmedSwing]
+    candidate: SupportResistanceZoneCandidate | None
 
 
 @dataclass(frozen=True)
@@ -1079,52 +1097,37 @@ class _SupportResistanceFrontier:
     touch_trackers: dict[tuple[UUID, UUID], _ReactionTracker] = field(
         default_factory=dict
     )
-    # Non-permanent (still-advancing) tracker keys, so only those are advanced
-    # each candle instead of iterating the whole (potentially O(A^2)) tracker set.
     non_permanent_origins: frozenset[UUID] = frozenset()
     non_permanent_touches: frozenset[tuple[UUID, UUID]] = frozenset()
-    # Cached per-origin candidate keyed by (zone_type, origin record id). Reused
-    # verbatim when the origin is not dirty this candle.
-    origin_cache: dict[
-        tuple[SupportResistanceType, UUID], SupportResistanceZoneCandidate | None
-    ] = field(default_factory=dict)
+    origin_states: dict[tuple[SupportResistanceType, UUID], _SrOriginState] = field(
+        default_factory=dict
+    )
     prior_swings: tuple[ConfirmedSwing, ...] = ()
-    # Cached per-zone-type sorted origins and the ascending opposite-swing
-    # confirmation-time index, rebuilt ONLY when the confirmed swings change so
-    # an ordinary no-swing-change candle performs zero swing scans.
-    zone_origins: dict[SupportResistanceType, tuple[ConfirmedSwing, ...]] = field(
+    swing_ids: frozenset[UUID] = frozenset()
+    zone_registry: dict[SupportResistanceType, PersistentMap[ConfirmedSwing]] = field(
+        default_factory=dict
+    )
+    zone_registry_len: dict[SupportResistanceType, int] = field(default_factory=dict)
+    zone_pos_by_id: dict[SupportResistanceType, dict[UUID, int]] = field(
         default_factory=dict
     )
     zone_opposite_times: dict[SupportResistanceType, tuple[datetime, ...]] = field(
         default_factory=dict
     )
+    origin_zone: dict[UUID, SupportResistanceType] = field(default_factory=dict)
 
 
-def _walk_sr_origin(
+_SR_ZONE_SPECS = (
+    (SupportResistanceType.SUPPORT, SwingType.SWING_LOW, SwingType.SWING_HIGH),
+    (SupportResistanceType.RESISTANCE, SwingType.SWING_HIGH, SwingType.SWING_LOW),
+)
+
+
+def _sr_zone_geometry(
     origin: ConfirmedSwing,
-    zone_type: SupportResistanceType,
-    opposite_confirmation_times: tuple[datetime, ...],
-    same_type_swings: tuple[ConfirmedSwing, ...],
-    candles: list[NormalizedCandle],
-    atr_values: list[Decimal | None],
-    candle_index_by_id: dict[UUID, int],
-    origin_trackers: dict[UUID, _ReactionTracker],
-    touch_trackers: dict[tuple[UUID, UUID], _ReactionTracker],
-    non_permanent_origins: set[UUID],
-    non_permanent_touches: set[tuple[UUID, UUID]],
+    is_support: bool,
     configuration: MarketMeasurementConfiguration,
-) -> SupportResistanceZoneCandidate | None:
-    """Reproduce _derive_support_resistance_zone_candidates's inner per-origin
-    walk EXACTLY for one origin. Existing (already-advanced this candle) trackers
-    are read as-is; a tracker first reached here (a new origin/touch pair) is
-    created and advanced once, exactly as the oracle does on first encounter.
-    Mutates the passed tracker dicts / non-permanent sets in place (the caller
-    owns fresh copies -- transactional)."""
-    is_support = zone_type == SupportResistanceType.SUPPORT
-    n = len(candles)
-    origin_last_candle_id = origin.pivot_candle_record_ids[-1]
-    origin_index = candle_index_by_id[origin_last_candle_id]
-
+) -> tuple[Decimal, Decimal, Decimal, Decimal, Decimal]:
     zone_depth = (
         configuration.support_resistance_zone_depth_atr_multiplier
         * origin.pivot_reference_atr
@@ -1135,28 +1138,6 @@ def _walk_sr_origin(
     else:
         zone_top = origin.pivot_price
         zone_bottom = zone_top - zone_depth
-
-    if origin_index + 1 >= n:
-        return None
-    origin_tracker = origin_trackers.get(origin.record_id)
-    if origin_tracker is None:
-        origin_tracker = _advance_reaction_tracker(
-            _create_reaction_tracker(
-                origin_index + 1, zone_top, zone_bottom, is_support
-            ),
-            candles,
-            atr_values,
-            configuration,
-        )
-        origin_trackers[origin.record_id] = origin_tracker
-        if not origin_tracker.permanent:
-            non_permanent_origins.add(origin.record_id)
-        else:
-            non_permanent_origins.discard(origin.record_id)
-
-    if origin_tracker.confirming_candle_index is None:
-        return None
-
     touch_tolerance = (
         configuration.support_resistance_touch_tolerance_atr_multiplier
         * origin.pivot_reference_atr
@@ -1165,91 +1146,142 @@ def _walk_sr_origin(
         configuration.support_resistance_pierce_tolerance_atr_multiplier
         * origin.pivot_reference_atr
     )
+    return zone_top, zone_bottom, zone_depth, touch_tolerance, pierce_tolerance
 
-    qualifying_touches: list[ConfirmedSwing] = []
-    first_confirming_index: int | None = None
-    last_touch_time = origin.meaningful_confirmation_time_utc
 
-    for touch in same_type_swings:
-        if touch.record_id == origin.record_id:
-            continue
-        if touch.meaningful_confirmation_time_utc <= last_touch_time:
-            continue
+def _sr_geometric_ok(state: _SrOriginState, touch: ConfirmedSwing) -> bool:
+    if state.is_support:
+        return (
+            touch.pivot_price <= state.zone_top + state.touch_tolerance
+            and touch.pivot_price >= state.zone_bottom - state.pierce_tolerance
+        )
+    return (
+        touch.pivot_price >= state.zone_bottom - state.touch_tolerance
+        and touch.pivot_price <= state.zone_top + state.pierce_tolerance
+    )
 
-        if is_support:
-            geometric_ok = (
-                touch.pivot_price <= zone_top + touch_tolerance
-                and touch.pivot_price >= zone_bottom - pierce_tolerance
-            )
-        else:
-            geometric_ok = (
-                touch.pivot_price >= zone_bottom - touch_tolerance
-                and touch.pivot_price <= zone_top + pierce_tolerance
-            )
-        if not geometric_ok:
-            continue
 
-        # A6-F6D: exact indexed replacement for
-        #   any(s.swing_type == opposite and last < s.time < touch.time ...).
-        # opposite_confirmation_times is the ascending list of opposite-type
-        # swing confirmation times. Count times strictly in the open interval
-        # (last_touch_time, touch.time): bisect_right skips ties at last_touch_
-        # time, bisect_left excludes ties at touch.time -- preserving the old
-        # strict/strict boundaries exactly.
-        touch_time = touch.meaningful_confirmation_time_utc
-        has_opposite_between = bisect.bisect_left(
-            opposite_confirmation_times, touch_time
-        ) > bisect.bisect_right(opposite_confirmation_times, last_touch_time)
-        if not has_opposite_between:
-            continue
-
-        touch_last_candle_id = touch.pivot_candle_record_ids[-1]
-        touch_index = candle_index_by_id[touch_last_candle_id]
-        if touch_index + 1 >= n:
-            continue
-        touch_key = (origin.record_id, touch.record_id)
-        touch_tracker = touch_trackers.get(touch_key)
-        if touch_tracker is None:
-            touch_tracker = _advance_reaction_tracker(
-                _create_reaction_tracker(
-                    touch_index + 1, zone_top, zone_bottom, is_support
-                ),
-                candles,
-                atr_values,
-                configuration,
-            )
-            touch_trackers[touch_key] = touch_tracker
-            if not touch_tracker.permanent:
-                non_permanent_touches.add(touch_key)
-            else:
-                non_permanent_touches.discard(touch_key)
-
-        if touch_tracker.confirming_candle_index is None:
-            continue
-
-        qualifying_touches.append(touch)
-        if first_confirming_index is None:
-            first_confirming_index = touch_tracker.confirming_candle_index
-        last_touch_time = touch.meaningful_confirmation_time_utc
-
-    if first_confirming_index is None:
+def _sr_build_candidate(
+    state: _SrOriginState,
+    qualifying: PersistentMap[ConfirmedSwing],
+    touch_trackers: dict[tuple[UUID, UUID], _ReactionTracker],
+    candles: list[NormalizedCandle],
+) -> SupportResistanceZoneCandidate | None:
+    items = qualifying.items()
+    if not items:
         return None
-
+    first_touch = items[0][1]
+    first_tracker = touch_trackers[(state.origin.record_id, first_touch.record_id)]
+    first_confirming_index = first_tracker.confirming_candle_index
+    assert first_confirming_index is not None
     first_confirming_candle = candles[first_confirming_index]
     return SupportResistanceZoneCandidate(
-        symbol=origin.symbol,
-        timeframe=origin.timeframe,
-        zone_type=zone_type,
-        origin_swing_record_id=origin.record_id,
-        creator_reference_atr=origin.pivot_reference_atr,
-        zone_depth=zone_depth,
-        zone_top=zone_top,
-        zone_bottom=zone_bottom,
-        qualifying_touch_swing_record_ids=tuple(
-            touch.record_id for touch in qualifying_touches
+        symbol=state.origin.symbol,
+        timeframe=state.origin.timeframe,
+        zone_type=(
+            SupportResistanceType.SUPPORT
+            if state.is_support
+            else SupportResistanceType.RESISTANCE
         ),
+        origin_swing_record_id=state.origin.record_id,
+        creator_reference_atr=state.origin.pivot_reference_atr,
+        zone_depth=state.zone_depth,
+        zone_top=state.zone_top,
+        zone_bottom=state.zone_bottom,
+        qualifying_touch_swing_record_ids=tuple(t.record_id for _pos, t in items),
         confirmation_candle_id=first_confirming_candle.record_id,
         confirmation_time_utc=first_confirming_candle.availability_time_utc,
+    )
+
+
+def _sr_resume_origin(
+    state: _SrOriginState,
+    from_pos: int,
+    latest_dirty: int,
+    registry: PersistentMap[ConfirmedSwing],
+    registry_len: int,
+    opposite_times: tuple[datetime, ...],
+    new_touch_trackers: dict[tuple[UUID, UUID], _ReactionTracker],
+    non_permanent_touches: set[tuple[UUID, UUID]],
+    candles: list[NormalizedCandle],
+    atr_values: list[Decimal | None],
+    candle_index_by_id: dict[UUID, int],
+    n: int,
+    configuration: MarketMeasurementConfiguration,
+) -> _SrOriginState:
+    """Resume the origin walk from ``from_pos`` (a registry position in
+    (origin_pos, registry_len]), stopping once the entering last_touch_time
+    re-converges past ``latest_dirty``. Mutates the passed tracker dict / set for
+    newly created touch trackers; ck/qualifying are path-copied."""
+    if not state.origin_confirmed:
+        return state
+    origin_id = state.origin.record_id
+    ck = state.ck
+    qualifying = state.qualifying
+    last_time = ck.get(from_pos)
+    assert last_time is not None
+    j = from_pos
+    while j < registry_len:
+        touch = registry.get(j)
+        old_next = ck.get(j + 1)
+        was_qualified = j in qualifying
+        qualified = False
+        if touch is not None and _sr_geometric_ok(state, touch):
+            touch_time = touch.meaningful_confirmation_time_utc
+            if touch_time > last_time:
+                touch_index = candle_index_by_id[touch.pivot_candle_record_ids[-1]]
+                if touch_index + 1 < n:
+                    has_opp = bisect.bisect_left(
+                        opposite_times, touch_time
+                    ) > bisect.bisect_right(opposite_times, last_time)
+                    if has_opp:
+                        touch_key = (origin_id, touch.record_id)
+                        tracker = new_touch_trackers.get(touch_key)
+                        if tracker is None:
+                            tracker = _advance_reaction_tracker(
+                                _create_reaction_tracker(
+                                    touch_index + 1,
+                                    state.zone_top,
+                                    state.zone_bottom,
+                                    state.is_support,
+                                ),
+                                candles,
+                                atr_values,
+                                configuration,
+                            )
+                            new_touch_trackers[touch_key] = tracker
+                            if not tracker.permanent:
+                                non_permanent_touches.add(touch_key)
+                        if tracker.confirming_candle_index is not None:
+                            qualified = True
+        if qualified and not was_qualified:
+            qualifying = qualifying.set(j, touch)  # type: ignore[arg-type]
+        elif not qualified and was_qualified:
+            qualifying = qualifying.delete(j)
+        new_next = (
+            touch.meaningful_confirmation_time_utc  # type: ignore[union-attr]
+            if qualified
+            else last_time
+        )
+        ck = ck.set(j + 1, new_next)
+        last_time = new_next
+        j += 1
+        if j > latest_dirty and new_next == old_next:
+            break
+    candidate = _sr_build_candidate(state, qualifying, new_touch_trackers, candles)
+    return _SrOriginState(
+        origin=state.origin,
+        is_support=state.is_support,
+        zone_top=state.zone_top,
+        zone_bottom=state.zone_bottom,
+        zone_depth=state.zone_depth,
+        touch_tolerance=state.touch_tolerance,
+        pierce_tolerance=state.pierce_tolerance,
+        origin_pos=state.origin_pos,
+        origin_confirmed=state.origin_confirmed,
+        ck=ck,
+        qualifying=qualifying,
+        candidate=candidate,
     )
 
 
@@ -1260,131 +1292,229 @@ def _advance_sr_frontier(
     confirmed_swings: tuple[ConfirmedSwing, ...],
     configuration: MarketMeasurementConfiguration,
 ) -> tuple[tuple[SupportResistanceZoneCandidate, ...], _SupportResistanceFrontier]:
-    """Advance the incremental SR frontier by one candle, returning the exact
-    same candidate tuple as _derive_support_resistance_zone_candidates(prefix).
-    Transactional: fresh tracker dicts / sets / cache are built and published
-    only on return, so a raised advance leaves ``prior`` untouched."""
-    candle_index_by_id = {
-        candle.record_id: index for index, candle in enumerate(candles)
-    }
-    # A6-F6D: O(1) no-swing-change test. The measurement replay reuses the SAME
-    # confirmed_swings tuple object across candles that do not change any swing,
-    # so an identity check avoids the O(history) whole-tuple comparison. On a
-    # genuine change we currently recompute all origins (correct); the fine-
-    # grained per-inserted-swing invalidation is a separate follow-up.
+    candle_index_by_id = {c.record_id: i for i, c in enumerate(candles)}
+    n = len(candles)
     swings_changed = confirmed_swings is not prior.prior_swings
 
     new_origin_trackers = dict(prior.origin_trackers)
     new_touch_trackers = dict(prior.touch_trackers)
-    non_permanent_origins = set(prior.non_permanent_origins)
-    non_permanent_touches = set(prior.non_permanent_touches)
+    np_origins = set(prior.non_permanent_origins)
+    np_touches = set(prior.non_permanent_touches)
 
-    # Advance only non-permanent trackers; record which origins become dirty
-    # because one of their trackers changed its confirming_candle_index.
-    dirty_origins: set[UUID] = set()
-    for origin_id in prior.non_permanent_origins:
-        old_tracker = prior.origin_trackers[origin_id]
-        new_tracker = _advance_reaction_tracker(
-            old_tracker, candles, atr_values, configuration
-        )
-        new_origin_trackers[origin_id] = new_tracker
-        if new_tracker.confirming_candle_index != old_tracker.confirming_candle_index:
-            dirty_origins.add(origin_id)
-        if new_tracker.permanent:
-            non_permanent_origins.discard(origin_id)
-    for touch_key in prior.non_permanent_touches:
-        old_tracker = prior.touch_trackers[touch_key]
-        new_tracker = _advance_reaction_tracker(
-            old_tracker, candles, atr_values, configuration
-        )
-        new_touch_trackers[touch_key] = new_tracker
-        if new_tracker.confirming_candle_index != old_tracker.confirming_candle_index:
-            dirty_origins.add(touch_key[0])
-        if new_tracker.permanent:
-            non_permanent_touches.discard(touch_key)
+    dirty: dict[tuple[SupportResistanceType, UUID], tuple[int, int]] = {}
 
-    # Per-zone-type sorted origins + opposite-time index: rebuilt only when the
-    # swings change (identity) or the cache is not yet populated (first advance),
-    # reused verbatim otherwise (no per-candle scan).
-    if swings_changed or not prior.zone_origins:
-        zone_origins: dict[SupportResistanceType, tuple[ConfirmedSwing, ...]] = {}
-        zone_opposite_times: dict[SupportResistanceType, tuple[datetime, ...]] = {}
-        for zone_type, origin_swing_type in (
-            (SupportResistanceType.SUPPORT, SwingType.SWING_LOW),
-            (SupportResistanceType.RESISTANCE, SwingType.SWING_HIGH),
+    def _mark(key: tuple[SupportResistanceType, UUID], pos: int) -> None:
+        cur = dirty.get(key)
+        if cur is None:
+            dirty[key] = (pos, pos)
+        else:
+            dirty[key] = (min(cur[0], pos), max(cur[1], pos))
+
+    for oid in prior.non_permanent_origins:
+        old = prior.origin_trackers[oid]
+        new = _advance_reaction_tracker(old, candles, atr_values, configuration)
+        new_origin_trackers[oid] = new
+        zone = prior.origin_zone.get(oid)
+        if (
+            zone is not None
+            and new.confirming_candle_index != old.confirming_candle_index
         ):
-            opposite_swing_type = (
-                SwingType.SWING_HIGH
-                if origin_swing_type == SwingType.SWING_LOW
-                else SwingType.SWING_LOW
+            state = prior.origin_states[(zone, oid)]
+            _mark((zone, oid), state.origin_pos + 1)
+        if new.permanent:
+            np_origins.discard(oid)
+    for touch_key in prior.non_permanent_touches:
+        old = prior.touch_trackers[touch_key]
+        new = _advance_reaction_tracker(old, candles, atr_values, configuration)
+        new_touch_trackers[touch_key] = new
+        if new.confirming_candle_index != old.confirming_candle_index:
+            oid = touch_key[0]
+            zone = prior.origin_zone.get(oid)
+            if zone is not None:
+                pos = prior.zone_pos_by_id[zone].get(touch_key[1])
+                if pos is not None:
+                    _mark((zone, oid), pos)
+        if new.permanent:
+            np_touches.discard(touch_key)
+
+    new_states = dict(prior.origin_states)
+    new_registry = dict(prior.zone_registry)
+    new_registry_len = dict(prior.zone_registry_len)
+    new_pos_by_id = {z: dict(m) for z, m in prior.zone_pos_by_id.items()}
+    new_opp = dict(prior.zone_opposite_times)
+    new_origin_zone = dict(prior.origin_zone)
+    new_swing_ids = prior.swing_ids
+
+    if swings_changed:
+        new_swing_ids = frozenset(s.record_id for s in confirmed_swings)
+        added_ids = new_swing_ids - prior.swing_ids
+        removed_ids = prior.swing_ids - new_swing_ids
+        by_id = {s.record_id: s for s in confirmed_swings}
+        for zone_type, origin_type, opposite_type in _SR_ZONE_SPECS:
+            registry: PersistentMap[ConfirmedSwing] = new_registry.get(
+                zone_type, PersistentMap()
             )
-            zone_origins[zone_type] = tuple(
-                sorted(
-                    (s for s in confirmed_swings if s.swing_type == origin_swing_type),
-                    key=lambda s: s.meaningful_confirmation_time_utc,
+            reg_len = new_registry_len.get(zone_type, 0)
+            pos_by_id = new_pos_by_id.setdefault(zone_type, {})
+            for rid in removed_ids:
+                pos = pos_by_id.pop(rid, None)
+                if pos is not None:
+                    registry = registry.delete(pos)
+                    for (z, oid2), st in new_states.items():
+                        if z == zone_type and st.origin_pos < pos:
+                            _mark((z, oid2), pos)
+                new_states.pop((zone_type, rid), None)
+                new_origin_zone.pop(rid, None)
+            added_same = sorted(
+                (
+                    by_id[rid]
+                    for rid in added_ids
+                    if by_id[rid].swing_type == origin_type
+                ),
+                key=lambda s: (s.meaningful_confirmation_time_utc, str(s.record_id)),
+            )
+            for swing in added_same:
+                pos = reg_len
+                registry = registry.set(pos, swing)
+                pos_by_id[swing.record_id] = pos
+                reg_len += 1
+                new_origin_zone[swing.record_id] = zone_type
+                for (z, oid2), st in new_states.items():
+                    if z == zone_type and st.origin_pos < pos:
+                        _mark((z, oid2), pos)
+                is_support = zone_type == SupportResistanceType.SUPPORT
+                zt, zb, zd, tt, pt = _sr_zone_geometry(swing, is_support, configuration)
+                new_states[(zone_type, swing.record_id)] = _SrOriginState(
+                    origin=swing,
+                    is_support=is_support,
+                    zone_top=zt,
+                    zone_bottom=zb,
+                    zone_depth=zd,
+                    touch_tolerance=tt,
+                    pierce_tolerance=pt,
+                    origin_pos=pos,
+                    origin_confirmed=False,
+                    ck=PersistentMap[datetime]().set(
+                        pos + 1, swing.meaningful_confirmation_time_utc
+                    ),
+                    qualifying=PersistentMap[ConfirmedSwing](),
+                    candidate=None,
                 )
-            )
-            zone_opposite_times[zone_type] = tuple(
+                _mark((zone_type, swing.record_id), pos + 1)
+            new_registry[zone_type] = registry
+            new_registry_len[zone_type] = reg_len
+            new_opp[zone_type] = tuple(
                 sorted(
                     s.meaningful_confirmation_time_utc
                     for s in confirmed_swings
-                    if s.swing_type == opposite_swing_type
+                    if s.swing_type == opposite_type
                 )
             )
-    else:
-        zone_origins = prior.zone_origins
-        zone_opposite_times = prior.zone_opposite_times
 
-    new_cache: dict[
-        tuple[SupportResistanceType, UUID], SupportResistanceZoneCandidate | None
-    ] = {}
     results: list[SupportResistanceZoneCandidate] = []
-
-    for zone_type in (
-        SupportResistanceType.SUPPORT,
-        SupportResistanceType.RESISTANCE,
-    ):
-        origins = zone_origins[zone_type]
-        opposite_confirmation_times = zone_opposite_times[zone_type]
-
-        for origin in origins:
-            cache_key = (zone_type, origin.record_id)
-            dirty = (
-                swings_changed
-                or origin.record_id in dirty_origins
-                or cache_key not in prior.origin_cache
+    for zone_type, _origin_type, _opp in _SR_ZONE_SPECS:
+        registry = new_registry.get(zone_type, PersistentMap[ConfirmedSwing]())
+        reg_len = new_registry_len.get(zone_type, 0)
+        opp_times = new_opp.get(zone_type, ())
+        for key, state in list(new_states.items()):
+            if key[0] != zone_type:
+                continue
+            origin_tracker = new_origin_trackers.get(state.origin.record_id)
+            if origin_tracker is None:
+                origin_index = candle_index_by_id[
+                    state.origin.pivot_candle_record_ids[-1]
+                ]
+                if origin_index + 1 < n:
+                    origin_tracker = _advance_reaction_tracker(
+                        _create_reaction_tracker(
+                            origin_index + 1,
+                            state.zone_top,
+                            state.zone_bottom,
+                            state.is_support,
+                        ),
+                        candles,
+                        atr_values,
+                        configuration,
+                    )
+                    new_origin_trackers[state.origin.record_id] = origin_tracker
+                    if not origin_tracker.permanent:
+                        np_origins.add(state.origin.record_id)
+            confirmed = (
+                origin_tracker is not None
+                and origin_tracker.confirming_candle_index is not None
             )
-            if dirty:
-                candidate = _walk_sr_origin(
-                    origin,
-                    zone_type,
-                    opposite_confirmation_times,
-                    origins,
+            if confirmed != state.origin_confirmed:
+                state = _SrOriginState(
+                    origin=state.origin,
+                    is_support=state.is_support,
+                    zone_top=state.zone_top,
+                    zone_bottom=state.zone_bottom,
+                    zone_depth=state.zone_depth,
+                    touch_tolerance=state.touch_tolerance,
+                    pierce_tolerance=state.pierce_tolerance,
+                    origin_pos=state.origin_pos,
+                    origin_confirmed=confirmed,
+                    ck=state.ck.set(
+                        state.origin_pos + 1,
+                        state.origin.meaningful_confirmation_time_utc,
+                    ),
+                    qualifying=state.qualifying if confirmed else PersistentMap(),
+                    candidate=None,
+                )
+                new_states[key] = state
+                _mark(key, state.origin_pos + 1)
+            d = dirty.get(key)
+            if d is not None and confirmed:
+                state = _sr_resume_origin(
+                    state,
+                    d[0],
+                    d[1],
+                    registry,
+                    reg_len,
+                    opp_times,
+                    new_touch_trackers,
+                    np_touches,
                     candles,
                     atr_values,
                     candle_index_by_id,
-                    new_origin_trackers,
-                    new_touch_trackers,
-                    non_permanent_origins,
-                    non_permanent_touches,
+                    n,
                     configuration,
                 )
-            else:
-                candidate = prior.origin_cache[cache_key]
-            new_cache[cache_key] = candidate
-            if candidate is not None:
-                results.append(candidate)
+                new_states[key] = state
+            elif d is not None and not confirmed:
+                if state.candidate is not None or len(state.qualifying) > 0:
+                    state = _SrOriginState(
+                        origin=state.origin,
+                        is_support=state.is_support,
+                        zone_top=state.zone_top,
+                        zone_bottom=state.zone_bottom,
+                        zone_depth=state.zone_depth,
+                        touch_tolerance=state.touch_tolerance,
+                        pierce_tolerance=state.pierce_tolerance,
+                        origin_pos=state.origin_pos,
+                        origin_confirmed=False,
+                        ck=state.ck,
+                        qualifying=PersistentMap[ConfirmedSwing](),
+                        candidate=None,
+                    )
+                    new_states[key] = state
+            if state.candidate is not None:
+                results.append(state.candidate)
 
     results.sort(key=lambda candidate: candidate.confirmation_time_utc)
     new_frontier = _SupportResistanceFrontier(
         origin_trackers=new_origin_trackers,
         touch_trackers=new_touch_trackers,
-        non_permanent_origins=frozenset(non_permanent_origins),
-        non_permanent_touches=frozenset(non_permanent_touches),
-        origin_cache=new_cache,
+        non_permanent_origins=frozenset(np_origins),
+        non_permanent_touches=frozenset(np_touches),
+        origin_states=new_states,
         prior_swings=confirmed_swings,
-        zone_origins=zone_origins,
-        zone_opposite_times=zone_opposite_times,
+        swing_ids=new_swing_ids,
+        zone_registry=new_registry,
+        zone_registry_len=new_registry_len,
+        zone_pos_by_id=new_pos_by_id,
+        zone_opposite_times=new_opp,
+        origin_zone=new_origin_zone,
     )
     return tuple(results), new_frontier
 
@@ -1886,9 +2016,11 @@ class _MeasurementReplayState:
     confirmation_trackers: dict[
         tuple[int, int, SwingType], _PivotConfirmationTracker
     ] = field(default_factory=dict)
-    sr_origin_trackers: dict[UUID, _ReactionTracker] = field(default_factory=dict)
-    sr_touch_trackers: dict[tuple[UUID, UUID], _ReactionTracker] = field(
-        default_factory=dict
+    # A6-F6D: incremental support/resistance replay frontier (byte-identical to
+    # _derive_support_resistance_zone_candidates at every prefix; that batch
+    # helper remains the untouched oracle).
+    sr_frontier: _SupportResistanceFrontier = field(
+        default_factory=_SupportResistanceFrontier
     )
     confirmed_swing_candidates_so_far: tuple[ConfirmedSwingCandidate, ...] = ()
     confirmed_swings_so_far: tuple[ConfirmedSwing, ...] = ()
@@ -2133,16 +2265,11 @@ def _advance_measurement_replay_state(
     # (O(1) amortized per candidate) rather than the unmodified batch
     # detector's O(candles) internal rescans, preserving (not optimizing
     # away) only the O(A_swings^2) outer walk per register §44AI/§44AL.
-    (
-        support_resistance_candidates,
-        new_sr_origin_trackers,
-        new_sr_touch_trackers,
-    ) = _derive_support_resistance_zone_candidates(
+    support_resistance_candidates, new_sr_frontier = _advance_sr_frontier(
+        state.sr_frontier,
         new_candles_so_far,
         new_atr_values_so_far,
         new_confirmed_swings,
-        state.sr_origin_trackers,
-        state.sr_touch_trackers,
         configuration,
     )
     new_support_resistance_zones = _finalize(
@@ -2182,8 +2309,7 @@ def _advance_measurement_replay_state(
         atr_values_so_far=new_atr_values_so_far,
         raw_pivots_so_far=new_raw_pivots_so_far,
         confirmation_trackers=new_confirmation_trackers,
-        sr_origin_trackers=new_sr_origin_trackers,
-        sr_touch_trackers=new_sr_touch_trackers,
+        sr_frontier=new_sr_frontier,
         confirmed_swing_candidates_so_far=new_confirmed_swing_candidates,
         confirmed_swings_so_far=new_confirmed_swings,
         displacement_candidates_so_far=new_displacement_candidates,

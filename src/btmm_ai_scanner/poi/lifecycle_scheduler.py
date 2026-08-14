@@ -44,6 +44,7 @@ from uuid import UUID
 
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
+from btmm_ai_scanner.persistent_map import PersistentMap
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.cursor_fast_forward import fast_forward_poi_cursor
 from btmm_ai_scanner.poi.enums import PoiDirection
@@ -61,7 +62,6 @@ from btmm_ai_scanner.poi.persistent_interval_index import (
     PersistentIntervalTouchIndex,
     create_persistent_interval_index,
 )
-from btmm_ai_scanner.poi.persistent_map import PersistentMap
 
 
 @dataclass(frozen=True)

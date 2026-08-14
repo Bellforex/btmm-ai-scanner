@@ -22,6 +22,7 @@ from btmm_ai_scanner.domain import (
 )
 from btmm_ai_scanner.domain.enums import DerivedOutputType
 from btmm_ai_scanner.measurements.atr import compute_atr_series
+from btmm_ai_scanner.persistent_map import PersistentMap
 from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration, validate_configuration
 from btmm_ai_scanner.poi.current_state import CurrentPoiState
@@ -65,7 +66,6 @@ from btmm_ai_scanner.poi.overlap import (
     resolve_merges,
 )
 from btmm_ai_scanner.poi.period_levels import detect_period_levels
-from btmm_ai_scanner.poi.persistent_map import PersistentMap
 from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
