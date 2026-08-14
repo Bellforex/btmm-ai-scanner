@@ -933,7 +933,18 @@ class _StructureReplayState:
     confirmed_swings_so_far: tuple[ConfirmedSwing, ...] = ()
     relationship_candidates: tuple[SwingRelationshipCandidate, ...] = ()
     event_identities: tuple[tuple[object, ...], ...] = ()
+    # A6-F6G: the sorted-event payloads parallel to event_identities. Candles and
+    # (via the F6F reuse cache) unchanged confirmed swings are the SAME objects
+    # across candles, so on the full re-diff path an unchanged event's identity is
+    # reused by object identity instead of being re-derived (str(uuid)/isoformat).
+    event_payloads: tuple[object, ...] = ()
     checkpoints: tuple[_StructureWalkCheckpoint, ...] = ()
+    # A6-F6G per-advance instrumentation (not a published contract): how many
+    # event identities this advance reused vs freshly derived, and whether it took
+    # the full re-sort path. Proves the delta behaviour and feeds the benchmark.
+    identity_reused: int = 0
+    identity_derived: int = 0
+    full_sort_path: bool = False
     # A6-F6B: the walk result (transitions + protected/weak swings + direction)
     # of the incremental checkpoint replay. The public swing_relationships /
     # structure_transitions / current_state are NO LONGER finalized per candle
@@ -1186,7 +1197,11 @@ def _advance_structure_replay_state(
             *state.event_identities,
             _structure_event_identity(_EVENT_CANDLE, candle),
         )
+        new_event_payloads: tuple[object, ...] = (*state.event_payloads, candle)
         common_prefix = len(state.event_identities)
+        identity_reused = len(state.event_identities)
+        identity_derived = 1
+        full_sort_path = False
     else:
         relationship_candidates = detect_swing_relationships(
             confirmed_swings, configuration
@@ -1194,9 +1209,36 @@ def _advance_structure_replay_state(
         events = _build_sorted_structure_events(
             new_candles, confirmed_swings, relationship_candidates
         )
-        identities = tuple(
-            _structure_event_identity(kind, payload) for _, kind, _, payload in events
-        )
+        # A6-F6G: reuse the prior identity for any event whose payload object is
+        # unchanged, keyed by object identity so a reused object is matched even if
+        # its sorted position shifted. Candles are always the same objects, and
+        # unchanged confirmed swings are the same objects via the F6F finalize-reuse
+        # cache; both the prior payloads (held by ``state``) and the new payloads
+        # are alive here, so ``id()`` is a collision-free key. Only genuinely
+        # new/changed swings and the rebuilt relationship candidates fall through to
+        # a fresh derivation -- the identity VALUE is byte-identical either way
+        # (§6: compute less often; do not change the id algorithm). Candles dominate
+        # the event count, so reusing them removes the bulk of the per-full-path
+        # str(uuid)/isoformat work even though relationships are always re-derived.
+        prior_identity_by_id = {
+            id(payload): identity
+            for payload, identity in zip(
+                state.event_payloads, state.event_identities, strict=True
+            )
+        }
+        identity_reused = 0
+        identity_derived = 0
+        identity_list: list[tuple[object, ...]] = []
+        for _, kind, _, payload in events:
+            reused = prior_identity_by_id.get(id(payload))
+            if reused is not None:
+                identity_list.append(reused)
+                identity_reused += 1
+            else:
+                identity_list.append(_structure_event_identity(kind, payload))
+                identity_derived += 1
+        identities = tuple(identity_list)
+        new_event_payloads = tuple(payload for _, _, _, payload in events)
         common_prefix = 0
         limit = min(len(state.event_identities), len(identities))
         while (
@@ -1205,6 +1247,7 @@ def _advance_structure_replay_state(
         ):
             common_prefix += 1
         events_suffix = events[common_prefix:]
+        full_sort_path = True
 
     candle_index_by_id = {c.record_id: index for index, c in enumerate(new_candles)}
 
@@ -1247,8 +1290,12 @@ def _advance_structure_replay_state(
         confirmed_swings_so_far=confirmed_swings,
         relationship_candidates=relationship_candidates,
         event_identities=identities,
+        event_payloads=new_event_payloads,
         checkpoints=tuple(reused_checkpoints),
         walk_result=walk_result,
+        identity_reused=identity_reused,
+        identity_derived=identity_derived,
+        full_sort_path=full_sort_path,
     )
 
 
