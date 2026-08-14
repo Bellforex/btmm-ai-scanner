@@ -1544,6 +1544,7 @@ class _MeasurementReplayState:
 
     resolver: _IdentityResolver
     rule_version_text: str
+    configuration: MarketMeasurementConfiguration
     candles_so_far: list[NormalizedCandle] = field(default_factory=list)
     atr_state: _AtrIncrementalState = field(default_factory=_AtrIncrementalState)
     atr_values_so_far: list[Decimal | None] = field(default_factory=list)
@@ -1557,10 +1558,17 @@ class _MeasurementReplayState:
     )
     confirmed_swing_candidates_so_far: tuple[ConfirmedSwingCandidate, ...] = ()
     confirmed_swings_so_far: tuple[ConfirmedSwing, ...] = ()
-    displacement_observations_so_far: tuple[DisplacementObservation, ...] = ()
+    # A6-F6C: displacement observations and trendlines are category-D outputs --
+    # consumed only by the public MeasurementAnalysis / ledger, never by the
+    # next-candle structure or POI logic. Their *candidates* are carried here and
+    # the public records are finalized (resolved + fingerprinted) on demand by
+    # _materialize_displacement / _materialize_trendlines at the analysis / ledger
+    # boundary (finalize()/event_ledger() under the F6A lazy kernel), instead of
+    # re-finalizing the whole cumulative set every candle / swing-change.
+    displacement_candidates_so_far: tuple[Any, ...] = ()
     equal_level_clusters_so_far: tuple[EqualLevelCluster, ...] = ()
     support_resistance_zones_so_far: tuple[SupportResistanceZone, ...] = ()
-    trendlines_so_far: tuple[Trendline, ...] = ()
+    trendline_candidates_so_far: tuple[Any, ...] = ()
     equal_level_cache_high: _EqualLevelTypeCache = field(
         default_factory=_EqualLevelTypeCache
     )
@@ -1588,6 +1596,45 @@ def _create_initial_measurement_replay_state(
     return _MeasurementReplayState(
         resolver=_IdentityResolver(identity_provider),
         rule_version_text=str(configuration.rule_version),
+        configuration=configuration,
+    )
+
+
+def _materialize_displacement(
+    state: _MeasurementReplayState,
+) -> tuple[DisplacementObservation, ...]:
+    """A6-F6C: finalize displacement observations from the deferred candidates.
+    Byte-identical to the pre-deferral per-candle finalize -- displacement is
+    append-only and record ids/fingerprints are content-addressed, so finalizing
+    the concatenated candidate stream once yields the same records in the same
+    order."""
+    return _finalize(
+        list(state.displacement_candidates_so_far),
+        DerivedOutputType.DISPLACEMENT_OBSERVATION,
+        DisplacementObservation,
+        lambda c: _displacement_semantic_key(c, state.rule_version_text),
+        lambda c: {},
+        frozenset(),
+        state.configuration,
+        state.resolver,
+    )
+
+
+def _materialize_trendlines(
+    state: _MeasurementReplayState,
+) -> tuple[Trendline, ...]:
+    """A6-F6C: finalize trendlines from the deferred current candidate set (the
+    incremental frontier advance still runs per swing-change and maintains the
+    caches; only the public record finalization is deferred to this boundary)."""
+    return _finalize(
+        list(state.trendline_candidates_so_far),
+        DerivedOutputType.TRENDLINE,
+        Trendline,
+        lambda c: _trendline_semantic_key(c, state.rule_version_text),
+        lambda c: {"availability_time_utc": c.confirmation_time_utc},
+        frozenset(),
+        state.configuration,
+        state.resolver,
     )
 
 
@@ -1687,7 +1734,7 @@ def _advance_measurement_replay_state(
         )
 
     new_equal_level_clusters = state.equal_level_clusters_so_far
-    new_trendlines = state.trendlines_so_far
+    new_trendline_candidates = state.trendline_candidates_so_far
     new_equal_level_cache_high = state.equal_level_cache_high
     new_equal_level_cache_low = state.equal_level_cache_low
     new_trendline_caches = state.trendline_caches
@@ -1728,26 +1775,20 @@ def _advance_measurement_replay_state(
             new_reuse=new_finalize_reuse,
         )
 
-        new_trendline_caches, trendline_candidates = _advance_trendlines_incremental(
-            state.trendline_caches,
-            new_confirmed_swings,
-            state.confirmed_swings_so_far,
-            new_candles_so_far,
-            new_atr_values_so_far,
-            configuration,
+        # A6-F6C: advance the trendline frontier caches (needed for correctness)
+        # but DEFER the public record finalization -- store the current candidate
+        # set; _materialize_trendlines finalizes it once at the analysis boundary.
+        new_trendline_caches, trendline_candidate_list = (
+            _advance_trendlines_incremental(
+                state.trendline_caches,
+                new_confirmed_swings,
+                state.confirmed_swings_so_far,
+                new_candles_so_far,
+                new_atr_values_so_far,
+                configuration,
+            )
         )
-        new_trendlines = _finalize(
-            list(trendline_candidates),
-            DerivedOutputType.TRENDLINE,
-            Trendline,
-            lambda c: _trendline_semantic_key(c, state.rule_version_text),
-            lambda c: {"availability_time_utc": c.confirmation_time_utc},
-            frozenset(),
-            configuration,
-            state.resolver,
-            prior_reuse=state.finalize_reuse_cache,
-            new_reuse=new_finalize_reuse,
-        )
+        new_trendline_candidates = tuple(trendline_candidate_list)
 
     # Unlike equal-levels/trendlines, a support/resistance zone's reaction
     # evaluation searches a bounded window of RAW candles following the
@@ -1783,31 +1824,25 @@ def _advance_measurement_replay_state(
         new_reuse=new_finalize_reuse,
     )
 
-    new_displacement_observations = state.displacement_observations_so_far
+    # A6-F6C: detect displacement candidates this candle (bounded window) and
+    # append them to the deferred candidate stream -- DO NOT finalize per candle.
+    # _materialize_displacement finalizes the whole stream once at the boundary.
+    new_displacement_candidates = state.displacement_candidates_so_far
     window = configuration.range_context_window
     if absolute_index >= window:
         displacement_slice = tuple(new_candles_so_far[absolute_index - window :])
         displacement_candidates = detect_displacement_observations(
             displacement_slice, configuration
         )
-        newly_finalized_displacement = _finalize(
-            list(displacement_candidates),
-            DerivedOutputType.DISPLACEMENT_OBSERVATION,
-            DisplacementObservation,
-            lambda c: _displacement_semantic_key(c, state.rule_version_text),
-            lambda c: {},
-            frozenset(),
-            configuration,
-            state.resolver,
-        )
-        new_displacement_observations = (
-            *state.displacement_observations_so_far,
-            *newly_finalized_displacement,
+        new_displacement_candidates = (
+            *state.displacement_candidates_so_far,
+            *displacement_candidates,
         )
 
     return _MeasurementReplayState(
         resolver=state.resolver,
         rule_version_text=state.rule_version_text,
+        configuration=state.configuration,
         candles_so_far=new_candles_so_far,
         atr_state=new_atr_state,
         atr_values_so_far=new_atr_values_so_far,
@@ -1817,10 +1852,10 @@ def _advance_measurement_replay_state(
         sr_touch_trackers=new_sr_touch_trackers,
         confirmed_swing_candidates_so_far=new_confirmed_swing_candidates,
         confirmed_swings_so_far=new_confirmed_swings,
-        displacement_observations_so_far=new_displacement_observations,
+        displacement_candidates_so_far=new_displacement_candidates,
         equal_level_clusters_so_far=new_equal_level_clusters,
         support_resistance_zones_so_far=new_support_resistance_zones,
-        trendlines_so_far=new_trendlines,
+        trendline_candidates_so_far=new_trendline_candidates,
         equal_level_cache_high=new_equal_level_cache_high,
         equal_level_cache_low=new_equal_level_cache_low,
         trendline_caches=new_trendline_caches,
@@ -1838,10 +1873,10 @@ def _measurement_replay_state_to_analysis(
         timeframe=timeframe,
         analyzed_candle_count=len(state.candles_so_far),
         confirmed_swings=state.confirmed_swings_so_far,
-        displacement_observations=state.displacement_observations_so_far,
+        displacement_observations=_materialize_displacement(state),
         equal_level_clusters=state.equal_level_clusters_so_far,
         support_resistance_zones=state.support_resistance_zones_so_far,
-        trendlines=state.trendlines_so_far,
+        trendlines=_materialize_trendlines(state),
     )
 
 
@@ -1867,13 +1902,19 @@ def _measurement_replay_state_to_view(
     """
     symbol = state.candles_so_far[0].symbol if state.candles_so_far else None
     timeframe = state.candles_so_far[0].timeframe if state.candles_so_far else None
+    # A6-F6C: the per-candle view feeds structure (confirmed_swings) and the POI
+    # detector frontier (support_resistance_zones + equal_level_clusters). Neither
+    # reads displacement_observations or trendlines, so they are left empty here
+    # (deferred, category D) rather than finalized every candle. The fully-
+    # materialized public analysis (_measurement_replay_state_to_analysis) still
+    # populates them exactly at the finalize/ledger boundary.
     return MarketMeasurementAnalysis.model_construct(
         symbol=symbol,
         timeframe=timeframe,
         analyzed_candle_count=len(state.candles_so_far),
         confirmed_swings=state.confirmed_swings_so_far,
-        displacement_observations=state.displacement_observations_so_far,
+        displacement_observations=(),
         equal_level_clusters=state.equal_level_clusters_so_far,
         support_resistance_zones=state.support_resistance_zones_so_far,
-        trendlines=state.trendlines_so_far,
+        trendlines=(),
     )

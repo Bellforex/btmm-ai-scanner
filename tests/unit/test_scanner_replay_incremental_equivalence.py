@@ -42,6 +42,7 @@ from btmm_ai_scanner.domain.analyzer import (
     _atr_incremental_step,
     _AtrIncrementalState,
     _create_initial_measurement_replay_state,
+    _materialize_trendlines,
     _measurement_replay_state_to_analysis,
     analyze_market_measurements,
 )
@@ -401,7 +402,7 @@ def test_older_confirmed_swings_remain_relevant_to_later_equal_level_and_trendli
     late_referenced_ids: set[UUID] = set()
     for cluster in state.equal_level_clusters_so_far:
         late_referenced_ids.update(cluster.component_swing_record_ids)
-    for trendline in state.trendlines_so_far:
+    for trendline in _materialize_trendlines(state):
         late_referenced_ids.add(trendline.anchor_1_swing_record_id)
         late_referenced_ids.add(trendline.anchor_2_swing_record_id)
 
@@ -895,7 +896,7 @@ def test_frontier_caches_roll_back_cleanly_on_a_domain_update_failure() -> None:
     low_before = state.equal_level_cache_low
     trendline_caches_before = state.trendline_caches
     clusters_before = state.equal_level_clusters_so_far
-    trendlines_before = state.trendlines_so_far
+    trendlines_before = state.trendline_candidates_so_far
 
     out_of_order = _candle(
         9999,
@@ -914,7 +915,7 @@ def test_frontier_caches_roll_back_cleanly_on_a_domain_update_failure() -> None:
     assert state.equal_level_cache_low is low_before
     assert state.trendline_caches is trendline_caches_before
     assert state.equal_level_clusters_so_far == clusters_before
-    assert state.trendlines_so_far == trendlines_before
+    assert state.trendline_candidates_so_far == trendlines_before
 
 
 # =====================================================================
@@ -3423,6 +3424,49 @@ def test_f6b_structure_finalize_deferred_out_of_advance(
     # ...materialized only at finalize().
     kernel.finalize()
     assert calls["n"] > 0
+
+
+def test_f6c_measurement_category_d_finalize_deferred_out_of_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F6C measurement operation-count gate. The category-D measurement outputs
+    # (displacement observations, trendlines) must NOT be finalized per candle;
+    # only their candidates are carried, and the public records are materialized
+    # once at the analysis/ledger boundary (finalize()/event_ledger()).
+    from btmm_ai_scanner.domain import analyzer as domain_mod
+    from btmm_ai_scanner.domain.analyzer import (
+        _materialize_displacement as real_disp,
+    )
+    from btmm_ai_scanner.domain.analyzer import (
+        _materialize_trendlines as real_trend,
+    )
+
+    calls = {"disp": 0, "trend": 0}
+
+    def _disp(state: object) -> object:
+        calls["disp"] += 1
+        return real_disp(state)  # type: ignore[arg-type]
+
+    def _trend(state: object) -> object:
+        calls["trend"] += 1
+        return real_trend(state)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(domain_mod, "_materialize_displacement", _disp)
+    monkeypatch.setattr(domain_mod, "_materialize_trendlines", _trend)
+
+    candles = _SINGLE_M15_INPUTS[0].candles
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    # Zero category-D finalizations across every advance (deferred).
+    assert calls["disp"] == 0
+    assert calls["trend"] == 0
+    # ...materialized only at finalize().
+    kernel.finalize()
+    assert calls["disp"] > 0
+    assert calls["trend"] > 0
 
 
 # =====================================================================

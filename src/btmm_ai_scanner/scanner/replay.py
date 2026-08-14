@@ -28,6 +28,8 @@ from btmm_ai_scanner.domain.analyzer import (
     DerivedOutputIdentityProvider,
     _advance_measurement_replay_state,
     _create_initial_measurement_replay_state,
+    _materialize_displacement,
+    _materialize_trendlines,
     _measurement_replay_state_to_analysis,
     _measurement_replay_state_to_view,
     _MeasurementReplayState,
@@ -804,12 +806,24 @@ class IncrementalReplayKernel:
                     state.structure_states[tf]
                 )[1]
             )
+
+        # A6-F6C: displacement + trendlines are materialized on demand from the
+        # deferred measurement candidates (never finalized per candle).
+        def _measure_materialized(
+            fn: Callable[[_MeasurementReplayState], tuple[Any, ...]],
+        ) -> tuple[Any, ...]:
+            if single_tf is not None:
+                return fn(state.measurement_states[single_tf])
+            return tuple(
+                record for tf in ordered for record in fn(state.measurement_states[tf])
+            )
+
         return _ScannerEventLedger(
             confirmed_swings=_measure_cat("confirmed_swings_so_far"),
-            displacement_observations=_measure_cat("displacement_observations_so_far"),
+            displacement_observations=_measure_materialized(_materialize_displacement),
             equal_level_clusters=_measure_cat("equal_level_clusters_so_far"),
             support_resistance_zones=_measure_cat("support_resistance_zones_so_far"),
-            trendlines=_measure_cat("trendlines_so_far"),
+            trendlines=_measure_materialized(_materialize_trendlines),
             structure_transitions=structure_transitions,
             poi_observations=combined_poi.poi_observations,
             poi_lifecycle_transitions=self._finalized_lifecycle_transitions or (),
