@@ -924,6 +924,9 @@ class _StructureReplayState:
 
     resolver: _IdentityResolver
     rule_version_text: str
+    configuration: StructureConfiguration = field(
+        default_factory=StructureConfiguration
+    )
     timeframe: Timeframe | None = None
     symbol: InternalSymbol | None = None
     candles_so_far: tuple[NormalizedCandle, ...] = ()
@@ -931,20 +934,41 @@ class _StructureReplayState:
     relationship_candidates: tuple[SwingRelationshipCandidate, ...] = ()
     event_identities: tuple[tuple[object, ...], ...] = ()
     checkpoints: tuple[_StructureWalkCheckpoint, ...] = ()
-    swing_relationships_so_far: tuple[SwingRelationship, ...] = ()
-    structure_transitions_so_far: tuple[StructureTransition, ...] = ()
-    current_state: CurrentStructureState | None = None
-    active_protected_high_swing: ConfirmedSwing | None = None
-    active_protected_low_swing: ConfirmedSwing | None = None
-    active_weak_high_swing: ConfirmedSwing | None = None
-    active_weak_low_swing: ConfirmedSwing | None = None
-    # A3-C: shared finalized-record reuse cache (record_id -> (fields, object))
-    # for swing relationships + structure transitions. record_ids are globally
-    # unique across categories, so one map is exact. _finalize reuses the object
-    # for any record whose fields are unchanged, rebuilding only the genuinely
-    # dirty suffix (middle insertion / same-length replacement handled exactly).
-    finalize_reuse_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
-        default_factory=dict
+    # A6-F6B: the walk result (transitions + protected/weak swings + direction)
+    # of the incremental checkpoint replay. The public swing_relationships /
+    # structure_transitions / current_state are NO LONGER finalized per candle
+    # (an O(P log P)-per-candle sort + finalize); they are materialized on demand
+    # from this walk result + relationship_candidates by
+    # ``_materialize_structure_outputs`` at the analysis / ledger boundary (which,
+    # under the F6A lazy kernel, is only finalize()/event_ledger()).
+    walk_result: StructureWalkResult | None = None
+
+
+def _materialize_structure_outputs(
+    state: _StructureReplayState,
+) -> tuple[
+    tuple[SwingRelationship, ...],
+    tuple[StructureTransition, ...],
+    CurrentStructureState | None,
+]:
+    """A6-F6B: finalize the public structure outputs (sorted swing relationships,
+    structure transitions, current state) from the deferred walk result. Called
+    once at the materialization boundary rather than every candle. Byte-identical
+    to the pre-deferral per-candle finalize: record ids / fingerprints are
+    content-addressed by the resolver (order-independent), and the single
+    materialization needs no cross-candle object-reuse cache."""
+    if state.walk_result is None:
+        return (), (), None
+    return _finalize_structure_outputs(
+        state.candles_so_far,
+        state.confirmed_swings_so_far,
+        state.relationship_candidates,
+        state.walk_result,
+        state.resolver,
+        state.configuration,
+        state.rule_version_text,
+        prior_reuse=None,
+        new_reuse=None,
     )
 
 
@@ -955,6 +979,7 @@ def _create_initial_structure_replay_state(
     return _StructureReplayState(
         resolver=_IdentityResolver(identity_provider),
         rule_version_text=str(configuration.rule_version),
+        configuration=configuration,
     )
 
 
@@ -1208,28 +1233,14 @@ def _advance_structure_replay_state(
         analyzed_swing_count=len(confirmed_swings),
     )
 
-    # A3-C: local reuse cache carried forward from the prior state (a copy, so a
-    # raised advance never mutates the caller's cache), published only on success.
-    new_finalize_reuse: dict[UUID, tuple[dict[str, object], ContractModel]] = dict(
-        state.finalize_reuse_cache
-    )
-    swing_relationships, structure_transitions, current_state = (
-        _finalize_structure_outputs(
-            new_candles,
-            confirmed_swings,
-            relationship_candidates,
-            walk_result,
-            state.resolver,
-            configuration,
-            state.rule_version_text,
-            prior_reuse=state.finalize_reuse_cache,
-            new_reuse=new_finalize_reuse,
-        )
-    )
-
+    # A6-F6B: the public swing relationships / structure transitions / current
+    # state are NOT finalized here (deferred to _materialize_structure_outputs at
+    # the analysis/ledger boundary). The per-candle advance only advances the
+    # checkpoint walk and stores its result.
     return _StructureReplayState(
         resolver=state.resolver,
         rule_version_text=state.rule_version_text,
+        configuration=configuration,
         timeframe=new_candles[0].timeframe,
         symbol=new_candles[0].symbol,
         candles_so_far=new_candles,
@@ -1237,14 +1248,7 @@ def _advance_structure_replay_state(
         relationship_candidates=relationship_candidates,
         event_identities=identities,
         checkpoints=tuple(reused_checkpoints),
-        swing_relationships_so_far=swing_relationships,
-        structure_transitions_so_far=structure_transitions,
-        current_state=current_state,
-        active_protected_high_swing=final_checkpoint.protected_high,
-        active_protected_low_swing=final_checkpoint.protected_low,
-        active_weak_high_swing=final_checkpoint.weak_high,
-        active_weak_low_swing=final_checkpoint.weak_low,
-        finalize_reuse_cache=new_finalize_reuse,
+        walk_result=walk_result,
     )
 
 
@@ -1264,12 +1268,15 @@ def _structure_replay_state_to_analysis(
             structure_transitions=(),
             current_state=None,
         )
+    swing_relationships, structure_transitions, current_state = (
+        _materialize_structure_outputs(state)
+    )
     return StructureAnalysis(
         symbol=state.symbol,
         timeframe=state.timeframe,
         analyzed_candle_count=len(state.candles_so_far),
         analyzed_swing_count=len(state.confirmed_swings_so_far),
-        swing_relationships=state.swing_relationships_so_far,
-        structure_transitions=state.structure_transitions_so_far,
-        current_state=state.current_state,
+        swing_relationships=swing_relationships,
+        structure_transitions=structure_transitions,
+        current_state=current_state,
     )

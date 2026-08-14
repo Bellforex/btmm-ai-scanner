@@ -94,6 +94,7 @@ from btmm_ai_scanner.structure.analyzer import (
     StructureAnalysis,
     _advance_structure_replay_state,
     _create_initial_structure_replay_state,
+    _materialize_structure_outputs,
     _structure_replay_state_to_analysis,
     analyze_structure_state,
 )
@@ -1264,7 +1265,7 @@ def test_structure_one_transition_per_candle_matches_the_batch_oracle() -> None:
         state = _advance_structure_replay_state(
             state, candle, _swings_visible_at(swings, candle), _STRUCT_CONFIG
         )
-    assert len(state.structure_transitions_so_far) == 1
+    assert len(_materialize_structure_outputs(state)[1]) == 1
 
 
 def test_structure_protected_level_replacement_matches_the_batch_oracle() -> None:
@@ -1493,7 +1494,7 @@ def test_structure_transaction_rollback_leaves_prior_state_untouched() -> None:
 
     checkpoints_before = state.checkpoints
     candles_before = state.candles_so_far
-    transitions_before = state.structure_transitions_so_far
+    transitions_before = _materialize_structure_outputs(state)[1]
 
     replayed = _candle(
         9999,
@@ -1512,7 +1513,7 @@ def test_structure_transaction_rollback_leaves_prior_state_untouched() -> None:
     # (identity, not just equality) survives the failed transition.
     assert state.checkpoints is checkpoints_before
     assert state.candles_so_far == candles_before
-    assert state.structure_transitions_so_far == transitions_before
+    assert _materialize_structure_outputs(state)[1] == transitions_before
 
     resumed = _advance_structure_replay_state(
         state, candles[10], _swings_visible_at(swings, candles[10]), _STRUCT_CONFIG
@@ -1527,7 +1528,7 @@ def test_structure_measurement_to_structure_handoff_matches_the_batch_oracle() -
     # The swings that reached structure are exactly the measurement engine's
     # confirmed swings, and a real transition was produced from them.
     assert result.final_state.confirmed_swings_so_far == result.swing_series[-1]  # type: ignore[attr-defined]
-    assert len(result.final_state.structure_transitions_so_far) > 0  # type: ignore[attr-defined]
+    assert len(_materialize_structure_outputs(result.final_state)[1]) > 0  # type: ignore[arg-type]
 
 
 # =====================================================================
@@ -3388,6 +3389,38 @@ def test_f6a_poi_advance_does_not_materialize_observation_tuple(
     # Zero full-tuple materializations across every advance (persistent updates).
     assert calls["n"] == 0
     # The public tuple is materialized only when finalize() requests it.
+    kernel.finalize()
+    assert calls["n"] > 0
+
+
+def test_f6b_structure_finalize_deferred_out_of_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A6-F6B structure operation-count gate. The per-candle structure advance must
+    # NOT finalize the public swing relationships / transitions / current state
+    # (the O(P log P)-per-candle sort + finalize). _finalize_structure_outputs is
+    # invoked zero times across every advance and only at the explicit
+    # materialization boundary (event_ledger/finalize).
+    from btmm_ai_scanner.structure import analyzer as struct_mod
+
+    calls = {"n": 0}
+    real = struct_mod._finalize_structure_outputs
+
+    def _counting(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(struct_mod, "_finalize_structure_outputs", _counting)
+
+    candles = _SINGLE_M15_INPUTS[0].candles
+    kernel = IncrementalReplayKernel(
+        (Timeframe.M15,), _SINGLE_M15_CONFIG, _HashIdentityProvider(), ()
+    )
+    for candle in candles:
+        kernel.advance_group({Timeframe.M15: (candle,)})
+    # Zero structure finalizations across every advance (deferred).
+    assert calls["n"] == 0
+    # ...materialized only at finalize().
     kernel.finalize()
     assert calls["n"] > 0
 

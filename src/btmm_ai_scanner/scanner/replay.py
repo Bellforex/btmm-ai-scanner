@@ -64,6 +64,7 @@ from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
 from btmm_ai_scanner.structure.analyzer import (
     _advance_structure_replay_state,
     _create_initial_structure_replay_state,
+    _materialize_structure_outputs,
     _structure_replay_state_to_analysis,
     _StructureReplayState,
 )
@@ -789,17 +790,19 @@ class IncrementalReplayKernel:
                 for record in getattr(state.measurement_states[tf], attr)
             )
 
+        # A6-F6B: structure transitions are materialized on demand from the
+        # deferred structure walk result (never finalized per candle).
         if single_tf is not None:
-            structure_transitions = state.structure_states[
-                single_tf
-            ].structure_transitions_so_far
+            structure_transitions = _materialize_structure_outputs(
+                state.structure_states[single_tf]
+            )[1]
         else:
             structure_transitions = tuple(
                 transition
                 for tf in ordered
-                for transition in state.structure_states[
-                    tf
-                ].structure_transitions_so_far
+                for transition in _materialize_structure_outputs(
+                    state.structure_states[tf]
+                )[1]
             )
         return _ScannerEventLedger(
             confirmed_swings=_measure_cat("confirmed_swings_so_far"),
