@@ -23,7 +23,6 @@ from btmm_ai_scanner.domain.enums import (
     EqualLevelType,
     SupportResistanceType,
     SwingType,
-    TrendlineOrientation,
 )
 from btmm_ai_scanner.domain.equal_levels import (
     EqualLevelCluster,
@@ -47,7 +46,6 @@ from btmm_ai_scanner.domain.swings import (
 )
 from btmm_ai_scanner.domain.trendlines import (
     Trendline,
-    TrendlineCandidate,
     detect_trendlines,
 )
 from btmm_ai_scanner.measurements.atr import _true_range
@@ -182,10 +180,23 @@ class _IdentityResolver:
     def __init__(self, provider: DerivedOutputIdentityProvider) -> None:
         self._provider = provider
         self._issued: dict[UUID, tuple[str, ...]] = {}
+        # A6-F6F-B: forward memo (output_type, semantic_key) -> record_id. The
+        # provider is a pure deterministic function of its inputs, so resolving a
+        # semantic key already seen returns the identical id WITHOUT re-invoking
+        # identify(). Under incremental replay the same historical candidate is
+        # re-finalized every candle; this collapses O(N * A) identify() calls
+        # (each a SHA-256 over the key) to O(A) -- one per distinct record -- with
+        # byte-identical results. Not an algorithm change (§9): the exact same
+        # provider is still the sole source of every id, just called less often.
+        self._by_key: dict[tuple[DerivedOutputType, tuple[str, ...]], UUID] = {}
 
     def resolve(
         self, output_type: DerivedOutputType, semantic_key: tuple[str, ...]
     ) -> UUID:
+        memo_key = (output_type, semantic_key)
+        cached = self._by_key.get(memo_key)
+        if cached is not None:
+            return cached
         record_id = self._provider.identify(
             output_type=output_type, semantic_key=semantic_key
         )
@@ -196,6 +207,7 @@ class _IdentityResolver:
                 "semantic keys within one analysis call."
             )
         self._issued[record_id] = semantic_key
+        self._by_key[memo_key] = record_id
         return record_id
 
 
@@ -1857,312 +1869,22 @@ def _advance_equal_levels_incremental(
     return high_cache, low_cache, combined
 
 
-# ---- Incremental trendlines -----------------------------------------
-
-
-@dataclass(frozen=True)
-class _ArmedTrendline:
-    """A geometry-valid trendline anchor pair still searching for its first
-    confirming touch. Everything needed to (a) test whether a later same-type
-    swing is that touch and (b) emit the TrendlineCandidate is captured, so a
-    carry-over or re-arm never re-derives geometry."""
-
-    orientation: TrendlineOrientation
-    symbol: InternalSymbol
-    timeframe: Timeframe
-    anchor_1_id: UUID
-    anchor_2_id: UUID
-    anchor_1_price: Decimal
-    anchor_2_price: Decimal
-    anchor_1_bar: int
-    anchor_2_bar: int
-    raw_slope: Decimal
-    reference_atr: Decimal
-    normalized_slope: Decimal
-    pierce_tolerance: Decimal
-    touch_tolerance: Decimal
-
-
-@dataclass(frozen=True)
-class _EmittedTrendline:
-    armed: _ArmedTrendline
-    candidate: TrendlineCandidate
-    touch_bar: int
-
-
-@dataclass(frozen=True)
-class _TrendlineOrientationCache:
-    armed: tuple[_ArmedTrendline, ...] = ()
-    emitted: tuple[_EmittedTrendline, ...] = ()
-
-
-_TRENDLINE_ORIENTATIONS: tuple[tuple[TrendlineOrientation, SwingType], ...] = (
-    (TrendlineOrientation.BULLISH_TRENDLINE, SwingType.SWING_LOW),
-    (TrendlineOrientation.BEARISH_TRENDLINE, SwingType.SWING_HIGH),
-)
-
-
-def _trendline_pair_geometry(
-    anchor1: ConfirmedSwing,
-    anchor2: ConfirmedSwing,
-    anchor1_bar: int,
-    anchor2_bar: int,
-    orientation: TrendlineOrientation,
-    candles: list[NormalizedCandle],
-    atr_values: list[Decimal | None],
-    configuration: MarketMeasurementConfiguration,
-) -> _ArmedTrendline | None:
-    """Exact port of detect_trendlines' per-pair geometry gate (spacing,
-    direction, slope band, straight-line integrity). Returns an armed pair
-    when the geometry qualifies, else None. Every input is fixed once both
-    anchors exist and candles reach anchor2_bar, so this is computed once
-    per pair."""
-    if anchor2_bar - anchor1_bar < configuration.trendline_min_anchor_spacing_bars:
-        return None
-
-    is_bullish = orientation == TrendlineOrientation.BULLISH_TRENDLINE
-    if is_bullish:
-        if not (
-            anchor2.pivot_price > anchor1.pivot_price + anchor1.pivot_tie_tolerance
-        ):
-            return None
-    else:
-        if not (
-            anchor2.pivot_price < anchor1.pivot_price - anchor1.pivot_tie_tolerance
-        ):
-            return None
-
-    raw_slope = (anchor2.pivot_price - anchor1.pivot_price) / Decimal(
-        anchor2_bar - anchor1_bar
-    )
-
-    between_atrs = [
-        value
-        for value in atr_values[anchor1_bar : anchor2_bar + 1]
-        if value is not None
-    ]
-    if not between_atrs:
-        return None
-    reference_atr = _decimal_median(between_atrs)
-    if reference_atr == 0:
-        return None
-    normalized_slope = abs(raw_slope) / reference_atr
-    if normalized_slope < configuration.trendline_horizontal_atr_multiplier:
-        return None
-    if normalized_slope > configuration.trendline_too_steep_atr_multiplier:
-        return None
-
-    pierce_tolerance = (
-        configuration.trendline_pierce_tolerance_atr_multiplier * reference_atr
-    )
-    touch_tolerance = (
-        configuration.trendline_touch_tolerance_atr_multiplier * reference_atr
-    )
-
-    for between_index in range(anchor1_bar + 1, anchor2_bar):
-        projected = anchor1.pivot_price + raw_slope * Decimal(
-            between_index - anchor1_bar
-        )
-        candle_close = candles[between_index].close
-        if is_bullish:
-            if projected - candle_close > pierce_tolerance:
-                return None
-        else:
-            if candle_close - projected > pierce_tolerance:
-                return None
-
-    return _ArmedTrendline(
-        orientation=orientation,
-        symbol=anchor1.symbol,
-        timeframe=anchor1.timeframe,
-        anchor_1_id=anchor1.record_id,
-        anchor_2_id=anchor2.record_id,
-        anchor_1_price=anchor1.pivot_price,
-        anchor_2_price=anchor2.pivot_price,
-        anchor_1_bar=anchor1_bar,
-        anchor_2_bar=anchor2_bar,
-        raw_slope=raw_slope,
-        reference_atr=reference_atr,
-        normalized_slope=normalized_slope,
-        pierce_tolerance=pierce_tolerance,
-        touch_tolerance=touch_tolerance,
-    )
-
-
-def _trendline_touch_qualifies(
-    armed: _ArmedTrendline, touch: ConfirmedSwing, touch_bar: int
-) -> bool:
-    projected = armed.anchor_1_price + armed.raw_slope * Decimal(
-        touch_bar - armed.anchor_1_bar
-    )
-    if armed.orientation == TrendlineOrientation.BULLISH_TRENDLINE:
-        difference = touch.pivot_price - projected
-    else:
-        difference = projected - touch.pivot_price
-    return abs(difference) <= armed.touch_tolerance or (
-        -armed.pierce_tolerance <= difference < -armed.touch_tolerance
-    )
-
-
-def _emit_trendline_candidate(
-    armed: _ArmedTrendline, touch: ConfirmedSwing
-) -> TrendlineCandidate:
-    return TrendlineCandidate(
-        symbol=armed.symbol,
-        timeframe=armed.timeframe,
-        orientation=armed.orientation,
-        anchor_1_swing_record_id=armed.anchor_1_id,
-        anchor_2_swing_record_id=armed.anchor_2_id,
-        anchor_1_price=armed.anchor_1_price,
-        anchor_2_price=armed.anchor_2_price,
-        anchor_1_bar_index=armed.anchor_1_bar,
-        anchor_2_bar_index=armed.anchor_2_bar,
-        raw_slope=armed.raw_slope,
-        anchor_reference_atr=armed.reference_atr,
-        normalized_slope=armed.normalized_slope,
-        qualifying_touch_swing_record_ids=(touch.record_id,),
-        confirmation_candle_id=touch.pivot_candle_record_ids[-1],
-        confirmation_time_utc=touch.meaningful_confirmation_time_utc,
-    )
-
-
-def _advance_trendlines_incremental(
-    previous: dict[TrendlineOrientation, _TrendlineOrientationCache],
-    new_confirmed_swings: tuple[ConfirmedSwing, ...],
-    previous_confirmed_swings: tuple[ConfirmedSwing, ...],
-    candles: list[NormalizedCandle],
-    atr_values: list[Decimal | None],
-    configuration: MarketMeasurementConfiguration,
-) -> tuple[
-    dict[TrendlineOrientation, _TrendlineOrientationCache], list[TrendlineCandidate]
-]:
-    """Exact incremental equivalent of detect_trendlines. Diffs the confirmed
-    swings for the earliest changed bar (`bar_f`); reuses trendlines whose
-    confirming touch predates it, carries over/re-arms anchor pairs whose
-    anchors predate it, and replays only the dirty swing suffix as appends.
-    Cumulative pair-geometry work is O(A_swings^2) (each pair's geometry is
-    computed once, when its later anchor first appears); touch matching walks
-    each armed pair forward over later same-type swings, bounded like the
-    batch detector's own all-pairs touch search — never the current
-    O(A_swings^3)-leaning full recompute per swing change."""
-    confirmed_swings_order = _common_prefix_length(
-        previous_confirmed_swings, new_confirmed_swings
-    )
-    bar_f_candidates: list[int] = []
-    if confirmed_swings_order < len(new_confirmed_swings):
-        bar_f_candidates.append(
-            _confirmed_swing_bar_index(new_confirmed_swings[confirmed_swings_order])
-        )
-    if confirmed_swings_order < len(previous_confirmed_swings):
-        bar_f_candidates.append(
-            _confirmed_swing_bar_index(
-                previous_confirmed_swings[confirmed_swings_order]
-            )
-        )
-    # None only when the swing tuples are identical; the caller guards on
-    # swings_changed so that path stays a pure reuse.
-    bar_f = min(bar_f_candidates) if bar_f_candidates else None
-
-    new_state: dict[TrendlineOrientation, _TrendlineOrientationCache] = {}
-    all_candidates: list[TrendlineCandidate] = []
-
-    for orientation, swing_type in _TRENDLINE_ORIENTATIONS:
-        prev_cache = previous.get(orientation, _TrendlineOrientationCache())
-
-        if bar_f is None:
-            new_state[orientation] = prev_cache
-            all_candidates.extend(e.candidate for e in prev_cache.emitted)
-            continue
-
-        emitted: list[_EmittedTrendline] = []
-        armed: list[_ArmedTrendline] = []
-        for existing in prev_cache.emitted:
-            if existing.touch_bar < bar_f:
-                emitted.append(existing)
-            elif existing.armed.anchor_2_bar < bar_f:
-                # Anchors are in the unchanged prefix, only the touch is dirty:
-                # geometry is stable, re-arm and re-search from the frontier.
-                armed.append(existing.armed)
-            # else: anchor2 is dirty -> dropped, regenerated in the replay.
-        for existing_armed in prev_cache.armed:
-            if existing_armed.anchor_2_bar < bar_f:
-                armed.append(existing_armed)
-            # else: anchor2 dirty -> dropped, regenerated in the replay.
-
-        type_swings = [
-            (s, _confirmed_swing_bar_index(s))
-            for s in new_confirmed_swings
-            if s.swing_type == swing_type
-        ]
-        processed_earlier = [pair for pair in type_swings if pair[1] < bar_f]
-        dirty = [pair for pair in type_swings if pair[1] >= bar_f]
-
-        for swing, swing_bar in dirty:
-            still_armed: list[_ArmedTrendline] = []
-            for candidate_armed in armed:
-                if (
-                    candidate_armed.anchor_2_bar < swing_bar
-                    and _trendline_touch_qualifies(candidate_armed, swing, swing_bar)
-                ):
-                    emitted.append(
-                        _EmittedTrendline(
-                            armed=candidate_armed,
-                            candidate=_emit_trendline_candidate(candidate_armed, swing),
-                            touch_bar=swing_bar,
-                        )
-                    )
-                else:
-                    still_armed.append(candidate_armed)
-            armed = still_armed
-
-            for anchor1, anchor1_bar in processed_earlier:
-                pair = _trendline_pair_geometry(
-                    anchor1,
-                    swing,
-                    anchor1_bar,
-                    swing_bar,
-                    orientation,
-                    candles,
-                    atr_values,
-                    configuration,
-                )
-                if pair is not None:
-                    armed.append(pair)
-
-            processed_earlier.append((swing, swing_bar))
-
-        new_state[orientation] = _TrendlineOrientationCache(
-            armed=tuple(armed), emitted=tuple(emitted)
-        )
-        all_candidates.extend(e.candidate for e in emitted)
-
-    all_candidates.sort(
-        key=lambda c: (
-            c.anchor_1_bar_index,
-            c.anchor_2_bar_index,
-            str(c.anchor_1_swing_record_id),
-        )
-    )
-    return new_state, all_candidates
-
-
 @dataclass
 class _MeasurementReplayState:
     """Private, per-timeframe incremental measurement state for subsystem 2b.
     Not part of the public contract surface; owned exclusively by the
     scanner replay path. candles_so_far and confirmed_swings_so_far are
     retained in full (register §44AL classification A / O(T*C), O(A_swings)).
-    equal_level_clusters/trendlines are derived incrementally when
-    confirmed_swings_so_far changes (subsystem 2b-final): equal-levels via a
-    checkpoint-resume of its confirmation-time greedy sweep
-    (equal_level_cache_high/low), trendlines via an anchor-pair frontier that
-    reuses trendlines whose confirming touch predates the earliest changed
-    swing bar, carries over/re-arms unchanged anchor pairs, and replays only
-    the dirty swing suffix (trendline_caches). Both reproduce the unmodified
-    batch detectors exactly (they remain the differential oracle) but no
-    longer re-derive O(A_swings^2) trendline work on every swing arrival:
-    cumulative pair-geometry is O(A_swings^2), matching the approved all-pairs
-    requirement instead of the previous O(A_swings^3)-leaning recompute.
+    equal_level_clusters are derived incrementally when confirmed_swings_so_far
+    changes (subsystem 2b-final) via a checkpoint-resume of its confirmation-time
+    greedy sweep (equal_level_cache_high/low), reproducing the unmodified batch
+    detector exactly (it remains the differential oracle). A6-F6F-A: trendlines
+    are a category-D output (nothing in the incremental replay consumes them --
+    structure reads confirmed swings, POI reads SR zones / equal levels), so NO
+    trendline work runs on the per-candle advance; the whole history is derived
+    on demand from the batch detector by _materialize_trendlines. This removes
+    the per-candle O(A_swings^2)-cumulative trendline frontier from FINAL_ONLY,
+    which only ever produced intermediate results the run discarded.
     support_resistance_zones is derived every candle via persistent
     _ReactionTracker state (O(1) amortized per reaction candidate) rather than
     the unmodified batch detector's O(candles) internal rescans, since a
@@ -2197,15 +1919,11 @@ class _MeasurementReplayState:
     displacement_candidates_so_far: tuple[Any, ...] = ()
     equal_level_clusters_so_far: tuple[EqualLevelCluster, ...] = ()
     support_resistance_zones_so_far: tuple[SupportResistanceZone, ...] = ()
-    trendline_candidates_so_far: tuple[Any, ...] = ()
     equal_level_cache_high: _EqualLevelTypeCache = field(
         default_factory=_EqualLevelTypeCache
     )
     equal_level_cache_low: _EqualLevelTypeCache = field(
         default_factory=_EqualLevelTypeCache
-    )
-    trendline_caches: dict[TrendlineOrientation, _TrendlineOrientationCache] = field(
-        default_factory=dict
     )
     # A3-C: shared finalized-record reuse cache (record_id -> (fields, object))
     # spanning confirmed swings / clusters / zones / trendlines. record_ids are
@@ -2252,11 +1970,26 @@ def _materialize_displacement(
 def _materialize_trendlines(
     state: _MeasurementReplayState,
 ) -> tuple[Trendline, ...]:
-    """A6-F6C: finalize trendlines from the deferred current candidate set (the
-    incremental frontier advance still runs per swing-change and maintains the
-    caches; only the public record finalization is deferred to this boundary)."""
+    """A6-F6F-A: trendlines are a category-D output -- nothing in the incremental
+    replay (structure consumes confirmed swings; POI consumes SR zones / equal
+    levels) reads them, they are only ever published via MeasurementAnalysis /
+    the event ledger / the final report. So NO trendline work runs on the
+    per-candle advance; the complete history is derived on demand here straight
+    from the UNMODIFIED batch detector over the confirmed-swing history, then
+    finalized. This is byte-identical to the batch analysis by construction (the
+    same ``detect_trendlines`` call the batch oracle uses at line ~371) and, for
+    FINAL_ONLY, replaces the whole per-candle incremental frontier -- which only
+    ever produced intermediate results the run threw away -- with a single
+    end-of-run derivation. Callers that materialize per candle (ALL retention)
+    pay one batch derivation per requested snapshot, which the differential
+    tests still verify exactly."""
+    trendline_candidates = detect_trendlines(
+        tuple(state.candles_so_far),
+        state.confirmed_swings_so_far,
+        state.configuration,
+    )
     return _finalize(
-        list(state.trendline_candidates_so_far),
+        list(trendline_candidates),
         DerivedOutputType.TRENDLINE,
         Trendline,
         lambda c: _trendline_semantic_key(c, state.rule_version_text),
@@ -2363,10 +2096,8 @@ def _advance_measurement_replay_state(
         )
 
     new_equal_level_clusters = state.equal_level_clusters_so_far
-    new_trendline_candidates = state.trendline_candidates_so_far
     new_equal_level_cache_high = state.equal_level_cache_high
     new_equal_level_cache_low = state.equal_level_cache_low
-    new_trendline_caches = state.trendline_caches
     swings_changed = new_confirmed_swings != state.confirmed_swings_so_far
     if swings_changed:
         # A still-open same-type pivot run's collapsed representative (the
@@ -2374,13 +2105,14 @@ def _advance_measurement_replay_state(
         # pivots extend it, even after its earlier extreme already produced
         # a confirmed swing at the same list position: a length check alone
         # would miss that same-length content change, so this must key off
-        # full-value inequality, not a length comparison. Equal-levels and
-        # trendlines depend only on confirmed_swings, so gating on
-        # swings_changed is exactly correct — and their re-derivation is now
-        # incremental (subsystem 2b-final): only the frontier of the
-        # confirmed-swing diff is reprocessed, not the whole history, while
-        # reproducing the unmodified batch detectors exactly (both remain the
-        # differential oracle in the permanent equivalence tests).
+        # full-value inequality, not a length comparison. Equal-levels depend
+        # only on confirmed_swings, so gating on swings_changed is exactly
+        # correct — and their re-derivation is incremental (subsystem 2b-final):
+        # only the frontier of the confirmed-swing diff is reprocessed, not the
+        # whole history, while reproducing the unmodified batch detector exactly
+        # (it remains the differential oracle in the permanent equivalence
+        # tests). A6-F6F-A: trendlines (category D, see _materialize_trendlines)
+        # do NO per-candle work at all now -- they are derived on demand.
         (
             new_equal_level_cache_high,
             new_equal_level_cache_low,
@@ -2404,22 +2136,7 @@ def _advance_measurement_replay_state(
             new_reuse=new_finalize_reuse,
         )
 
-        # A6-F6C: advance the trendline frontier caches (needed for correctness)
-        # but DEFER the public record finalization -- store the current candidate
-        # set; _materialize_trendlines finalizes it once at the analysis boundary.
-        new_trendline_caches, trendline_candidate_list = (
-            _advance_trendlines_incremental(
-                state.trendline_caches,
-                new_confirmed_swings,
-                state.confirmed_swings_so_far,
-                new_candles_so_far,
-                new_atr_values_so_far,
-                configuration,
-            )
-        )
-        new_trendline_candidates = tuple(trendline_candidate_list)
-
-    # Unlike equal-levels/trendlines, a support/resistance zone's reaction
+    # Unlike equal-levels, a support/resistance zone's reaction
     # evaluation searches a bounded window of RAW candles following the
     # origin/touch swing; a window that was truncated by the current candle
     # count can newly resolve as more candles arrive with no new confirmed
@@ -2478,10 +2195,8 @@ def _advance_measurement_replay_state(
         displacement_candidates_so_far=new_displacement_candidates,
         equal_level_clusters_so_far=new_equal_level_clusters,
         support_resistance_zones_so_far=new_support_resistance_zones,
-        trendline_candidates_so_far=new_trendline_candidates,
         equal_level_cache_high=new_equal_level_cache_high,
         equal_level_cache_low=new_equal_level_cache_low,
-        trendline_caches=new_trendline_caches,
         finalize_reuse_cache=new_finalize_reuse,
     )
 

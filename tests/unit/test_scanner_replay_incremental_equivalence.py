@@ -895,9 +895,9 @@ def test_frontier_caches_roll_back_cleanly_on_a_domain_update_failure() -> None:
 
     high_before = state.equal_level_cache_high
     low_before = state.equal_level_cache_low
-    trendline_caches_before = state.trendline_caches
     clusters_before = state.equal_level_clusters_so_far
-    trendlines_before = state.trendline_candidates_so_far
+    sr_before = state.sr_frontier
+    swings_before = state.confirmed_swings_so_far
 
     out_of_order = _candle(
         9999,
@@ -911,12 +911,15 @@ def test_frontier_caches_roll_back_cleanly_on_a_domain_update_failure() -> None:
         _advance_measurement_replay_state(state, out_of_order, _CONFIG)
 
     # The prior state object is never mutated: the very same cache objects
-    # (identity, not just equality) survive the failed transition.
+    # (identity, not just equality) survive the failed transition. (Trendlines
+    # are no longer carried in the state after F6F-A -- they are derived on
+    # demand from the confirmed-swing history -- so the surviving incremental
+    # caches checked here are the equal-level and SR frontiers.)
     assert state.equal_level_cache_high is high_before
     assert state.equal_level_cache_low is low_before
-    assert state.trendline_caches is trendline_caches_before
+    assert state.sr_frontier is sr_before
     assert state.equal_level_clusters_so_far == clusters_before
-    assert state.trendline_candidates_so_far == trendlines_before
+    assert state.confirmed_swings_so_far == swings_before
 
 
 # =====================================================================
