@@ -302,9 +302,15 @@ def test_cli_blocks_run_when_host_ram_below_floor_and_publishes_nothing(
     assert not list(output_root.rglob("checksums.json"))
 
 
-def test_cli_denies_publication_when_worker_verification_fails(
+def test_cli_denies_publication_when_batch_historical_worker_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A6-F6H: the DEFAULT (FINAL_ONLY) run is the authoritative batch path, so a
+    # non-SUCCESS isolated worker (here CRASHED) must deny publication with no
+    # checksums. The worker now runs inside execution_module (not the CLI verify
+    # step), so that is where the seam is substituted.
+    from btmm_ai_scanner.historical_backtest import execution as execution_module
+
     dataset_root = tmp_path / "dataset"
     dataset_root.mkdir()
     _build_valid_dataset(dataset_root)
@@ -320,7 +326,9 @@ def test_cli_denies_publication_when_worker_verification_fails(
             preserved_log_path=None,
         )
 
-    monkeypatch.setattr(cli_module, "_run_isolated_direct_batch_verification", _crashed)
+    monkeypatch.setattr(
+        execution_module, "_run_isolated_direct_batch_verification", _crashed
+    )
     exit_code = main(["--dataset", str(dataset_root), "--output", str(output_root)])
     assert exit_code == EXIT_REPLAY_FAILURE
     assert not list(output_root.rglob("checksums.json"))
@@ -329,6 +337,9 @@ def test_cli_denies_publication_when_worker_verification_fails(
 def test_cli_denies_publication_on_cross_engine_mismatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A6-F6H: per-run cross-engine (batch↔incremental) verification is now a
+    # property of the INCREMENTAL streaming path (ALL / CHANGED_ONLY); FINAL_ONLY
+    # is batch-authoritative and has no such step. Exercise it under --all.
     dataset_root = tmp_path / "dataset"
     dataset_root.mkdir()
     _build_valid_dataset(dataset_root)
@@ -339,7 +350,16 @@ def test_cli_denies_publication_on_cross_engine_mismatch(
         "_cross_engine_equality",
         lambda incremental, worker_json: (False, True, True),
     )
-    exit_code = main(["--dataset", str(dataset_root), "--output", str(output_root)])
+    exit_code = main(
+        [
+            "--dataset",
+            str(dataset_root),
+            "--output",
+            str(output_root),
+            "--snapshot-retention",
+            "all",
+        ]
+    )
     assert exit_code == EXIT_REPLAY_FAILURE
     assert not list(output_root.rglob("checksums.json"))
 
@@ -347,6 +367,9 @@ def test_cli_denies_publication_on_cross_engine_mismatch(
 def test_cli_denies_publication_when_incremental_replay_is_aborted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # A6-F6H: the in-process incremental replay gate governs the INCREMENTAL
+    # streaming path (ALL / CHANGED_ONLY). FINAL_ONLY runs the batch worker (a
+    # separate 120-min ceiling), so exercise the incremental abort under --all.
     from btmm_ai_scanner.historical_backtest import execution as execution_module
 
     dataset_root = tmp_path / "dataset"
@@ -365,6 +388,15 @@ def test_cli_denies_publication_when_incremental_replay_is_aborted(
     monkeypatch.setattr(
         execution_module, "_IncrementalReplayGate", lambda: _AlwaysAbort()
     )
-    exit_code = main(["--dataset", str(dataset_root), "--output", str(output_root)])
+    exit_code = main(
+        [
+            "--dataset",
+            str(dataset_root),
+            "--output",
+            str(output_root),
+            "--snapshot-retention",
+            "all",
+        ]
+    )
     assert exit_code == EXIT_REPLAY_FAILURE
     assert not list(output_root.rglob("checksums.json"))

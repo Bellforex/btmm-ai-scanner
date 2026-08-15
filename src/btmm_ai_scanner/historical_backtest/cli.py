@@ -15,9 +15,13 @@ from btmm_ai_scanner.historical_backtest.direct_batch_worker import (
 )
 from btmm_ai_scanner.historical_backtest.execution import (
     HistoricalBacktestExecutionResult,
+    HistoricalBatchExecutionError,
+    HistoricalExecutionMode,
     IncrementalReplayAbortedError,
     InsufficientHostMemoryError,
     execute_scanner_backtest,
+    execute_scanner_backtest_batch_historical,
+    resolve_historical_execution_mode,
 )
 from btmm_ai_scanner.historical_backtest.identity import (
     ContentAddressedIdentityProvider,
@@ -188,13 +192,21 @@ def _verify_and_publish(
             }
         )
 
+    return _write_report_or_fail(publishable_result, output_root)
+
+
+def _write_report_or_fail(
+    result: HistoricalBacktestExecutionResult, output_root: Path
+) -> int:
+    """The single atomic publication tail shared by both engines: write the
+    report (checksums.json is written last, so a partial run leaves no
+    success-claiming checksums), mapping write failures to their exit codes."""
     try:
-        write_backtest_report(publishable_result, output_root)
+        write_backtest_report(result, output_root)
     except HistoricalReportWriteError:
         return EXIT_REPORT_WRITE_FAILURE
     except Exception:
         return EXIT_UNEXPECTED_FAILURE
-
     return EXIT_SUCCESS
 
 
@@ -224,6 +236,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_DATASET_REJECTION
     except Exception:
         return EXIT_UNEXPECTED_FAILURE
+
+    # A6-F6H execution-mode split: FINAL_ONLY historical validation is owned by
+    # the authoritative isolated batch worker (fast, the semantic oracle, 120-min
+    # ceiling); ALL / CHANGED_ONLY stay on the incremental kernel with its 90-min
+    # in-process gate and per-run direct-batch cross-verification. Streaming /
+    # forward-test live execution (not exposed by this offline CLI) is always the
+    # incremental kernel.
+    execution_mode = resolve_historical_execution_mode(
+        replay_configuration.snapshot_retention
+    )
+
+    if execution_mode is HistoricalExecutionMode.BATCH_HISTORICAL_FINAL_ONLY:
+        try:
+            result = execute_scanner_backtest_batch_historical(
+                dataset, scanner_configuration
+            )
+        except (
+            InsufficientHostMemoryError,
+            HistoricalBatchExecutionError,
+        ):
+            return EXIT_REPLAY_FAILURE
+        except InvalidReviewedLabelError:
+            return EXIT_REVIEWED_CASE_FAILURE
+        except Exception:
+            return EXIT_UNEXPECTED_FAILURE
+        # Batch IS the authoritative oracle here, so there is no separate
+        # cross-engine verification step; the result publishes directly (still
+        # atomic — checksums.json is written last, nothing on any failure above).
+        return _write_report_or_fail(result, args.output)
 
     try:
         result = execute_scanner_backtest(
