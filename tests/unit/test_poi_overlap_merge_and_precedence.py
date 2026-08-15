@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import permutations
 from uuid import UUID
 
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
 from btmm_ai_scanner.contracts.types import SemVer
+from btmm_ai_scanner.poi.analyzer import _refingerprint
 from btmm_ai_scanner.poi.enums import (
     PoiDirection,
     PoiFamily,
@@ -175,6 +177,61 @@ def test_merged_child_poi_remains_independently_observable() -> None:
     assert weak.record_id in merged_children[strong.record_id]
     assert weak.zone_top == Decimal("101")
     assert weak.zone_bottom == Decimal("99")
+
+
+def test_merged_source_poi_ids_are_canonical_regardless_of_arrival_order() -> None:
+    # A6 genuine-equivalence correction (S1 cp4000 divergence):
+    # ``merged_source_poi_record_ids`` is an UNORDERED provenance set -- the child
+    # POIs absorbed into a stronger-timeframe parent, with no precedence among
+    # them. resolve_merges collects children in input-iteration order, and the
+    # batch (analyze_pois) and incremental (_combine_poi_replay_states) engines
+    # feed their observation tuples in different orders, so the SAME logical merge
+    # emitted a different child permutation per engine -- and, because that order
+    # feeds ``content_fingerprint``, a divergent fingerprint on genuine
+    # cross-timeframe data. resolve_merges must canonicalize the set at the single
+    # shared boundary, so every arrival permutation of >=3 children yields the
+    # identical merged tuple, the identical merged POI, and the identical
+    # fingerprint. Children carry record_ids whose natural index order is NOT the
+    # order fed below, so the assertion genuinely exercises canonicalization.
+    parent = _observation(
+        100, PoiType.BUY_ORDER_BLOCK, PoiDirection.BULLISH, "110", "90", Timeframe.H4
+    )
+    children = [
+        _observation(
+            3, PoiType.BUY_ORDER_BLOCK, PoiDirection.BULLISH, "101", "99", Timeframe.M1
+        ),
+        _observation(
+            1, PoiType.BUY_ORDER_BLOCK, PoiDirection.BULLISH, "103", "97", Timeframe.M1
+        ),
+        _observation(
+            2, PoiType.BUY_ORDER_BLOCK, PoiDirection.BULLISH, "104", "96", Timeframe.M1
+        ),
+    ]
+    child_ids = {child.record_id for child in children}
+    canonical = tuple(sorted(child_ids, key=str))
+
+    merged_tuples: set[tuple[UUID, ...]] = set()
+    fingerprints: set[str] = set()
+    for permuted in permutations(children):
+        merged_children, effective_timeframe = resolve_merges((*permuted, parent))
+        assert set(merged_children) == {parent.record_id}
+        merged_ids = merged_children[parent.record_id]
+        # every child merged into the single stronger parent, no duplicates
+        assert set(merged_ids) == child_ids
+        assert len(merged_ids) == len(children)
+        # canonical order, independent of arrival permutation
+        assert merged_ids == canonical
+        merged_tuples.add(merged_ids)
+        merged_parent = _refingerprint(
+            parent.model_copy(update={"merged_source_poi_record_ids": merged_ids})
+        )
+        fingerprints.add(merged_parent.content_fingerprint)
+        for child in children:
+            assert effective_timeframe[child.record_id] == Timeframe.H4
+
+    # exactly one canonical merged tuple and one fingerprint across all 6 orders
+    assert len(merged_tuples) == 1
+    assert len(fingerprints) == 1
 
 
 def test_overlap_relationships_are_not_transitively_inferred() -> None:

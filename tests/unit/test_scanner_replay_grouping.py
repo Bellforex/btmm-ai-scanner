@@ -24,7 +24,7 @@ from btmm_ai_scanner.scanner.configuration import (
     ScannerConfiguration,
 )
 from btmm_ai_scanner.scanner.enums import SnapshotRetentionPolicy
-from btmm_ai_scanner.scanner.replay import run_scanner_replay
+from btmm_ai_scanner.scanner.replay import ScannerReplayResult, run_scanner_replay
 from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
 
@@ -351,3 +351,28 @@ def test_replay_produces_one_final_snapshot() -> None:
     )
     assert result.final_snapshot is not None
     assert result.final_snapshot == result.snapshots[-1]
+
+
+def test_snapshot_retention_policy_includes_final_only_member() -> None:
+    assert SnapshotRetentionPolicy.FINAL_ONLY.value == "FINAL_ONLY"
+    assert {member.value for member in SnapshotRetentionPolicy} == {
+        "ALL",
+        "CHANGED_ONLY",
+        "FINAL_ONLY",
+    }
+
+
+def test_final_only_retention_semantics_are_general_purpose_correct() -> None:
+    result = run_scanner_replay(
+        _three_group_inputs(),
+        (),
+        _config(),
+        _replay_config(snapshot_retention=SnapshotRetentionPolicy.FINAL_ONLY),
+        _SequentialIdentityProvider(),
+    )
+    assert len(result.snapshots) == 1
+    assert result.snapshots[0] == result.final_snapshot
+
+
+def test_scanner_replay_result_field_count_is_unchanged_at_eleven() -> None:
+    assert len(ScannerReplayResult.model_fields) == 11

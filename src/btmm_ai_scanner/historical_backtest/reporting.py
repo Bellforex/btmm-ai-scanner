@@ -11,6 +11,22 @@ from btmm_ai_scanner.historical_backtest.execution import (
 
 _INDENT = 2
 
+# The exact ten operational-metadata keys published flat in execution_summary
+# (register §44AO). All are observational only and never participate in scanner
+# identity/fingerprint/detection output (§44Z).
+_PERFORMANCE_METRIC_KEYS = (
+    "processed_availability_group_count",
+    "replay_elapsed_seconds",
+    "peak_working_set_bytes",
+    "minimum_available_system_ram_bytes",
+    "retained_snapshot_count",
+    "final_replay_result_bytes",
+    "direct_batch_elapsed_seconds",
+    "direct_batch_peak_working_set_bytes",
+    "direct_batch_verification_status",
+    "metrics_platform",
+)
+
 
 class HistoricalReportWriteError(Exception):
     def __init__(self, message: str) -> None:
@@ -112,6 +128,14 @@ def write_backtest_report(
 
         execution_summary_payload = result.model_dump(mode="json")
         execution_summary_payload["tzdata_version"] = _package_version("tzdata")
+        # Publish the ten performance metrics as flat top-level keys (§44AO),
+        # always present with a JSON null where a metric is unavailable; the
+        # nested source object is removed so each key appears exactly once.
+        nested_metrics = execution_summary_payload.pop("performance_metrics", None)
+        for key in _PERFORMANCE_METRIC_KEYS:
+            execution_summary_payload[key] = (
+                nested_metrics.get(key) if isinstance(nested_metrics, dict) else None
+            )
         execution_summary_path = execution_directory / "execution_summary.json"
         _write_json_file(execution_summary_payload, execution_summary_path)
         written_file_paths.append(execution_summary_path.name)

@@ -164,6 +164,21 @@ def resolve_merges(
             )
             effective_timeframe[child.record_id] = best_parent.source_timeframe
 
+    # ``merged_source_poi_record_ids`` is an UNORDERED provenance set (every
+    # consumer treats it by membership/set, never by index): the children are the
+    # POIs absorbed into a parent, with no precedence among them. It is collected
+    # above in input-iteration order, which differs between the batch
+    # ``analyze_pois`` observation order and the incremental
+    # ``_combine_poi_replay_states`` per-timeframe concatenation -- so the same
+    # logical merge emitted a different permutation per engine, and (since the
+    # order feeds ``content_fingerprint``) a different fingerprint. Canonicalize
+    # the set here, at the single shared merge boundary both engines call, by the
+    # immutable source ``record_id`` (the same ``str(record_id)`` key already used
+    # as the canonical UUID tiebreaker in the parent sort above). The merged POI
+    # object is therefore canonical before fingerprinting, lifecycle, serialization
+    # and ledger derivation. Each child appends to exactly one parent once, so no
+    # duplicates are introduced or removed -- this changes ORDER only.
     return {
-        parent_id: tuple(children) for parent_id, children in merged_children.items()
+        parent_id: tuple(sorted(children, key=str))
+        for parent_id, children in merged_children.items()
     }, effective_timeframe

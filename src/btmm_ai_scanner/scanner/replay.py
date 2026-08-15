@@ -1,8 +1,19 @@
 import hashlib
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
+from btmm_ai_scanner.btmm.analyzer import (
+    _advance_btmm_replay_state,
+    _BtmmReplayState,
+    _combine_btmm_replay_states,
+    _create_initial_btmm_replay_state,
+)
+from btmm_ai_scanner.btmm.lifecycle import BtmmLifecycleTransition
+from btmm_ai_scanner.btmm.observation import BtmmObservation
 from btmm_ai_scanner.btmm.reviewed_evidence import BtmmReviewedEvidence
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
@@ -13,9 +24,37 @@ from btmm_ai_scanner.contracts.types import (
     SHA256Fingerprint,
     UUIDv7,
 )
-from btmm_ai_scanner.domain.analyzer import DerivedOutputIdentityProvider
+from btmm_ai_scanner.domain.analyzer import (
+    DerivedOutputIdentityProvider,
+    _advance_measurement_replay_state,
+    _create_initial_measurement_replay_state,
+    _materialize_displacement,
+    _materialize_trendlines,
+    _measurement_replay_state_to_analysis,
+    _measurement_replay_state_to_view,
+    _MeasurementReplayState,
+)
+from btmm_ai_scanner.domain.displacement import DisplacementObservation
+from btmm_ai_scanner.domain.equal_levels import EqualLevelCluster
+from btmm_ai_scanner.domain.support_resistance import SupportResistanceZone
+from btmm_ai_scanner.domain.swings import ConfirmedSwing
+from btmm_ai_scanner.domain.trendlines import Trendline
+from btmm_ai_scanner.poi.analyzer import (
+    _advance_poi_replay_state,
+    _combine_poi_replay_states,
+    _create_initial_poi_replay_state,
+    _PoiReplayState,
+)
+from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
+from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
-from btmm_ai_scanner.scanner.analyzer import scan_market
+from btmm_ai_scanner.scanner.analyzer import (
+    _all_symbol,
+    _build_setup_summaries,
+    _empty_scanner_analysis,
+    _max_candle_availability,
+    scan_market,
+)
 from btmm_ai_scanner.scanner.configuration import (
     ReplayConfiguration,
     ScannerConfiguration,
@@ -24,6 +63,14 @@ from btmm_ai_scanner.scanner.configuration import (
 )
 from btmm_ai_scanner.scanner.enums import SnapshotRetentionPolicy
 from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
+from btmm_ai_scanner.structure.analyzer import (
+    _advance_structure_replay_state,
+    _create_initial_structure_replay_state,
+    _materialize_structure_outputs,
+    _structure_replay_state_to_analysis,
+    _StructureReplayState,
+)
+from btmm_ai_scanner.structure.transitions import StructureTransition
 
 _TIMEFRAME_RANK: dict[Timeframe, int] = {
     Timeframe.M1: 1,
@@ -366,13 +413,443 @@ def _compare_snapshots(
     return tuple(mismatches)
 
 
+# =====================================================================
+# Subsystem 2f: private event ledger + incremental availability-group replay
+# kernel (register §44P/§44U).
+#
+# scan_market and every batch analyzer are preserved byte-for-byte and remain
+# the sole semantic oracle. The kernel replaces only run_scanner_replay's
+# internal per-group scan_market loop for the FINAL_ONLY retention policy — the
+# historical-backtest optimized path — advancing the per-timeframe incremental
+# measurement (2b), structure (2c), and POI (2d) states one availability group
+# at a time instead of re-running scan_market over the complete growing prefix.
+# It materializes exactly one final ScannerAnalysis, so no tuple of full
+# ScannerAnalysis snapshots is retained per group — removing the historical
+# snapshot-memory pathology while POI/BTMM run once (not once per group).
+#
+# ALL and CHANGED_ONLY keep the existing, unchanged per-group scan_market loop
+# (their general-purpose semantics and every existing test are preserved).
+#
+# Cross-timeframe POI merge/overlap and BTMM span timeframes; the single-
+# timeframe 2d/2e engines are validated by their own differential suites, and
+# the kernel materializes the cross-timeframe POI/BTMM output via the unchanged
+# batch analyze_pois/analyze_btmm at finalization (the exact oracle, run once
+# under FINAL_ONLY). measurement_analyses/structure_analyses come from the
+# incremental 2b/2c states, so the final ScannerAnalysis is byte-identical to
+# scan_market over the full prefix.
+# =====================================================================
+
+
+@dataclass
+class _ScannerEventLedger:
+    """Private, order-preserving accumulator of the classification-A semantic
+    records the final ScannerAnalysis requires (register §44U2 + §44AJ warnings
+    field). Built from the incremental domain states and the finalized POI/BTMM
+    analyses at materialization; it holds semantic records, never full
+    ScannerAnalysis snapshots. `warnings` is present for §44U2 fidelity but is
+    always empty — the current scanner emits no warnings (ScannerAnalysis has no
+    warnings field). Growth is output-sensitive, not constant."""
+
+    confirmed_swings: tuple[ConfirmedSwing, ...] = ()
+    displacement_observations: tuple[DisplacementObservation, ...] = ()
+    equal_level_clusters: tuple[EqualLevelCluster, ...] = ()
+    support_resistance_zones: tuple[SupportResistanceZone, ...] = ()
+    trendlines: tuple[Trendline, ...] = ()
+    structure_transitions: tuple[StructureTransition, ...] = ()
+    poi_observations: tuple[PoiObservation, ...] = ()
+    poi_lifecycle_transitions: tuple[PoiLifecycleTransition, ...] = ()
+    btmm_observations: tuple[BtmmObservation, ...] = ()
+    btmm_lifecycle_transitions: tuple[BtmmLifecycleTransition, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass
+class _ScannerOrchestrationReplayState:
+    """Private per-replay kernel state (register §44U). Holds ONLY the private
+    incremental domain replay states plus the accumulated visible candles.
+
+    A6-F6A: under FINAL_ONLY the kernel is lazy. advance_group publishes only the
+    advanced domain states; it no longer eagerly builds the combined multi-
+    timeframe POI/BTMM analyses or the event-ledger tuples (an O(history)-per-
+    group materialization). The combined analyses and the ledger are materialized
+    on demand -- ``event_ledger()`` (cached, invalidated each advance) and
+    ``finalize()`` -- exactly reproducing the previous observable results."""
+
+    measurement_states: dict[Timeframe, _MeasurementReplayState]
+    structure_states: dict[Timeframe, _StructureReplayState]
+    poi_states: dict[Timeframe, _PoiReplayState]
+    btmm_states: dict[Timeframe, _BtmmReplayState]
+    visible_candles: dict[Timeframe, tuple[NormalizedCandle, ...]]
+
+
+class IncrementalReplayKernel:
+    """Private single-pass availability-group replay engine (register §44P). Not
+    exported. Advances the full domain chain measurement→structure→POI→BTMM one
+    availability group at a time, combines the cross-timeframe POI/BTMM output
+    from the incremental states, reconciles the event ledger, and finalizes
+    exactly one ScannerAnalysis — byte-identical to scan_market over the full
+    prefix — without ever calling batch analyze_pois/analyze_btmm."""
+
+    def __init__(
+        self,
+        tracked_timeframes: tuple[Timeframe, ...],
+        scanner_configuration: ScannerConfiguration,
+        identity_provider: DerivedOutputIdentityProvider,
+        reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
+    ) -> None:
+        self._config = scanner_configuration
+        self._identity_provider = identity_provider
+        self._tracked = tracked_timeframes
+        self._reviewed_evidence = reviewed_evidence
+        self._btmm_eligible = (
+            scanner_configuration.btmm_configuration.formation_timeframes
+            | scanner_configuration.btmm_configuration.supporting_only_timeframes
+        )
+        self._ordered = tuple(
+            sorted(tracked_timeframes, key=lambda tf: _TIMEFRAME_RANK[tf])
+        )
+        self._btmm_timeframes = tuple(
+            tf for tf in self._ordered if tf in self._btmm_eligible
+        )
+        measurement_cfg = scanner_configuration.measurement_configuration
+        structure_cfg = scanner_configuration.structure_configuration
+        poi_cfg = scanner_configuration.poi_configuration
+        btmm_cfg = scanner_configuration.btmm_configuration
+        poi_states = {
+            tf: _create_initial_poi_replay_state(identity_provider, poi_cfg)
+            for tf in tracked_timeframes
+        }
+        btmm_states = {
+            tf: _create_initial_btmm_replay_state(identity_provider, btmm_cfg)
+            for tf in self._btmm_timeframes
+        }
+        self._state = _ScannerOrchestrationReplayState(
+            measurement_states={
+                tf: _create_initial_measurement_replay_state(
+                    identity_provider, measurement_cfg
+                )
+                for tf in tracked_timeframes
+            },
+            structure_states={
+                tf: _create_initial_structure_replay_state(
+                    identity_provider, structure_cfg
+                )
+                for tf in tracked_timeframes
+            },
+            poi_states=poi_states,
+            btmm_states=btmm_states,
+            visible_candles=dict.fromkeys(tracked_timeframes, ()),
+        )
+        self._processed_group_count = 0
+        # A6-F6A lazy materialization: the event ledger is built on demand from
+        # the current domain states and cached; the cache is invalidated on every
+        # successful advance. Non-None only after event_ledger() is called.
+        self._ledger_cache: _ScannerEventLedger | None = None
+        # Set once by finalize(): the materialized POI lifecycle transitions the
+        # ledger exposes after finalization (empty / None before finalize, exactly
+        # as the pre-lazy stored ledger behaved).
+        self._finalized_lifecycle_transitions: (
+            tuple[PoiLifecycleTransition, ...] | None
+        ) = None
+
+    def advance_group(
+        self, new_candles_by_timeframe: dict[Timeframe, tuple[NormalizedCandle, ...]]
+    ) -> None:
+        """Advance one availability group through measurement→structure→POI→BTMM,
+        combine the cross-timeframe POI/BTMM output, and reconcile the ledger.
+        Transactional: every replacement (domain states, combined analyses,
+        ledger) is built in locals and the new orchestration state is published
+        only after all six steps succeed, so any domain/ledger failure leaves the
+        prior kernel state, ledger, group count, and snapshots untouched."""
+        prior = self._state
+        measurement_cfg = self._config.measurement_configuration
+        structure_cfg = self._config.structure_configuration
+        poi_cfg = self._config.poi_configuration
+        btmm_cfg = self._config.btmm_configuration
+
+        new_measurement = dict(prior.measurement_states)
+        new_structure = dict(prior.structure_states)
+        new_poi = dict(prior.poi_states)
+        new_btmm = dict(prior.btmm_states)
+        new_visible = dict(prior.visible_candles)
+
+        group_candles = [
+            candle
+            for candles in new_candles_by_timeframe.values()
+            for candle in candles
+        ]
+        if group_candles:
+            group_availability = group_candles[0].availability_time_utc
+            gated_evidence = tuple(
+                evidence
+                for evidence in self._reviewed_evidence
+                if evidence.availability_time_utc <= group_availability
+            )
+        else:
+            gated_evidence = ()
+
+        for timeframe in self._tracked:
+            candles = new_candles_by_timeframe.get(timeframe, ())
+            if len(candles) == 0:
+                continue
+            measurement_state = prior.measurement_states[timeframe]
+            structure_state = prior.structure_states[timeframe]
+            poi_state = prior.poi_states[timeframe]
+            visible = prior.visible_candles[timeframe]
+            is_btmm_timeframe = timeframe in self._btmm_eligible
+            btmm_state = prior.btmm_states[timeframe] if is_btmm_timeframe else None
+            for candle in candles:
+                measurement_state = _advance_measurement_replay_state(
+                    measurement_state, candle, measurement_cfg
+                )
+                # A6-F2: feed structure/POI an O(1) unvalidated measurement view
+                # (model_construct) instead of the fully re-validated public
+                # analysis. The nested records are already validated in the
+                # incremental state; re-validating the whole cumulative analysis
+                # every candle was an O(history)-per-candle -> O(N^2) cost. The
+                # public analysis is still materialized (validated) at finalize.
+                measurement = _measurement_replay_state_to_view(measurement_state)
+                structure_state = _advance_structure_replay_state(
+                    structure_state, candle, measurement.confirmed_swings, structure_cfg
+                )
+                poi_state = _advance_poi_replay_state(
+                    poi_state, candle, measurement, poi_cfg
+                )
+                visible = (*visible, candle)
+                if is_btmm_timeframe:
+                    assert btmm_state is not None
+                    assert poi_state.scheduler is not None
+                    # A6-B2-C: feed BTMM the POI engine's own bounded per-candle
+                    # delta (new/changed/removed BTMM-eligible source POIs) and
+                    # its scheduler's bounded last_walks — never a full POI
+                    # snapshot scan (no _poi_replay_state_to_analysis call here).
+                    btmm_state = _advance_btmm_replay_state(
+                        btmm_state,
+                        candle,
+                        poi_state.new_pois_for_btmm,
+                        poi_state.changed_pois_for_btmm,
+                        poi_state.removed_poi_ids_for_btmm,
+                        poi_state.scheduler.last_walks,
+                        gated_evidence,
+                        btmm_cfg,
+                        poi_observation_count=len(poi_state.observations_ordered),
+                    )
+            new_measurement[timeframe] = measurement_state
+            new_structure[timeframe] = structure_state
+            new_poi[timeframe] = poi_state
+            new_visible[timeframe] = visible
+            if is_btmm_timeframe:
+                assert btmm_state is not None
+                new_btmm[timeframe] = btmm_state
+
+        # A6-F6A: publish ONLY the advanced private domain states. The combined
+        # POI/BTMM analyses and the event-ledger tuples are no longer built here
+        # (an O(history)-per-group materialization); they are produced lazily in
+        # event_ledger() (cached) and finalize(). Transactional: the domain
+        # advances above raise before this point on a bad candle, leaving the
+        # prior self._state, ledger cache, and group count untouched; the cache
+        # is invalidated only after the successful publish below.
+        self._state = _ScannerOrchestrationReplayState(
+            measurement_states=new_measurement,
+            structure_states=new_structure,
+            poi_states=new_poi,
+            btmm_states=new_btmm,
+            visible_candles=new_visible,
+        )
+        self._ledger_cache = None
+        self._processed_group_count += 1
+
+    def _ordered_active_timeframes(self) -> tuple[Timeframe, ...]:
+        return self._ordered
+
+    def finalize(self) -> ScannerAnalysis:
+        """Materialize exactly one ScannerAnalysis from the final incremental
+        measurement/structure states and the current combined POI/BTMM analyses
+        (never batch analyze_pois/analyze_btmm). Byte-identical in public shape to
+        scan_market over the full prefix."""
+        state = self._state
+        config = self._config
+        if all(len(state.visible_candles[tf]) == 0 for tf in self._tracked):
+            return _empty_scanner_analysis(config, self._identity_provider)
+
+        ordered = self._ordered
+        measurement_analyses = tuple(
+            _measurement_replay_state_to_analysis(state.measurement_states[tf])
+            for tf in ordered
+        )
+        structure_analyses = tuple(
+            _structure_replay_state_to_analysis(state.structure_states[tf])
+            for tf in ordered
+        )
+        # Materialize the cross-timeframe overlap AND the POI lifecycle
+        # transitions once, here, from the final POI states (advance_group defers
+        # both — the ledger's transitions are reconciled once, below, from this
+        # single materialized analysis). A6-F6A: the merge cache is no longer
+        # threaded per group (advance_group does not combine), so finalize runs
+        # the single cross-timeframe combine fresh.
+        poi_analysis, _ = _combine_poi_replay_states(
+            state.poi_states,
+            ordered,
+            with_overlap=True,
+        )
+        # A3-B: rebuild the combined BTMM analysis here so its CurrentBtmmState
+        # objects (deferred out of the per-group hot path) are materialized once.
+        # Observations/transitions are identical to the stored per-group combine;
+        # only current_btmm_states, unused per-group, are added at this boundary.
+        btmm_symbol: InternalSymbol | None = None
+        for tf in self._btmm_timeframes:
+            if state.visible_candles[tf]:
+                btmm_symbol = state.visible_candles[tf][0].symbol
+                break
+        if btmm_symbol is None and poi_analysis.poi_observations:
+            btmm_symbol = poi_analysis.poi_observations[0].symbol
+        btmm_analysis = _combine_btmm_replay_states(
+            state.btmm_states,
+            self._btmm_timeframes,
+            {tf: len(state.visible_candles[tf]) for tf in self._btmm_timeframes},
+            btmm_symbol,
+            len(poi_analysis.poi_observations),
+            with_current_states=True,
+        )
+        # A6-F6A: record the finalized POI lifecycle transitions so a subsequent
+        # event_ledger() reflects them (register §44U2 fidelity: the ledger
+        # exposes lifecycle transitions only after finalize, empty before). The
+        # ledger cache is invalidated so the next event_ledger() rebuilds with
+        # these transitions included.
+        self._finalized_lifecycle_transitions = poi_analysis.poi_lifecycle_transitions
+        self._ledger_cache = None
+        setup_summaries = _build_setup_summaries(poi_analysis, btmm_analysis)
+        scanner_bundles = tuple(
+            ScannerTimeframeInput(timeframe=tf, candles=state.visible_candles[tf])
+            for tf in ordered
+        )
+        return ScannerAnalysis(
+            symbol=_all_symbol(scanner_bundles),
+            processed_timeframes=ordered,
+            measurement_analyses=measurement_analyses,
+            structure_analyses=structure_analyses,
+            poi_analysis=poi_analysis,
+            btmm_analysis=btmm_analysis,
+            setup_summaries=setup_summaries,
+            availability_time_utc=_max_candle_availability(scanner_bundles),
+            evidence_classification=EvidenceClassification.ENGINEERING_PROVISIONAL,
+            rule_version=config.rule_version,
+            contract_version=config.contract_version,
+            schema_version=config.schema_version,
+        )
+
+    def event_ledger(self) -> _ScannerEventLedger:
+        """A6-F6A: lazily materialize the event ledger from the current domain
+        states and cache it. The cache is invalidated on every successful
+        advance_group and by finalize(), so the returned ledger is always exactly
+        what the pre-lazy per-group build would have produced at this moment --
+        including the same object identity across repeated calls between advances
+        (relied on by the transaction-rollback contract). The FINAL_ONLY historical
+        replay path never calls this, so the O(history) materialization is paid
+        only when an accessor genuinely requests the public ledger."""
+        if self._ledger_cache is None:
+            self._ledger_cache = self._materialize_ledger()
+        return self._ledger_cache
+
+    def _materialize_ledger(self) -> _ScannerEventLedger:
+        state = self._state
+        ordered = self._ordered
+        if all(len(state.visible_candles[tf]) == 0 for tf in self._tracked):
+            return _ScannerEventLedger(
+                poi_lifecycle_transitions=self._finalized_lifecycle_transitions or ()
+            )
+        combined_poi, _ = _combine_poi_replay_states(
+            state.poi_states,
+            ordered,
+            with_overlap=False,
+            with_lifecycle=False,
+            validated=False,
+        )
+        btmm_symbol: InternalSymbol | None = None
+        for tf in self._btmm_timeframes:
+            if state.visible_candles[tf]:
+                btmm_symbol = state.visible_candles[tf][0].symbol
+                break
+        if btmm_symbol is None and combined_poi.poi_observations:
+            btmm_symbol = combined_poi.poi_observations[0].symbol
+        combined_btmm = _combine_btmm_replay_states(
+            state.btmm_states,
+            self._btmm_timeframes,
+            {tf: len(state.visible_candles[tf]) for tf in self._btmm_timeframes},
+            btmm_symbol,
+            len(combined_poi.poi_observations),
+            with_current_states=False,
+            validated=False,
+        )
+        single_tf = ordered[0] if len(ordered) == 1 else None
+
+        def _measure_cat(attr: str) -> tuple[Any, ...]:
+            if single_tf is not None:
+                return getattr(state.measurement_states[single_tf], attr)  # type: ignore[no-any-return]
+            return tuple(
+                record
+                for tf in ordered
+                for record in getattr(state.measurement_states[tf], attr)
+            )
+
+        # A6-F6B: structure transitions are materialized on demand from the
+        # deferred structure walk result (never finalized per candle).
+        if single_tf is not None:
+            structure_transitions = _materialize_structure_outputs(
+                state.structure_states[single_tf]
+            )[1]
+        else:
+            structure_transitions = tuple(
+                transition
+                for tf in ordered
+                for transition in _materialize_structure_outputs(
+                    state.structure_states[tf]
+                )[1]
+            )
+
+        # A6-F6C: displacement + trendlines are materialized on demand from the
+        # deferred measurement candidates (never finalized per candle).
+        def _measure_materialized(
+            fn: Callable[[_MeasurementReplayState], tuple[Any, ...]],
+        ) -> tuple[Any, ...]:
+            if single_tf is not None:
+                return fn(state.measurement_states[single_tf])
+            return tuple(
+                record for tf in ordered for record in fn(state.measurement_states[tf])
+            )
+
+        return _ScannerEventLedger(
+            confirmed_swings=_measure_cat("confirmed_swings_so_far"),
+            displacement_observations=_measure_materialized(_materialize_displacement),
+            equal_level_clusters=_measure_cat("equal_level_clusters_so_far"),
+            support_resistance_zones=_measure_cat("support_resistance_zones_so_far"),
+            trendlines=_measure_materialized(_materialize_trendlines),
+            structure_transitions=structure_transitions,
+            poi_observations=combined_poi.poi_observations,
+            poi_lifecycle_transitions=self._finalized_lifecycle_transitions or (),
+            btmm_observations=combined_btmm.btmm_observations,
+            btmm_lifecycle_transitions=combined_btmm.btmm_lifecycle_transitions,
+            warnings=(),
+        )
+
+    def processed_group_count(self) -> int:
+        return self._processed_group_count
+
+
 def run_scanner_replay(
     historical_inputs: tuple[ScannerTimeframeInput, ...],
     reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
     scanner_configuration: ScannerConfiguration,
     replay_configuration: ReplayConfiguration,
     identity_provider: DerivedOutputIdentityProvider,
+    group_gate: Callable[[], None] | None = None,
 ) -> ScannerReplayResult:
+    # ``group_gate`` is an optional, backward-compatible per-availability-group
+    # hook: it is invoked once before each group is processed so a historical
+    # run-level policy (elapsed-time / host-RAM abort, see historical_backtest/
+    # execution.py) can raise and stop a long replay cooperatively. It is never
+    # invoked with any argument, is purely a control-flow gate, and — when
+    # ``None`` (every existing caller) — the replay behaves exactly as before.
     validate_configuration(scanner_configuration)
     minimum_price_tick = canonical_minimum_price_tick(scanner_configuration)
 
@@ -425,10 +902,47 @@ def run_scanner_replay(
             historical_inputs, (), scanner_configuration, identity_provider
         )
         snapshots = [final_snapshot]
+    elif replay_configuration.snapshot_retention == SnapshotRetentionPolicy.FINAL_ONLY:
+        # Historical-backtest optimized path: advance the incremental kernel one
+        # availability group at a time (never re-running scan_market over the
+        # growing prefix) and materialize exactly one final ScannerAnalysis.
+        kernel = IncrementalReplayKernel(
+            tracked_timeframes,
+            scanner_configuration,
+            identity_provider,
+            reviewed_evidence,
+        )
+        index = 0
+        total = len(flat_candles)
+        while index < total:
+            if group_gate is not None:
+                group_gate()
+            group_availability = flat_candles[index][0]
+            group_end = index
+            group_new_candles: dict[Timeframe, list[NormalizedCandle]] = {
+                timeframe: [] for timeframe in tracked_timeframes
+            }
+            while (
+                group_end < total and flat_candles[group_end][0] == group_availability
+            ):
+                group_new_candles[flat_candles[group_end][3]].append(
+                    flat_candles[group_end][4]
+                )
+                group_end += 1
+            index = group_end
+            kernel.advance_group(
+                {
+                    timeframe: tuple(candles)
+                    for timeframe, candles in group_new_candles.items()
+                }
+            )
+        final_snapshot = kernel.finalize()
     else:
         index = 0
         total = len(flat_candles)
         while index < total:
+            if group_gate is not None:
+                group_gate()
             group_availability = flat_candles[index][0]
             group_end = index
             while (
@@ -466,6 +980,9 @@ def run_scanner_replay(
                 snapshots.append(snapshot)
 
     assert final_snapshot is not None
+
+    if replay_configuration.snapshot_retention == SnapshotRetentionPolicy.FINAL_ONLY:
+        snapshots = [final_snapshot]
 
     detection_mismatches: tuple[DetectionMismatch, ...] = ()
     if replay_configuration.verify_against_direct_batch:

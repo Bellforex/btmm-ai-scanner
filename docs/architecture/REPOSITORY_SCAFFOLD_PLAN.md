@@ -922,3 +922,13 @@ This milestone completes the deterministic scanner — a pure orchestrator, not 
 **Recorded:** no implementation yet; full XAUUSD replay remains blocked; dataset/manifest unchanged; no accuracy/profitability claim; `NOT PRODUCTION-APPROVED`. All prior history preserved unchanged.
 
 **Documentation-only.** No source, test, dependency, lockfile, Protocol, dataset, or manifest modified.
+
+### 34-Test-Plan-Reconciliation. Implementation-time test-plan reconciliation (subsystems 2A/2B/2C)
+
+**Status: `IMPLEMENTATION-TIME AMENDMENT`, `DECISION A — ACCEPT EXPANDED TEST PLAN`, `NOT PRODUCTION-APPROVED`.** Baseline `HEAD == origin/a2-implementation-wip == 5dec997…`; `origin/main == 7cf5ad6…` unchanged. Full detail: `PHASE_1B_AUTHOR_DECISION_REGISTER.md` §44AW. **The original 50-test plan / 906 projected collected total (§34-Author-Approval) is preserved unchanged above.**
+
+- **Inventory unchanged by 2A/2B/2C so far vs the A2 projection:** the approved A2 source/test path scope (2 new source, 9 modified source, 2 new test, 4 modified test) is only partially realized — 2A/2B/2C modified `scanner/enums.py`, `scanner/replay.py`, `historical_backtest/cli.py`, `domain/analyzer.py`, `structure/analyzer.py` (source) and the new `test_scanner_replay_incremental_equivalence.py` + modified `test_scanner_replay_grouping.py` (test). The 2 new source paths (`direct_batch_worker.py`, `process_metrics.py`) and the remaining test paths remain pending for later subsystems.
+- **Counts:** original projected **906** collected / **50** new top-level tests → actual **922** collected / **66** A2-added collected / **59** A2-added top-level functions (2A = 3/3, 2B = 31/34, 2C = 25/29). Expansion = 2B frontier-optimization tests + full standalone per-prefix differential suites for measurement and structure + two parametrized seed families; the plan's worker/batch-replay/execution/CLI tests (13) remain correctly absent pending their subsystems.
+- **Classification (bodies inspected):** all 66 A2-added tests are `REQUIRED_SEMANTIC_COVERAGE`/`REQUIRED_REGRESSION_COVERAGE`; `DUPLICATE` = 0, `REDUNDANT` = 0, `OUT_OF_SCOPE` = 0.
+- **Amended baseline:** future totals use **922** collected / **59** A2-added functions; the final A2 total will exceed 922 as later subsystems land.
+- **No detection semantics or public contract changed; no source/test file modified; `NOT PRODUCTION-APPROVED`.** Documentation-only; exactly four controlling documents modified; `origin/main` not modified.
