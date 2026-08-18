@@ -24,6 +24,12 @@ from btmm_ai_scanner.btrc.enums import (
     TrendState,
     VolatilityState,
 )
+from btmm_ai_scanner.btrc.trend_assessment import (
+    TimeframeTrendAssessment,
+    TrendAssessment,
+)
+from btmm_ai_scanner.btrc.trend_configuration import TrendEngineConfiguration
+from btmm_ai_scanner.btrc.trend_engine import assess_trend
 
 __all__ = [
     "AnalyticalPermission",
@@ -37,7 +43,11 @@ __all__ = [
     "Regime",
     "SessionContext",
     "SignalLifecycleState",
+    "TimeframeTrendAssessment",
     "TrendAlignment",
+    "TrendAssessment",
+    "TrendEngineConfiguration",
     "TrendState",
     "VolatilityState",
+    "assess_trend",
 ]
