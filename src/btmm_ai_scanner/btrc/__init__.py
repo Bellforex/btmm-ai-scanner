@@ -30,6 +30,19 @@ from btmm_ai_scanner.btrc.regime_assessment import (
 )
 from btmm_ai_scanner.btrc.regime_configuration import RegimeEngineConfiguration
 from btmm_ai_scanner.btrc.regime_engine import assess_regime
+from btmm_ai_scanner.btrc.t3_assessment import (
+    TimeframeBreakoutAssessment,
+    TimeframeMomentumAssessment,
+    TimeframePullbackAssessment,
+)
+from btmm_ai_scanner.btrc.t3_configuration import (
+    MomentumBreakoutPullbackConfiguration,
+)
+from btmm_ai_scanner.btrc.t3_engine import (
+    assess_breakout,
+    assess_momentum,
+    assess_pullback,
+)
 from btmm_ai_scanner.btrc.trend_assessment import (
     TimeframeTrendAssessment,
     TrendAssessment,
@@ -43,6 +56,7 @@ __all__ = [
     "Direction",
     "ExecutionPriority",
     "MomentumAcceleration",
+    "MomentumBreakoutPullbackConfiguration",
     "MomentumDirection",
     "PinePortability",
     "PullbackState",
@@ -51,6 +65,9 @@ __all__ = [
     "RegimeEngineConfiguration",
     "SessionContext",
     "SignalLifecycleState",
+    "TimeframeBreakoutAssessment",
+    "TimeframeMomentumAssessment",
+    "TimeframePullbackAssessment",
     "TimeframeRegimeAssessment",
     "TimeframeTrendAssessment",
     "TrendAlignment",
@@ -58,6 +75,9 @@ __all__ = [
     "TrendEngineConfiguration",
     "TrendState",
     "VolatilityState",
+    "assess_breakout",
+    "assess_momentum",
+    "assess_pullback",
     "assess_regime",
     "assess_trend",
 ]
