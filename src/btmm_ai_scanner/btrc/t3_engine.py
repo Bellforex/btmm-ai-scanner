@@ -75,12 +75,6 @@ def _order_transitions(
     )
 
 
-def _order_equal_levels(
-    cs: tuple[EqualLevelCluster, ...],
-) -> list[EqualLevelCluster]:
-    return sorted(cs, key=lambda c: (c.availability_time_utc, str(c.record_id)))
-
-
 def _order_swings(sw: tuple[ConfirmedSwing, ...]) -> list[ConfirmedSwing]:
     return sorted(
         sw,
@@ -200,37 +194,28 @@ def _assess_timeframe_breakout(
     displacements: tuple[DisplacementObservation, ...],
 ) -> TimeframeBreakoutAssessment:
     ordered_transitions = _order_transitions(transitions)
-    ordered_levels = _order_equal_levels(equal_levels)
     supporting: list[str] = []
     opposing: list[str] = []
 
     last_transition = ordered_transitions[-1] if ordered_transitions else None
-    last_level = ordered_levels[-1] if ordered_levels else None
 
-    # LIQUIDITY_SWEEP: liquidity taken (equal-level cluster) strictly later than the
-    # last confirmed structural break -> beyond a level without a new acceptance.
-    if last_level is not None and (
-        last_transition is None
-        or last_level.availability_time_utc > last_transition.availability_time_utc
-    ):
-        supporting.append("equal-level liquidity taken without a new confirmed break")
-        return TimeframeBreakoutAssessment(
-            timeframe=timeframe,
-            breakout_state=BreakoutState.LIQUIDITY_SWEEP,
-            breakout_score=20,
-            evaluation_time_utc=last_level.availability_time_utc,
-            supporting_evidence=tuple(supporting),
-            opposing_evidence=tuple(opposing),
-            provenance_ids=(str(last_level.record_id),),
-        )
-
+    # A breakout REQUIRES a confirmed structural transition (the structural
+    # precondition). Displacement alone -- however fast -- is NOT a breakout, which
+    # keeps breakout quality independent of displacement classification.
+    #
+    # LIQUIDITY_SWEEP is intentionally NOT emitted in V1: distinguishing a genuine
+    # liquidity take (price trades THROUGH a known level AND fails required
+    # structural acceptance, with rejection/re-entry evidence) from a generic
+    # equal-level touch/proximity is not decidable from the exposed scanner outputs
+    # (EqualLevelCluster is a liquidity REFERENCE, not a sweep event). We classify
+    # conservatively and disclose this limitation rather than invent a sweep rule.
     if last_transition is None:
         return TimeframeBreakoutAssessment(
             timeframe=timeframe,
             breakout_state=None,
             breakout_score=0,
             evaluation_time_utc=None,
-            supporting_evidence=("no confirmed break",),
+            supporting_evidence=("no confirmed structural break",),
             opposing_evidence=(),
             provenance_ids=(),
         )
@@ -254,13 +239,18 @@ def _assess_timeframe_breakout(
             provenance_ids=(str(last_transition.record_id),),
         )
 
+    # Strength = the confirmed structural break (precondition) MODULATED by the
+    # displacement observed at the break. Displacement is one input, not an alias:
+    # a structurally-confirmed break with no displacement is still a WEAK_BREAK.
     classification = _displacement_at(displacements, last_transition)
     if classification is None:
         state, score = BreakoutState.WEAK_BREAK, 25
-        supporting.append("break without accompanying displacement")
+        supporting.append("confirmed structural break, no accompanying displacement")
     else:
         state, score = _STRENGTH_BY_CLASSIFICATION[classification]
-        supporting.append(f"break with {classification.value} displacement")
+        supporting.append(
+            f"confirmed structural break modulated by {classification.value} displacement"
+        )
     return TimeframeBreakoutAssessment(
         timeframe=timeframe,
         breakout_state=state,
@@ -329,18 +319,24 @@ def _assess_timeframe_pullback(
             provenance_ids=refs,
         )
 
-    genuine_invalidation = any(
+    # POI lifecycle truth is a SEPARATE contract from structure truth: a POI may
+    # invalidate without the impulse structure failing. It is recorded as
+    # SUPPORTING evidence only and never, on its own, classifies STRUCTURAL_FAILURE.
+    poi_invalidation = any(
         t.transition_type is PoiLifecycleTransitionType.GENUINE_INVALIDATION_CONFIRMED
         and t.timeframe is timeframe
         for t in lifecycle_transitions
     )
-    if depth > Decimal("1") or genuine_invalidation:
-        reason = (
-            "pullback exceeded the impulse origin"
-            if depth > Decimal("1")
-            else "POI genuine invalidation confirmed"
+    # STRUCTURAL_FAILURE requires STRUCTURAL evidence: the retracement broke the
+    # structural low/high that governs the active impulse (its origin swing), i.e.
+    # depth > 1.0. (A confirmed opposing CHOCH/BOS would instead have flipped
+    # current_state.direction, so this branch only sees an impulse that still holds.)
+    if depth > Decimal("1"):
+        opposing.append(
+            "retracement broke the impulse origin swing (structural low/high failed)"
         )
-        opposing.append(reason)
+        if poi_invalidation:
+            supporting.append("POI genuine invalidation (supporting, not defining)")
         state = PullbackState.STRUCTURAL_FAILURE
     elif depth <= config.pullback_shallow_max:
         state = PullbackState.SHALLOW_PULLBACK

@@ -45,6 +45,8 @@ from btmm_ai_scanner.historical_backtest.identity import (
     ContentAddressedIdentityProvider,
 )
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
+from btmm_ai_scanner.poi.enums import PoiLifecycleTransitionType
+from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
 from btmm_ai_scanner.scanner.analyzer import scan_market
 from btmm_ai_scanner.scanner.configuration import (
@@ -299,11 +301,50 @@ def test_breakout_explosive_with_very_fast_displacement() -> None:
     assert b.breakout_state is BreakoutState.EXPLOSIVE_BREAK
 
 
-def test_breakout_liquidity_sweep_when_level_taken_after_break() -> None:
+def test_equal_level_proximity_alone_is_not_a_liquidity_sweep() -> None:
+    # An equal-level cluster next to a confirmed break is a liquidity REFERENCE,
+    # not proof of an actual sweep (penetration + failed acceptance). V1 classifies
+    # conservatively by the structural break; it never emits LIQUIDITY_SWEEP here.
     b = _assess_timeframe_breakout(
         _M15, (_transition(1, _BOS, 10),), (_equal_level(2, 20),), ()
     )
-    assert b.breakout_state is BreakoutState.LIQUIDITY_SWEEP
+    assert b.breakout_state is not BreakoutState.LIQUIDITY_SWEEP
+    assert b.breakout_state is BreakoutState.WEAK_BREAK  # break, no displacement
+
+
+def test_v1_breakout_never_emits_liquidity_sweep() -> None:
+    # Documented limitation: the exposed scanner outputs cannot distinguish a
+    # genuine sweep from a generic interaction, so V1 never returns LIQUIDITY_SWEEP.
+    variants = (
+        _assess_timeframe_breakout(_M15, (), (_equal_level(1, 5),), ()),
+        _assess_timeframe_breakout(
+            _M15,
+            (_transition(1, _BOS, 10),),
+            (_equal_level(2, 20),),
+            (_disp(10, _BU, "1.2"),),
+        ),
+        _assess_timeframe_breakout(
+            _M15,
+            (_transition(1, _BULL_CHOCH, 10), _transition(2, _BEAR_CHOCH, 20)),
+            (_equal_level(3, 25),),
+            (),
+        ),
+    )
+    assert all(b.breakout_state is not BreakoutState.LIQUIDITY_SWEEP for b in variants)
+
+
+def test_breakout_strength_is_independent_of_displacement() -> None:
+    # Displacement alone (however fast) with NO structural break is NOT a breakout,
+    # and FAILED overrides displacement -> breakout quality != displacement class.
+    no_break = _assess_timeframe_breakout(_M15, (), (), (_disp(1, _BU, "2.5", _VFAST),))
+    assert no_break.breakout_state is None
+    whipsaw_with_fast = _assess_timeframe_breakout(
+        _M15,
+        (_transition(1, _BULL_CHOCH, 10), _transition(2, _BEAR_CHOCH, 20)),
+        (),
+        (_disp(20, _BU, "1.8", _FAST),),
+    )
+    assert whipsaw_with_fast.breakout_state is BreakoutState.FAILED_BREAK
 
 
 def test_breakout_failed_on_whipsaw_reversal() -> None:
@@ -366,11 +407,62 @@ def test_pullback_deep_but_structurally_valid() -> None:
     assert p.pullback_state is PullbackState.DEEP_PULLBACK  # depth 0.8, still > origin
 
 
-def test_pullback_structural_failure_when_origin_exceeded() -> None:
+def test_pullback_structural_failure_when_origin_exceeded_without_poi_invalidation() -> (
+    None
+):
+    # STRUCTURAL evidence (impulse origin broken) alone classifies STRUCTURAL_FAILURE
+    # even with NO POI invalidation present.
     p = _assess_timeframe_pullback(
         _M15, _bullish_impulse("99"), _state(StructureDirection.BULLISH), (), _CFG
     )
     assert p.pullback_state is PullbackState.STRUCTURAL_FAILURE  # depth > 1.0
+
+
+def _poi_invalidation(n: int) -> PoiLifecycleTransition:
+    t = _BASE + timedelta(minutes=n)
+    return PoiLifecycleTransition(
+        record_id=_uid(80000 + n),
+        content_fingerprint=_FP,
+        symbol=InternalSymbol.XAUUSD,
+        timeframe=_M15,
+        poi_record_id=_uid(81000 + n),
+        transition_type=PoiLifecycleTransitionType.GENUINE_INVALIDATION_CONFIRMED,
+        triggering_candle_record_id=_uid(82000 + n),
+        event_time_utc=t,
+        availability_time_utc=t,
+        rule_version=_V,
+        contract_version=_V,
+        schema_version=_V,
+        evidence_classification=_EC,
+        provenance_id=_uid(83000 + n),
+    )
+
+
+def test_poi_invalidation_alone_does_not_imply_structural_failure() -> None:
+    # A healthy-depth pullback with a POI genuine invalidation but a still-intact
+    # impulse structure stays HEALTHY_PULLBACK (POI truth != structure truth). The
+    # POI invalidation is recorded only as supporting evidence when failure is
+    # already structural.
+    p = _assess_timeframe_pullback(
+        _M15,
+        _bullish_impulse("105"),  # depth 0.5, origin intact
+        _state(StructureDirection.BULLISH),
+        (_poi_invalidation(1),),
+        _CFG,
+    )
+    assert p.pullback_state is PullbackState.HEALTHY_PULLBACK
+
+
+def test_poi_invalidation_is_supporting_evidence_on_structural_failure() -> None:
+    p = _assess_timeframe_pullback(
+        _M15,
+        _bullish_impulse("99"),  # structural failure (origin exceeded)
+        _state(StructureDirection.BULLISH),
+        (_poi_invalidation(1),),
+        _CFG,
+    )
+    assert p.pullback_state is PullbackState.STRUCTURAL_FAILURE
+    assert any("POI genuine invalidation" in e for e in p.supporting_evidence)
 
 
 # ---------------- integration -----------------

@@ -30,15 +30,28 @@ Over the last `momentum_window` displacements (never a single candle):
   state is fully understandable without the score.
 
 ## Breakout (frozen `BreakoutState`, `| None` when no active break)
-- `LIQUIDITY_SWEEP`: an equal-level cluster taken strictly later than the last
-  confirmed structural break (beyond a level without new acceptance).
-- else the latest structure transition is the break:
-  - `FAILED_BREAK` on an immediate whipsaw (two opposite-polarity CHOCHs in a row);
-  - else strength by displacement at the break: none → `WEAK_BREAK`, NORMAL →
-    `VALID_BREAK`, FAST → `STRONG_BREAK`, VERY_FAST → `EXPLOSIVE_BREAK`.
+A breakout **requires a confirmed structural transition** (the structural
+precondition); displacement alone — however fast — is never a breakout, so
+breakout quality is independent of displacement classification (tested
+`test_breakout_strength_is_independent_of_displacement`).
+- `FAILED_BREAK` on an immediate whipsaw (two opposite-polarity CHOCHs in a row) —
+  a confirmed structural reversal, not one candle; it overrides displacement.
+- else strength = the confirmed break **modulated** by the displacement observed at
+  it: none → `WEAK_BREAK`, NORMAL → `VALID_BREAK`, FAST → `STRONG_BREAK`, VERY_FAST →
+  `EXPLOSIVE_BREAK` (displacement is one input on a structural precondition, not an
+  alias — a structurally-confirmed break with no displacement is still WEAK_BREAK).
+- **`LIQUIDITY_SWEEP` is NOT emitted in V1 (disclosed limitation).** A genuine sweep
+  requires evidence of price trading THROUGH a known liquidity level AND failing
+  required structural acceptance (rejection/re-entry). The exposed scanner outputs
+  cannot distinguish that from a generic equal-level touch/proximity
+  (`EqualLevelCluster` is a liquidity REFERENCE, not a sweep event), so V1 classifies
+  conservatively and never claims a sweep (tested
+  `test_equal_level_proximity_alone_is_not_a_liquidity_sweep`,
+  `test_v1_breakout_never_emits_liquidity_sweep`). A future phase can add
+  LIQUIDITY_SWEEP once genuine sweep evidence is exposed.
 - **Causal lifecycle (VALID → FAILED), no history rewrite:** each assessment is a
   pure function of its prefix analysis, so the break's reading at an early prefix
-  stays VALID while a later prefix (after rejection) reads FAILED — tested
+  stays VALID while a later prefix (after a confirmed reversal) reads FAILED — tested
   (`test_breakout_history_not_rewritten_across_prefixes`).
 
 ## Pullback (frozen `PullbackState`, `| None` without an impulse)
@@ -47,9 +60,18 @@ latest counter-swing retracement as a fraction of the impulse leg (bullish: orig
 SWING_LOW → SWING_HIGH, retraced by the following SWING_LOW; bearish symmetric):
 - `SHALLOW_PULLBACK` (`depth ≤ pullback_shallow_max`), `HEALTHY_PULLBACK`
   (`≤ pullback_deep_min`), `DEEP_PULLBACK` (`≤ 1.0`).
-- **`STRUCTURAL_FAILURE` requires structural evidence** — the impulse origin was
-  exceeded (`depth > 1.0`) or a POI `GENUINE_INVALIDATION_CONFIRMED` occurred — never
-  a bare percentage (a deep-but-valid retracement stays `DEEP_PULLBACK`; tested).
+- **`STRUCTURAL_FAILURE` requires STRUCTURAL evidence only** — the retracement broke
+  the impulse origin swing (the structural low/high governing the impulse, `depth >
+  1.0`). POI lifecycle truth is a SEPARATE contract: a POI `GENUINE_INVALIDATION_
+  CONFIRMED` is recorded as **supporting** evidence but never, on its own, classifies
+  STRUCTURAL_FAILURE — a healthy-depth pullback with a POI invalidation but an intact
+  impulse stays `HEALTHY_PULLBACK` (tested
+  `test_poi_invalidation_alone_does_not_imply_structural_failure`), and structural
+  failure classifies with or without any POI invalidation (tested
+  `test_pullback_structural_failure_when_origin_exceeded_without_poi_invalidation`).
+  A deep-but-structurally-valid retracement stays `DEEP_PULLBACK`. (A confirmed
+  opposing CHOCH/BOS would instead flip `current_state.direction`, ending the impulse
+  → the pullback engine returns None there rather than mislabelling a reversal.)
 
 ## Provisional parameters (ENGINEERING-PROVISIONAL, centralized)
 `momentum_window=3, momentum_strong_count=2, momentum_acceleration_margin=0.15,
