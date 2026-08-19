@@ -1,0 +1,911 @@
+//@version=6
+
+// =============================================================================
+// BTMM + POI + BTRC Scanner  [P1 DEV]
+// -----------------------------------------------------------------------------
+// PHASE P1 — MEASUREMENTS PORT (development / parity indicator, NOT a product).
+//
+// This is an ANALYTICAL indicator. It contains NO order execution, NO
+// entries/SL/TP, NO strategy.* calls. It ports the VALIDATED Python scanner
+// measurement layer (the authoritative semantic reference) onto Pine v6, on the
+// CURRENT chart feed and timeframe only. Multi-timeframe orchestration, canonical
+// FXCM mode, market structure (BOS/CHOCH), POI, BTMM and BTRC all belong to later
+// phases and are intentionally absent here.
+//
+// Semantic source of truth (byte-cited in docs/architecture/
+// BTRC_V1_P1_PINE_MEASUREMENTS_PORT.md):
+//   measurements/candle_metrics.py   — candle metrics + range_speed_ratio
+//   measurements/atr.py              — Wilder ATR (incremental image ported)
+//   measurements/legs.py             — measure_leg
+//   domain/swings.py                 — detect_confirmed_swings (full pipeline)
+//   domain/displacement.py           — detect_displacement_observations
+//   domain/equal_levels.py           — detect_equal_level_clusters
+//   domain/support_resistance.py     — detect_support_resistance_zones
+//   domain/trendlines.py             — detect_trendlines
+//   domain/configuration.py          — MarketMeasurementConfiguration (defaults)
+//   contracts/normalized_candle.py + historical_backtest/csv_parser.py
+//                                    — availability = close of the bar
+//
+// NON-REPAINT CONTRACT: every confirmed analytical record is produced ONLY on a
+// CONFIRMED/CLOSED bar (barstate.isconfirmed). The forming realtime bar never
+// mutates confirmed state. No future indexing, no lookahead, no request.security.
+//
+// GOVERNING RULE: data structures are adapted (Python UUIDs -> semantic time/price
+// anchors; Python dicts -> Pine arrays/UDTs; unbounded history -> a bounded rolling
+// window). Analytical MEANING (swing definition, confirmation timing, tolerances,
+// displacement/equal-level/zone semantics) is preserved unchanged.
+// =============================================================================
+
+indicator("BTMM + POI + BTRC Scanner [P1 DEV]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
+
+// -----------------------------------------------------------------------------
+// INPUTS — debug/visual controls (client defaults: conservative & clean).
+// -----------------------------------------------------------------------------
+grpDev = "P1 Development / Parity"
+debugMode        = input.bool(false, "P1 Debug Mode (visuals + parity table)", group = grpDev)
+showSwings       = input.bool(true,  "  Show confirmed swings",         group = grpDev)
+showDisplacement = input.bool(true,  "  Show displacement markers",     group = grpDev)
+showEqualLevels  = input.bool(true,  "  Show equal-high/low lines",     group = grpDev)
+showSR           = input.bool(false, "  Show support/resistance zones", group = grpDev)
+showTrendlines   = input.bool(false, "  Show trendline debug",          group = grpDev)
+maxDrawPerFamily = input.int(20, "  Max drawings per family", minval = 1, maxval = 200, group = grpDev)
+
+// ENGINEERING-PROVISIONAL: rolling analytical window. This is a Pine practical
+// retention bound (Python retains full history). Larger = more faithful to the
+// batch scanner but heavier per confirmed bar. Not a strategy parameter.
+lookbackWindow = input.int(300, "Analytical window (bars, provisional)", minval = 60, maxval = 1000, group = grpDev)
+
+// -----------------------------------------------------------------------------
+// CONFIGURATION — EXACT defaults from MarketMeasurementConfiguration.
+// ENGINEERING-PROVISIONAL, centralized, NOT production-approved, NOT tuned here.
+// -----------------------------------------------------------------------------
+int   C_WINDOW_RADIUS                 = 2        // domain/swings.py:20 _WINDOW_RADIUS
+int   C_ATR_PERIOD                    = 14       // configuration.py:24
+int   C_RANGE_CONTEXT_WINDOW          = 20       // configuration.py:25
+float C_PIVOT_TIE_TOL_ATR             = 0.02     // configuration.py:27
+float C_MEANINGFUL_REVERSAL_ATR       = 0.50     // configuration.py:28
+float C_EQUAL_LEVEL_TOL_ATR           = 0.10     // configuration.py:30
+int   C_TL_MIN_ANCHOR_SPACING         = 5        // configuration.py:32
+float C_TL_HORIZONTAL_ATR             = 0.02     // configuration.py:33
+float C_TL_TOO_STEEP_ATR              = 0.35     // configuration.py:34
+float C_TL_TOUCH_TOL_ATR              = 0.10     // configuration.py:35
+float C_TL_PIERCE_TOL_ATR             = 0.20     // configuration.py:36
+float C_SR_ZONE_DEPTH_ATR             = 0.10     // configuration.py:38
+float C_SR_TOUCH_TOL_ATR              = 0.05     // configuration.py:39
+float C_SR_PIERCE_TOL_ATR             = 0.15     // configuration.py:40
+float C_DISP_FAST_RATIO               = 1.50     // configuration.py:42
+float C_DISP_VERY_FAST_RATIO          = 2.00     // configuration.py:43
+int   C_REACTION_WINDOW_BARS          = 5        // configuration.py:45
+float C_REACTION_STD_ATR_RATIO        = 0.75     // configuration.py:46
+float C_REACTION_STD_ZONE_CLEAR_RATIO = 1.00     // configuration.py:47
+float C_REACTION_STD_DIR_EFF          = 0.50     // configuration.py:48
+float C_REACTION_STD_DIR_SHARE        = 0.60     // configuration.py:49
+float C_LEG_FAST_SPEED                = 0.50     // configuration.py:55
+float C_LEG_FAST_EFF                  = 0.60     // configuration.py:56
+float C_LEG_FAST_SHARE                = 0.67     // configuration.py:57
+float C_LEG_STRONG_SPEED              = 0.75     // configuration.py:58
+float C_LEG_STRONG_EFF                = 0.75     // configuration.py:59
+float C_LEG_STRONG_SHARE              = 0.80     // configuration.py:60
+
+// Swing type codes (Python SwingType). Displacement classification codes.
+int SWING_HIGH = 1
+int SWING_LOW  = -1
+
+// =============================================================================
+// USER-DEFINED TYPES — minimal analytical records (semantic content only; no UUID).
+// =============================================================================
+type SwingRec
+    int   swingType            // SWING_HIGH / SWING_LOW
+    float price                // pivot_price
+    int   pivotStartIdx        // window index of pivot start
+    int   pivotEndIdx          // window index of pivot end (= last pivot candle)
+    int   pivotEndTime         // event/open time of pivot end candle (anchor)
+    int   localConfTime        // local_confirmation_time (availability of end+radius bar)
+    int   meaningfulConfTime   // meaningful_confirmation_time (availability of reversal bar)
+    float referenceAtr         // pivot_reference_atr
+    float tieTolerance         // pivot_tie_tolerance
+    float reversalThreshold    // reversal_threshold
+    float reversalExcursion    // reversal_excursion
+
+type EqualLevelRec
+    int   clusterType          // SWING_HIGH => EQUAL_HIGH, SWING_LOW => EQUAL_LOW
+    float zoneBottom
+    float zoneTop
+    float representativePrice
+    float clusterSpread
+    float equalityTolerance
+    int   memberCount
+    int   firstTime            // earliest member meaningful confirmation time
+    int   confirmationTime     // max member meaningful confirmation time
+
+type SRRec
+    int   zoneType             // SWING_LOW origin => SUPPORT, SWING_HIGH origin => RESISTANCE
+    float zoneTop
+    float zoneBottom
+    float zoneDepth
+    int   touchCount
+    int   confirmationTime     // availability of first confirming candle
+
+type TrendlineRec
+    int   orientation          // SWING_LOW anchors => BULLISH, SWING_HIGH anchors => BEARISH
+    float anchor1Price
+    float anchor2Price
+    int   anchor1Time
+    int   anchor2Time
+    float rawSlope             // price per bar
+    float normalizedSlope
+    int   confirmationTime
+
+// =============================================================================
+// PRIMITIVE HELPERS — measurements/candle_metrics.py
+// =============================================================================
+f_median(array<float> vals) =>
+    int n = array.size(vals)
+    float out = 0.0
+    if n > 0
+        arr = array.copy(vals)
+        array.sort(arr, order.ascending)
+        int mid = int(n / 2)
+        out := (n % 2 == 1) ? array.get(arr, mid) : (array.get(arr, mid - 1) + array.get(arr, mid)) / 2.0
+    out
+
+// median of total_range over window slice [startIncl, endExcl)  (median_total_range)
+f_medianRange(array<float> highs, array<float> lows, int startIncl, int endExcl) =>
+    tmp = array.new<float>()
+    if endExcl > startIncl and startIncl >= 0 and endExcl <= array.size(highs)
+        for i = startIncl to endExcl - 1
+            array.push(tmp, array.get(highs, i) - array.get(lows, i))
+    f_median(tmp)
+
+// =============================================================================
+// ROLLING WINDOW STATE — confirmed candles + exact incremental Wilder ATR.
+// atr.py: true_range uses previous close; seed = mean of first `period` TRs at
+// index period-1 (na before); Wilder recurrence thereafter. This mirrors
+// advance_incremental_atr (append-stable, exact image of compute_atr_series).
+// =============================================================================
+var array<float> wHigh   = array.new<float>()
+var array<float> wLow    = array.new<float>()
+var array<float> wOpen   = array.new<float>()
+var array<float> wClose  = array.new<float>()
+var array<int>   wOpenT  = array.new<int>()   // bar open time (event_time_utc analogue)
+var array<int>   wAvailT = array.new<int>()   // availability time = bar close time
+var array<float> wAtr    = array.new<float>() // ATR at this candle (na during warm-up)
+
+// Incremental ATR carry state (var; advances only on confirmed bars).
+var float atrPrevClose = na
+var float atrWarmSum   = 0.0
+var int   atrWarmCount = 0
+var float atrPrevFinal = na
+
+f_trueRange(float h, float l, float prevClose) =>
+    float hl = h - l
+    na(prevClose) ? hl : math.max(hl, math.abs(h - prevClose), math.abs(l - prevClose))
+
+// Persistent "latest confirmed" summaries for the parity interface.
+var float latestSwingHighPrice = na
+var int   latestSwingHighTime  = na
+var float latestSwingLowPrice  = na
+var int   latestSwingLowTime   = na
+var int   latestDispCode       = na   // signed: +/-(0 normal,1 fast,2 very_fast); sign = direction
+var float latestDispRatio      = na
+var float latestEqualHigh      = na
+var float latestEqualLow       = na
+var float latestSRTop          = na
+var float latestSRBottom       = na
+var int   latestSRType         = na
+var float latestTLNormSlope    = na
+var int   latestTLOrient       = na
+
+// Swing-set change detection (so heavy derived detectors run only on change).
+var int lastSwingCount    = na
+var int lastSwingConfTime = na
+
+// Persistent draw-object handles (bounded, redrawn on change).
+var array<label> swingLabelObjs = array.new<label>()
+var array<line>  eqLineObjs     = array.new<line>()
+var array<box>   srBoxObjs      = array.new<box>()
+var array<line>  tlLineObjs     = array.new<line>()
+
+f_clearLabels(array<label> a) =>
+    if array.size(a) > 0
+        for i = 0 to array.size(a) - 1
+            label.delete(array.get(a, i))
+        array.clear(a)
+
+f_clearLines(array<line> a) =>
+    if array.size(a) > 0
+        for i = 0 to array.size(a) - 1
+            line.delete(array.get(a, i))
+        array.clear(a)
+
+f_clearBoxes(array<box> a) =>
+    if array.size(a) > 0
+        for i = 0 to array.size(a) - 1
+            box.delete(array.get(a, i))
+        array.clear(a)
+
+// =============================================================================
+// SWING PIPELINE — domain/swings.py (single-candle pivots -> plateau merge ->
+// same-direction supersede -> alternation + meaningful-reversal confirmation).
+// Recomputed over the bounded window on each confirmed bar (batch-faithful).
+// Parallel arrays are used instead of the Python _Pivot NamedTuple.
+// =============================================================================
+f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<int> availT, array<float> atr) =>
+    array<SwingRec> outSwings = array.new<SwingRec>()
+    int n = array.size(highs)
+    if n >= 2 * C_WINDOW_RADIUS + 1
+        // ---- _find_single_candle_pivots (swings.py:84) ----
+        pType  = array.new<int>()
+        pStart = array.new<int>()
+        pEnd   = array.new<int>()
+        pPrice = array.new<float>()
+        pAtr   = array.new<float>()
+        pTie   = array.new<float>()
+        for idx = C_WINDOW_RADIUS to n - C_WINDOW_RADIUS - 1
+            float a = array.get(atr, idx)
+            if not na(a)
+                float tie = C_PIVOT_TIE_TOL_ATR * a
+                float candHigh = array.get(highs, idx)
+                float candLow  = array.get(lows, idx)
+                bool qHigh = true
+                bool qLow  = true
+                for j = idx - C_WINDOW_RADIUS to idx + C_WINDOW_RADIUS
+                    if j != idx
+                        if array.get(highs, j) > candHigh + tie
+                            qHigh := false
+                        if array.get(lows, j) < candLow - tie
+                            qLow := false
+                if qHigh and qLow
+                    qHigh := qHigh   // ambiguous (register 33I): emit neither
+                else if qHigh
+                    array.push(pType, SWING_HIGH)
+                    array.push(pStart, idx)
+                    array.push(pEnd, idx)
+                    array.push(pPrice, candHigh)
+                    array.push(pAtr, a)
+                    array.push(pTie, tie)
+                else if qLow
+                    array.push(pType, SWING_LOW)
+                    array.push(pStart, idx)
+                    array.push(pEnd, idx)
+                    array.push(pPrice, candLow)
+                    array.push(pAtr, a)
+                    array.push(pTie, tie)
+
+        // ---- _merge_adjacent_plateaus (swings.py:139): per type, merge pivots at
+        // consecutive indices within tie tolerance. ----
+        mType  = array.new<int>()
+        mStart = array.new<int>()
+        mEnd   = array.new<int>()
+        mPrice = array.new<float>()
+        mAtr   = array.new<float>()
+        mTie   = array.new<float>()
+        typesArr = array.from(SWING_HIGH, SWING_LOW)
+        for ti = 0 to 1
+            int swingType = array.get(typesArr, ti)
+            gi = array.new<int>()
+            for k = 0 to array.size(pType) - 1
+                if array.get(pType, k) == swingType
+                    array.push(gi, k)
+            int gidx = 0
+            while gidx < array.size(gi)
+                int cur = array.get(gi, gidx)
+                bool merged = false
+                if gidx + 1 < array.size(gi)
+                    int nxt = array.get(gi, gidx + 1)
+                    if array.get(pStart, nxt) == array.get(pEnd, cur) + 1 and math.abs(array.get(pPrice, nxt) - array.get(pPrice, cur)) <= array.get(pTie, cur)
+                        float price = swingType == SWING_HIGH ? math.max(array.get(pPrice, cur), array.get(pPrice, nxt)) : math.min(array.get(pPrice, cur), array.get(pPrice, nxt))
+                        pair = array.from(array.get(pAtr, cur), array.get(pAtr, nxt))
+                        array.push(mType, swingType)
+                        array.push(mStart, array.get(pStart, cur))
+                        array.push(mEnd, array.get(pEnd, nxt))
+                        array.push(mPrice, price)
+                        array.push(mAtr, f_median(pair))
+                        array.push(mTie, array.get(pTie, nxt))
+                        gidx += 2
+                        merged := true
+                if not merged
+                    array.push(mType, swingType)
+                    array.push(mStart, array.get(pStart, cur))
+                    array.push(mEnd, array.get(pEnd, cur))
+                    array.push(mPrice, array.get(pPrice, cur))
+                    array.push(mAtr, array.get(pAtr, cur))
+                    array.push(mTie, array.get(pTie, cur))
+                    gidx += 1
+
+        // sort merged pivots by start index (swings.py:179) — insertion sort on order
+        order2 = array.new<int>()
+        for k = 0 to array.size(mType) - 1
+            array.push(order2, k)
+        for a2 = 1 to array.size(order2) - 1
+            int keyIdx = array.get(order2, a2)
+            int b2 = a2 - 1
+            while b2 >= 0 and array.get(mStart, array.get(order2, b2)) > array.get(mStart, keyIdx)
+                array.set(order2, b2 + 1, array.get(order2, b2))
+                b2 -= 1
+            array.set(order2, b2 + 1, keyIdx)
+
+        // ---- _supersede_same_direction_runs (swings.py:183): keep extreme per run ----
+        cType  = array.new<int>()
+        cStart = array.new<int>()
+        cEnd   = array.new<int>()
+        cPrice = array.new<float>()
+        cAtr   = array.new<float>()
+        cTie   = array.new<float>()
+        int runType = na
+        int bestRel = na
+        for ii = 0 to array.size(order2) - 1
+            int rel = array.get(order2, ii)
+            int thisType = array.get(mType, rel)
+            if na(runType)
+                runType := thisType
+                bestRel := rel
+            else if thisType != runType
+                array.push(cType, array.get(mType, bestRel))
+                array.push(cStart, array.get(mStart, bestRel))
+                array.push(cEnd, array.get(mEnd, bestRel))
+                array.push(cPrice, array.get(mPrice, bestRel))
+                array.push(cAtr, array.get(mAtr, bestRel))
+                array.push(cTie, array.get(mTie, bestRel))
+                runType := thisType
+                bestRel := rel
+            else
+                bool better = thisType == SWING_HIGH ? array.get(mPrice, rel) > array.get(mPrice, bestRel) : array.get(mPrice, rel) < array.get(mPrice, bestRel)
+                if better
+                    bestRel := rel
+        if not na(bestRel)
+            array.push(cType, array.get(mType, bestRel))
+            array.push(cStart, array.get(mStart, bestRel))
+            array.push(cEnd, array.get(mEnd, bestRel))
+            array.push(cPrice, array.get(mPrice, bestRel))
+            array.push(cAtr, array.get(mAtr, bestRel))
+            array.push(cTie, array.get(mTie, bestRel))
+
+        // ---- confirmation loop (swings.py:219): alternation + meaningful reversal ----
+        int lastConfirmedType = na
+        for p = 0 to array.size(cType) - 1
+            int endIdx = array.get(cEnd, p)
+            int localConfIdx = endIdx + C_WINDOW_RADIUS
+            if localConfIdx < n and array.get(cType, p) != lastConfirmedType
+                float refAtr = array.get(cAtr, p)
+                float threshold = C_MEANINGFUL_REVERSAL_ATR * refAtr
+                float pivotPrice = array.get(cPrice, p)
+                int confIdx = na
+                float excursion = 0.0
+                int searchStart = localConfIdx + 1
+                if array.get(cType, p) == SWING_HIGH
+                    float lowestLow = array.get(lows, localConfIdx)
+                    for j = searchStart to n - 1
+                        lowestLow := math.min(lowestLow, array.get(lows, j))
+                        float exc = pivotPrice - lowestLow
+                        if exc >= threshold
+                            confIdx := j
+                            excursion := exc
+                            break
+                else
+                    float highestHigh = array.get(highs, localConfIdx)
+                    for j = searchStart to n - 1
+                        highestHigh := math.max(highestHigh, array.get(highs, j))
+                        float exc = highestHigh - pivotPrice
+                        if exc >= threshold
+                            confIdx := j
+                            excursion := exc
+                            break
+                if not na(confIdx)
+                    SwingRec s = SwingRec.new(array.get(cType, p), pivotPrice, array.get(cStart, p), endIdx, array.get(openT, endIdx), array.get(availT, localConfIdx), array.get(availT, confIdx), refAtr, array.get(cTie, p), threshold, excursion)
+                    array.push(outSwings, s)
+                    lastConfirmedType := array.get(cType, p)
+    outSwings
+
+// =============================================================================
+// EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
+// confirmation time (record_id tiebreak replaced by deterministic
+// (time, pivotEndTime, price) order — content preserved); grow a cluster while
+// spread <= tolerance(median atr).
+// =============================================================================
+f_sweepEqualType(array<SwingRec> swings, int wantType) =>
+    array<EqualLevelRec> out = array.new<EqualLevelRec>()
+    idxs = array.new<int>()
+    for k = 0 to array.size(swings) - 1
+        if array.get(swings, k).swingType == wantType
+            array.push(idxs, k)
+    // insertion sort idxs by (meaningfulConfTime, pivotEndTime, price)
+    for a = 1 to array.size(idxs) - 1
+        int key = array.get(idxs, a)
+        SwingRec ks = array.get(swings, key)
+        int b = a - 1
+        bool placed = false
+        while b >= 0 and not placed
+            SwingRec bs = array.get(swings, array.get(idxs, b))
+            bool greater = bs.meaningfulConfTime > ks.meaningfulConfTime or (bs.meaningfulConfTime == ks.meaningfulConfTime and (bs.pivotEndTime > ks.pivotEndTime or (bs.pivotEndTime == ks.pivotEndTime and bs.price > ks.price)))
+            if greater
+                array.set(idxs, b + 1, array.get(idxs, b))
+                b -= 1
+            else
+                placed := true
+        array.set(idxs, b + 1, key)
+
+    members = array.new<int>()
+    for a = 0 to array.size(idxs) - 1
+        int si = array.get(idxs, a)
+        bool closeIt = false
+        if array.size(members) == 0
+            array.push(members, si)
+        else
+            candPrices = array.new<float>()
+            candAtrs = array.new<float>()
+            for m = 0 to array.size(members) - 1
+                SwingRec ms = array.get(swings, array.get(members, m))
+                array.push(candPrices, ms.price)
+                array.push(candAtrs, ms.referenceAtr)
+            array.push(candPrices, array.get(swings, si).price)
+            array.push(candAtrs, array.get(swings, si).referenceAtr)
+            float refAtr = f_median(candAtrs)
+            float tol = C_EQUAL_LEVEL_TOL_ATR * refAtr
+            float spread = array.max(candPrices) - array.min(candPrices)
+            if spread <= tol
+                array.push(members, si)
+            else
+                closeIt := true
+        if closeIt
+            if array.size(members) >= 2
+                prices = array.new<float>()
+                atrs = array.new<float>()
+                int firstT = na
+                int confT = na
+                for m = 0 to array.size(members) - 1
+                    SwingRec ms = array.get(swings, array.get(members, m))
+                    array.push(prices, ms.price)
+                    array.push(atrs, ms.referenceAtr)
+                    firstT := na(firstT) ? ms.meaningfulConfTime : math.min(firstT, ms.meaningfulConfTime)
+                    confT := na(confT) ? ms.meaningfulConfTime : math.max(confT, ms.meaningfulConfTime)
+                float refAtr = f_median(atrs)
+                float zb = array.min(prices)
+                float zt = array.max(prices)
+                array.push(out, EqualLevelRec.new(wantType, zb, zt, (zb + zt) / 2.0, zt - zb, C_EQUAL_LEVEL_TOL_ATR * refAtr, array.size(members), firstT, confT))
+            array.clear(members)
+            array.push(members, si)
+    // final close
+    if array.size(members) >= 2
+        prices = array.new<float>()
+        atrs = array.new<float>()
+        int firstT = na
+        int confT = na
+        for m = 0 to array.size(members) - 1
+            SwingRec ms = array.get(swings, array.get(members, m))
+            array.push(prices, ms.price)
+            array.push(atrs, ms.referenceAtr)
+            firstT := na(firstT) ? ms.meaningfulConfTime : math.min(firstT, ms.meaningfulConfTime)
+            confT := na(confT) ? ms.meaningfulConfTime : math.max(confT, ms.meaningfulConfTime)
+        float refAtr = f_median(atrs)
+        float zb = array.min(prices)
+        float zt = array.max(prices)
+        array.push(out, EqualLevelRec.new(wantType, zb, zt, (zb + zt) / 2.0, zt - zb, C_EQUAL_LEVEL_TOL_ATR * refAtr, array.size(members), firstT, confT))
+    out
+
+f_detectEqualLevels(array<SwingRec> swings) =>
+    out = array.new<EqualLevelRec>()
+    highs = f_sweepEqualType(swings, SWING_HIGH)
+    lows = f_sweepEqualType(swings, SWING_LOW)
+    for i = 0 to array.size(highs) - 1
+        array.push(out, array.get(highs, i))
+    for i = 0 to array.size(lows) - 1
+        array.push(out, array.get(lows, i))
+    out
+
+// =============================================================================
+// LEG MEASUREMENT — measurements/legs.py measure_leg. Returns
+// [classification (2=STRONG_FAST,1=FAST,0=SLOW/UNCLEAR), dirEfficiency, dirShare].
+// =============================================================================
+f_measureLeg(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, int startIncl, int endIncl, bool isBull) =>
+    int barCount = endIncl - startIncl + 1
+    int classification = 0
+    float dirEff = 0.0
+    float dirShare = 0.0
+    if barCount > 0
+        float startPrice = array.get(opens, startIncl)
+        float endPrice = array.get(closes, endIncl)
+        float netDist = math.abs(endPrice - startPrice)
+        atrs = array.new<float>()
+        float legPath = 0.0
+        int dirCloses = 0
+        for i = startIncl to endIncl
+            float av = array.get(atr, i)
+            if not na(av)
+                array.push(atrs, av)
+            legPath += array.get(highs, i) - array.get(lows, i)
+            bool dir = isBull ? array.get(closes, i) >= array.get(opens, i) : array.get(closes, i) <= array.get(opens, i)
+            if dir
+                dirCloses += 1
+        float refAtr = f_median(atrs)
+        dirShare := dirCloses / barCount
+        if refAtr != 0.0 and legPath != 0.0
+            float normSpeed = netDist / (barCount * refAtr)
+            dirEff := netDist / legPath
+            if normSpeed >= C_LEG_STRONG_SPEED and dirEff >= C_LEG_STRONG_EFF and dirShare >= C_LEG_STRONG_SHARE
+                classification := 2
+            else if normSpeed >= C_LEG_FAST_SPEED and dirEff >= C_LEG_FAST_EFF and dirShare >= C_LEG_FAST_SHARE
+                classification := 1
+    [classification, dirEff, dirShare]
+
+// =============================================================================
+// SR REACTION — support_resistance._evaluate_reaction. Returns confirming candle
+// window index, or na. Faithful port of the standard-reaction gate.
+// =============================================================================
+f_evaluateReaction(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, int searchStart, float zoneTop, float zoneBottom, bool isSupport) =>
+    int n = array.size(highs)
+    int result = na
+    float zoneHeight = zoneTop - zoneBottom
+    if zoneHeight > 0.0 and searchStart < n
+        int reactionStart = na
+        for i = searchStart to n - 1
+            if na(reactionStart)
+                if isSupport and array.get(closes, i) > zoneTop
+                    reactionStart := i
+                if not isSupport and array.get(closes, i) < zoneBottom
+                    reactionStart := i
+        if not na(reactionStart)
+            float anchor = na
+            if isSupport
+                anchor := array.get(lows, searchStart)
+                for i = searchStart to reactionStart
+                    anchor := math.min(anchor, array.get(lows, i))
+            else
+                anchor := array.get(highs, searchStart)
+                for i = searchStart to reactionStart
+                    anchor := math.max(anchor, array.get(highs, i))
+            int windowEnd = math.min(reactionStart + C_REACTION_WINDOW_BARS, n) // exclusive
+            if windowEnd > reactionStart
+                float mfe = na
+                float zoneClearance = na
+                int mfeIdx = reactionStart
+                if isSupport
+                    float hh = array.get(highs, reactionStart)
+                    for i = reactionStart to windowEnd - 1
+                        if array.get(highs, i) > hh
+                            hh := array.get(highs, i)
+                            mfeIdx := i
+                    mfe := hh - anchor
+                    zoneClearance := math.max(0.0, hh - zoneTop)
+                else
+                    float ll = array.get(lows, reactionStart)
+                    for i = reactionStart to windowEnd - 1
+                        if array.get(lows, i) < ll
+                            ll := array.get(lows, i)
+                            mfeIdx := i
+                    mfe := anchor - ll
+                    zoneClearance := math.max(0.0, zoneBottom - ll)
+                float refAtr = array.get(atr, reactionStart)
+                if not na(refAtr) and refAtr != 0.0
+                    float atrRatio = mfe / refAtr
+                    float clearanceRatio = zoneClearance / zoneHeight
+                    [legClass, legEff, legShare] = f_measureLeg(highs, lows, opens, closes, atr, reactionStart, mfeIdx, isSupport)
+                    bool meets = atrRatio >= C_REACTION_STD_ATR_RATIO and clearanceRatio >= C_REACTION_STD_ZONE_CLEAR_RATIO and legEff >= C_REACTION_STD_DIR_EFF and legShare >= C_REACTION_STD_DIR_SHARE
+                    if meets
+                        result := mfeIdx
+    result
+
+// =============================================================================
+// SUPPORT / RESISTANCE — domain/support_resistance.detect_support_resistance_zones.
+// =============================================================================
+f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, array<int> availT, array<SwingRec> swings) =>
+    array<SRRec> out = array.new<SRRec>()
+    originTypes = array.from(SWING_LOW, SWING_HIGH)
+    for ot = 0 to 1
+        int originType = array.get(originTypes, ot)
+        bool isSupport = originType == SWING_LOW
+        int oppositeType = isSupport ? SWING_HIGH : SWING_LOW
+        oi = array.new<int>()
+        for k = 0 to array.size(swings) - 1
+            if array.get(swings, k).swingType == originType
+                array.push(oi, k)
+        // order by meaningfulConfTime (insertion sort)
+        for a = 1 to array.size(oi) - 1
+            int key = array.get(oi, a)
+            int b = a - 1
+            bool placed = false
+            while b >= 0 and not placed
+                if array.get(swings, array.get(oi, b)).meaningfulConfTime > array.get(swings, key).meaningfulConfTime
+                    array.set(oi, b + 1, array.get(oi, b))
+                    b -= 1
+                else
+                    placed := true
+            array.set(oi, b + 1, key)
+
+        for oo = 0 to array.size(oi) - 1
+            SwingRec origin = array.get(swings, array.get(oi, oo))
+            int originIdx = origin.pivotEndIdx
+            float zoneDepth = C_SR_ZONE_DEPTH_ATR * origin.referenceAtr
+            float zoneTop = na
+            float zoneBottom = na
+            if isSupport
+                zoneBottom := origin.price
+                zoneTop := zoneBottom + zoneDepth
+            else
+                zoneTop := origin.price
+                zoneBottom := zoneTop - zoneDepth
+            int originReaction = f_evaluateReaction(highs, lows, opens, closes, atr, originIdx + 1, zoneTop, zoneBottom, isSupport)
+            if not na(originReaction)
+                float touchTol = C_SR_TOUCH_TOL_ATR * origin.referenceAtr
+                float pierceTol = C_SR_PIERCE_TOL_ATR * origin.referenceAtr
+                int touchCount = 0
+                int firstConfTime = na
+                int lastTouchTime = origin.meaningfulConfTime
+                for tt = 0 to array.size(oi) - 1
+                    SwingRec touch = array.get(swings, array.get(oi, tt))
+                    if touch.meaningfulConfTime > lastTouchTime
+                        bool geomOk = isSupport ? (touch.price <= zoneTop + touchTol and touch.price >= zoneBottom - pierceTol) : (touch.price >= zoneBottom - touchTol and touch.price <= zoneTop + pierceTol)
+                        if geomOk
+                            bool oppositeBetween = false
+                            for s = 0 to array.size(swings) - 1
+                                SwingRec sw = array.get(swings, s)
+                                if sw.swingType == oppositeType and lastTouchTime < sw.meaningfulConfTime and sw.meaningfulConfTime < touch.meaningfulConfTime
+                                    oppositeBetween := true
+                            if oppositeBetween
+                                int touchReaction = f_evaluateReaction(highs, lows, opens, closes, atr, touch.pivotEndIdx + 1, zoneTop, zoneBottom, isSupport)
+                                if not na(touchReaction)
+                                    touchCount += 1
+                                    if na(firstConfTime)
+                                        firstConfTime := array.get(availT, touchReaction)
+                                    lastTouchTime := touch.meaningfulConfTime
+                if not na(firstConfTime)
+                    array.push(out, SRRec.new(originType, zoneTop, zoneBottom, zoneDepth, touchCount, firstConfTime))
+    out
+
+// =============================================================================
+// TRENDLINES — domain/trendlines.detect_trendlines.
+// =============================================================================
+f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings) =>
+    array<TrendlineRec> out = array.new<TrendlineRec>()
+    orientTypes = array.from(SWING_LOW, SWING_HIGH)  // BULLISH uses lows, BEARISH uses highs
+    for ot = 0 to 1
+        int orientation = array.get(orientTypes, ot)
+        bool isBull = orientation == SWING_LOW
+        si = array.new<int>()
+        for k = 0 to array.size(swings) - 1
+            if array.get(swings, k).swingType == orientation
+                array.push(si, k)
+        // order by pivotEndIdx (insertion sort)
+        for a = 1 to array.size(si) - 1
+            int key = array.get(si, a)
+            int b = a - 1
+            bool placed = false
+            while b >= 0 and not placed
+                if array.get(swings, array.get(si, b)).pivotEndIdx > array.get(swings, key).pivotEndIdx
+                    array.set(si, b + 1, array.get(si, b))
+                    b -= 1
+                else
+                    placed := true
+            array.set(si, b + 1, key)
+
+        for i = 0 to array.size(si) - 1
+            SwingRec a1 = array.get(swings, array.get(si, i))
+            int a1Idx = a1.pivotEndIdx
+            for j = i + 1 to array.size(si) - 1
+                SwingRec a2 = array.get(swings, array.get(si, j))
+                int a2Idx = a2.pivotEndIdx
+                if a2Idx - a1Idx >= C_TL_MIN_ANCHOR_SPACING
+                    bool progressOk = isBull ? (a2.price > a1.price + a1.tieTolerance) : (a2.price < a1.price - a1.tieTolerance)
+                    if progressOk
+                        float rawSlope = (a2.price - a1.price) / (a2Idx - a1Idx)
+                        betweenAtrs = array.new<float>()
+                        for bi = a1Idx to a2Idx
+                            float av = array.get(atr, bi)
+                            if not na(av)
+                                array.push(betweenAtrs, av)
+                        if array.size(betweenAtrs) > 0
+                            float refAtr = f_median(betweenAtrs)
+                            if refAtr != 0.0
+                                float normSlope = math.abs(rawSlope) / refAtr
+                                if normSlope >= C_TL_HORIZONTAL_ATR and normSlope <= C_TL_TOO_STEEP_ATR
+                                    float pierceTol = C_TL_PIERCE_TOL_ATR * refAtr
+                                    float touchTol = C_TL_TOUCH_TOL_ATR * refAtr
+                                    bool integrityOk = true
+                                    for bi = a1Idx + 1 to a2Idx - 1
+                                        if integrityOk
+                                            float projected = a1.price + rawSlope * (bi - a1Idx)
+                                            float cc = array.get(closes, bi)
+                                            if isBull
+                                                if projected - cc > pierceTol
+                                                    integrityOk := false
+                                            else
+                                                if cc - projected > pierceTol
+                                                    integrityOk := false
+                                    if integrityOk
+                                        int confTime = na
+                                        for t = 0 to array.size(si) - 1
+                                            if na(confTime)
+                                                SwingRec touch = array.get(swings, array.get(si, t))
+                                                int tIdx = touch.pivotEndIdx
+                                                if tIdx > a2Idx
+                                                    float projected = a1.price + rawSlope * (tIdx - a1Idx)
+                                                    float diff = isBull ? (touch.price - projected) : (projected - touch.price)
+                                                    bool qualifies = math.abs(diff) <= touchTol or (diff >= -pierceTol and diff < -touchTol)
+                                                    if qualifies
+                                                        confTime := touch.meaningfulConfTime
+                                        if not na(confTime)
+                                            array.push(out, TrendlineRec.new(orientation, a1.price, a2.price, a1.pivotEndTime, a2.pivotEndTime, rawSlope, normSlope, confTime))
+    out
+
+// =============================================================================
+// DISPLACEMENT — domain/displacement for the most-recent confirmed candle.
+// =============================================================================
+f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, array<float> closes) =>
+    int n = array.size(highs)
+    int code = na
+    float ratio = na
+    if n > C_RANGE_CONTEXT_WINDOW
+        int idx = n - 1
+        float rangeValue = array.get(highs, idx) - array.get(lows, idx)
+        int cls = 0
+        if rangeValue == 0.0
+            ratio := 0.0
+            cls := 0
+        else
+            float baseline = f_medianRange(highs, lows, idx - C_RANGE_CONTEXT_WINDOW, idx)
+            ratio := baseline == 0.0 ? 0.0 : rangeValue / baseline
+            cls := ratio >= C_DISP_VERY_FAST_RATIO ? 2 : (ratio >= C_DISP_FAST_RATIO ? 1 : 0)
+        bool isBull = array.get(closes, idx) >= array.get(opens, idx)
+        code := isBull ? cls : -cls
+    [code, ratio]
+
+// =============================================================================
+// MAIN — advance state ONLY on confirmed/closed bars (non-repaint).
+// =============================================================================
+if barstate.isconfirmed
+    // ---- exact incremental Wilder ATR for THIS candle ----
+    float tr = f_trueRange(high, low, atrPrevClose)
+    float atrValue = na
+    if not na(atrPrevFinal)
+        atrValue := (atrPrevFinal * (C_ATR_PERIOD - 1) + tr) / C_ATR_PERIOD
+        atrPrevFinal := atrValue
+    else
+        atrWarmSum := atrWarmSum + tr
+        atrWarmCount := atrWarmCount + 1
+        if atrWarmCount < C_ATR_PERIOD
+            atrValue := na
+        else
+            atrValue := atrWarmSum / C_ATR_PERIOD
+            atrPrevFinal := atrValue
+    atrPrevClose := close
+
+    // ---- push into rolling window; prune to lookbackWindow ----
+    array.push(wHigh, high)
+    array.push(wLow, low)
+    array.push(wOpen, open)
+    array.push(wClose, close)
+    array.push(wOpenT, time)
+    array.push(wAvailT, time_close)
+    array.push(wAtr, atrValue)
+    while array.size(wHigh) > lookbackWindow
+        array.shift(wHigh)
+        array.shift(wLow)
+        array.shift(wOpen)
+        array.shift(wClose)
+        array.shift(wOpenT)
+        array.shift(wAvailT)
+        array.shift(wAtr)
+
+    // ---- displacement (latest confirmed candle) ----
+    [dispCode, dispRatio] = f_latestDisplacement(wHigh, wLow, wOpen, wClose)
+    latestDispCode := dispCode
+    latestDispRatio := dispRatio
+
+    // ---- swing pipeline (every confirmed bar over the window) ----
+    array<SwingRec> swings = f_detectSwings(wHigh, wLow, wOpenT, wAvailT, wAtr)
+
+    for k = 0 to array.size(swings) - 1
+        SwingRec s = array.get(swings, k)
+        if s.swingType == SWING_HIGH
+            latestSwingHighPrice := s.price
+            latestSwingHighTime := s.pivotEndTime
+        else
+            latestSwingLowPrice := s.price
+            latestSwingLowTime := s.pivotEndTime
+
+    // ---- recompute derived detectors only when the swing set changes ----
+    int newCount = array.size(swings)
+    int newConfTime = newCount > 0 ? array.get(swings, newCount - 1).meaningfulConfTime : na
+    bool changed = na(lastSwingCount) or newCount != lastSwingCount or newConfTime != lastSwingConfTime
+    if changed
+        lastSwingCount := newCount
+        lastSwingConfTime := newConfTime
+
+        // EQUAL LEVELS
+        array<EqualLevelRec> eqs = f_detectEqualLevels(swings)
+        latestEqualHigh := na
+        latestEqualLow := na
+        for k = 0 to array.size(eqs) - 1
+            EqualLevelRec e = array.get(eqs, k)
+            if e.clusterType == SWING_HIGH
+                latestEqualHigh := e.representativePrice
+            else
+                latestEqualLow := e.representativePrice
+
+        // SUPPORT / RESISTANCE
+        array<SRRec> srs = f_detectSR(wHigh, wLow, wOpen, wClose, wAtr, wAvailT, swings)
+        latestSRTop := na
+        latestSRBottom := na
+        latestSRType := na
+        if array.size(srs) > 0
+            SRRec sr = array.get(srs, array.size(srs) - 1)
+            latestSRTop := sr.zoneTop
+            latestSRBottom := sr.zoneBottom
+            latestSRType := sr.zoneType
+
+        // TRENDLINES
+        array<TrendlineRec> tls = f_detectTrendlines(wClose, wAtr, swings)
+        latestTLNormSlope := na
+        latestTLOrient := na
+        if array.size(tls) > 0
+            TrendlineRec tl = array.get(tls, array.size(tls) - 1)
+            latestTLNormSlope := tl.normalizedSlope
+            latestTLOrient := tl.orientation
+
+        // ---- bounded debug drawings (only on change; each family capped) ----
+        if debugMode and showSwings
+            f_clearLabels(swingLabelObjs)
+            int startK = math.max(0, array.size(swings) - maxDrawPerFamily)
+            for k = startK to array.size(swings) - 1
+                SwingRec s = array.get(swings, k)
+                bool isHigh = s.swingType == SWING_HIGH
+                label lb = label.new(x = s.pivotEndTime, y = s.price, xloc = xloc.bar_time, style = isHigh ? label.style_label_down : label.style_label_up, color = isHigh ? color.new(color.teal, 20) : color.new(color.maroon, 20), textcolor = color.white, size = size.tiny, text = isHigh ? "SH" : "SL")
+                array.push(swingLabelObjs, lb)
+        if debugMode and showEqualLevels
+            f_clearLines(eqLineObjs)
+            int startK = math.max(0, array.size(eqs) - maxDrawPerFamily)
+            for k = startK to array.size(eqs) - 1
+                EqualLevelRec e = array.get(eqs, k)
+                line ln = line.new(x1 = e.firstTime, y1 = e.representativePrice, x2 = e.confirmationTime, y2 = e.representativePrice, xloc = xloc.bar_time, color = e.clusterType == SWING_HIGH ? color.orange : color.blue, style = line.style_dotted, width = 1)
+                array.push(eqLineObjs, ln)
+        if debugMode and showSR
+            f_clearBoxes(srBoxObjs)
+            int startK = math.max(0, array.size(srs) - maxDrawPerFamily)
+            for k = startK to array.size(srs) - 1
+                SRRec sr = array.get(srs, k)
+                box bx = box.new(left = sr.confirmationTime, top = sr.zoneTop, right = time_close, bottom = sr.zoneBottom, xloc = xloc.bar_time, border_color = sr.zoneType == SWING_LOW ? color.green : color.red, bgcolor = color.new(sr.zoneType == SWING_LOW ? color.green : color.red, 88))
+                array.push(srBoxObjs, bx)
+        if debugMode and showTrendlines
+            f_clearLines(tlLineObjs)
+            int startK = math.max(0, array.size(tls) - maxDrawPerFamily)
+            for k = startK to array.size(tls) - 1
+                TrendlineRec tl = array.get(tls, k)
+                line ln = line.new(x1 = tl.anchor1Time, y1 = tl.anchor1Price, x2 = tl.anchor2Time, y2 = tl.anchor2Price, xloc = xloc.bar_time, color = tl.orientation == SWING_LOW ? color.green : color.red, style = line.style_solid, width = 1)
+                array.push(tlLineObjs, ln)
+
+// -----------------------------------------------------------------------------
+// DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
+// -----------------------------------------------------------------------------
+bool dispFastNow = barstate.isconfirmed and debugMode and showDisplacement and not na(latestDispCode) and math.abs(latestDispCode) >= 1
+plotshape(dispFastNow and latestDispCode > 0, title = "Displacement up", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.tiny)
+plotshape(dispFastNow and latestDispCode < 0, title = "Displacement down", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.tiny)
+
+// =============================================================================
+// PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
+// =============================================================================
+plot(latestSwingHighPrice, "P1_swing_high_price", color = color.teal,   display = display.data_window)
+plot(latestSwingLowPrice,  "P1_swing_low_price",  color = color.maroon, display = display.data_window)
+plot(latestDispCode,       "P1_disp_code",        color = color.gray,   display = display.data_window)
+plot(latestDispRatio,      "P1_disp_ratio",       color = color.gray,   display = display.data_window)
+plot(latestEqualHigh,      "P1_equal_high",       color = color.orange, display = display.data_window)
+plot(latestEqualLow,       "P1_equal_low",        color = color.blue,   display = display.data_window)
+plot(latestSRTop,          "P1_sr_top",           color = color.green,  display = display.data_window)
+plot(latestSRBottom,       "P1_sr_bottom",        color = color.red,    display = display.data_window)
+plot(latestTLNormSlope,    "P1_tl_norm_slope",    color = color.purple, display = display.data_window)
+
+f_row(table t, int r, string k, string v) =>
+    table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)
+    table.cell(t, 1, r, v, text_size = size.tiny, text_halign = text.align_right, text_color = color.white)
+
+var table dbg = table.new(position.top_right, 2, 10, border_width = 1)
+if barstate.islast and debugMode
+    f_row(dbg, 0, "P1 DEV — latest confirmed", "")
+    f_row(dbg, 1, "Swing High", na(latestSwingHighPrice) ? "-" : str.tostring(latestSwingHighPrice, format.mintick))
+    f_row(dbg, 2, "Swing Low",  na(latestSwingLowPrice)  ? "-" : str.tostring(latestSwingLowPrice, format.mintick))
+    f_row(dbg, 3, "Disp code",  na(latestDispCode)  ? "-" : str.tostring(latestDispCode))
+    f_row(dbg, 4, "Disp ratio", na(latestDispRatio) ? "-" : str.tostring(latestDispRatio, "#.###"))
+    f_row(dbg, 5, "Equal High", na(latestEqualHigh) ? "-" : str.tostring(latestEqualHigh, format.mintick))
+    f_row(dbg, 6, "Equal Low",  na(latestEqualLow)  ? "-" : str.tostring(latestEqualLow, format.mintick))
+    f_row(dbg, 7, "SR top",     na(latestSRTop)     ? "-" : str.tostring(latestSRTop, format.mintick))
+    f_row(dbg, 8, "SR bottom",  na(latestSRBottom)  ? "-" : str.tostring(latestSRBottom, format.mintick))
+    f_row(dbg, 9, "TL n-slope", na(latestTLNormSlope) ? "-" : str.tostring(latestTLNormSlope, "#.###"))
