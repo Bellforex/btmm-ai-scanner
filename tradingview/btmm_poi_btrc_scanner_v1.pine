@@ -139,23 +139,34 @@ type TrendlineRec
 // =============================================================================
 // PRIMITIVE HELPERS — measurements/candle_metrics.py
 // =============================================================================
-f_median(array<float> vals) =>
-    int n = array.size(vals)
+// Median of an ALREADY ascending-sorted array. O(1). Same value as f_median for
+// the same multiset — the median depends only on the multiset, not on how it was
+// ordered — so a caller that maintains sorted order incrementally may use this.
+f_medianOfSorted(array<float> sorted) =>
+    int n = array.size(sorted)
     float out = 0.0
     if n > 0
-        arr = array.copy(vals)
-        array.sort(arr, order.ascending)
         int mid = int(n / 2)
-        out := (n % 2 == 1) ? array.get(arr, mid) : (array.get(arr, mid - 1) + array.get(arr, mid)) / 2.0
+        out := (n % 2 == 1) ? array.get(sorted, mid) : (array.get(sorted, mid - 1) + array.get(sorted, mid)) / 2.0
     out
 
+// P1-PERF-1: median that CONSUMES its argument — it sorts in place instead of
+// allocating a copy. Every call site builds a fresh (or scratch) array and never
+// reads it again afterwards, so consuming it is safe and removes one array
+// allocation plus one full copy from every median in the hot path. The returned
+// value is identical to the previous copy-then-sort implementation.
+f_medianConsume(array<float> vals) =>
+    array.sort(vals, order.ascending)
+    f_medianOfSorted(vals)
+
 // median of total_range over window slice [startIncl, endExcl)  (median_total_range)
-f_medianRange(array<float> highs, array<float> lows, int startIncl, int endExcl) =>
-    tmp = array.new<float>()
+// P1-PERF-1: writes into a caller-owned scratch array instead of allocating.
+f_medianRange(array<float> highs, array<float> lows, int startIncl, int endExcl, array<float> scratch) =>
+    array.clear(scratch)
     if endExcl > startIncl and startIncl >= 0 and endExcl <= array.size(highs)
         for i = startIncl to endExcl - 1
-            array.push(tmp, array.get(highs, i) - array.get(lows, i))
-    f_median(tmp)
+            array.push(scratch, array.get(highs, i) - array.get(lows, i))
+    f_medianConsume(scratch)
 
 // =============================================================================
 // ROLLING WINDOW STATE — confirmed candles + exact incremental Wilder ATR.
@@ -177,6 +188,35 @@ var float atrWarmSum   = 0.0
 var int   atrWarmCount = 0
 var float atrPrevFinal = na
 
+// -----------------------------------------------------------------------------
+// P1-PERF-1 — SINGLE-CANDLE PIVOT FRONTIER (persistent, absolute-indexed).
+//
+// _find_single_candle_pivots tests every window index in [R, n-R-1]. That test
+// reads only highs/lows/atr[idx-R .. idx+R], so a bar's pivot status is FINAL as
+// soon as it has R closed bars to its right and can never change afterwards.
+// Re-deriving the whole window on every confirmed bar therefore recomputed an
+// identical answer O(W) times. Instead we decide exactly ONE new candle per
+// confirmed bar (the bar at window index n-1-R) and retire entries that have
+// fallen out of the batch's scan range.
+//
+// Pivots are stored by ABSOLUTE confirmed-bar index so that a window shift does
+// not invalidate them; f_detectSwings converts to window indices on read. The
+// resulting pivot multiset is identical to the batch scan (proof in
+// docs/architecture/BTRC_V1_P1_PERFORMANCE_OPTIMIZATION.md).
+// -----------------------------------------------------------------------------
+var int confirmedBarCount = 0                 // absolute count of confirmed bars seen
+var array<int>   pvAbs   = array.new<int>()   // absolute index of the pivot candle
+var array<int>   pvType  = array.new<int>()
+var array<float> pvPrice = array.new<float>()
+var array<float> pvAtr   = array.new<float>()
+var array<float> pvTie   = array.new<float>()
+
+// Reusable scratch buffers (P1-PERF-1): avoid per-call array allocation in the
+// hot path. Each is cleared by its owner before use and is never aliased across
+// two live users at the same time.
+var array<float> scDispRange = array.new<float>()   // f_medianRange, displacement
+var array<float> scTlAtr     = array.new<float>()   // trendline anchor-slice ATRs (kept sorted)
+
 f_trueRange(float h, float l, float prevClose) =>
     float hl = h - l
     na(prevClose) ? hl : math.max(hl, math.abs(h - prevClose), math.abs(l - prevClose))
@@ -197,8 +237,9 @@ var float latestTLNormSlope    = na
 var int   latestTLOrient       = na
 
 // Swing-set change detection (so heavy derived detectors run only on change).
-var int lastSwingCount    = na
-var int lastSwingConfTime = na
+var int lastSwingCount       = na
+var int lastSwingConfTime    = na
+var int lastSwingFingerprint = na
 
 // Persistent draw-object handles (bounded, redrawn on change).
 var array<label> swingLabelObjs = array.new<label>()
@@ -227,105 +268,108 @@ f_clearBoxes(array<box> a) =>
 // =============================================================================
 // SWING PIPELINE — domain/swings.py (single-candle pivots -> plateau merge ->
 // same-direction supersede -> alternation + meaningful-reversal confirmation).
-// Recomputed over the bounded window on each confirmed bar (batch-faithful).
 // Parallel arrays are used instead of the Python _Pivot NamedTuple.
+//
+// P1-PERF-1: single-candle pivots are now maintained incrementally (one new
+// candle decided per confirmed bar). Everything downstream of that — merge,
+// supersede, alternation, meaningful-reversal confirmation — still runs over the
+// bounded window on every confirmed bar and remains batch-faithful; it is cheap
+// because it walks the pivot list (tens of entries), not the candle window.
 // =============================================================================
-f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<int> availT, array<float> atr) =>
+// P1-PERF-1 — advance the single-candle pivot frontier by exactly one candle.
+//
+// Decides the newest candle that has just acquired C_WINDOW_RADIUS closed bars to
+// its right (window index n-1-R), then retires pivots that have dropped out of
+// the range the batch scan would cover. The resulting pivot set is identical to
+// re-running _find_single_candle_pivots over the whole window.
+f_advancePivotFrontier(array<float> highs, array<float> lows, array<float> atr, int absFirst, array<int> pAbs, array<int> pType, array<float> pPrice, array<float> pAtr, array<float> pTie) =>
+    int n = array.size(highs)
+    int idx = n - 1 - C_WINDOW_RADIUS
+    if idx >= C_WINDOW_RADIUS
+        float a = array.get(atr, idx)
+        if not na(a)
+            float tie = C_PIVOT_TIE_TOL_ATR * a
+            float candHigh = array.get(highs, idx)
+            float candLow  = array.get(lows, idx)
+            bool qHigh = true
+            bool qLow  = true
+            for j = idx - C_WINDOW_RADIUS to idx + C_WINDOW_RADIUS
+                if j != idx
+                    if array.get(highs, j) > candHigh + tie
+                        qHigh := false
+                    if array.get(lows, j) < candLow - tie
+                        qLow := false
+            if qHigh and qLow
+                qHigh := qHigh   // ambiguous (register 33I): emit neither
+            else if qHigh
+                array.push(pAbs, absFirst + idx)
+                array.push(pType, SWING_HIGH)
+                array.push(pPrice, candHigh)
+                array.push(pAtr, a)
+                array.push(pTie, tie)
+            else if qLow
+                array.push(pAbs, absFirst + idx)
+                array.push(pType, SWING_LOW)
+                array.push(pPrice, candLow)
+                array.push(pAtr, a)
+                array.push(pTie, tie)
+    // The batch scan starts at window index C_WINDOW_RADIUS, i.e. absolute
+    // absFirst + C_WINDOW_RADIUS. Anything older is outside its range.
+    int minAbs = absFirst + C_WINDOW_RADIUS
+    while array.size(pAbs) > 0 and array.get(pAbs, 0) < minAbs
+        array.shift(pAbs)
+        array.shift(pType)
+        array.shift(pPrice)
+        array.shift(pAtr)
+        array.shift(pTie)
+    array.size(pAbs)   // explicit return: live pivot count (callers may ignore it)
+
+f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<int> availT, array<float> atr, array<int> pAbs, array<int> pType, array<float> pPrice, array<float> pAtr, array<float> pTie, int absFirst) =>
     array<SwingRec> outSwings = array.new<SwingRec>()
     int n = array.size(highs)
-    if n >= 2 * C_WINDOW_RADIUS + 1
-        // ---- _find_single_candle_pivots (swings.py:84) ----
-        pType  = array.new<int>()
-        pStart = array.new<int>()
-        pEnd   = array.new<int>()
-        pPrice = array.new<float>()
-        pAtr   = array.new<float>()
-        pTie   = array.new<float>()
-        for idx = C_WINDOW_RADIUS to n - C_WINDOW_RADIUS - 1
-            float a = array.get(atr, idx)
-            if not na(a)
-                float tie = C_PIVOT_TIE_TOL_ATR * a
-                float candHigh = array.get(highs, idx)
-                float candLow  = array.get(lows, idx)
-                bool qHigh = true
-                bool qLow  = true
-                for j = idx - C_WINDOW_RADIUS to idx + C_WINDOW_RADIUS
-                    if j != idx
-                        if array.get(highs, j) > candHigh + tie
-                            qHigh := false
-                        if array.get(lows, j) < candLow - tie
-                            qLow := false
-                if qHigh and qLow
-                    qHigh := qHigh   // ambiguous (register 33I): emit neither
-                else if qHigh
-                    array.push(pType, SWING_HIGH)
-                    array.push(pStart, idx)
-                    array.push(pEnd, idx)
-                    array.push(pPrice, candHigh)
-                    array.push(pAtr, a)
-                    array.push(pTie, tie)
-                else if qLow
-                    array.push(pType, SWING_LOW)
-                    array.push(pStart, idx)
-                    array.push(pEnd, idx)
-                    array.push(pPrice, candLow)
-                    array.push(pAtr, a)
-                    array.push(pTie, tie)
-
-        // ---- _merge_adjacent_plateaus (swings.py:139): per type, merge pivots at
-        // consecutive indices within tie tolerance. ----
+    int np = array.size(pAbs)
+    if n >= 2 * C_WINDOW_RADIUS + 1 and np > 0
+        // ---- _merge_adjacent_plateaus (swings.py:139): merge pivots of the same
+        // type at consecutive indices within tie tolerance.
+        //
+        // P1-PERF-1: the frontier is already in ascending index order and holds at
+        // most ONE pivot per candle, so two same-type pivots at consecutive
+        // indices are necessarily neighbours in this list — nothing can sit
+        // between them. A single ordered pass therefore produces exactly the
+        // records Python's group-by-type pass produces, and emits them already
+        // ordered by start index, which is what swings.py:179 sorts for. The
+        // O(M^2) insertion sort is provably redundant and has been removed.
+        // The two-element median is written as the mean of the pair — identical
+        // by definition, without allocating a temporary array per merge.
         mType  = array.new<int>()
         mStart = array.new<int>()
         mEnd   = array.new<int>()
         mPrice = array.new<float>()
         mAtr   = array.new<float>()
         mTie   = array.new<float>()
-        typesArr = array.from(SWING_HIGH, SWING_LOW)
-        for ti = 0 to 1
-            int swingType = array.get(typesArr, ti)
-            gi = array.new<int>()
-            for [k, _u287] in pType
-                if array.get(pType, k) == swingType
-                    array.push(gi, k)
-            int gidx = 0
-            while gidx < array.size(gi)
-                int cur = array.get(gi, gidx)
-                bool merged = false
-                if gidx + 1 < array.size(gi)
-                    int nxt = array.get(gi, gidx + 1)
-                    if array.get(pStart, nxt) == array.get(pEnd, cur) + 1 and math.abs(array.get(pPrice, nxt) - array.get(pPrice, cur)) <= array.get(pTie, cur)
-                        float price = swingType == SWING_HIGH ? math.max(array.get(pPrice, cur), array.get(pPrice, nxt)) : math.min(array.get(pPrice, cur), array.get(pPrice, nxt))
-                        pair = array.from(array.get(pAtr, cur), array.get(pAtr, nxt))
-                        array.push(mType, swingType)
-                        array.push(mStart, array.get(pStart, cur))
-                        array.push(mEnd, array.get(pEnd, nxt))
-                        array.push(mPrice, price)
-                        array.push(mAtr, f_median(pair))
-                        array.push(mTie, array.get(pTie, nxt))
-                        gidx += 2
-                        merged := true
-                if not merged
-                    array.push(mType, swingType)
-                    array.push(mStart, array.get(pStart, cur))
-                    array.push(mEnd, array.get(pEnd, cur))
-                    array.push(mPrice, array.get(pPrice, cur))
-                    array.push(mAtr, array.get(pAtr, cur))
-                    array.push(mTie, array.get(pTie, cur))
-                    gidx += 1
-
-        // sort merged pivots by start index (swings.py:179) — insertion sort on order
-        order2 = array.new<int>()
-        for [k, _u318] in mType
-            array.push(order2, k)
-        for [a2, _u320] in order2
-            if a2 < 1
-                continue
-            int keyIdx = array.get(order2, a2)
-            int b2 = a2 - 1
-            while b2 >= 0 and array.get(mStart, array.get(order2, b2)) > array.get(mStart, keyIdx)
-                array.set(order2, b2 + 1, array.get(order2, b2))
-                b2 -= 1
-            array.set(order2, b2 + 1, keyIdx)
+        int gidx = 0
+        while gidx < np
+            int curType = array.get(pType, gidx)
+            bool merged = false
+            if gidx + 1 < np
+                if array.get(pType, gidx + 1) == curType and array.get(pAbs, gidx + 1) == array.get(pAbs, gidx) + 1 and math.abs(array.get(pPrice, gidx + 1) - array.get(pPrice, gidx)) <= array.get(pTie, gidx)
+                    float price = curType == SWING_HIGH ? math.max(array.get(pPrice, gidx), array.get(pPrice, gidx + 1)) : math.min(array.get(pPrice, gidx), array.get(pPrice, gidx + 1))
+                    array.push(mType, curType)
+                    array.push(mStart, array.get(pAbs, gidx) - absFirst)
+                    array.push(mEnd, array.get(pAbs, gidx + 1) - absFirst)
+                    array.push(mPrice, price)
+                    array.push(mAtr, (array.get(pAtr, gidx) + array.get(pAtr, gidx + 1)) / 2.0)
+                    array.push(mTie, array.get(pTie, gidx + 1))
+                    gidx += 2
+                    merged := true
+            if not merged
+                array.push(mType, curType)
+                array.push(mStart, array.get(pAbs, gidx) - absFirst)
+                array.push(mEnd, array.get(pAbs, gidx) - absFirst)
+                array.push(mPrice, array.get(pPrice, gidx))
+                array.push(mAtr, array.get(pAtr, gidx))
+                array.push(mTie, array.get(pTie, gidx))
+                gidx += 1
 
         // ---- _supersede_same_direction_runs (swings.py:183): keep extreme per run ----
         cType  = array.new<int>()
@@ -336,8 +380,7 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
         cTie   = array.new<float>()
         int runType = na
         int bestRel = na
-        for [ii, _u337] in order2
-            int rel = array.get(order2, ii)
+        for [rel, _u337] in mType
             int thisType = array.get(mType, rel)
             if na(runType)
                 runType := thisType
@@ -379,28 +422,34 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
                 int confIdx = na
                 float excursion = 0.0
                 int searchStart = localConfIdx + 1
+                // P1-PERF-1: this is Python's `for j in range(search_start, n)`.
+                // The previous `for [j, _] in lows` + `if j < searchStart: continue`
+                // form re-walked the whole window from index 0 on every candidate
+                // (~W/2 wasted iterations each) before reaching the first index it
+                // could actually use. A `while` bounded at both ends visits exactly
+                // the same indices in the same order, and cannot run backwards.
                 if array.get(cType, p) == SWING_HIGH
                     float lowestLow = array.get(lows, localConfIdx)
-                    for [j, _u378] in lows
-                        if j < searchStart
-                            continue
+                    int j = searchStart
+                    while j < n
                         lowestLow := math.min(lowestLow, array.get(lows, j))
                         float exc = pivotPrice - lowestLow
                         if exc >= threshold
                             confIdx := j
                             excursion := exc
                             break
+                        j += 1
                 else
                     float highestHigh = array.get(highs, localConfIdx)
-                    for [j, _u387] in highs
-                        if j < searchStart
-                            continue
+                    int j = searchStart
+                    while j < n
                         highestHigh := math.max(highestHigh, array.get(highs, j))
                         float exc = highestHigh - pivotPrice
                         if exc >= threshold
                             confIdx := j
                             excursion := exc
                             break
+                        j += 1
                 if not na(confIdx)
                     SwingRec s = SwingRec.new(array.get(cType, p), pivotPrice, array.get(cStart, p), endIdx, array.get(openT, endIdx), array.get(availT, localConfIdx), array.get(availT, confIdx), refAtr, array.get(cTie, p), threshold, excursion)
                     array.push(outSwings, s)
@@ -452,7 +501,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
                 array.push(candAtrs, ms.referenceAtr)
             array.push(candPrices, array.get(swings, si).price)
             array.push(candAtrs, array.get(swings, si).referenceAtr)
-            float refAtr = f_median(candAtrs)
+            float refAtr = f_medianConsume(candAtrs)
             float tol = C_EQUAL_LEVEL_TOL_ATR * refAtr
             float spread = array.max(candPrices) - array.min(candPrices)
             if spread <= tol
@@ -471,7 +520,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
                     array.push(atrs, ms.referenceAtr)
                     firstT := na(firstT) ? ms.meaningfulConfTime : math.min(firstT, ms.meaningfulConfTime)
                     confT := na(confT) ? ms.meaningfulConfTime : math.max(confT, ms.meaningfulConfTime)
-                float refAtr = f_median(atrs)
+                float refAtr = f_medianConsume(atrs)
                 float zb = array.min(prices)
                 float zt = array.max(prices)
                 array.push(out, EqualLevelRec.new(wantType, zb, zt, (zb + zt) / 2.0, zt - zb, C_EQUAL_LEVEL_TOL_ATR * refAtr, array.size(members), firstT, confT))
@@ -489,7 +538,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
             array.push(atrs, ms.referenceAtr)
             firstT := na(firstT) ? ms.meaningfulConfTime : math.min(firstT, ms.meaningfulConfTime)
             confT := na(confT) ? ms.meaningfulConfTime : math.max(confT, ms.meaningfulConfTime)
-        float refAtr = f_median(atrs)
+        float refAtr = f_medianConsume(atrs)
         float zb = array.min(prices)
         float zt = array.max(prices)
         array.push(out, EqualLevelRec.new(wantType, zb, zt, (zb + zt) / 2.0, zt - zb, C_EQUAL_LEVEL_TOL_ATR * refAtr, array.size(members), firstT, confT))
@@ -529,7 +578,7 @@ f_measureLeg(array<float> highs, array<float> lows, array<float> opens, array<fl
             bool dir = isBull ? array.get(closes, i) >= array.get(opens, i) : array.get(closes, i) <= array.get(opens, i)
             if dir
                 dirCloses += 1
-        float refAtr = f_median(atrs)
+        float refAtr = f_medianConsume(atrs)
         dirShare := dirCloses / barCount
         if refAtr != 0.0 and legPath != 0.0
             float normSpeed = netDist / (barCount * refAtr)
@@ -549,13 +598,20 @@ f_evaluateReaction(array<float> highs, array<float> lows, array<float> opens, ar
     int result = na
     float zoneHeight = zoneTop - zoneBottom
     if zoneHeight > 0.0 and searchStart < n
+        // P1-PERF-1: the original loop kept walking to the end of the window after
+        // the first qualifying close had already fixed `reactionStart` (the
+        // `if na(reactionStart)` guard made every later iteration a no-op). This
+        // stops at the same index; it is the dominant read in the S/R detector.
         int reactionStart = na
-        for i = searchStart to n - 1
-            if na(reactionStart)
-                if isSupport and array.get(closes, i) > zoneTop
-                    reactionStart := i
-                if not isSupport and array.get(closes, i) < zoneBottom
-                    reactionStart := i
+        int ri = searchStart
+        while ri < n
+            if isSupport and array.get(closes, ri) > zoneTop
+                reactionStart := ri
+                break
+            if not isSupport and array.get(closes, ri) < zoneBottom
+                reactionStart := ri
+                break
+            ri += 1
         if not na(reactionStart)
             float anchor = na
             if isSupport
@@ -650,11 +706,13 @@ f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<floa
                     if touch.meaningfulConfTime > lastTouchTime
                         bool geomOk = isSupport ? (touch.price <= zoneTop + touchTol and touch.price >= zoneBottom - pierceTol) : (touch.price >= zoneBottom - touchTol and touch.price <= zoneTop + pierceTol)
                         if geomOk
+                            // P1-PERF-1: existence test — stop at the first witness.
                             bool oppositeBetween = false
                             for [s, _u640] in swings
                                 SwingRec sw = array.get(swings, s)
                                 if sw.swingType == oppositeType and lastTouchTime < sw.meaningfulConfTime and sw.meaningfulConfTime < touch.meaningfulConfTime
                                     oppositeBetween := true
+                                    break
                             if oppositeBetween
                                 int touchReaction = f_evaluateReaction(highs, lows, opens, closes, atr, touch.pivotEndIdx + 1, zoneTop, zoneBottom, isSupport)
                                 if not na(touchReaction)
@@ -669,7 +727,7 @@ f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<floa
 // =============================================================================
 // TRENDLINES — domain/trendlines.detect_trendlines.
 // =============================================================================
-f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings) =>
+f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings, array<float> atrSlice) =>
     array<TrendlineRec> out = array.new<TrendlineRec>()
     orientTypes = array.from(SWING_LOW, SWING_HIGH)  // BULLISH uses lows, BEARISH uses highs
     for ot = 0 to 1
@@ -697,6 +755,13 @@ f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings
         for [i, _u681] in si
             SwingRec a1 = array.get(swings, array.get(si, i))
             int a1Idx = a1.pivotEndIdx
+            // P1-PERF-1: `si` is ordered by pivotEndIdx, so for a fixed first
+            // anchor the ATR slice [a1Idx .. a2Idx] only ever GROWS as j advances.
+            // Rebuilding and re-allocating it for every candidate pair re-read the
+            // same bars O(pairs) times; instead extend one reused buffer. The
+            // median is over a multiset, so growth order is irrelevant.
+            array.clear(atrSlice)
+            int slicedTo = a1Idx - 1
             for [j, _u684] in si
                 if j <= i
                     continue
@@ -706,41 +771,51 @@ f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings
                     bool progressOk = isBull ? (a2.price > a1.price + a1.tieTolerance) : (a2.price < a1.price - a1.tieTolerance)
                     if progressOk
                         float rawSlope = (a2.price - a1.price) / (a2Idx - a1Idx)
-                        betweenAtrs = array.new<float>()
-                        for bi = a1Idx to a2Idx
-                            float av = array.get(atr, bi)
-                            if not na(av)
-                                array.push(betweenAtrs, av)
-                        if array.size(betweenAtrs) > 0
-                            float refAtr = f_median(betweenAtrs)
+                        if a2Idx > slicedTo
+                            for bi = slicedTo + 1 to a2Idx
+                                float av = array.get(atr, bi)
+                                if not na(av)
+                                    array.push(atrSlice, av)
+                            slicedTo := a2Idx
+                        if array.size(atrSlice) > 0
+                            float refAtr = f_medianConsume(atrSlice)
                             if refAtr != 0.0
                                 float normSlope = math.abs(rawSlope) / refAtr
                                 if normSlope >= C_TL_HORIZONTAL_ATR and normSlope <= C_TL_TOO_STEEP_ATR
                                     float pierceTol = C_TL_PIERCE_TOL_ATR * refAtr
                                     float touchTol = C_TL_TOUCH_TOL_ATR * refAtr
+                                    // P1-PERF-1: stop at the first pierce instead of
+                                    // scanning the remaining bars with the result
+                                    // already decided. Same verdict, fewer reads.
                                     bool integrityOk = true
-                                    for bi = a1Idx + 1 to a2Idx - 1
-                                        if integrityOk
-                                            float projected = a1.price + rawSlope * (bi - a1Idx)
-                                            float cc = array.get(closes, bi)
-                                            if isBull
-                                                if projected - cc > pierceTol
-                                                    integrityOk := false
-                                            else
-                                                if cc - projected > pierceTol
-                                                    integrityOk := false
+                                    int ii = a1Idx + 1
+                                    while ii <= a2Idx - 1
+                                        float projected = a1.price + rawSlope * (ii - a1Idx)
+                                        float cc = array.get(closes, ii)
+                                        if isBull
+                                            if projected - cc > pierceTol
+                                                integrityOk := false
+                                                break
+                                        else
+                                            if cc - projected > pierceTol
+                                                integrityOk := false
+                                                break
+                                        ii += 1
                                     if integrityOk
+                                        // P1-PERF-1: `si` is ascending by pivotEndIdx,
+                                        // so the first qualifying touch encountered is
+                                        // the one the original scan kept; break there.
                                         int confTime = na
                                         for [t, _u716] in si
-                                            if na(confTime)
-                                                SwingRec touch = array.get(swings, array.get(si, t))
-                                                int tIdx = touch.pivotEndIdx
-                                                if tIdx > a2Idx
-                                                    float projected = a1.price + rawSlope * (tIdx - a1Idx)
-                                                    float diff = isBull ? (touch.price - projected) : (projected - touch.price)
-                                                    bool qualifies = math.abs(diff) <= touchTol or (diff >= -pierceTol and diff < -touchTol)
-                                                    if qualifies
-                                                        confTime := touch.meaningfulConfTime
+                                            SwingRec touch = array.get(swings, array.get(si, t))
+                                            int tIdx = touch.pivotEndIdx
+                                            if tIdx > a2Idx
+                                                float projected = a1.price + rawSlope * (tIdx - a1Idx)
+                                                float diff = isBull ? (touch.price - projected) : (projected - touch.price)
+                                                bool qualifies = math.abs(diff) <= touchTol or (diff >= -pierceTol and diff < -touchTol)
+                                                if qualifies
+                                                    confTime := touch.meaningfulConfTime
+                                                    break
                                         if not na(confTime)
                                             array.push(out, TrendlineRec.new(orientation, a1.price, a2.price, a1.pivotEndTime, a2.pivotEndTime, rawSlope, normSlope, confTime))
     out
@@ -748,7 +823,7 @@ f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings
 // =============================================================================
 // DISPLACEMENT — domain/displacement for the most-recent confirmed candle.
 // =============================================================================
-f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, array<float> closes) =>
+f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> scratch) =>
     int n = array.size(highs)
     int code = na
     float ratio = na
@@ -760,7 +835,7 @@ f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, 
             ratio := 0.0
             cls := 0
         else
-            float baseline = f_medianRange(highs, lows, idx - C_RANGE_CONTEXT_WINDOW, idx)
+            float baseline = f_medianRange(highs, lows, idx - C_RANGE_CONTEXT_WINDOW, idx, scratch)
             ratio := baseline == 0.0 ? 0.0 : rangeValue / baseline
             cls := ratio >= C_DISP_VERY_FAST_RATIO ? 2 : (ratio >= C_DISP_FAST_RATIO ? 1 : 0)
         bool isBull = array.get(closes, idx) >= array.get(opens, idx)
@@ -788,6 +863,7 @@ if barstate.isconfirmed
     atrPrevClose := close
 
     // ---- push into rolling window; prune to lookbackWindow ----
+    confirmedBarCount := confirmedBarCount + 1
     array.push(wHigh, high)
     array.push(wLow, low)
     array.push(wOpen, open)
@@ -805,29 +881,56 @@ if barstate.isconfirmed
         array.shift(wAtr)
 
     // ---- displacement (latest confirmed candle) ----
-    [dispCode, dispRatio] = f_latestDisplacement(wHigh, wLow, wOpen, wClose)
+    [dispCode, dispRatio] = f_latestDisplacement(wHigh, wLow, wOpen, wClose, scDispRange)
     latestDispCode := dispCode
     latestDispRatio := dispRatio
 
-    // ---- swing pipeline (every confirmed bar over the window) ----
-    array<SwingRec> swings = f_detectSwings(wHigh, wLow, wOpenT, wAvailT, wAtr)
+    // ---- single-candle pivot frontier: decide ONE new candle, retire stale ----
+    int absFirst = confirmedBarCount - array.size(wHigh)
+    f_advancePivotFrontier(wHigh, wLow, wAtr, absFirst, pvAbs, pvType, pvPrice, pvAtr, pvTie)
 
-    for [k, _u797] in swings
-        SwingRec s = array.get(swings, k)
+    // ---- swing pipeline (every confirmed bar, from the maintained frontier) ----
+    array<SwingRec> swings = f_detectSwings(wHigh, wLow, wOpenT, wAvailT, wAtr, pvAbs, pvType, pvPrice, pvAtr, pvTie, absFirst)
+
+    // Latest confirmed of each direction. The list is append-ordered, so the last
+    // entry of each type wins; scanning backwards lets us stop as soon as both
+    // directions are known.
+    int sc = array.size(swings)
+    bool haveHigh = false
+    bool haveLow = false
+    int si2 = sc - 1
+    while si2 >= 0 and not (haveHigh and haveLow)
+        SwingRec s = array.get(swings, si2)
         if s.swingType == SWING_HIGH
-            latestSwingHighPrice := s.price
-            latestSwingHighTime := s.pivotEndTime
+            if not haveHigh
+                latestSwingHighPrice := s.price
+                latestSwingHighTime := s.pivotEndTime
+                haveHigh := true
         else
-            latestSwingLowPrice := s.price
-            latestSwingLowTime := s.pivotEndTime
+            if not haveLow
+                latestSwingLowPrice := s.price
+                latestSwingLowTime := s.pivotEndTime
+                haveLow := true
+        si2 -= 1
 
     // ---- recompute derived detectors only when the swing set changes ----
-    int newCount = array.size(swings)
-    int newConfTime = newCount > 0 ? array.get(swings, newCount - 1).meaningfulConfTime : na
-    bool changed = na(lastSwingCount) or newCount != lastSwingCount or newConfTime != lastSwingConfTime
+    // P1-PERF-1: (count, last confirmation time) alone could not see a change
+    // confined to the MIDDLE of the list — which the window's left edge can cause,
+    // because the alternation chain is re-seeded at that edge on every bar. The
+    // fingerprint below is an order-sensitive rolling accumulator over EVERY
+    // member, so a same-length reshuffle is detected too. It is O(S) and cheap,
+    // and it can only ever trigger MORE recomputation than before, never less.
+    int newCount = sc
+    int newConfTime = sc > 0 ? array.get(swings, sc - 1).meaningfulConfTime : na
+    int newFingerprint = 0
+    for [k, _u797] in swings
+        SwingRec sf = array.get(swings, k)
+        newFingerprint := (newFingerprint * 31 + sf.swingType + sf.meaningfulConfTime % 1000000 + k) % 1000000007
+    bool changed = na(lastSwingCount) or newCount != lastSwingCount or newConfTime != lastSwingConfTime or newFingerprint != lastSwingFingerprint
     if changed
         lastSwingCount := newCount
         lastSwingConfTime := newConfTime
+        lastSwingFingerprint := newFingerprint
 
         // EQUAL LEVELS
         array<EqualLevelRec> eqs = f_detectEqualLevels(swings)
@@ -852,7 +955,7 @@ if barstate.isconfirmed
             latestSRType := sr.zoneType
 
         // TRENDLINES
-        array<TrendlineRec> tls = f_detectTrendlines(wClose, wAtr, swings)
+        array<TrendlineRec> tls = f_detectTrendlines(wClose, wAtr, swings, scTlAtr)
         latestTLNormSlope := na
         latestTLOrient := na
         if array.size(tls) > 0
@@ -923,8 +1026,11 @@ f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)
     table.cell(t, 1, r, v, text_size = size.tiny, text_halign = text.align_right, text_color = color.white)
 
-var table dbg = table.new(position.top_right, 2, 10, border_width = 1)
+// P1-PERF-1: the parity table is development instrumentation. Declaring it here
+// (inside the guarded branch) means no table object is created at all in normal
+// client-style mode.
 if barstate.islast and debugMode
+    var table dbg = table.new(position.top_right, 2, 10, border_width = 1)
     f_row(dbg, 0, "P1 DEV — latest confirmed", "")
     f_row(dbg, 1, "Swing High", na(latestSwingHighPrice) ? "-" : str.tostring(latestSwingHighPrice, format.mintick))
     f_row(dbg, 2, "Swing Low",  na(latestSwingLowPrice)  ? "-" : str.tostring(latestSwingLowPrice, format.mintick))

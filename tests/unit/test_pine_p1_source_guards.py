@@ -244,3 +244,180 @@ def test_pine_has_no_offset_start_counted_array_loops() -> None:
         "offset-start counted array loop; use `for [i, elem] in <array>` with a "
         f"`continue` guard for the skipped prefix: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# P1-PERF-1 — architectural performance invariants.
+#
+# The port originally re-derived the entire measurement pipeline over the whole
+# rolling window on every confirmed historical bar, which exhausted TradingView's
+# per-script time budget (RE10110) on M1/H1/D1. The guards below pin the shape of
+# the optimisation so a later edit cannot quietly reintroduce the quadratic work.
+# They are structural, not stylistic: each one matches on a token or an
+# assignment, never on indentation or spacing.
+# ---------------------------------------------------------------------------
+
+
+def _next_code_line(lines: list[str], index: int) -> str:
+    """First non-blank code line strictly after ``index`` (or '' at the end)."""
+    for candidate in lines[index + 1 :]:
+        if candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+def test_pine_pivot_detection_is_incremental() -> None:
+    """Single-candle pivots must be maintained by a frontier, not rescanned.
+
+    A pivot's verdict is final once it has C_WINDOW_RADIUS closed bars to its
+    right, so re-deriving every window index on every bar recomputed an identical
+    answer O(window) times over.
+    """
+    code = _code_only(_source())
+    assert "f_advancePivotFrontier" in code, (
+        "the incremental single-candle pivot frontier is missing"
+    )
+    assert "for idx = C_WINDOW_RADIUS to n - C_WINDOW_RADIUS - 1" not in code, (
+        "the full-window single-candle pivot rescan has been reintroduced"
+    )
+
+
+def test_pine_pivot_frontier_state_is_persistent() -> None:
+    """The frontier only works if its state survives across bars."""
+    code = _code_only(_source())
+    for declaration in (
+        "var int confirmedBarCount",
+        "var array<int>   pvAbs",
+        "var array<int>   pvType",
+        "var array<float> pvPrice",
+        "var array<float> pvAtr",
+        "var array<float> pvTie",
+    ):
+        assert declaration in code, f"missing persistent frontier state: {declaration}"
+
+
+def test_pine_reversal_search_starts_at_its_lower_bound() -> None:
+    """The meaningful-reversal scan must not walk the window from index 0.
+
+    ``for [j, _] in lows`` + ``if j < searchStart: continue`` visited ~W/2 dead
+    indices per candidate pivot before reaching the first usable one. Python's
+    ``range(search_start, n)`` starts where it means to.
+    """
+    offenders = [
+        (number, line.strip())
+        for number, line in enumerate(_code_lines(), start=1)
+        if "j < searchStart" in line
+    ]
+    assert not offenders, (
+        "reversal-confirmation search re-walks the window from index 0 instead of "
+        f"starting at searchStart: {offenders}"
+    )
+
+
+def test_pine_existence_scans_short_circuit() -> None:
+    """First-match / existence scans must stop once the answer is fixed.
+
+    Each of these assignments settles its scan's result; continuing to iterate
+    afterwards cannot change the outcome and was a large share of the S/R and
+    trendline cost.
+    """
+    settling_assignments = (
+        "reactionStart := ri",
+        "oppositeBetween := true",
+        "integrityOk := false",
+        "confTime := touch.meaningfulConfTime",
+        "confIdx := j",
+    )
+    lines = _code_lines()
+    offenders: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not any(stripped == assignment for assignment in settling_assignments):
+            continue
+        window = [
+            candidate.strip()
+            for candidate in lines[index + 1 : index + 4]
+            if candidate.strip()
+        ]
+        if "break" not in window[:3]:
+            offenders.append((index + 1, stripped))
+    assert not offenders, (
+        "scan result is settled but the loop keeps iterating — add a `break`: "
+        f"{offenders}"
+    )
+
+
+def test_pine_derived_detectors_stay_behind_the_change_gate() -> None:
+    """Equal levels / S/R / trendlines must not run unconditionally per bar."""
+    lines = _code_lines()
+    gate_indices = [
+        index
+        for index, line in enumerate(lines)
+        if line.strip().startswith("if changed")
+    ]
+    assert gate_indices, "the derived-detector change gate is missing"
+    gate = gate_indices[0]
+    for call in ("f_detectEqualLevels(", "f_detectSR(", "f_detectTrendlines("):
+        call_sites = [
+            index
+            for index, line in enumerate(lines)
+            if call in line and not line.strip().startswith("f_")
+        ]
+        assert call_sites, f"missing call site for {call}"
+        assert all(index > gate for index in call_sites), (
+            f"{call} is invoked outside the swing-set change gate"
+        )
+
+
+def test_pine_change_gate_covers_the_whole_swing_set() -> None:
+    """A same-length reshuffle must invalidate the cached derived state.
+
+    The window's left edge re-seeds the alternation chain every bar, so a change
+    can land in the MIDDLE of the swing list with the count and the last
+    confirmation time both unchanged.
+    """
+    code = _code_only(_source())
+    assert "lastSwingFingerprint" in code, (
+        "the change gate no longer fingerprints the whole swing set"
+    )
+    assert "newFingerprint != lastSwingFingerprint" in code, (
+        "the fingerprint is computed but not compared"
+    )
+
+
+def test_pine_median_does_not_copy_per_call() -> None:
+    """Medians run inside the hot path; they must not allocate a copy each time."""
+    code = _code_only(_source())
+    assert "array.copy(" not in code, (
+        "array.copy in the Pine source — the median helpers consume a "
+        "caller-owned array instead of copying"
+    )
+    assert "f_medianConsume(" in code, "the consuming median helper is missing"
+
+
+def test_pine_debug_table_is_built_only_in_debug_mode() -> None:
+    """Instrumentation must not allocate in normal client-style mode."""
+    lines = _code_lines()
+    offenders: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if "table.new(" not in line:
+            continue
+        window = lines[max(0, index - 3) : index]
+        if not any("debugMode" in candidate for candidate in window):
+            offenders.append((index + 1, line.strip()))
+    assert not offenders, (
+        f"table.new reached without a debugMode guard above it: {offenders}"
+    )
+
+
+def test_pine_analytical_window_default_is_unchanged() -> None:
+    """B17: performance must come from algorithmic work, not a shorter window.
+
+    Shrinking `lookbackWindow` changes which records the port can reproduce, so it
+    is a semantic change and needs its own equivalence analysis — not a perf knob.
+    """
+    code = _code_only(_source())
+    assert 'input.int(300, "Analytical window' in code, (
+        "the provisional 300-bar analytical window default was changed; that is a "
+        "semantic change, not a performance optimisation"
+    )
