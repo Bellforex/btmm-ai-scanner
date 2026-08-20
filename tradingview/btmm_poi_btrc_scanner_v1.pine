@@ -284,7 +284,7 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
         for ti = 0 to 1
             int swingType = array.get(typesArr, ti)
             gi = array.new<int>()
-            for k = 0 to array.size(pType) - 1
+            for [k, _u287] in pType
                 if array.get(pType, k) == swingType
                     array.push(gi, k)
             int gidx = 0
@@ -315,9 +315,11 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
 
         // sort merged pivots by start index (swings.py:179) — insertion sort on order
         order2 = array.new<int>()
-        for k = 0 to array.size(mType) - 1
+        for [k, _u318] in mType
             array.push(order2, k)
-        for a2 = 1 to array.size(order2) - 1
+        for [a2, _u320] in order2
+            if a2 < 1
+                continue
             int keyIdx = array.get(order2, a2)
             int b2 = a2 - 1
             while b2 >= 0 and array.get(mStart, array.get(order2, b2)) > array.get(mStart, keyIdx)
@@ -334,7 +336,7 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
         cTie   = array.new<float>()
         int runType = na
         int bestRel = na
-        for ii = 0 to array.size(order2) - 1
+        for [ii, _u337] in order2
             int rel = array.get(order2, ii)
             int thisType = array.get(mType, rel)
             if na(runType)
@@ -363,10 +365,14 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
 
         // ---- confirmation loop (swings.py:219): alternation + meaningful reversal ----
         int lastConfirmedType = na
-        for p = 0 to array.size(cType) - 1
+        for [p, _u366] in cType
             int endIdx = array.get(cEnd, p)
             int localConfIdx = endIdx + C_WINDOW_RADIUS
-            if localConfIdx < n and array.get(cType, p) != lastConfirmedType
+            // swings.py:228 `pivot.swing_type == last_confirmed_type` is False while
+            // last_confirmed_type is None, so the FIRST eligible pivot is never skipped.
+            // Pine `!=` against an na int yields na (falsy), which would permanently
+            // block that first confirmation; the na() guard restores the Python state.
+            if localConfIdx < n and (na(lastConfirmedType) or array.get(cType, p) != lastConfirmedType)
                 float refAtr = array.get(cAtr, p)
                 float threshold = C_MEANINGFUL_REVERSAL_ATR * refAtr
                 float pivotPrice = array.get(cPrice, p)
@@ -375,7 +381,9 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
                 int searchStart = localConfIdx + 1
                 if array.get(cType, p) == SWING_HIGH
                     float lowestLow = array.get(lows, localConfIdx)
-                    for j = searchStart to n - 1
+                    for [j, _u378] in lows
+                        if j < searchStart
+                            continue
                         lowestLow := math.min(lowestLow, array.get(lows, j))
                         float exc = pivotPrice - lowestLow
                         if exc >= threshold
@@ -384,7 +392,9 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
                             break
                 else
                     float highestHigh = array.get(highs, localConfIdx)
-                    for j = searchStart to n - 1
+                    for [j, _u387] in highs
+                        if j < searchStart
+                            continue
                         highestHigh := math.max(highestHigh, array.get(highs, j))
                         float exc = highestHigh - pivotPrice
                         if exc >= threshold
@@ -406,11 +416,13 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
 f_sweepEqualType(array<SwingRec> swings, int wantType) =>
     array<EqualLevelRec> out = array.new<EqualLevelRec>()
     idxs = array.new<int>()
-    for k = 0 to array.size(swings) - 1
+    for [k, _u409] in swings
         if array.get(swings, k).swingType == wantType
             array.push(idxs, k)
     // insertion sort idxs by (meaningfulConfTime, pivotEndTime, price)
-    for a = 1 to array.size(idxs) - 1
+    for [a, _u413] in idxs
+        if a < 1
+            continue
         int key = array.get(idxs, a)
         SwingRec ks = array.get(swings, key)
         int b = a - 1
@@ -426,7 +438,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
         array.set(idxs, b + 1, key)
 
     members = array.new<int>()
-    for a = 0 to array.size(idxs) - 1
+    for [a, _u429] in idxs
         int si = array.get(idxs, a)
         bool closeIt = false
         if array.size(members) == 0
@@ -434,7 +446,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
         else
             candPrices = array.new<float>()
             candAtrs = array.new<float>()
-            for m = 0 to array.size(members) - 1
+            for [m, _u437] in members
                 SwingRec ms = array.get(swings, array.get(members, m))
                 array.push(candPrices, ms.price)
                 array.push(candAtrs, ms.referenceAtr)
@@ -453,7 +465,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
                 atrs = array.new<float>()
                 int firstT = na
                 int confT = na
-                for m = 0 to array.size(members) - 1
+                for [m, _u456] in members
                     SwingRec ms = array.get(swings, array.get(members, m))
                     array.push(prices, ms.price)
                     array.push(atrs, ms.referenceAtr)
@@ -471,7 +483,7 @@ f_sweepEqualType(array<SwingRec> swings, int wantType) =>
         atrs = array.new<float>()
         int firstT = na
         int confT = na
-        for m = 0 to array.size(members) - 1
+        for [m, _u474] in members
             SwingRec ms = array.get(swings, array.get(members, m))
             array.push(prices, ms.price)
             array.push(atrs, ms.referenceAtr)
@@ -487,9 +499,9 @@ f_detectEqualLevels(array<SwingRec> swings) =>
     out = array.new<EqualLevelRec>()
     highs = f_sweepEqualType(swings, SWING_HIGH)
     lows = f_sweepEqualType(swings, SWING_LOW)
-    for i = 0 to array.size(highs) - 1
+    for [i, _u490] in highs
         array.push(out, array.get(highs, i))
-    for i = 0 to array.size(lows) - 1
+    for [i, _u492] in lows
         array.push(out, array.get(lows, i))
     out
 
@@ -596,11 +608,13 @@ f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<floa
         bool isSupport = originType == SWING_LOW
         int oppositeType = isSupport ? SWING_HIGH : SWING_LOW
         oi = array.new<int>()
-        for k = 0 to array.size(swings) - 1
+        for [k, _u599] in swings
             if array.get(swings, k).swingType == originType
                 array.push(oi, k)
         // order by meaningfulConfTime (insertion sort)
-        for a = 1 to array.size(oi) - 1
+        for [a, _u603] in oi
+            if a < 1
+                continue
             int key = array.get(oi, a)
             int b = a - 1
             bool placed = false
@@ -612,7 +626,7 @@ f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<floa
                     placed := true
             array.set(oi, b + 1, key)
 
-        for oo = 0 to array.size(oi) - 1
+        for [oo, _u615] in oi
             SwingRec origin = array.get(swings, array.get(oi, oo))
             int originIdx = origin.pivotEndIdx
             float zoneDepth = C_SR_ZONE_DEPTH_ATR * origin.referenceAtr
@@ -631,13 +645,13 @@ f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<floa
                 int touchCount = 0
                 int firstConfTime = na
                 int lastTouchTime = origin.meaningfulConfTime
-                for tt = 0 to array.size(oi) - 1
+                for [tt, _u634] in oi
                     SwingRec touch = array.get(swings, array.get(oi, tt))
                     if touch.meaningfulConfTime > lastTouchTime
                         bool geomOk = isSupport ? (touch.price <= zoneTop + touchTol and touch.price >= zoneBottom - pierceTol) : (touch.price >= zoneBottom - touchTol and touch.price <= zoneTop + pierceTol)
                         if geomOk
                             bool oppositeBetween = false
-                            for s = 0 to array.size(swings) - 1
+                            for [s, _u640] in swings
                                 SwingRec sw = array.get(swings, s)
                                 if sw.swingType == oppositeType and lastTouchTime < sw.meaningfulConfTime and sw.meaningfulConfTime < touch.meaningfulConfTime
                                     oppositeBetween := true
@@ -662,11 +676,13 @@ f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings
         int orientation = array.get(orientTypes, ot)
         bool isBull = orientation == SWING_LOW
         si = array.new<int>()
-        for k = 0 to array.size(swings) - 1
+        for [k, _u665] in swings
             if array.get(swings, k).swingType == orientation
                 array.push(si, k)
         // order by pivotEndIdx (insertion sort)
-        for a = 1 to array.size(si) - 1
+        for [a, _u669] in si
+            if a < 1
+                continue
             int key = array.get(si, a)
             int b = a - 1
             bool placed = false
@@ -678,10 +694,12 @@ f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings
                     placed := true
             array.set(si, b + 1, key)
 
-        for i = 0 to array.size(si) - 1
+        for [i, _u681] in si
             SwingRec a1 = array.get(swings, array.get(si, i))
             int a1Idx = a1.pivotEndIdx
-            for j = i + 1 to array.size(si) - 1
+            for [j, _u684] in si
+                if j <= i
+                    continue
                 SwingRec a2 = array.get(swings, array.get(si, j))
                 int a2Idx = a2.pivotEndIdx
                 if a2Idx - a1Idx >= C_TL_MIN_ANCHOR_SPACING
@@ -713,7 +731,7 @@ f_detectTrendlines(array<float> closes, array<float> atr, array<SwingRec> swings
                                                     integrityOk := false
                                     if integrityOk
                                         int confTime = na
-                                        for t = 0 to array.size(si) - 1
+                                        for [t, _u716] in si
                                             if na(confTime)
                                                 SwingRec touch = array.get(swings, array.get(si, t))
                                                 int tIdx = touch.pivotEndIdx
@@ -794,7 +812,7 @@ if barstate.isconfirmed
     // ---- swing pipeline (every confirmed bar over the window) ----
     array<SwingRec> swings = f_detectSwings(wHigh, wLow, wOpenT, wAvailT, wAtr)
 
-    for k = 0 to array.size(swings) - 1
+    for [k, _u797] in swings
         SwingRec s = array.get(swings, k)
         if s.swingType == SWING_HIGH
             latestSwingHighPrice := s.price
@@ -815,7 +833,7 @@ if barstate.isconfirmed
         array<EqualLevelRec> eqs = f_detectEqualLevels(swings)
         latestEqualHigh := na
         latestEqualLow := na
-        for k = 0 to array.size(eqs) - 1
+        for [k, _u818] in eqs
             EqualLevelRec e = array.get(eqs, k)
             if e.clusterType == SWING_HIGH
                 latestEqualHigh := e.representativePrice
@@ -846,7 +864,9 @@ if barstate.isconfirmed
         if debugMode and showSwings
             f_clearLabels(swingLabelObjs)
             int startK = math.max(0, array.size(swings) - maxDrawPerFamily)
-            for k = startK to array.size(swings) - 1
+            for [k, _u849] in swings
+                if k < startK
+                    continue
                 SwingRec s = array.get(swings, k)
                 bool isHigh = s.swingType == SWING_HIGH
                 label lb = label.new(x = s.pivotEndTime, y = s.price, xloc = xloc.bar_time, style = isHigh ? label.style_label_down : label.style_label_up, color = isHigh ? color.new(color.teal, 20) : color.new(color.maroon, 20), textcolor = color.white, size = size.tiny, text = isHigh ? "SH" : "SL")
@@ -854,21 +874,27 @@ if barstate.isconfirmed
         if debugMode and showEqualLevels
             f_clearLines(eqLineObjs)
             int startK = math.max(0, array.size(eqs) - maxDrawPerFamily)
-            for k = startK to array.size(eqs) - 1
+            for [k, _u857] in eqs
+                if k < startK
+                    continue
                 EqualLevelRec e = array.get(eqs, k)
                 line ln = line.new(x1 = e.firstTime, y1 = e.representativePrice, x2 = e.confirmationTime, y2 = e.representativePrice, xloc = xloc.bar_time, color = e.clusterType == SWING_HIGH ? color.orange : color.blue, style = line.style_dotted, width = 1)
                 array.push(eqLineObjs, ln)
         if debugMode and showSR
             f_clearBoxes(srBoxObjs)
             int startK = math.max(0, array.size(srs) - maxDrawPerFamily)
-            for k = startK to array.size(srs) - 1
+            for [k, _u864] in srs
+                if k < startK
+                    continue
                 SRRec sr = array.get(srs, k)
                 box bx = box.new(left = sr.confirmationTime, top = sr.zoneTop, right = time_close, bottom = sr.zoneBottom, xloc = xloc.bar_time, border_color = sr.zoneType == SWING_LOW ? color.green : color.red, bgcolor = color.new(sr.zoneType == SWING_LOW ? color.green : color.red, 88))
                 array.push(srBoxObjs, bx)
         if debugMode and showTrendlines
             f_clearLines(tlLineObjs)
             int startK = math.max(0, array.size(tls) - maxDrawPerFamily)
-            for k = startK to array.size(tls) - 1
+            for [k, _u871] in tls
+                if k < startK
+                    continue
                 TrendlineRec tl = array.get(tls, k)
                 line ln = line.new(x1 = tl.anchor1Time, y1 = tl.anchor1Price, x2 = tl.anchor2Time, y2 = tl.anchor2Price, xloc = xloc.bar_time, color = tl.orientation == SWING_LOW ? color.green : color.red, style = line.style_solid, width = 1)
                 array.push(tlLineObjs, ln)

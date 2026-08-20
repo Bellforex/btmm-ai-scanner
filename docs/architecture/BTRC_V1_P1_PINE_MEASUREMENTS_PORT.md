@@ -149,8 +149,72 @@ No Python semantic defect was discovered; no protected Python logic was modified
   large window this may approach Pine's per-bar compute budget; reduce
   `lookbackWindow` or test over a limited bar range if TradingView reports a
   loop/time limit.
-- Not yet compiled in TradingView (status above); the static guards in
-  `tests/unit/test_pine_p1_source_guards.py` are repository safety checks only.
+- Compiled and runtime-tested in TradingView — see **P1 correction checkpoint**
+  below for what passed and what remains open. The static guards in
+  `tests/unit/test_pine_p1_source_guards.py` remain repository safety checks only;
+  they cannot substitute for a TradingView run.
+
+## P1 correction checkpoint (TradingView-verified)
+
+The port was compiled and run in the TradingView browser environment. This
+section records what the runtime exposed and what was corrected. It is a
+**correctness** record; it is not a parity claim.
+
+**Compile.** The initial paste compiled as a Pine v6 `indicator` with zero
+compiler errors. No language-level porting defect existed.
+
+**RE10045 — Pine descending-loop behaviour.** The first run raised a runtime
+array error. Cause: Pine's `for i = a to b` counts **downward** when `a > b`
+instead of yielding zero iterations the way Python's `for x in seq` /
+`range(len(seq))` does. Every `for i = 0 to array.size(x) - 1` therefore executed
+`array.get(x, 0)` against an *empty* array; `for a = 1 to size - 1` misbehaved at
+sizes 0 and 1; and `for j = i + 1 to size - 1` ran in reverse on the final `i` of
+a nested pair scan. **31 loop sites** were adapted to `for [i, elem] in <array>`
+(zero iterations when empty), with an explicit `continue` guard wherever the
+original loop started at a non-zero offset. Iteration order over the *valid*
+elements is unchanged at every site, and no analytical expression was touched.
+
+**First-confirmed-swing initialisation.** `domain/swings.py` seeds
+`last_confirmed_type = None` and skips a pivot only when
+`pivot.swing_type == last_confirmed_type`; against `None` that comparison is
+`False`, so the **first** eligible pivot always proceeds. The Pine analogue seeded
+`int lastConfirmedType = na` and tested `array.get(cType, p) != lastConfirmedType`
+— but in Pine any comparison against `na` evaluates to `na` (falsy), so the first
+pivot could never confirm and `lastConfirmedType` was never assigned. Result:
+**zero confirmed swings on every timeframe**, which silently starved equal levels,
+support/resistance and trendlines. Corrected to
+`na(lastConfirmedType) or array.get(cType, p) != lastConfirmedType` — the same
+idiom already used correctly elsewhere in the file. The alternation rule itself is
+unchanged; only the absent-prior-state comparison is made explicit.
+
+**Post-correction runtime observation.** With both corrections in place the
+corrected chain was observed active end to end: confirmed swings appear at
+qualifying pivots and alternate across history; equal levels, support/resistance
+and trendlines all produce observed output; displacement continues to produce
+observed output. No RE10045, no array out-of-bounds and no drawing-object-limit
+errors were seen on any timeframe tested.
+
+**Source guards strengthened.** `tests/unit/test_pine_p1_source_guards.py` gained
+permanent regression guards for both failure classes: counted array loops must be
+non-empty-guarded (and offset-start counted array loops are rejected outright),
+and comparisons against `na`-seeded scalars must carry an explicit `na()` guard.
+
+**Open — RE10110 (performance, not semantics).** On a TradingView **Basic** plan
+(20-second script budget) the port exceeds the budget on some timeframes:
+timeouts with no output on **M1, H1 and D1**, intermittent timeouts on **M5**, and
+clean runs on **M15** and **H4**. This is a cost property of recomputing the
+measurement pipeline over the rolling window on every confirmed bar; it is not an
+analytical defect and it does not affect the corrections above. **P2 remains
+blocked pending P1-PERF-1**, tracked in
+`BTRC_V1_P1_PERFORMANCE_OPTIMIZATION.md`.
+
+**Runtime feed caveat — not canonical parity evidence.** `FXCM:XAUUSD` was
+unavailable in the TradingView session used for this run (the symbol resolves but
+the feed returns no data), so the runtime smoke used **`OANDA:XAUUSD`**
+("Gold Spot / U.S. Dollar"). OANDA runtime testing demonstrates that the code
+paths execute and produce output; it is **NOT** canonical parity evidence. Any
+Python↔Pine parity comparison must be performed against the canonical feed with
+matching candles. **No claim of full Python↔Pine parity is made here.**
 
 ## Manual TradingView validation procedure (author, before P2)
 1. Open TradingView → Pine Editor.
@@ -159,7 +223,9 @@ No Python semantic defect was discovered; no protected Python logic was modified
 3. Save. Resolve any compiler errors (report them verbatim for the one authorized
    correction cycle).
 4. Add to chart. Use **`FXCM:XAUUSD`** for the first controlled review where
-   available.
+   available — but note it was **not** available in the 2026-08-19 session (the
+   symbol resolves with an empty feed), and `OANDA:XAUUSD` was used instead. A
+   non-canonical feed is acceptable for runtime smoke only, never for parity.
 5. First timeframe: **M15** (enough confirmed swing/displacement events for
    inspection, good chart clarity, and no multi-timeframe dependency — appropriate
    for the current-chart-only P1).
