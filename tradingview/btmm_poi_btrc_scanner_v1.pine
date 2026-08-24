@@ -96,6 +96,41 @@ float C_LEG_STRONG_SHARE              = 0.80     // configuration.py:60
 int SWING_HIGH = 1
 int SWING_LOW  = -1
 
+// =============================================================================
+// P2-I1 — STRUCTURE CODES (structure/enums.py)
+// -----------------------------------------------------------------------------
+// Integer codes for the three Python StrEnums. Pine has no string enums, so each
+// member gets a stable named constant; nothing here is behaviour.
+//
+// The enums are CLOSED. structure/enums.py defines exactly these members, so
+// there is deliberately no RANGE, NEUTRAL, MSS, internal/external or major/minor
+// code — inventing one would fabricate a state the Python contract cannot emit.
+//
+// C_ST_NA is the unset sentinel. It is -99, not 0 and not na: 0 is a live
+// direction code (UNDETERMINED) and Pine `int x = na` degrades to `const int`,
+// which cannot be reassigned (the defect that broke the first forensic probe).
+int C_ST_NA = -99
+
+// StructureDirection
+int C_ST_DIR_UNDETERMINED = 0
+int C_ST_DIR_BULLISH      = 1
+int C_ST_DIR_BEARISH      = -1
+
+// SwingRelationshipLabel — sign carries the relation, magnitude the side, so
+// `code > 0` is HIGHER and `abs(code) == 1` is the high side.
+int C_ST_REL_HIGHER_HIGH = 1
+int C_ST_REL_LOWER_HIGH  = -1
+int C_ST_REL_EQUAL_HIGH  = 10
+int C_ST_REL_HIGHER_LOW  = 2
+int C_ST_REL_LOWER_LOW   = -2
+int C_ST_REL_EQUAL_LOW   = 20
+
+// StructureTransitionType
+int C_ST_TR_BULLISH_BOS   = 1
+int C_ST_TR_BEARISH_BOS   = -1
+int C_ST_TR_BULLISH_CHOCH = 2
+int C_ST_TR_BEARISH_CHOCH = -2
+
 // -----------------------------------------------------------------------------
 // P1-PERF-4 — BOUNDED HISTORICAL EXECUTION
 //
@@ -213,6 +248,46 @@ type TrendlineRec
     float rawSlope             // price per bar
     float normalizedSlope
     int   confirmationTime
+
+// =============================================================================
+// P2-I1 — STRUCTURE RECORDS (structure/relationships.py, structure/transitions.py)
+// -----------------------------------------------------------------------------
+// Declarations only. No P2 behaviour exists yet: nothing constructs a
+// StructRelRec or a StructEventRec, and no analytical value reads one.
+// =============================================================================
+
+// Adapter-facing projection of ONE canonical P1 confirmed swing. Every field is
+// either copied straight from SwingRec or derived from it plus the live window —
+// nothing is re-detected, so this cannot become a second source of truth.
+//
+// Python counterpart: domain.swings.ConfirmedSwing, restricted to the fields
+// structure/ actually consumes.
+type StructSwingView
+    int   stableKey            // == SwingRec.pivotEndTime; P1's own swing identity
+    int   swingType            // SWING_HIGH / SWING_LOW  <- SwingRec.swingType
+    float pivotPrice           // <- SwingRec.price            (pivot_price)
+    float referenceAtr         // <- SwingRec.referenceAtr     (pivot_reference_atr)
+    int   meaningfulConfTime   // <- SwingRec.meaningfulConfTime; also the swing's
+                               //    availability_time_utc (domain/analyzer.py:318
+                               //    assigns availability FROM meaningful confirmation)
+    int   pivotStartTime       // <- wOpenT[pivotStartIdx]     (pivot_start_time_utc)
+    int   pivotStartAbs        // <- absFirst + pivotStartIdx  (pivot_bar_index)
+
+// A swing-to-predecessor relationship. Python: relationships.SwingRelationship.
+type StructRelRec
+    int   swingKey             // current swing's stableKey
+    int   previousSameTypeKey  // predecessor of the SAME type
+    int   relationshipCode     // C_ST_REL_*
+    int   availabilityTime     // max(current, predecessor) availability
+
+// An emitted BOS / CHOCH. Python: transitions.StructureTransition.
+type StructEventRec
+    int   transitionCode       // C_ST_TR_*
+    int   brokenSwingKey
+    float brokenLevel
+    float breakClose
+    int   breakTime            // break candle event_time_utc
+    int   availabilityTime     // max(break candle, broken swing) availability
 
 // =============================================================================
 // PRIMITIVE HELPERS — measurements/candle_metrics.py
@@ -351,6 +426,17 @@ var float latestSRBottom       = na
 var int   latestSRType         = na
 var float latestTLNormSlope    = na
 var int   latestTLOrient       = na
+
+// ---- P2-I2 adapter observation state (diagnostic only) ----------------------
+// Written by the adapter, read only by the debug-gated P2_* plots below. No
+// analytical value consumes these, so they cannot influence P1 output.
+var int   p2SwingCount    = na
+var int   p2LastKey       = na
+var int   p2LastType      = na
+var float p2LastPrice     = na
+var float p2LastAtr       = na
+var int   p2LastConfTime  = na
+var int   p2LastStartAbs  = na
 
 // Swing-set change detection (so SWING-DERIVED detectors run only on change).
 // S/R is deliberately NOT behind this gate — see the P1-CLOSEOUT note in MAIN.
@@ -574,6 +660,39 @@ f_detectSwings(array<float> highs, array<float> lows, array<int> openT, array<in
                     array.push(outSwings, s)
                     lastConfirmedType := array.get(cType, p)
     outSwings
+
+// =============================================================================
+// P2-I2 — CANONICAL P1 SWING ADAPTER
+// -----------------------------------------------------------------------------
+// Projects the canonical confirmed-swing list onto StructSwingView. This is the
+// ONLY way P2 may obtain swings: it performs no detection, applies no threshold
+// and makes no ordering decision of its own.
+//
+// ORDERING. P1 emits `outSwings` in append order, which is ascending by
+// pivotEndTime (f_srSwingHasKey binary-searches on exactly that invariant). That
+// order is also what Python's validated swing stream requires, so the adapter
+// maps 1:1 and NEVER sorts — re-sorting would silently redefine canonical order
+// and is a semantic bug, not an optimisation.
+//
+// ALTERNATION. Python's _validate_swings rejects two consecutive same-type
+// swings, and P1's own alternation gate guarantees the same, so the projection
+// preserves alternation for free. The within-type predecessor a later phase needs
+// is therefore always two positions back.
+//
+// pivotStartIdx is a WINDOW index and the window slides, but f_detectSwings is
+// re-run over the live window on every confirmed bar, so pivotStartIdx is always
+// valid against the `openT` passed here. Nothing can stale between the two.
+//
+// COST. O(number of live swings) per confirmed bar — tens of entries, the same
+// class as the swing walk that produced them. No history traversal is added.
+f_p2BuildSwingView(array<SwingRec> swings, array<int> openT, int absFirst) =>
+    array<StructSwingView> out = array.new<StructSwingView>()
+    int nT = array.size(openT)
+    for [i, _p2a] in swings
+        SwingRec s = array.get(swings, i)
+        int startTime = s.pivotStartIdx >= 0 and s.pivotStartIdx < nT ? array.get(openT, s.pivotStartIdx) : s.pivotEndTime
+        array.push(out, StructSwingView.new(s.pivotEndTime, s.swingType, s.price, s.referenceAtr, s.meaningfulConfTime, startTime, absFirst + s.pivotStartIdx))
+    out
 
 // =============================================================================
 // EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
@@ -1328,6 +1447,25 @@ if barstate.isconfirmed
     // ---- swing pipeline (every confirmed bar, from the maintained frontier) ----
     array<SwingRec> swings = f_detectSwings(wHigh, wLow, wOpenT, wAvailT, wAtr, pvAbs, pvType, pvPrice, pvAtr, pvTie, absFirst)
 
+    // ---- P2-I2: canonical swing view. Built from CONFIRMED P1 state only, so a
+    // forming bar cannot move it; no P1 value reads it back.
+    array<StructSwingView> p2Swings = f_p2BuildSwingView(swings, wOpenT, absFirst)
+    p2SwingCount := array.size(p2Swings)
+    p2LastKey := na
+    p2LastType := na
+    p2LastPrice := na
+    p2LastAtr := na
+    p2LastConfTime := na
+    p2LastStartAbs := na
+    if p2SwingCount > 0
+        StructSwingView lastView = array.get(p2Swings, p2SwingCount - 1)
+        p2LastKey := lastView.stableKey
+        p2LastType := lastView.swingType
+        p2LastPrice := lastView.pivotPrice
+        p2LastAtr := lastView.referenceAtr
+        p2LastConfTime := lastView.meaningfulConfTime
+        p2LastStartAbs := lastView.pivotStartAbs
+
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
     // directions are known.
@@ -1581,6 +1719,23 @@ plot(p1HistoryOk ? latestEqualLow       : na, "P1_equal_low",        color = col
 plot(p1HistoryOk ? latestSRTop          : na, "P1_sr_top",           color = color.green,  display = display.data_window)
 plot(p1HistoryOk ? latestSRBottom       : na, "P1_sr_bottom",        color = color.red,    display = display.data_window)
 plot(p1HistoryOk ? latestTLNormSlope    : na, "P1_tl_norm_slope",    color = color.purple, display = display.data_window)
+
+// =============================================================================
+// P2-I2 ADAPTER DIAGNOSTICS — debug-gated, data-window only.
+//
+// Proves the P1 -> P2 projection on a live chart. Gated on `debugMode` so the
+// product surface stays at P1's nine outputs; the plot declarations still count
+// against the 64-plot budget (11 -> 17), which is documented and well clear.
+// These describe the LAST adapted swing; there is no P2 behaviour to show yet.
+// Times are epoch seconds (ms/1000) so a 2dp readout keeps full precision.
+// =============================================================================
+plot(debugMode and p1HistoryOk ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.new(color.gray, 0),  display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastType     : na, "P2_last_swing_type",     color = color.new(color.gray, 0),  display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastPrice    : na, "P2_last_swing_price",    color = color.new(color.gray, 0),  display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastAtr      : na, "P2_last_swing_atr",      color = color.new(color.gray, 0),  display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastStartAbs : na, "P2_last_pivot_start_abs", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and not na(p2LastConfTime) ? p2LastConfTime / 1000 : na, "P2_last_conf_time", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and not na(p2LastKey) ? p2LastKey / 1000 : na, "P2_last_swing_key", color = color.new(color.gray, 0), display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)
