@@ -1,7 +1,7 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
 Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15–§21 record what has actually shipped.
+P2-I0 test-proven contract; §15–§22 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -16,11 +16,13 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I5 | BOS (§18) | committed `8be961d` |
 | P2-I6-PRE | TD-B weak re-arm contract (§19) | committed `3c855aa` |
 | P2-I6 | weak re-arm (§20) | committed `00c183a` |
-| P2-I7 | CHOCH (§21) | implemented, **uncommitted**, awaiting author review |
-| — | **bounded batch-equivalent Structure semantics COMPLETE** | persistent incremental frontier not started (§21.9) |
+| P2-I7 | CHOCH (§21) | committed `f43a296` |
+| — | **bounded batch-equivalent Structure semantics COMPLETE** | |
+| P2-I8-PRE | consolidation review (§22) | tests + docs, **uncommitted**, awaiting author review |
+| P2-I8 | persistent incremental frontier | **not started** |
 
 §1–§13 were written before implementation and are preserved as the design of
-record; where a detail was refined by testing, §14–§21 are authoritative.
+record; where a detail was refined by testing, §14–§22 are authoritative.
 
 ---
 
@@ -1685,3 +1687,267 @@ often the walk runs.
 ### 21.10 Test debt
 
 TD-A **RESOLVED** (§17), TD-B **CLOSED** (§19). No debt is open.
+
+---
+
+## 22. P2-I8-PRE — BOUNDED-WALK CONSOLIDATION REVIEW
+
+Review / test / design only. No production semantics changed; `git diff -- src/`
+and `git diff -- tradingview/` are both empty after the I7 checkpoint.
+
+Test file: `tests/unit/test_p2_structure_consolidation.py` (25 tests).
+
+### 22.1 The complete bounded walk
+
+| stage | function | input | output | state |
+|---|---|---|---|---|
+| adapter | `f_p2BuildSwingView` | P1 `SwingRec[]`, `wOpenT`, `absFirst` | `StructSwingView[]` | none |
+| relationships | `f_p2ClassifyRelationship`, `f_p2BuildRelationships` | views | `StructRelRec[]` | none |
+| rel ordering | `f_p2OrderRelationships` | rels | index list | none |
+| swing ordering | `f_p2OrderSwings` | views | index list | none |
+| replacement | `f_p2MostRecentUnbroken` | views, visOrder, type, brokenKeys | index or −1 | none |
+| key lookup | `f_p2ViewIndexByKey` | views, key | index or −1 | none |
+| **merged walk** | `f_p2StructureWalk` | views, rels, both orders, `wClose`/`wAvailT`/`wOpenT`, `absFirst` | direction, 4 keys, `lastChange`, events, brokenKeys, 2 boundaries, abort count | **all walk-local** |
+
+Every stage is a pure function of the bounded window. Nothing persists between
+confirmed bars except the debug diagnostics.
+
+### 22.2 Composite coverage — all seven mechanisms in one stream
+
+Previous phases proved mechanisms singly or in pairs. Two composite fixtures now
+chain **all seven** in one valid stream, in both directions:
+
+```
+bootstrap -> BOS#1 -> weak re-arm -> BOS#2 -> CHOCH -> post-CHOCH re-arm -> post-CHOCH BOS
+```
+
+Four transitions each (`BOS, BOS, CHOCH, BOS` and its mirror), with the weak-slot
+traces asserted as `None → H2 → None → H3 → None` on the pre-CHOCH side and
+`None → L4 → None` on the post-CHOCH side, so no transition can be an artifact.
+
+Campaign: **6 scenarios, 240 prefix comparisons, 0 mismatches**, reaching both BOS
+directions, both CHOCH directions, re-arms, direction flips, a scenario with **≥2**
+direction changes, and a max of 4 transitions in one scenario.
+
+### 22.3 Invariant audit
+
+| # | invariant | verdict |
+|---|---|---|
+| 1/2 | BULLISH ⇒ `protected_low` set and `protected_high` null (and mirror) | **PROVEN** (conditional on bootstrap having fired) |
+| 3 | a weak key is never in `brokenKeys` | **PROVEN** |
+| 4 | an active protected key is never broken | **PROVEN** |
+| 5 | every transition's broken key is recorded broken | **PROVEN** |
+| 6 | CHOCH abort changes no state | **PROVEN** (§21.3) |
+| 7 | BOS never changes direction | **PROVEN** |
+| 8 | successful CHOCH always changes direction | **PROVEN** |
+| 9 | boundaries never move backward | **PROVEN** |
+| 10 | re-arm never moves a boundary | **PROVEN** |
+| 11 | no swing is consumed twice (`len(broken) == len(set(broken)) == len(transitions)`) | **PROVEN** |
+| 12 | latest transition is the last emitted | **PROVEN** |
+| 13 | no transition references a swing unavailable at event time | **PROVEN** |
+
+Invariant 1/2 is the same property that makes the TD-A fallback unreachable
+(§17.2). **No new defect was found.**
+
+Four branches remain real-in-source but not behaviour-discriminable, all
+transcribed faithfully and guarded at the source: TD-A's protected fallback
+(§17), TD-B's broken-id filter (§19.2), the first-vs-newest re-arm rule (§20.2),
+and CHOCH-abort-versus-live-BOS (§21.4).
+
+### 22.4 Left-edge semantics — what truncation actually changes
+
+Measured directly by re-running the composite fixture with the window's left edge
+advanced to bars 2, 6, 10, 14, 20, 24 and 28, same final candle:
+
+**`direction`, `transitions`, `broken`, the protected/weak keys and both boundaries
+all change.** Each truncated window is internally consistent — Pine and Python
+agree on every one — but the windows disagree with *each other*. That is correct
+bounded behaviour, not a bug: the walk is defined over the input it is given.
+
+One concrete hazard is isolated by
+`test_boundary_indices_are_absolute_not_window_relative`: a boundary is compared
+against `pivot_bar_index`, an index into the supplied candle tuple. Re-basing the
+window re-bases both, so the comparison stays valid — but **a persisted raw
+boundary would silently refer to a different bar after the window slides.**
+
+### 22.5 The incremental hazard — why Python's design does not port directly
+
+Python already has a complete incremental engine (`analyzer.py:478-1300`), and its
+shape is instructive precisely because it **cannot be copied**:
+
+* Python accumulates the entire history (`candles_so_far`) and stores one
+  `_StructureWalkCheckpoint` **per event**, so it can resume anywhere.
+* It must, because confirmed swings are **not append-only**: *"a pending pivot can
+  confirm out of order, a plateau representative can change, same-direction
+  supersession can rewrite an existing entry's content without changing the tuple
+  length"* (`:490-494`). So each advance rebuilds the event stream, diffs it
+  against the prior one, finds the longest identical prefix, and resumes from the
+  checkpoint **before the earliest changed event**. Append-only is a fast path
+  (`:1177`), never an assumption.
+* **Python never truncates. Pine always does.** A Pine frontier therefore has a
+  problem Python does not: state legitimately derived from candles that have since
+  left the window.
+
+Answering the phase question directly — *if Pine simply persisted direction,
+protected/weak, brokenKeys, boundaries and the relationship registers across a
+window advance, would it remember what the bounded batch has forgotten?* **Yes,
+every one of them.**
+
+| frontier field | classification | why |
+|---|---|---|
+| `direction` | **MUST_BE_REBUILT_ON_LEFT_EDGE_CHANGE** | derived from a bootstrap whose relationships may have left the window |
+| `protectedHighIx/LowIx` | **MUST_BE_REBUILT** | may name a swing no longer in the input |
+| `weakHighIx/LowIx` | **MUST_BE_REBUILT** | same, plus re-arm history is window-dependent |
+| `weakHigh/LowBoundaryAbs` | **MUST_BE_REBUILT** (or stored as a stable key) | a raw index means a different bar after re-basing (§22.4) |
+| `brokenKeys` | **MUST_BE_PRUNED** | keys for swings outside the window must not suppress future breaks |
+| latest relationship label/swing | **MUST_BE_REBUILT** | bootstrap-only inputs, window-dependent |
+| `transitions` | **MUST_BE_PRUNED** | transitions whose break candle has left the window are no longer emitted |
+| `visOrder` | **DERIVABLE** | rebuilt from the swing order each bar |
+| relationship list | **DERIVABLE** | pure function of the views |
+| `lastChange` | **DERIVABLE** | falls out of the walk |
+| abort counter | **NOT_NEEDED** | diagnostic only |
+
+**Nothing is SAFE_TO_PERSIST unconditionally.** Everything is either derivable or
+window-dependent.
+
+### 22.6 Checkpoint invalidation rule (design, not implemented)
+
+A future Pine checkpoint must be rebuilt when **any** of the following holds:
+
+1. `absFirst` advanced (the window's left edge moved) — the common case, every
+   time the 300-bar buffer is full and a bar is pushed;
+2. a previously adapted swing is absent from the new canonical view;
+3. an existing swing's identity or content changed (P1's frontier can rewrite a
+   plateau representative or supersede a same-direction run);
+4. the relationship set changed at any position, not just the tail;
+5. the replay prefix shrank;
+6. symbol/timeframe reset, or any P2 parameter change.
+
+Only when **none** of these holds — a strictly appended confirmed bar with an
+unchanged swing set and an unmoved left edge — may the walk resume from the prior
+final state and process one candle event. Given the window is full for almost all
+of a 1800-bar run, condition 1 fires on nearly every bar, so **the naive
+"persist and append" frontier would rebuild almost every bar anyway**.
+
+The productive direction is therefore not "persist the walk state" but "make the
+per-bar rebuild cheaper" — see §22.7.
+
+### 22.7 STATIC / MODELLED cost characterisation
+
+**This is not a TradingView runtime measurement.** It drives the **real P1
+detector** (`detect_confirmed_swings`) over 40 synthetic 300-bar M15 random walks
+at XAUUSD scale and models the Pine walk's comparison counts from the observed
+sizes.
+
+| quantity | median | p95 | max | min |
+|---|---|---|---|---|
+| **S** — confirmed swings per 300-bar window | **60.5** | 70 | 75 | 45 |
+| **R** — relationships per window | **58.5** | 68 | 73 | 43 |
+| **C** — candles per window | 300 | 300 | 300 | 300 |
+| **B** — broken keys | ≤ 4 in every fixture built so far | | | |
+
+**This corrects the I5/§18.6 estimate**, which described the insertion sorts as
+being "over tens". S is ~60, so `S²/2` is ~1,800 — about 4.5× the figure that
+estimate implied.
+
+Modelled per-confirmed-bar work:
+
+| component | median | p95 |
+|---|---|---|
+| swing ordering `O(S²/2)` | 1,800 | 2,450 |
+| relationship ordering `O(R²/2)` | 1,682 | 2,312 |
+| 3-way merge `O(C+S+R)` | 418 | 438 |
+| relationship build `O(2S)` | 120 | 140 |
+| adapter `O(S)` | 60 | 70 |
+| replacement scans `O(B·S)` | 240 | 280 |
+| **total** | **~4,320 ops/bar** | **~5,690 ops/bar** |
+| **× 1800 confirmed bars** | **~7.8M** | **~10.2M** |
+
+**The two insertion sorts are 81% of the work.** That is the bottleneck, and it is
+also the most tractable target: both lists change by at most one element per bar,
+so an incremental frontier that maintains them in order would remove ~3,500 of the
+~4,300 ops/bar without touching walk semantics at all.
+
+### 22.8 TradingView runtime gate plan (prepared, NOT executed)
+
+Local testing cannot establish Pine runtime or RE10110. The next browser gate
+should run this matrix and capture the fields below. **No production
+instrumentation is proposed.**
+
+Symbol: `FXCM:XAUUSD`. Timeframes: **M1, M5, M15, H1, H4, D1**.
+
+Per timeframe: fresh add-to-chart; page reload; switch-away-and-back; `debugMode`
+false; `debugMode` true; **3 repetitions each**.
+
+Capture per run: load success/failure · RE10110 present · any runtime error · any
+array/object error · whether the nine P1 outputs are populated · approximate load
+duration · `P2_direction`, `P2_transition_count`, `P2_last_transition_code`,
+`P2_protected_low`/`_high`, `P2_weak_low`/`_high` sanity values.
+
+D1 is the known-hardest case: P1's own RE10110 was first hit on D1 Basic.
+
+### 22.9 Oracle decision — **YES, recommended (not generated here)**
+
+A dedicated frozen Structure oracle is now worth building, for a reason that did
+not apply earlier: every P2 parity test to date compares Pine-model against
+Python on **synthetic** fixtures. Nothing yet pins P2 against **real market
+data**, which is exactly where P1's feed-divergence work found its surprises.
+
+Proposed schema, one row per confirmed candle:
+
+```
+event_time_utc, availability_time_utc,
+direction, protected_high_key, protected_low_key, weak_high_key, weak_low_key,
+weak_high_boundary, weak_low_boundary,
+latest_transition_type, transition_broken_key, transition_broken_level,
+transition_break_close, transition_availability,
+latest_high_relationship, latest_low_relationship,
+analyzed_swing_count
+```
+
+Proposed window: the **July-2026 FXCM XAUUSD M15** range already used for P1.
+Caveat carried forward from §BTRC_V1_P1_VALIDATION_EVIDENCE: that export is a
+**2026-08-02 vintage** and the live feed has since been revised, so the oracle
+must be regenerated from a fresh export or explicitly annotated, or P2 will
+inherit P1's feed-divergence noise as apparent parity failures.
+
+### 22.10 Acceptance criterion for P2-I8 (incremental frontier)
+
+The future incremental Pine must equal the **current bounded batch-equivalent
+Pine** at **every confirmed prefix** on:
+
+direction · both protected keys · both weak keys · both boundaries · broken state
+relevant to future decisions · latest relationship registers · the full transition
+sequence and its field values · latest transition · the published
+`availability_time_utc` · all P2 debug outputs · and P1's nine outputs unchanged.
+
+Plus explicit behaviour on: left-edge advancement (rebuild, per §22.6), checkpoint
+invalidation (all six triggers), and post-rebuild equality with a cold run.
+
+Target: **0 mismatch**, and no change to any P2-I0..I7 test.
+
+### 22.11 P1 safety
+
+Verified: exactly one swing detector (1 definition + 1 call site); P2 consumes it
+only through `f_p2BuildSwingView`; `SwingRec` unchanged; the nine P1 outputs
+present and un-gated; `calc_bars_count = 1800`; analytical window 300; closed-bar
+only; zero `request.*` and zero `strategy.*` in code (both textual hits are
+comments). P1 guards/history/truncation: **91 passed**.
+
+### 22.12 Resource headroom
+
+| measure | value |
+|---|---|
+| lines / bytes | 2,281 / 127,631 |
+| plot consumers | **26 / 64** |
+| record types | 10 |
+| `array.new` sites | 67 |
+| for / while loops | 59 / 20 |
+| `var` globals | 75 |
+| functions | 35 |
+
+Plot budget is comfortable (38 free). The limiting resource is **execution time**,
+not any structural count — §22.7 puts the walk at ~7.8M modelled ops per full run
+on top of everything P1 already does, and P1 has previously hit RE10110 on D1.
+
+**Runtime headroom is unmeasured and must not be assumed.**
