@@ -286,6 +286,11 @@ type StructRelRec
     int   previousSameTypeKey  // predecessor of the SAME type
     int   relationshipCode     // C_ST_REL_*
     int   availabilityTime     // max(current, predecessor) availability
+    int   currentPivotStartAbs // P2-I4 ordering key. Python's merged event sort
+                               // breaks relationship ties on the CURRENT swing's
+                               // pivot_bar_index (transitions.py:127-130), so the
+                               // record must carry it. Published relationship
+                               // order does NOT carry it — see f_p2OrderRelationships.
 
 // An emitted BOS / CHOCH. Python: transitions.StructureTransition.
 type StructEventRec
@@ -440,13 +445,20 @@ var int   latestTLOrient       = na
 var int   p2SwingCount    = na
 var int   p2LastKey       = na   // retained for I4+; not plotted (budget)
 var int   p2LastType      = na
-var float p2LastPrice     = na
-var float p2LastAtr       = na
+var float p2LastPrice     = na   // retained for I5+; not plotted (budget)
+var float p2LastAtr       = na   // retained for I5+; not plotted (budget)
 var int   p2LastConfTime  = na
 var int   p2LastStartAbs  = na
 var int   p2RelCount      = na   // P2-I3
 var int   p2LastHighRel   = na
 var int   p2LastLowRel    = na
+var int   p2Direction     = C_ST_NA  // P2-I4. Seeded to the sentinel, not na:
+                                    // these are compared against C_ST_NA, and
+                                    // `na == x` propagates na in Pine.
+var int   p2ProtHighKey   = C_ST_NA
+var int   p2ProtLowKey    = C_ST_NA
+var int   p2WeakHighKey   = C_ST_NA
+var int   p2WeakLowKey    = C_ST_NA
 
 // Swing-set change detection (so SWING-DERIVED detectors run only on change).
 // S/R is deliberately NOT behind this gate — see the P1-CLOSEOUT note in MAIN.
@@ -763,9 +775,119 @@ f_p2BuildRelationships(array<StructSwingView> views) =>
             if v.swingType == wantType
                 if prevIdx >= 0
                     StructSwingView pv = array.get(views, prevIdx)
-                    array.push(out, StructRelRec.new(v.stableKey, pv.stableKey, f_p2ClassifyRelationship(v, pv), math.max(v.meaningfulConfTime, pv.meaningfulConfTime)))
+                    array.push(out, StructRelRec.new(v.stableKey, pv.stableKey, f_p2ClassifyRelationship(v, pv), math.max(v.meaningfulConfTime, pv.meaningfulConfTime), v.pivotStartAbs))
                 prevIdx := i
     out
+
+// =============================================================================
+// P2-I4 — INITIAL DIRECTION BOOTSTRAP (transitions.py:355-381)
+// -----------------------------------------------------------------------------
+// UNDETERMINED -> BULLISH or BEARISH, once only. This phase emits NO transition,
+// consumes no candle, and implements neither BOS nor CHOCH.
+// =============================================================================
+
+// Which side of the book a relationship code belongs to.
+f_p2RelIsHigh(int relCode) =>
+    relCode == C_ST_REL_HIGHER_HIGH or relCode == C_ST_REL_LOWER_HIGH or relCode == C_ST_REL_EQUAL_HIGH
+
+// MERGED EVENT ORDER — the single highest-risk detail of this phase.
+//
+// f_p2BuildRelationships emits ALL HIGH relationships and then ALL LOW
+// relationships, because that is the order detect_swing_relationships builds them
+// in (relationships.py:86-91). That is an API/serialization artifact. It is NOT
+// chronology, and neither Python consumer reads it as chronology:
+// run_structure_walk re-sorts every event by availability (transitions.py:135) and
+// analyze_structure_state re-sorts for publication (analyzer.py:346-353).
+//
+// Python's merged key is (availability_time, kind, tiebreak) with
+// kind = _EVENT_RELATIONSHIP for all relationships, so restricted to
+// relationships the effective key is
+//     (availability_time_utc, current_swing.pivot_bar_index, str(record_id))
+// (transitions.py:122-133). The record_id leg is UNREACHABLE in production:
+// _find_single_candle_pivots emits at most one pivot per candle index and skips
+// any index qualifying as both high and low (swings.py:112-114), so
+// pivot_bar_index is unique across confirmed swings and (availability, index) is
+// already a total order. Pine therefore reproduces the order exactly.
+//
+// Insertion sort over a bounded live relationship list (tens of entries), on
+// integer comparisons only — deterministic and stable.
+f_p2OrderRelationships(array<StructRelRec> rels) =>
+    array<int> order = array.new<int>()
+    for [i, _p2o] in rels
+        StructRelRec r = array.get(rels, i)
+        int n = array.size(order)
+        int pos = n
+        if n > 0
+            for j = 0 to n - 1
+                StructRelRec o = array.get(rels, array.get(order, j))
+                bool earlier = r.availabilityTime < o.availabilityTime or (r.availabilityTime == o.availabilityTime and r.currentPivotStartAbs < o.currentPivotStartAbs)
+                if earlier
+                    pos := j
+                    break
+        if pos >= array.size(order)
+            array.push(order, i)
+        else
+            array.insert(order, pos, i)
+    order
+
+// Transcription of the _EVENT_RELATIONSHIP branch of run_structure_walk
+// (transitions.py:355-381).
+//
+//   latest_relationship_label[type] and latest_relationship_swing[type] are
+//   overwritten UNCONDITIONALLY on every relationship event (:358-361). An EQUAL
+//   therefore erases prior directional evidence for that side, and later
+//   contradictory evidence replaces earlier evidence. Bootstrap is then re-tested
+//   after every event while direction is still UNDETERMINED.
+//
+//   HH + HL -> BULLISH: protected_low = latest LOW swing, weak_high = latest HIGH
+//                       swing; protected_high and weak_low stay unset (:366-373)
+//   LH + LL -> BEARISH: protected_high = latest HIGH swing, weak_low = latest LOW
+//                       swing; protected_low and weak_high stay unset (:374-381)
+//
+//   The swing that becomes protected/weak is the latest RELATIONSHIP's current
+//   swing for that side, which may come from an EARLIER event than the one that
+//   triggers the bootstrap.
+//
+//   last_change_availability is the TRIGGERING event's own availability (:373),
+//   not the max of the two contributing relationships.
+//
+// ONCE-ONLY. The `dir == UNDETERMINED` guard means relationship evidence can
+// never flip BULLISH <-> BEARISH afterwards; direction flips belong to CHOCH
+// (P2-I5+). No transition is emitted here — Python appends none in this branch.
+//
+// BOUNDED. Rebuilt from the bounded relationship list on every confirmed bar and
+// discarded; no evidence is retained behind P1's window.
+f_p2BootstrapWalk(array<StructRelRec> rels, array<int> order) =>
+    int dir        = C_ST_DIR_UNDETERMINED
+    int protHigh   = C_ST_NA
+    int protLow    = C_ST_NA
+    int weakHigh   = C_ST_NA
+    int weakLow    = C_ST_NA
+    int lastChange = C_ST_NA
+    int hiLabel    = C_ST_NA
+    int loLabel    = C_ST_NA
+    int hiSwing    = C_ST_NA
+    int loSwing    = C_ST_NA
+    for [_p2k, relIdx] in order
+        StructRelRec r = array.get(rels, relIdx)
+        if f_p2RelIsHigh(r.relationshipCode)
+            hiLabel := r.relationshipCode
+            hiSwing := r.swingKey
+        else
+            loLabel := r.relationshipCode
+            loSwing := r.swingKey
+        if dir == C_ST_DIR_UNDETERMINED
+            if hiLabel == C_ST_REL_HIGHER_HIGH and loLabel == C_ST_REL_HIGHER_LOW
+                dir        := C_ST_DIR_BULLISH
+                protLow    := loSwing
+                weakHigh   := hiSwing
+                lastChange := r.availabilityTime
+            else if hiLabel == C_ST_REL_LOWER_HIGH and loLabel == C_ST_REL_LOWER_LOW
+                dir        := C_ST_DIR_BEARISH
+                protHigh   := hiSwing
+                weakLow    := loSwing
+                lastChange := r.availabilityTime
+    [dir, protHigh, protLow, weakHigh, weakLow, lastChange]
 
 // =============================================================================
 // EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
@@ -1552,6 +1674,16 @@ if barstate.isconfirmed
         else
             p2LastLowRel := r.relationshipCode
 
+    // ---- P2-I4: initial direction bootstrap. Derived purely from the bounded
+    // relationship list, so it inherits the confirmed-bar gate; no candle value is
+    // read and no transition is emitted.
+    [p2bDir, p2bProtHigh, p2bProtLow, p2bWeakHigh, p2bWeakLow, _p2bLastChange] = f_p2BootstrapWalk(p2Rels, f_p2OrderRelationships(p2Rels))
+    p2Direction   := p2bDir
+    p2ProtHighKey := p2bProtHigh
+    p2ProtLowKey  := p2bProtLow
+    p2WeakHighKey := p2bWeakHigh
+    p2WeakLowKey  := p2bWeakLow
+
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
     // directions are known.
@@ -1817,13 +1949,20 @@ plot(p1HistoryOk ? latestTLNormSlope    : na, "P1_tl_norm_slope",    color = col
 // =============================================================================
 plot(debugMode and p1HistoryOk ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.new(color.gray, 0),  display = display.data_window)
 plot(debugMode and p1HistoryOk ? p2LastType     : na, "P2_last_swing_type",     color = color.new(color.gray, 0),  display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2LastPrice    : na, "P2_last_swing_price",    color = color.new(color.gray, 0),  display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2LastAtr      : na, "P2_last_swing_atr",      color = color.new(color.gray, 0),  display = display.data_window)
+// P2_last_swing_price / P2_last_swing_atr retired at P2-I4 to fund the bootstrap
+// slots. Both were pure echoes of the I2 adapter, which is contract-tested; the
+// analytically meaningful derivations (relationship codes, direction,
+// protected/weak keys) all remain exposed below.
 plot(debugMode and p1HistoryOk ? p2LastStartAbs : na, "P2_last_pivot_start_abs", color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk and not na(p2LastConfTime) ? p2LastConfTime / 1000 : na, "P2_last_conf_time", color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk ? p2RelCount    : na, "P2_relationship_count", color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk ? p2LastHighRel : na, "P2_last_high_relationship", color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk ? p2LastLowRel  : na, "P2_last_low_relationship", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2Direction != C_ST_NA ? p2Direction : na, "P2_direction", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2ProtHighKey != C_ST_NA ? p2ProtHighKey / 1000 : na, "P2_protected_high", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2ProtLowKey  != C_ST_NA ? p2ProtLowKey  / 1000 : na, "P2_protected_low",  color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2WeakHighKey != C_ST_NA ? p2WeakHighKey / 1000 : na, "P2_weak_high", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2WeakLowKey  != C_ST_NA ? p2WeakLowKey  / 1000 : na, "P2_weak_low",  color = color.new(color.gray, 0), display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)

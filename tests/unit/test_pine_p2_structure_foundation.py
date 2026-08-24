@@ -117,7 +117,8 @@ def _type_body(text: str, name: str) -> str:
         ),
         (
             "StructRelRec",
-            ["swingKey", "previousSameTypeKey", "relationshipCode", "availabilityTime"],
+            ["swingKey", "previousSameTypeKey", "relationshipCode", "availabilityTime",
+             "currentPivotStartAbs"],
         ),
         (
             "StructEventRec",
@@ -323,17 +324,97 @@ def test_no_transition_emission_yet() -> None:
         assert text.count(code) == 1, f"{code} used beyond its declaration"
 
 
-def test_no_direction_state_machine_yet() -> None:
+def test_every_direction_code_is_actually_reachable() -> None:
+    """As of I4 direction is behavioural, not merely declared."""
     text = _src()
     for code in ("C_ST_DIR_UNDETERMINED", "C_ST_DIR_BULLISH", "C_ST_DIR_BEARISH"):
-        assert text.count(code) == 1, f"{code} used beyond its declaration"
+        assert text.count(code) >= 2, f"{code} is declared but never assigned"
 
 
-def test_no_protected_or_weak_level_state_yet() -> None:
+def test_no_break_state_yet() -> None:
+    """I4 owns bootstrap only. Break bookkeeping is P2-I5/I6."""
     text = _src()
-    for token in ("protectedHigh", "protectedLow", "weakHigh", "weakLow",
-                  "brokenKeys", "structDirection"):
-        assert token not in text, f"{token} is P2-I5/I6 state, not I1/I2"
+    for token in ("brokenKeys", "boundaryIndex", "weakHighBoundary",
+                  "weakLowBoundary", "StructEventRec.new("):
+        assert token not in text, f"{token} is P2-I5/I6 state, not I4"
+
+
+# --- P2-I4 bootstrap gates ------------------------------------------------
+
+def test_bootstrap_uses_merged_availability_order_not_api_order() -> None:
+    """The single highest-risk detail: `f_p2BuildRelationships` emits highs then
+    lows, which is API order, NOT chronology. The walk must consume an explicitly
+    ordered index list keyed on availability then the current swing's pivot index
+    (transitions.py:122-135)."""
+    text = _src()
+    order_body = _fn_body(text, "f_p2OrderRelationships")
+    assert "r.availabilityTime < o.availabilityTime" in order_body
+    assert "r.currentPivotStartAbs < o.currentPivotStartAbs" in order_body
+
+    walk_body = _fn_body(text, "f_p2BootstrapWalk")
+    assert "for [_p2k, relIdx] in order" in walk_body, (
+        "walk must iterate the ORDERED index list, not the raw relationship array"
+    )
+    assert "f_p2BuildRelationships" not in walk_body, (
+        "walk must not rebuild relationships in API order"
+    )
+
+
+def test_bootstrap_predicates_match_python() -> None:
+    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    assert "hiLabel == C_ST_REL_HIGHER_HIGH and loLabel == C_ST_REL_HIGHER_LOW" in body
+    assert "hiLabel == C_ST_REL_LOWER_HIGH and loLabel == C_ST_REL_LOWER_LOW" in body
+
+
+def test_bootstrap_assigns_only_the_two_python_slots_per_direction() -> None:
+    """BULLISH sets protected_low + weak_high; BEARISH sets protected_high +
+    weak_low. The opposite two must stay unset (transitions.py:366-381)."""
+    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    # Only the assignment lines of each branch — the shared return tuple names
+    # every slot and would defeat a naive substring split.
+    assigns = [ln.strip() for ln in body.splitlines() if ":=" in ln]
+    bull = [ln for ln in assigns[assigns.index("dir        := C_ST_DIR_BULLISH"):]
+            if ln.startswith(("protLow", "weakHigh", "protHigh", "weakLow"))][:2]
+    bear = [ln for ln in assigns[assigns.index("dir        := C_ST_DIR_BEARISH"):]
+            if ln.startswith(("protLow", "weakHigh", "protHigh", "weakLow"))][:2]
+    assert [ln.split()[0] for ln in bull] == ["protLow", "weakHigh"], bull
+    assert [ln.split()[0] for ln in bear] == ["protHigh", "weakLow"], bear
+
+
+def test_bootstrap_is_once_only() -> None:
+    """Relationship evidence must never flip an established direction; flips are
+    CHOCH (P2-I5+)."""
+    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    assert "if dir == C_ST_DIR_UNDETERMINED" in body
+
+
+def test_bootstrap_emits_no_transition() -> None:
+    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    for token in ("C_ST_TR_", "StructEventRec", "array.push"):
+        assert token not in body, f"bootstrap must not emit: {token}"
+
+
+def test_bootstrap_reads_no_candle_values() -> None:
+    """I4 consumes confirmed swing views and derived relationships only."""
+    text = _src()
+    for fn in ("f_p2OrderRelationships", "f_p2BootstrapWalk", "f_p2RelIsHigh"):
+        body = _fn_body(text, fn)
+        for token in ("close", "timenow", "open", "high[", "low[", "request."):
+            assert token not in body, f"{fn} must not reference {token}"
+
+
+def test_bootstrap_retains_no_state_behind_the_window() -> None:
+    """Batch-equivalent over the bounded relationship list: rebuilt every
+    confirmed bar, never accumulated."""
+    text = _src()
+    for fn in ("f_p2OrderRelationships", "f_p2BootstrapWalk"):
+        assert "var " not in _fn_body(text, fn), f"{fn} must hold no persistent state"
+
+
+def test_no_break_predicates_yet() -> None:
+    """No close-vs-structural-level comparison anywhere in P2 code."""
+    code = _code_only(_src())
+    assert not re.search(r"close\s*[<>]", code), "break predicate is P2-I5, not I4"
 
 
 def test_no_structure_tolerance_arithmetic_yet() -> None:
@@ -386,14 +467,15 @@ def test_p2_diagnostics_are_debug_gated() -> None:
 
 
 def test_plot_budget_stays_well_under_the_tradingview_limit() -> None:
-    """RE10140 fires at 64. P1 shipped 11; I1/I2 add debug diagnostics only."""
+    """RE10140 fires at 64. P1 shipped 11; P2 adds debug diagnostics only, and
+    I4 retired two superseded adapter echoes to fund the bootstrap slots."""
     text = _src()
     total = sum(
         len(re.findall(rf"^\s*{fn}\(", text, re.M))
         for fn in ("plot", "plotshape", "plotchar", "plotarrow", "plotcandle",
                    "plotbar", "bgcolor", "barcolor", "fill", "hline")
     )
-    assert total <= 32, f"{total} plot-budget consumers; keep well clear of 64"
+    assert total <= 24, f"{total} plot-budget consumers; P2-I4 target is 24"
 
 
 def _code_only(text: str) -> str:

@@ -1,12 +1,21 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
-Status: **DESIGN CANDIDATE — NOT IMPLEMENTED.** Awaiting author review.
+Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
+P2-I0 test-proven contract; §15 and §16 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
 
-This is a **design** document. It contains no implementation evidence and makes
-no claim of Pine correctness. Nothing in `tradingview/` has been modified.
+| phase | content | state |
+|---|---|---|
+| P2-I0 | contract hardening (tests only) | committed `0cac239` |
+| P2-I1 / P2-I2 | structure codes, records, canonical swing adapter | committed `0df061f` |
+| P2-I3 | relationship classification (§15) | committed `26bc64d` |
+| P2-I4 | initial direction bootstrap (§16) | implemented, **uncommitted**, awaiting author review |
+| P2-I5+ | BOS / CHOCH / weak re-arm | **not started**; gated on TD-A (§14.10) |
+
+§1–§13 were written before implementation and are preserved as the design of
+record; where a detail was refined by testing, §14–§16 are authoritative.
 
 ---
 
@@ -719,7 +728,8 @@ observable and is pinned by test.
 ### 15.3 NON-OBVIOUS FACT 1 — API ORDER IS NOT EVENT CHRONOLOGY
 
 `detect_swing_relationships` filters `highs` first, then `lows`, and appends in
-that order (`relationships.py:86-91`). The published tuple is therefore:
+that order (`relationships.py:86-91`). Its **returned candidate tuple** is
+therefore:
 
 > **ALL HIGH relationships, followed by ALL LOW relationships.**
 
@@ -727,11 +737,20 @@ This is **Python API/output ordering**. It is emphatically **NOT** structure-eve
 chronology. A LOW relationship can become available strictly *earlier* in time
 than a HIGH relationship that precedes it in the tuple.
 
-**Any later phase that consumes relationships as a time-ordered event stream must
-re-sort by availability under the merged event key — never iterate the published
-tuple and call it chronology.** `f_p2BuildRelationships` reproduces the published
-order with two typed passes because that is the contract it is porting; the
-ordering is a serialization detail, not a semantic one.
+Neither consumer reads that order as chronology, and neither publishes it:
+
+* `run_structure_walk` re-sorts every event by `(availability_time, kind,
+  tiebreak)` (`transitions.py:135`);
+* `analyze_structure_state` re-sorts for publication by `(pivot_bar_index,
+  pivot_start_time_utc, record_id)` (`analyzer.py:346-353`), so
+  `StructureAnalysis.swing_relationships` is chronological, **not**
+  highs-then-lows.
+
+So the highs-then-lows order is an internal serialization artifact that reaches no
+consumer in that form. **Any phase that consumes relationships as a time-ordered
+event stream must re-sort under the merged event key — never iterate the raw tuple
+and call it chronology.** `f_p2BuildRelationships` reproduces the raw order
+because that is the function it is porting; P2-I4 sorts before walking (§16.2).
 
 ### 15.4 NON-OBVIOUS FACT 2 — LEFT-EDGE SEMANTICS
 
@@ -772,3 +791,136 @@ availability — production is always the reference side.
 **TD-A** and **TD-B** (§14.10) remain **OPEN** and unchanged. TD-A continues to
 gate acceptance of P2-I5 (BOS); TD-B continues to gate acceptance of P2-I6 (weak
 re-arm). Neither is touched by I1, I2, I3 or I4.
+
+---
+
+## 16. P2-I4 — INITIAL DIRECTION BOOTSTRAP (delivered, uncommitted)
+
+### 16.1 Scope
+
+`UNDETERMINED -> BULLISH | BEARISH`, once only, plus the initial protected/weak
+references Python assigns at that moment. **No BOS, no CHOCH, no
+`StructEventRec`, no broken-level bookkeeping, no weak re-arm.**
+
+### 16.2 Source contract — exact
+
+| element | location |
+|---|---|
+| merged event key | `transitions.py:99-135` |
+| relationship sub-key | `transitions.py:122-133` |
+| bootstrap branch | `transitions.py:355-381` |
+| direction/protected/weak publication | `analyzer.py:418-436` |
+
+```
+on RELATIONSHIP event r (walked in merged order):
+    latest_label[r.swing_type] = r.label            # UNCONDITIONAL (:358)
+    latest_swing[r.swing_type] = r.current_swing    # UNCONDITIONAL (:359-361)
+    if direction == UNDETERMINED:                                   # (:363)
+        if latest_label[HIGH] == HIGHER_HIGH and latest_label[LOW] == HIGHER_LOW:
+            direction      = BULLISH                                # (:366-373)
+            protected_low  = latest_swing[LOW]
+            weak_high      = latest_swing[HIGH]
+        elif latest_label[HIGH] == LOWER_HIGH and latest_label[LOW] == LOWER_LOW:
+            direction      = BEARISH                                # (:374-381)
+            protected_high = latest_swing[HIGH]
+            weak_low       = latest_swing[LOW]
+        last_change_availability = r.availability_time_utc
+```
+
+Answers to the questions the phase brief required be derived, not assumed:
+
+| question | answer |
+|---|---|
+| latest relationship per side? | **Yes** — unconditional dict overwrite |
+| does EQUAL replace prior directional evidence? | **Yes**, and therefore blocks bootstrap |
+| does later contradictory evidence replace earlier? | **Yes** — same overwrite |
+| which event triggers bootstrap? | the relationship event that **completes** a qualifying pair, either side |
+| protected/weak assigned | BULL: `protected_low`, `weak_high`. BEAR: `protected_high`, `weak_low`. The opposite two stay unset |
+| does bootstrap emit a transition? | **NO** — `transitions.append` is absent from the branch |
+| once-only? | **Yes** — the `UNDETERMINED` guard; flips are CHOCH (I5+) |
+
+The swing that becomes protected/weak is the latest relationship's **current**
+swing for that side, which may originate in an *earlier* event than the one that
+triggers the bootstrap. `last_change_availability` is the **triggering** event's
+own availability, not a max of the two contributing relationships.
+
+### 16.3 EVENT CHRONOLOGY — the highest-risk detail
+
+Restricted to relationships (all share `kind = _EVENT_RELATIONSHIP`), Python's key
+is:
+
+```
+(availability_time_utc, current_swing.pivot_bar_index, str(current_swing_record_id))
+```
+
+**The `record_id` leg is unreachable in production.**
+`_find_single_candle_pivots` emits at most one pivot per candle index and skips
+any index qualifying as both a high and a low (`swings.py:112-114`), so
+`pivot_bar_index` is unique across confirmed swings and
+`(availability, pivot_bar_index)` is already a **total** order. Pine reproduces it
+exactly with `(availabilityTime, currentPivotStartAbs)` — no UUID surrogate is
+needed, and none was invented. `_validate_swings` would *permit* a synthetic tie
+across types, so this is pinned by test rather than assumed.
+
+`StructRelRec` gained one field, `currentPivotStartAbs`, purely to carry that
+ordering key; it is the exact Python tiebreak component.
+
+### 16.4 Implementation
+
+| helper | role |
+|---|---|
+| `f_p2RelIsHigh` | side of the book from the relationship code |
+| `f_p2OrderRelationships` | stable insertion sort on `(availabilityTime, currentPivotStartAbs)` |
+| `f_p2BootstrapWalk` | the `_EVENT_RELATIONSHIP` branch, returning a 6-tuple |
+
+**Bounded and batch-equivalent.** All three are pure functions over the bounded
+live relationship list, rebuilt on every confirmed bar and discarded. No `var`, no
+1800-bar traversal, no unbounded accumulation, and no candle access — the walk
+inherits P1's confirmed-bar gate through its inputs. I4 is deliberately **not**
+the incremental frontier engine; that remains P2-I7.
+
+### 16.5 Left-edge semantics
+
+If the evidence that produced a bootstrap leaves the bounded input, the direction
+returns to `UNDETERMINED` — exactly what Python yields for the same bounded input.
+Pine retains no predecessor, no label and no direction behind P1's window.
+
+### 16.6 I4 proof
+
+| measure | value |
+|---|---|
+| deterministic campaign scenarios | 16 |
+| prefix comparisons | 90 |
+| bullish / bearish / undetermined outcomes | 6 / 4 / 6 (pinned exactly) |
+| relationship labels reached | 6 / 6 |
+| mismatches | **0** |
+| transitions fired anywhere in the campaign | **0** |
+| I4 parity tests | 59 passed |
+| Pine foundation guards | 53 passed |
+| plot consumers | 23 / 64 (target was ≤ 24) |
+
+Parity compares the **full** state — direction plus all four protected/weak
+identities — against production `analyze_structure_state`, never direction alone,
+and at **every prefix**, so bootstrap *timing* is validated and not just the final
+answer.
+
+Two guard-the-guard tests prove the fixtures actually discriminate:
+`test_api_order_model_would_have_diverged_*` shows an implementation that walks
+the highs-then-lows tuple reaches the **opposite** direction on those fixtures, and
+`test_swapping_the_tied_pair_would_change_the_direction` shows the
+`pivot_bar_index` tiebreak is load-bearing.
+
+### 16.7 Diagnostics
+
+Five slots added (`P2_direction`, `P2_protected_high`, `P2_protected_low`,
+`P2_weak_high`, `P2_weak_low`); two superseded adapter echoes retired
+(`P2_last_swing_price`, `P2_last_swing_atr` — both pure restatements of the I2
+adapter, which is contract-tested). Net 20 -> 23, under the ≤ 24 target with
+headroom for I5. All P2 diagnostics remain `debugMode`-gated and
+`display.data_window` only; P1's nine outputs are untouched and un-gated.
+
+### 16.8 Test debt — still open
+
+**TD-A** and **TD-B** (§14.10) remain **OPEN**. I4 touches neither. TD-A must be
+directly proven before P2-I5 is accepted; the next task is **P2-I5-PRE**, the TD-A
+BOS protected-fallback *taken*-branch fixture.
