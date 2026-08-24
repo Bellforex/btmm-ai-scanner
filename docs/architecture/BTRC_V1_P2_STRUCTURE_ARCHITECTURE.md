@@ -1,7 +1,7 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
 Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15 and §16 record what has actually shipped.
+P2-I0 test-proven contract; §15–§17 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -11,11 +11,12 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I0 | contract hardening (tests only) | committed `0cac239` |
 | P2-I1 / P2-I2 | structure codes, records, canonical swing adapter | committed `0df061f` |
 | P2-I3 | relationship classification (§15) | committed `26bc64d` |
-| P2-I4 | initial direction bootstrap (§16) | implemented, **uncommitted**, awaiting author review |
-| P2-I5+ | BOS / CHOCH / weak re-arm | **not started**; gated on TD-A (§14.10) |
+| P2-I4 | initial direction bootstrap (§16) | committed `5707034` |
+| P2-I5-PRE | TD-A BOS protected-fallback contract (§17) | **TD-A RESOLVED** — author-accepted |
+| P2-I5+ | BOS / CHOCH / weak re-arm | **not started** |
 
 §1–§13 were written before implementation and are preserved as the design of
-record; where a detail was refined by testing, §14–§16 are authoritative.
+record; where a detail was refined by testing, §14–§17 are authoritative.
 
 ---
 
@@ -688,11 +689,15 @@ Two production branches are exercised only indirectly by P2-I0. Each is a
 
 | # | branch | blocks | status |
 |---|---|---|---|
-| **TD-A** | BOS protected-fallback **TAKEN** branch (`_most_recent_unbroken` returns `None`, so the existing protected level is retained) | **P2-I5 (BOS) may not be accepted until this is directly tested** | OPEN |
+| **TD-A** | BOS protected-fallback **TAKEN** branch (`_most_recent_unbroken` returns `None`, so the existing protected level is retained) | ~~P2-I5 (BOS) may not be accepted until this is directly tested~~ — superseded, see §17.7 | **RESOLVED (§17)** |
 | **TD-B** | Explicit weak-re-arm-after-boundary fixture (a new same-type swing with `pivot_bar_index > boundary` re-arms the cleared weak level) | **P2-I6 (weak re-arm) may not be accepted until this is directly tested** | OPEN |
 
-Both are reachable by the same swing-exhaustion pattern that made the CHOCH abort
-constructible (§14.3); neither blocks P2-I1 or P2-I2.
+**Correction.** This section originally asserted that *both* debts "are reachable
+by the same swing-exhaustion pattern that made the CHOCH abort constructible
+(§14.3)". For TD-A that claim is **wrong**, and §17 gives the proof: the
+swing-exhaustion pattern cannot reach the BOS fallback, because exhausting the
+protected side necessarily flips the direction. TD-B is unaffected and remains
+OPEN and reachable.
 
 ---
 
@@ -786,11 +791,11 @@ against **production** `detect_swing_relationships` on every case, asserting
 relationship code, current swing identity, predecessor identity **and**
 availability — production is always the reference side.
 
-### 15.6 Test debt — still open
+### 15.6 Test debt
 
-**TD-A** and **TD-B** (§14.10) remain **OPEN** and unchanged. TD-A continues to
-gate acceptance of P2-I5 (BOS); TD-B continues to gate acceptance of P2-I6 (weak
-re-arm). Neither is touched by I1, I2, I3 or I4.
+Neither TD-A nor TD-B is touched by I1, I2 or I3. TD-A was subsequently
+**RESOLVED** at P2-I5-PRE (§17); **TD-B remains OPEN** and continues to gate
+acceptance of P2-I6 (weak re-arm).
 
 ---
 
@@ -919,8 +924,155 @@ adapter, which is contract-tested). Net 20 -> 23, under the ≤ 24 target with
 headroom for I5. All P2 diagnostics remain `debugMode`-gated and
 `display.data_window` only; P1's nine outputs are untouched and un-gated.
 
-### 16.8 Test debt — still open
+### 16.8 Test debt
 
-**TD-A** and **TD-B** (§14.10) remain **OPEN**. I4 touches neither. TD-A must be
-directly proven before P2-I5 is accepted; the next task is **P2-I5-PRE**, the TD-A
-BOS protected-fallback *taken*-branch fixture.
+I4 touches neither debt. TD-A was resolved by the P2-I5-PRE investigation
+(§17); **TD-B remains OPEN** and continues to gate P2-I6.
+
+---
+
+## 17. P2-I5-PRE / TD-A — BOS PROTECTED-FALLBACK
+
+Test file: `tests/unit/test_structure_bos_fallback_contract.py` (36 tests).
+
+### 17.1 Result — TD-A RESOLVED (author-accepted)
+
+> **TD-A RESOLVED — BOS protected-fallback branch proven unreachable through
+> valid production state; defensive fallback semantics test-pinned in both
+> directions.**
+
+The original acceptance criterion — *"TD-A closes only if natural production
+execution reaches `replacement == None`"* — is **superseded**, because the
+investigation proved that state is impossible under the validated production
+invariant. The branch is dead code; specifically, it is *defensive* code, and
+P2-I5 reproduces it deliberately (§17.5a).
+
+| criterion (from the phase brief) | outcome |
+|---|---|
+| direction established, BOS predicate true, weak level valid, BOS emits | **YES** |
+| replacement selection is called | **YES** |
+| `_most_recent_unbroken` returns `None` | **NO — provably impossible** |
+| fallback branch taken | **NO** in production; **YES** under injection |
+| existing protected reference retained | **YES** (pinned under injection) |
+| broken weak level consumed | **YES** (pinned on both paths) |
+
+### 17.2 Why the branch is unreachable
+
+The invariant is: **while `direction == BULLISH`, `protected_low` is always
+visible and always unbroken** (and its bearish mirror). Since
+`_most_recent_unbroken` filters only on `broken_ids`, the protected swing is
+always at least one eligible candidate, so `None` is impossible.
+
+The invariant holds because of four independent source facts:
+
+1. **Bootstrap runs with `broken_ids` empty.** `broken_ids` only gains entries
+   inside CHOCH/BOS handlers, which require a direction; bootstrap only runs while
+   `UNDETERMINED`, and direction never returns to `UNDETERMINED`.
+2. **A CHOCH that consumes `protected_low` flips the direction in the same step**
+   and sets `protected_low = None` (`transitions.py:246-248`). There is no state
+   in which a BULLISH direction survives its protected low being broken.
+3. **An aborting CHOCH consumes nothing.** The `continue` precedes
+   `broken_ids.add` (`:189-191`, `:223-225`), so a failed CHOCH leaves the
+   protected level unbroken. *This is the load-bearing detail* — pinned by
+   `test_choch_abort_precedes_broken_ids_add`. Reversing that order would make the
+   fallback live and reopen TD-A.
+4. **A BULLISH BOS consumes a HIGH but searches the LOWS** (`:260-264`), so the
+   BOS cannot empty the candidate set it is about to query.
+
+Empirical confirmation: a deterministic sweep of 398 seeds producing **≥ 350
+productive walks and ≥ 900 replacement searches**, covering all four transition
+types, records a **minimum eligible-candidate count of exactly 1 — never 0**.
+The test asserts the minimum is exactly 1, so the sweep also fails if it drifts
+away from the boundary and stops being evidence.
+
+The adversarial construction is spelled out in
+`test_exhausting_the_lows_flips_direction_instead_of_emptying_the_set`: breaking
+the protected low requires a BEARISH CHOCH, which flips to BEARISH and clears it.
+
+### 17.3 The vacuity trap, made explicit
+
+`test_unchanged_protected_id_does_not_imply_fallback` builds a real BULLISH BOS
+in which the protected low is **identical before and after** — yet the fallback
+was not taken; the search simply found two candidates and re-selected the same
+swing. Any TD-A fixture that asserted only "protected id unchanged" would have
+passed this and proved nothing. Every assertion in the file therefore also checks
+the eligible-candidate set.
+
+### 17.4 Fallback semantics — pinned by injection
+
+`_most_recent_unbroken` is replaced with a stub returning `None` to execute the
+defensive expression. This is a deliberate coupling to a private helper, justified
+because public state cannot reach the branch; the tests make no reachability
+claim.
+
+Both directions are covered and both are **discriminating**: unpatched, the
+fixture selects a strictly newer swing (bar 10); patched, it must retain the
+pre-BOS protected swing (bar 6). Mutating the production fallback to any other
+swing fails both tests.
+
+| under injection | bullish | bearish |
+|---|---|---|
+| transition still emitted | BULLISH_BOS | BEARISH_BOS |
+| `protected_swing_id` | pre-BOS `protected_low` | pre-BOS `protected_high` |
+| direction | unchanged BULLISH | unchanged BEARISH |
+| broken weak level | consumed (no repeat break) | consumed |
+
+### 17.5 Everything else P2-I5 needs, pinned from reachable state
+
+| element | pinned by |
+|---|---|
+| BOS predicates, close-only and strict | §14.1 (P2-I0) |
+| CHOCH precedence over BOS | §14.2 (P2-I0) |
+| replacement key `max(pivot_bar_index, pivot_start_time_utc, str(record_id))` | `test_most_recent_unbroken_key_is_pinned_to_source` |
+| newest of several eligible candidates wins | `test_replacement_picks_the_newest_of_several_eligible_candidates` |
+| broken candidates are excluded | `test_replacement_skips_broken_candidates` |
+| only the BOS's own weak side clears | `test_bos_clears_only_its_own_weak_side` |
+| no re-arm inside the BOS handler | `test_bos_does_not_re_arm_the_weak_side_in_its_own_branch` |
+| boundary index = break candle index; re-arm gate is `>` | `test_bos_sets_the_weak_boundary_to_the_break_candle_index` |
+| transition field values | `test_bos_transition_fields_match_the_break` |
+| `availability = max(candle, broken_swing)` | `test_bos_timing_is_the_later_of_candle_and_broken_swing` |
+| repeat break suppressed | `test_repeat_break_of_the_same_level_emits_no_second_transition` |
+| batch ↔ incremental equivalence | `test_batch_equals_incremental_replay`, `test_replay_totals` |
+
+**A second defensive `max` identified.** BOS availability is
+`max(candle.availability, broken_swing.availability)`, but the candle side
+**always wins**: a weak level must already be armed for a BOS to fire, so its
+availability necessarily precedes the break candle's. The two operands genuinely
+differ in the fixture, so the `max` is exercised rather than trivially equal, but
+Pine may implement it as either the max or the candle time without divergence.
+
+### 17.5a AUTHOR POLICY — Pine must keep the fallback
+
+Pine I5 **MUST** reproduce the Python fallback defensively even though it is
+currently unreachable:
+
+```
+replacement = most recent eligible unbroken opposite-side swing
+protected   = replacement if replacement exists else existing protected
+```
+
+It must **not** be optimised away, and production Pine must **not** carry a
+runtime assertion asserting `replacement` can never be absent — the invariant
+belongs in tests and in this document, not in the indicator. Rationale:
+structural parity with Python, negligible cost, and protection against a future
+change to the invariant (see §17.2 fact 3, the load-bearing detail).
+
+### 17.6 Remaining ambiguity for P2-I5
+
+**None.** Every BOS element above is pinned by test, and the fallback policy is
+settled by §17.5a.
+
+### 17.7 Status
+
+**TD-A is RESOLVED.** The author accepted the unreachability proof plus the
+injected-semantics coverage in place of a natural taken-branch fixture, and
+superseded the original criterion. TD-A no longer gates P2-I5.
+
+Accepted evidence: 377 productive walks, 1,096 replacement searches, minimum
+eligible replacement count exactly 1, zero natural `replacement == None` cases,
+both directional fallback branches exercised by controlled injection,
+discriminating mutation tests proving the fallback target matters, and 360
+batch/incremental prefix comparisons with 0 mismatch.
+
+**TD-B remains OPEN and unaffected.** It is genuinely reachable, it still gates
+P2-I6, and it does not gate P2-I5.
