@@ -1,7 +1,7 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
 Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15–§17 record what has actually shipped.
+P2-I0 test-proven contract; §15–§18 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -13,10 +13,11 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I3 | relationship classification (§15) | committed `26bc64d` |
 | P2-I4 | initial direction bootstrap (§16) | committed `5707034` |
 | P2-I5-PRE | TD-A BOS protected-fallback contract (§17) | **TD-A RESOLVED** — author-accepted |
-| P2-I5+ | BOS / CHOCH / weak re-arm | **not started** |
+| P2-I5 | BOS (§18) | implemented, **uncommitted**, awaiting author review |
+| P2-I6+ | CHOCH / weak re-arm | **not started**; I6 gated on TD-B |
 
 §1–§13 were written before implementation and are preserved as the design of
-record; where a detail was refined by testing, §14–§17 are authoritative.
+record; where a detail was refined by testing, §14–§18 are authoritative.
 
 ---
 
@@ -1076,3 +1077,165 @@ batch/incremental prefix comparisons with 0 mismatch.
 
 **TD-B remains OPEN and unaffected.** It is genuinely reachable, it still gates
 P2-I6, and it does not gate P2-I5.
+
+---
+
+## 18. P2-I5 — BOS (delivered, uncommitted)
+
+Test file: `tests/unit/test_p2_bos_parity.py` (51 tests).
+**Scope: BOS only.** No CHOCH emission, no direction flip, no weak re-arm.
+
+### 18.1 The merged walk
+
+I4's relationship-only walk is replaced by `f_p2StructureWalk`, a single pass over
+the merged event stream, transcribing `run_structure_walk` for the subset
+implemented so far:
+
+| event | kind | handled |
+|---|---|---|
+| CANDLE | 0 | **I5** — BOS predicate, suppression guard, break handling |
+| SWING_VISIBLE | 1 | **I5** — registers the replacement candidate. **No weak re-arm** (I6) |
+| RELATIONSHIP | 2 | **I4** — direction bootstrap, unchanged |
+
+Each stream is already sorted on its own key — candles chronologically by
+construction, swings by `f_p2OrderSwings`, relationships by
+`f_p2OrderRelationships` — so this is a **linear 3-way cursor merge**, not a sort
+of the combined list. Ties in availability fall to the lower `kind` because the
+streams are tested in kind order and only a **strictly** earlier time displaces
+the incumbent.
+
+### 18.2 CHOCH PRECEDENCE — the phase-safety problem, and why the guard is exact
+
+Python evaluates CHOCH **before** BOS. An I5-only engine could therefore emit a
+BOS on a candle that production Python classifies as CHOCH.
+
+The resolution is exact rather than approximate. Python continues past the BOS
+block on **both** CHOCH exits — the successful one (`transitions.py:253`) and the
+aborting one (`:190`/`:224`). So the rule governing BOS emission is precisely:
+
+> **CHOCH predicate true implies no BOS on this candle.**
+
+That holds regardless of whether the CHOCH would have succeeded, what it would
+have selected, or what it would have mutated. It is a pure price test over state
+I5 already tracks, so the guard reproduces Python's **BOS decisions exactly**.
+
+```
+if direction == BEARISH and protected_high and close > protected_high.price -> suppress
+if direction == BULLISH and protected_low  and close < protected_low.price  -> suppress
+```
+
+**This is BOS SUPPRESSION ONLY — it is NOT a CHOCH implementation.** It creates no
+transition, flips no direction, consumes no swing and mutates no state; the walk
+simply does nothing on such a candle. That is *incomplete* relative to Python
+(Python would have emitted a CHOCH and mutated state) but never *wrong about BOS*.
+The distinction is enforced by `test_choch_guard_is_suppression_only`, which
+asserts the guard writes only its own boolean and the suppression path mutates
+only a counter.
+
+**When a candle can satisfy both predicates.** It requires the protected level on
+the far side of the weak level — e.g. BULLISH with `protected_low > weak_high`.
+`test_the_precedence_fixture_really_satisfies_both_predicates` proves the fixture
+fires both, and `test_without_the_guard_a_false_bos_would_be_emitted` proves the
+guard is load-bearing by running the same walk with it removed. The fixture is
+geometrically extreme (a swing low above a swing high); real adjacent OHLC pivots
+would not produce it, but `_validate_swings` accepts it and it isolates the
+precedence question. **The guard is justified by Python's control flow, not by
+that fixture's realism.**
+
+### 18.3 BOS contract as implemented
+
+```
+predicate   BULLISH and close > weak_high.price   -> BULLISH_BOS     (strict, close-only)
+            BEARISH and close < weak_low.price    -> BEARISH_BOS
+consume     broken_keys += broken weak swing      (BEFORE the replacement search)
+replace     protected = most_recent_unbroken(opposite side)
+            ... or the EXISTING protected level if none (defensive, 17.5a)
+clear       only the BOS's own weak side; the boundary index := break candle index
+direction   unchanged
+timing      event_time = break candle open time
+            availability = max(break candle availability, broken swing availability)
+```
+
+`_most_recent_unbroken` is transcribed with **all three key tiers**
+(`pivot_bar_index`, `pivot_start_time`, `stableKey`). The lower two are
+unreachable for valid production swings, but omitting them would silently bake
+that invariant into the port.
+
+The **defensive fallback is present and must stay** (§17.5a). Pine carries no
+runtime assertion about the invariant.
+
+The `availability` **max is transcribed structurally** even though the candle
+operand always wins (§17.5) — the operands genuinely differ in the fixtures, so
+the max is exercised rather than trivially equal.
+
+`StructEventRec` gained one field, `protectedSwingKey`: Python publishes
+`protected_swing_id` on every `StructureTransition` (`transitions.py:36`) and it is
+not derivable from the other fields on the record.
+
+### 18.4 A structural consequence worth recording
+
+**A second same-direction BOS is unreachable within I5.** After a BOS the weak
+side is cleared, and only a later `SWING_VISIBLE` past the boundary can re-arm it
+— which is the P2-I6 / TD-B gate. Python agrees on the same input, so parity
+holds; `test_a_second_same_direction_bos_requires_weak_re_arm` records this so it
+is not later mistaken for a missing feature.
+
+The same fact means the "replacement excludes an already-broken swing" case is not
+reachable from BOS alone: `broken_keys` only ever holds weak-side swings, which
+are the *opposite* type to the side being searched. It is covered at the Python
+level in §17.5 and will become Pine-reachable once CHOCH lands.
+
+### 18.5 I5 proof
+
+| measure | value |
+|---|---|
+| BOS parity tests | 51 passed |
+| campaign scenarios | 13 |
+| prefix comparisons | 312 (every candle prefix of every scenario) |
+| BOS transitions reproduced | 7 across 7 scenarios |
+| suppressed would-be BOS | at least 2 (both directions) |
+| mismatches | **0** |
+| Pine foundation guards | 61 passed |
+| all Structure tests | 233 passed |
+| full suite | **1740 passed / 0 failed** |
+| plot consumers | 26 / 64 (target 26) |
+
+Required-case coverage: valid BOS both directions; close exactly at the level
+(not a break, both sides); wick through with close back inside (both sides); gap
+open through with a failing close; repeat suppression (both sides); normal
+replacement; newest-of-several replacement; swing not yet visible excluded;
+defensive fallback under injection (both directions, discriminating); opposite
+weak preserved; boundary index; event time; availability max; CHOCH-precedence
+suppression (both directions, plus a guard-the-guard proving it discriminates).
+
+Three source-guard mutations were run against production Pine and each was caught:
+optimising away the fallback, relaxing the break predicate to `>=`, and letting
+the suppression path mutate state. The file was restored byte-identically each
+time.
+
+### 18.6 Resources
+
+| measure | I4 | I5 | delta |
+|---|---|---|---|
+| lines | 1,986 | 2,199 | +213 |
+| bytes | 107,182 | 121,740 | +14,558 |
+| plot consumers | 23 | 26 | +3 (4 added, 1 retired) |
+| `array.new` | 63 | 67 | +4 |
+| for-loops | 55 | 59 | +4 |
+| `while` | 20 | 20 | 0 |
+| types | 10 | 10 | 0 |
+
+Worst case per confirmed bar: **O(C + S^2 + R^2 + B*S)** — a linear merge over the
+bounded window (C is about 300) plus insertion sorts over the live swing and
+relationship lists (tens) plus one replacement scan per break. No 1800-bar
+traversal, no unbounded accumulation, no nested history explosion. All walk state
+is rebuilt from bounded input each confirmed bar and discarded.
+
+`P2_last_swing_type` was retired to fund the BOS slots: swing type is
+contract-tested on the adapter and already implied by the relationship codes,
+which partition into high-side and low-side values.
+
+### 18.7 Test debt
+
+**TD-A RESOLVED** (§17). **TD-B remains OPEN** — no weak re-arm is implemented,
+and it continues to gate P2-I6.

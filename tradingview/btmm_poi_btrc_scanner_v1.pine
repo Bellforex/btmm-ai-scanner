@@ -300,6 +300,10 @@ type StructEventRec
     float breakClose
     int   breakTime            // break candle event_time_utc
     int   availabilityTime     // max(break candle, broken swing) availability
+    int   protectedSwingKey    // P2-I5. Python publishes protected_swing_id on
+                               // every StructureTransition (transitions.py:36);
+                               // it is the post-break protected level and is not
+                               // derivable from the other fields on this record.
 
 // =============================================================================
 // PRIMITIVE HELPERS — measurements/candle_metrics.py
@@ -459,6 +463,13 @@ var int   p2ProtHighKey   = C_ST_NA
 var int   p2ProtLowKey    = C_ST_NA
 var int   p2WeakHighKey   = C_ST_NA
 var int   p2WeakLowKey    = C_ST_NA
+var int   p2TransCount    = C_ST_NA  // P2-I5
+var int   p2LastTransCode = C_ST_NA
+var int   p2LastBrokenKey = C_ST_NA
+var float p2LastBrokenLvl = na
+var int   p2WeakHighBound = C_ST_NA  // not plotted; TD-B/I6 consumes it
+var int   p2WeakLowBound  = C_ST_NA
+var int   p2Suppressed    = C_ST_NA  // not plotted; CHOCH-guard hit count
 
 // Swing-set change detection (so SWING-DERIVED detectors run only on change).
 // S/R is deliberately NOT behind this gate — see the P1-CLOSEOUT note in MAIN.
@@ -857,37 +868,220 @@ f_p2OrderRelationships(array<StructRelRec> rels) =>
 //
 // BOUNDED. Rebuilt from the bounded relationship list on every confirmed bar and
 // discarded; no evidence is retained behind P1's window.
-f_p2BootstrapWalk(array<StructRelRec> rels, array<int> order) =>
+// -----------------------------------------------------------------------------
+// P2-I5 SUPPORT HELPERS
+// -----------------------------------------------------------------------------
+
+// Resolve a stableKey back to its index in the bounded view list. Called at most
+// twice per walk (only when the bootstrap fires), so the linear scan is free.
+f_p2ViewIndexByKey(array<StructSwingView> views, int key) =>
+    int found = -1
+    for [i, _p2v] in views
+        if found < 0 and array.get(views, i).stableKey == key
+            found := i
+    found
+
+// SWING_VISIBLE event order (transitions.py:109-121):
+//   (meaningful_confirmation_time, pivot_bar_index, pivot_start_time, record_id)
+// The record_id leg is unreachable for the same reason as in I4 (pivot_bar_index
+// is unique across confirmed swings), but pivotStartTime is transcribed anyway
+// because it costs nothing and keeps the key structurally identical.
+f_p2OrderSwings(array<StructSwingView> views) =>
+    array<int> order = array.new<int>()
+    for [i, _p2s] in views
+        StructSwingView v = array.get(views, i)
+        int n = array.size(order)
+        int pos = n
+        if n > 0
+            for j = 0 to n - 1
+                StructSwingView o = array.get(views, array.get(order, j))
+                bool earlier = v.meaningfulConfTime < o.meaningfulConfTime or (v.meaningfulConfTime == o.meaningfulConfTime and (v.pivotStartAbs < o.pivotStartAbs or (v.pivotStartAbs == o.pivotStartAbs and (v.pivotStartTime < o.pivotStartTime or (v.pivotStartTime == o.pivotStartTime and v.stableKey < o.stableKey)))))
+                if earlier
+                    pos := j
+                    break
+        if pos >= array.size(order)
+            array.push(order, i)
+        else
+            array.insert(order, pos, i)
+    order
+
+// Transcription of _most_recent_unbroken (transitions.py:80-89).
+//
+//   candidates = [s for s in visible if s.record_id not in broken_ids]
+//   return None if not candidates else max(
+//       candidates, key=(pivot_bar_index, pivot_start_time_utc, str(record_id)))
+//
+// `visOrder` holds the indices of swings whose SWING_VISIBLE event has already
+// fired, so the candidate set is exactly Python's visible_swings_by_type entry.
+// All three key tiers are transcribed: the lower two are unreachable for valid
+// production swings, but omitting them would silently bake that invariant into
+// the port. Returns -1 for "no candidate" (Python's None).
+f_p2MostRecentUnbroken(array<StructSwingView> views, array<int> visOrder, int wantType, array<int> brokenKeys) =>
+    int best = -1
+    for [_p2m, vi] in visOrder
+        StructSwingView v = array.get(views, vi)
+        if v.swingType == wantType and array.indexof(brokenKeys, v.stableKey) < 0
+            if best < 0
+                best := vi
+            else
+                StructSwingView b = array.get(views, best)
+                bool newer = v.pivotStartAbs > b.pivotStartAbs or (v.pivotStartAbs == b.pivotStartAbs and (v.pivotStartTime > b.pivotStartTime or (v.pivotStartTime == b.pivotStartTime and v.stableKey > b.stableKey)))
+                if newer
+                    best := vi
+    best
+
+// =============================================================================
+// P2-I4 / P2-I5 — MERGED STRUCTURE WALK
+// -----------------------------------------------------------------------------
+// One pass over the merged event stream, transcribing run_structure_walk
+// (transitions.py:92-392) for the subset implemented so far:
+//
+//   I4  direction bootstrap on RELATIONSHIP events           (:355-381)
+//   I5  BULLISH_BOS / BEARISH_BOS on CANDLE events           (:255-321)
+//
+// NOT IMPLEMENTED HERE: CHOCH emission, direction flips, CHOCH abort mutation,
+// and weak re-arm on SWING_VISIBLE (that gate is P2-I6 / TD-B).
+//
+// EVENT ORDER. Python sorts every event by (availability_time, kind, tiebreak)
+// with CANDLE=0 < SWING_VISIBLE=1 < RELATIONSHIP=2 (:75-77, :135). Each of the
+// three streams is already sorted on its own key -- candles are chronological by
+// construction, swings by f_p2OrderSwings, relationships by
+// f_p2OrderRelationships -- so this is a linear 3-way merge rather than a sort of
+// the combined list. Ties in availability are resolved by the kind ordinal,
+// exactly as Python's tuple comparison does: the streams are tested in kind
+// order and only a STRICTLY earlier time displaces the incumbent.
+//
+// CHOCH PRECEDENCE -- BOS SUPPRESSION ONLY, NOT CHOCH IMPLEMENTATION.
+// Python evaluates CHOCH first and `continue`s past the BOS block on BOTH exits:
+// the successful one (:253) and the aborting one (:190/:224). So the rule
+// governing BOS emission is exactly "CHOCH predicate true => no BOS on this
+// candle", with no dependence on whether the CHOCH would have succeeded. The
+// guard below is that price test and nothing else: it creates no transition,
+// flips no direction, consumes no swing and mutates no state. On such a candle
+// this walk simply does nothing, which is incomplete relative to Python but
+// never WRONG about BOS. Full CHOCH behaviour is a later phase.
+f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<int> relOrder, array<int> swingOrder, array<float> closes, array<int> availT, array<int> openT, int absFirst) =>
     int dir        = C_ST_DIR_UNDETERMINED
-    int protHigh   = C_ST_NA
-    int protLow    = C_ST_NA
-    int weakHigh   = C_ST_NA
-    int weakLow    = C_ST_NA
+    int protHighIx = -1
+    int protLowIx  = -1
+    int weakHighIx = -1
+    int weakLowIx  = -1
+    int weakHighBoundaryAbs = -1
+    int weakLowBoundaryAbs  = -1
     int lastChange = C_ST_NA
     int hiLabel    = C_ST_NA
     int loLabel    = C_ST_NA
-    int hiSwing    = C_ST_NA
-    int loSwing    = C_ST_NA
-    for [_p2k, relIdx] in order
-        StructRelRec r = array.get(rels, relIdx)
-        if f_p2RelIsHigh(r.relationshipCode)
-            hiLabel := r.relationshipCode
-            hiSwing := r.swingKey
-        else
-            loLabel := r.relationshipCode
-            loSwing := r.swingKey
-        if dir == C_ST_DIR_UNDETERMINED
-            if hiLabel == C_ST_REL_HIGHER_HIGH and loLabel == C_ST_REL_HIGHER_LOW
-                dir        := C_ST_DIR_BULLISH
-                protLow    := loSwing
-                weakHigh   := hiSwing
-                lastChange := r.availabilityTime
-            else if hiLabel == C_ST_REL_LOWER_HIGH and loLabel == C_ST_REL_LOWER_LOW
-                dir        := C_ST_DIR_BEARISH
-                protHigh   := hiSwing
-                weakLow    := loSwing
-                lastChange := r.availabilityTime
-    [dir, protHigh, protLow, weakHigh, weakLow, lastChange]
+    int hiSwingKey = C_ST_NA
+    int loSwingKey = C_ST_NA
+    int suppressed = 0
+    array<int> brokenKeys = array.new<int>()
+    array<int> visOrder   = array.new<int>()
+    array<StructEventRec> events = array.new<StructEventRec>()
+
+    int ci = 0
+    int si = 0
+    int ri = 0
+    int nc = array.size(closes)
+    int ns = array.size(swingOrder)
+    int nr = array.size(relOrder)
+    int total = nc + ns + nr
+
+    if total > 0
+        for _p2e = 0 to total - 1
+            // ---- pick the next event by (availability, kind) ----
+            int pick  = -1
+            int bestT = 0
+            if ci < nc
+                pick := 0
+                bestT := array.get(availT, ci)
+            if si < ns
+                StructSwingView sv = array.get(views, array.get(swingOrder, si))
+                if pick < 0 or sv.meaningfulConfTime < bestT
+                    pick := 1
+                    bestT := sv.meaningfulConfTime
+            if ri < nr
+                StructRelRec rr = array.get(rels, array.get(relOrder, ri))
+                if pick < 0 or rr.availabilityTime < bestT
+                    pick := 2
+                    bestT := rr.availabilityTime
+
+            if pick == 0
+                float barClose = array.get(closes, ci)
+                int   barAbs   = absFirst + ci
+
+                // CHOCH PRICE GUARD -- BOS SUPPRESSION ONLY (see banner above).
+                bool chochGuard = false
+                if dir == C_ST_DIR_BEARISH and protHighIx >= 0
+                    chochGuard := barClose > array.get(views, protHighIx).pivotPrice
+                if dir == C_ST_DIR_BULLISH and protLowIx >= 0
+                    chochGuard := barClose < array.get(views, protLowIx).pivotPrice
+
+                if chochGuard
+                    suppressed := suppressed + 1
+                else
+                    // Strict, close-only, no tolerance (transitions.py:176-181).
+                    bool bosHigh = dir == C_ST_DIR_BULLISH and weakHighIx >= 0 and barClose > array.get(views, weakHighIx).pivotPrice
+                    bool bosLow  = dir == C_ST_DIR_BEARISH and weakLowIx  >= 0 and barClose < array.get(views, weakLowIx).pivotPrice
+                    if bosHigh or bosLow
+                        int brokenIx = bosHigh ? weakHighIx : weakLowIx
+                        StructSwingView broken = array.get(views, brokenIx)
+                        // Python consumes the broken swing BEFORE searching for a
+                        // replacement (:260 precedes :262).
+                        array.push(brokenKeys, broken.stableKey)
+                        int wantType = bosHigh ? SWING_LOW : SWING_HIGH
+                        int replIx   = f_p2MostRecentUnbroken(views, visOrder, wantType, brokenKeys)
+                        int existing = bosHigh ? protLowIx : protHighIx
+                        // DEFENSIVE FALLBACK (architecture doc 17.5a). Proven
+                        // unreachable in valid production state and deliberately
+                        // retained for structural parity with Python; it must not
+                        // be optimised away, and no runtime assertion asserts the
+                        // invariant here.
+                        int newProtIx = replIx >= 0 ? replIx : existing
+                        int availability = math.max(array.get(availT, ci), broken.meaningfulConfTime)
+                        array.push(events, StructEventRec.new(bosHigh ? C_ST_TR_BULLISH_BOS : C_ST_TR_BEARISH_BOS, broken.stableKey, broken.pivotPrice, barClose, array.get(openT, ci), availability, newProtIx >= 0 ? array.get(views, newProtIx).stableKey : C_ST_NA))
+                        if bosHigh
+                            protLowIx  := newProtIx
+                            weakHighIx := -1
+                            weakHighBoundaryAbs := barAbs
+                        else
+                            protHighIx := newProtIx
+                            weakLowIx  := -1
+                            weakLowBoundaryAbs := barAbs
+                        lastChange := availability
+                ci := ci + 1
+
+            else if pick == 1
+                // Becomes eligible as a replacement candidate. No weak re-arm:
+                // that gate is P2-I6 / TD-B.
+                array.push(visOrder, array.get(swingOrder, si))
+                si := si + 1
+
+            else
+                StructRelRec r = array.get(rels, array.get(relOrder, ri))
+                if f_p2RelIsHigh(r.relationshipCode)
+                    hiLabel    := r.relationshipCode
+                    hiSwingKey := r.swingKey
+                else
+                    loLabel    := r.relationshipCode
+                    loSwingKey := r.swingKey
+                if dir == C_ST_DIR_UNDETERMINED
+                    if hiLabel == C_ST_REL_HIGHER_HIGH and loLabel == C_ST_REL_HIGHER_LOW
+                        dir        := C_ST_DIR_BULLISH
+                        protLowIx  := f_p2ViewIndexByKey(views, loSwingKey)
+                        weakHighIx := f_p2ViewIndexByKey(views, hiSwingKey)
+                        lastChange := r.availabilityTime
+                    else if hiLabel == C_ST_REL_LOWER_HIGH and loLabel == C_ST_REL_LOWER_LOW
+                        dir        := C_ST_DIR_BEARISH
+                        protHighIx := f_p2ViewIndexByKey(views, hiSwingKey)
+                        weakLowIx  := f_p2ViewIndexByKey(views, loSwingKey)
+                        lastChange := r.availabilityTime
+                ri := ri + 1
+
+    int protHighKey = protHighIx >= 0 ? array.get(views, protHighIx).stableKey : C_ST_NA
+    int protLowKey  = protLowIx  >= 0 ? array.get(views, protLowIx).stableKey  : C_ST_NA
+    int weakHighKey = weakHighIx >= 0 ? array.get(views, weakHighIx).stableKey : C_ST_NA
+    int weakLowKey  = weakLowIx  >= 0 ? array.get(views, weakLowIx).stableKey  : C_ST_NA
+    [dir, protHighKey, protLowKey, weakHighKey, weakLowKey, lastChange, events, brokenKeys, weakHighBoundaryAbs, weakLowBoundaryAbs, suppressed]
 
 // =============================================================================
 // EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
@@ -1674,15 +1868,28 @@ if barstate.isconfirmed
         else
             p2LastLowRel := r.relationshipCode
 
-    // ---- P2-I4: initial direction bootstrap. Derived purely from the bounded
-    // relationship list, so it inherits the confirmed-bar gate; no candle value is
-    // read and no transition is emitted.
-    [p2bDir, p2bProtHigh, p2bProtLow, p2bWeakHigh, p2bWeakLow, _p2bLastChange] = f_p2BootstrapWalk(p2Rels, f_p2OrderRelationships(p2Rels))
+    // ---- P2-I4 + P2-I5: merged structure walk (bootstrap + BOS). Consumes only
+    // CONFIRMED window state -- wClose/wOpenT/wAvailT are pushed above from the
+    // just-closed bar -- so it inherits the confirmed-bar gate and never reads a
+    // forming value, an intrabar price, or a wick.
+    [p2bDir, p2bProtHigh, p2bProtLow, p2bWeakHigh, p2bWeakLow, _p2bLastChange, p2bEvents, _p2bBroken, p2bWhBound, p2bWlBound, p2bSupp] = f_p2StructureWalk(p2Swings, p2Rels, f_p2OrderRelationships(p2Rels), f_p2OrderSwings(p2Swings), wClose, wAvailT, wOpenT, absFirst)
     p2Direction   := p2bDir
     p2ProtHighKey := p2bProtHigh
     p2ProtLowKey  := p2bProtLow
     p2WeakHighKey := p2bWeakHigh
     p2WeakLowKey  := p2bWeakLow
+    p2WeakHighBound := p2bWhBound
+    p2WeakLowBound  := p2bWlBound
+    p2Suppressed    := p2bSupp
+    p2TransCount    := array.size(p2bEvents)
+    p2LastTransCode := C_ST_NA
+    p2LastBrokenKey := C_ST_NA
+    p2LastBrokenLvl := na
+    if p2TransCount > 0
+        StructEventRec lastEv = array.get(p2bEvents, p2TransCount - 1)
+        p2LastTransCode := lastEv.transitionCode
+        p2LastBrokenKey := lastEv.brokenSwingKey
+        p2LastBrokenLvl := lastEv.brokenLevel
 
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
@@ -1948,7 +2155,9 @@ plot(p1HistoryOk ? latestTLNormSlope    : na, "P1_tl_norm_slope",    color = col
 // Times are epoch seconds (ms/1000) so a 2dp readout keeps full precision.
 // =============================================================================
 plot(debugMode and p1HistoryOk ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.new(color.gray, 0),  display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2LastType     : na, "P2_last_swing_type",     color = color.new(color.gray, 0),  display = display.data_window)
+// P2_last_swing_type retired at P2-I5 to fund the BOS slots: swing type is
+// contract-tested on the adapter and is already implied by the relationship
+// codes, which are partitioned into high-side and low-side values.
 // P2_last_swing_price / P2_last_swing_atr retired at P2-I4 to fund the bootstrap
 // slots. Both were pure echoes of the I2 adapter, which is contract-tested; the
 // analytically meaningful derivations (relationship codes, direction,
@@ -1963,6 +2172,10 @@ plot(debugMode and p1HistoryOk and p2ProtHighKey != C_ST_NA ? p2ProtHighKey / 10
 plot(debugMode and p1HistoryOk and p2ProtLowKey  != C_ST_NA ? p2ProtLowKey  / 1000 : na, "P2_protected_low",  color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk and p2WeakHighKey != C_ST_NA ? p2WeakHighKey / 1000 : na, "P2_weak_high", color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk and p2WeakLowKey  != C_ST_NA ? p2WeakLowKey  / 1000 : na, "P2_weak_low",  color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2TransCount    != C_ST_NA ? p2TransCount : na, "P2_transition_count", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2LastTransCode != C_ST_NA ? p2LastTransCode : na, "P2_last_transition_code", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk and p2LastBrokenKey != C_ST_NA ? p2LastBrokenKey / 1000 : na, "P2_last_broken_key", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastBrokenLvl : na, "P2_last_broken_level", color = color.new(color.gray, 0), display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)

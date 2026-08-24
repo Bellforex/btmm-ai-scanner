@@ -123,7 +123,7 @@ def _type_body(text: str, name: str) -> str:
         (
             "StructEventRec",
             ["transitionCode", "brokenSwingKey", "brokenLevel", "breakClose",
-             "breakTime", "availabilityTime"],
+             "breakTime", "availabilityTime", "protectedSwingKey"],
         ),
     ],
 )
@@ -133,14 +133,15 @@ def test_structure_records_declare_exactly_the_planned_fields(type_name, fields)
     assert declared == fields, f"{type_name} fields drifted: {declared}"
 
 
-def test_transition_record_is_declared_but_never_constructed() -> None:
-    """StructRelRec is constructed as of I3. StructEventRec must not be —
-    building one would mean BOS/CHOCH emission, which is I5."""
+def test_transition_record_is_constructed_for_bos_only() -> None:
+    """As of I5 StructEventRec is built — but only with BOS transition codes."""
     text = _src()
-    assert "type StructRelRec" in text
-    assert "type StructEventRec" in text
     assert "StructRelRec.new(" in text, "I3 must construct relationships"
-    assert "StructEventRec.new(" not in text, "transition emission is I5, not I3"
+    assert "StructEventRec.new(" in text, "I5 must construct BOS transitions"
+    construction = text.split("StructEventRec.new(")[1].split(")\n")[0]
+    assert "C_ST_TR_BULLISH_BOS" in construction
+    assert "C_ST_TR_BEARISH_BOS" in construction
+    assert "CHOCH" not in construction, "CHOCH emission is a later phase"
 
 
 def test_swing_view_does_not_duplicate_all_of_swingrec() -> None:
@@ -317,10 +318,12 @@ def test_relationship_builder_retains_no_state_behind_the_window() -> None:
     assert "var " not in body, "builder must hold no persistent state"
 
 
-def test_no_transition_emission_yet() -> None:
+def test_bos_codes_are_reachable_and_choch_codes_are_not() -> None:
+    """The I5 phase boundary: BOS is behavioural, CHOCH is still declaration-only."""
     text = _src()
-    for code in ("C_ST_TR_BULLISH_BOS", "C_ST_TR_BEARISH_BOS",
-                 "C_ST_TR_BULLISH_CHOCH", "C_ST_TR_BEARISH_CHOCH"):
+    for code in ("C_ST_TR_BULLISH_BOS", "C_ST_TR_BEARISH_BOS"):
+        assert text.count(code) >= 2, f"{code} is declared but never emitted"
+    for code in ("C_ST_TR_BULLISH_CHOCH", "C_ST_TR_BEARISH_CHOCH"):
         assert text.count(code) == 1, f"{code} used beyond its declaration"
 
 
@@ -331,12 +334,39 @@ def test_every_direction_code_is_actually_reachable() -> None:
         assert text.count(code) >= 2, f"{code} is declared but never assigned"
 
 
-def test_no_break_state_yet() -> None:
-    """I4 owns bootstrap only. Break bookkeeping is P2-I5/I6."""
-    text = _src()
-    for token in ("brokenKeys", "boundaryIndex", "weakHighBoundary",
-                  "weakLowBoundary", "StructEventRec.new("):
-        assert token not in text, f"{token} is P2-I5/I6 state, not I4"
+def test_no_weak_re_arm_state_yet() -> None:
+    """I5 owns BOS. Weak RE-ARM after the boundary is P2-I6 / TD-B.
+
+    The boundary index may be written (BOS sets it) but must not yet be READ by
+    any swing-visible gate, which is what re-arming would require.
+    """
+    swing_branch = _walk_branches(_src())["swing"]
+    assert "weakHighBoundaryAbs" not in swing_branch
+    assert "weakLowBoundaryAbs" not in swing_branch
+    assert "weakHighIx :=" not in swing_branch
+    assert "weakLowIx :=" not in swing_branch
+    assert "array.push(visOrder" in swing_branch, (
+        "the swing branch must still register the replacement candidate"
+    )
+
+
+def _walk_branches(text: str) -> dict[str, str]:
+    """Split f_p2StructureWalk's event dispatch into its three branches.
+
+    Pine has no `else:` terminator, so the branches are cut on the exact
+    indentation-anchored `if pick == N` / `else if pick == N` / trailing `else`
+    lines, and the final branch stops before the function's return tuple.
+    """
+    body = _fn_body(text, "f_p2StructureWalk")
+    candle_start = body.index(NL + " " * 12 + "if pick == 0")
+    swing_start = body.index(NL + " " * 12 + "else if pick == 1")
+    rel_start = body.index(NL + " " * 12 + "else" + NL, swing_start)
+    rel_end = body.index(NL + " " * 4 + "int protHighKey")
+    return {
+        "candle": body[candle_start:swing_start],
+        "swing": body[swing_start:rel_start],
+        "relationship": body[rel_start:rel_end],
+    }
 
 
 # --- P2-I4 bootstrap gates ------------------------------------------------
@@ -351,8 +381,8 @@ def test_bootstrap_uses_merged_availability_order_not_api_order() -> None:
     assert "r.availabilityTime < o.availabilityTime" in order_body
     assert "r.currentPivotStartAbs < o.currentPivotStartAbs" in order_body
 
-    walk_body = _fn_body(text, "f_p2BootstrapWalk")
-    assert "for [_p2k, relIdx] in order" in walk_body, (
+    walk_body = _fn_body(text, "f_p2StructureWalk")
+    assert "array.get(rels, array.get(relOrder, ri))" in walk_body, (
         "walk must iterate the ORDERED index list, not the raw relationship array"
     )
     assert "f_p2BuildRelationships" not in walk_body, (
@@ -361,7 +391,7 @@ def test_bootstrap_uses_merged_availability_order_not_api_order() -> None:
 
 
 def test_bootstrap_predicates_match_python() -> None:
-    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    body = _fn_body(_src(), "f_p2StructureWalk")
     assert "hiLabel == C_ST_REL_HIGHER_HIGH and loLabel == C_ST_REL_HIGHER_LOW" in body
     assert "hiLabel == C_ST_REL_LOWER_HIGH and loLabel == C_ST_REL_LOWER_LOW" in body
 
@@ -369,46 +399,150 @@ def test_bootstrap_predicates_match_python() -> None:
 def test_bootstrap_assigns_only_the_two_python_slots_per_direction() -> None:
     """BULLISH sets protected_low + weak_high; BEARISH sets protected_high +
     weak_low. The opposite two must stay unset (transitions.py:366-381)."""
-    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    body = _fn_body(_src(), "f_p2StructureWalk")
     # Only the assignment lines of each branch — the shared return tuple names
     # every slot and would defeat a naive substring split.
     assigns = [ln.strip() for ln in body.splitlines() if ":=" in ln]
     bull = [ln for ln in assigns[assigns.index("dir        := C_ST_DIR_BULLISH"):]
-            if ln.startswith(("protLow", "weakHigh", "protHigh", "weakLow"))][:2]
+            if ln.startswith(("protLowIx", "weakHighIx", "protHighIx", "weakLowIx"))][:2]
     bear = [ln for ln in assigns[assigns.index("dir        := C_ST_DIR_BEARISH"):]
-            if ln.startswith(("protLow", "weakHigh", "protHigh", "weakLow"))][:2]
-    assert [ln.split()[0] for ln in bull] == ["protLow", "weakHigh"], bull
-    assert [ln.split()[0] for ln in bear] == ["protHigh", "weakLow"], bear
+            if ln.startswith(("protLowIx", "weakHighIx", "protHighIx", "weakLowIx"))][:2]
+    assert [ln.split()[0] for ln in bull] == ["protLowIx", "weakHighIx"], bull
+    assert [ln.split()[0] for ln in bear] == ["protHighIx", "weakLowIx"], bear
 
 
 def test_bootstrap_is_once_only() -> None:
     """Relationship evidence must never flip an established direction; flips are
     CHOCH (P2-I5+)."""
-    body = _fn_body(_src(), "f_p2BootstrapWalk")
+    body = _fn_body(_src(), "f_p2StructureWalk")
     assert "if dir == C_ST_DIR_UNDETERMINED" in body
 
 
-def test_bootstrap_emits_no_transition() -> None:
-    body = _fn_body(_src(), "f_p2BootstrapWalk")
-    for token in ("C_ST_TR_", "StructEventRec", "array.push"):
-        assert token not in body, f"bootstrap must not emit: {token}"
+def test_bootstrap_branch_emits_no_transition() -> None:
+    """The RELATIONSHIP branch sets direction and the initial levels only; every
+    transition in the walk is emitted from the CANDLE branch."""
+    rel_branch = _walk_branches(_src())["relationship"]
+    for token in ("C_ST_TR_", "StructEventRec", "array.push", "brokenKeys"):
+        assert token not in rel_branch, f"bootstrap must not emit: {token}"
+    assert "C_ST_DIR_BULLISH" in rel_branch, "but it must still bootstrap"
 
 
-def test_bootstrap_reads_no_candle_values() -> None:
-    """I4 consumes confirmed swing views and derived relationships only."""
+def test_structure_walk_reads_no_live_series_values() -> None:
+    """I5 consumes the CONFIRMED window arrays passed in as parameters.
+
+    It must never touch the Pine series builtins directly: `close`/`high`/`low`/
+    `open` would be the FORMING bar, and a wick would not be a close-only break.
+    Word boundaries matter — the parameter `closes` and the local `barClose` are
+    legitimate, the bare builtin `close` is not.
+    """
+    raw = _src()
+    for fn in ("f_p2OrderRelationships", "f_p2OrderSwings", "f_p2RelIsHigh",
+               "f_p2MostRecentUnbroken", "f_p2ViewIndexByKey", "f_p2StructureWalk"):
+        # The body must be located in the RAW source — _code_only strips the
+        # banner comments that delimit a function — then comment-stripped.
+        body = _code_only(_fn_body(raw, fn))
+        found = re.findall(
+            r"(?<![\w.])(close|high|low|open|timenow|volume)(?![\w])", body
+        )
+        assert not found, f"{fn} references live series values: {sorted(set(found))}"
+        assert "request." not in body
+
+
+def test_structure_walk_retains_no_state_behind_the_window() -> None:
+    """Batch-equivalent over the bounded window: rebuilt every confirmed bar,
+    never accumulated."""
     text = _src()
-    for fn in ("f_p2OrderRelationships", "f_p2BootstrapWalk", "f_p2RelIsHigh"):
-        body = _fn_body(text, fn)
-        for token in ("close", "timenow", "open", "high[", "low[", "request."):
-            assert token not in body, f"{fn} must not reference {token}"
-
-
-def test_bootstrap_retains_no_state_behind_the_window() -> None:
-    """Batch-equivalent over the bounded relationship list: rebuilt every
-    confirmed bar, never accumulated."""
-    text = _src()
-    for fn in ("f_p2OrderRelationships", "f_p2BootstrapWalk"):
+    for fn in ("f_p2OrderRelationships", "f_p2OrderSwings", "f_p2MostRecentUnbroken",
+               "f_p2StructureWalk"):
         assert "var " not in _fn_body(text, fn), f"{fn} must hold no persistent state"
+
+
+# --- P2-I5 BOS gates ------------------------------------------------------
+
+def test_bos_predicates_are_strict_and_close_only() -> None:
+    candle = _code_only(_walk_branches(_src())["candle"])
+    assert "barClose > array.get(views, weakHighIx).pivotPrice" in candle
+    assert "barClose < array.get(views, weakLowIx).pivotPrice" in candle
+    # Every price comparison in the branch must be strict. `>= 0` index guards
+    # are not price tests, so the check is anchored on pivotPrice itself.
+    price_tests = re.findall(r"[<>]=?\s*array\.get\(views, \w+\)\.pivotPrice", candle)
+    assert len(price_tests) == 4, price_tests
+    for test in price_tests:
+        assert "=" not in test, f"equality must not break: {test}"
+
+
+def test_choch_guard_is_suppression_only() -> None:
+    """The guard must decide BOS eligibility and nothing else: no transition, no
+    direction flip, no swing consumption, no state mutation."""
+    candle = _walk_branches(_src())["candle"]
+    guard = candle.split("bool chochGuard = false")[1].split("if chochGuard")[0]
+
+    # It may READ the direction and the protected level; it may WRITE only its
+    # own boolean.
+    assignments = re.findall(r"(\w+)\s*:=", guard)
+    assert set(assignments) == {"chochGuard"}, assignments
+    for token in ("array.push", "StructEventRec", "C_ST_TR_"):
+        assert token not in guard, f"CHOCH guard must not {token}"
+
+    taken = candle.split("if chochGuard")[1].split(NL + " " * 16 + "else" + NL, 1)[0]
+    assert "suppressed := suppressed + 1" in taken
+    taken_assignments = re.findall(r"(\w+)\s*:=", taken)
+    assert set(taken_assignments) == {"suppressed"}, (
+        f"suppression must mutate nothing else: {taken_assignments}"
+    )
+    for token in ("array.push", "StructEventRec", "C_ST_TR_"):
+        assert token not in taken, f"suppression path must not {token}"
+
+
+def test_defensive_fallback_is_present_and_not_optimised_away() -> None:
+    """Architecture doc 17.5a: the fallback is retained even though it is proven
+    unreachable, and no runtime assertion encodes the invariant."""
+    body = _fn_body(_src(), "f_p2StructureWalk")
+    assert "int newProtIx = replIx >= 0 ? replIx : existing" in body
+    assert "runtime.error" not in body
+    assert "int existing = bosHigh ? protLowIx : protHighIx" in body
+
+
+def test_broken_swing_is_consumed_before_the_replacement_search() -> None:
+    """Python adds to broken_ids at :260, before searching at :262."""
+    body = _fn_body(_src(), "f_p2StructureWalk")
+    assert body.index("array.push(brokenKeys, broken.stableKey)") < body.index(
+        "int replIx   = f_p2MostRecentUnbroken("
+    )
+
+
+def test_replacement_transcribes_all_three_key_tiers() -> None:
+    body = _fn_body(_src(), "f_p2MostRecentUnbroken")
+    assert "v.pivotStartAbs > b.pivotStartAbs" in body
+    assert "v.pivotStartTime > b.pivotStartTime" in body
+    assert "v.stableKey > b.stableKey" in body
+    assert "array.indexof(brokenKeys, v.stableKey) < 0" in body
+
+
+def test_bos_clears_only_its_own_weak_side_in_source() -> None:
+    body = _fn_body(_src(), "f_p2StructureWalk")
+    bull = body.split("if bosHigh\n")[1].split("else")[0]
+    assert "weakHighIx := -1" in bull
+    assert "weakLowIx" not in bull
+    assert "weakHighBoundaryAbs := barAbs" in bull
+
+
+def test_transition_availability_keeps_the_max() -> None:
+    body = _fn_body(_src(), "f_p2StructureWalk")
+    assert (
+        "math.max(array.get(availT, ci), broken.meaningfulConfTime)" in body
+    ), "the max must be transcribed structurally, not simplified to the candle"
+
+
+def test_merged_walk_is_a_three_way_cursor_merge() -> None:
+    """Not a sort of the combined list: each stream is pre-sorted, and ties are
+    resolved by kind because only a STRICTLY earlier time displaces."""
+    body = _fn_body(_src(), "f_p2StructureWalk")
+    for cursor in ("ci := ci + 1", "si := si + 1", "ri := ri + 1"):
+        assert cursor in body
+    assert "sv.meaningfulConfTime < bestT" in body
+    assert "rr.availabilityTime < bestT" in body
+    assert "<=" not in body.split("// ---- pick the next event")[1].split("if pick == 0")[0]
 
 
 def test_no_break_predicates_yet() -> None:
@@ -475,7 +609,7 @@ def test_plot_budget_stays_well_under_the_tradingview_limit() -> None:
         for fn in ("plot", "plotshape", "plotchar", "plotarrow", "plotcandle",
                    "plotbar", "bgcolor", "barcolor", "fill", "hline")
     )
-    assert total <= 24, f"{total} plot-budget consumers; P2-I4 target is 24"
+    assert total <= 26, f"{total} plot-budget consumers; P2-I5 target is 26"
 
 
 def _code_only(text: str) -> str:
