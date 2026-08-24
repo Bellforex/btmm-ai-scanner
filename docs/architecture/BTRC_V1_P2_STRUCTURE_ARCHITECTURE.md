@@ -1,7 +1,7 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
 Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15–§18 record what has actually shipped.
+P2-I0 test-proven contract; §15–§19 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -13,11 +13,13 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I3 | relationship classification (§15) | committed `26bc64d` |
 | P2-I4 | initial direction bootstrap (§16) | committed `5707034` |
 | P2-I5-PRE | TD-A BOS protected-fallback contract (§17) | **TD-A RESOLVED** — author-accepted |
-| P2-I5 | BOS (§18) | implemented, **uncommitted**, awaiting author review |
-| P2-I6+ | CHOCH / weak re-arm | **not started**; I6 gated on TD-B |
+| P2-I5 | BOS (§18) | committed `8be961d` |
+| P2-I6-PRE | TD-B weak re-arm contract (§19) | tests + docs, **uncommitted**, awaiting author review |
+| P2-I6 | weak re-arm | **not started**; TD-B now CLOSED, so unblocked |
+| P2-I7 | CHOCH | **not started** |
 
 §1–§13 were written before implementation and are preserved as the design of
-record; where a detail was refined by testing, §14–§18 are authoritative.
+record; where a detail was refined by testing, §14–§19 are authoritative.
 
 ---
 
@@ -691,14 +693,14 @@ Two production branches are exercised only indirectly by P2-I0. Each is a
 | # | branch | blocks | status |
 |---|---|---|---|
 | **TD-A** | BOS protected-fallback **TAKEN** branch (`_most_recent_unbroken` returns `None`, so the existing protected level is retained) | ~~P2-I5 (BOS) may not be accepted until this is directly tested~~ — superseded, see §17.7 | **RESOLVED (§17)** |
-| **TD-B** | Explicit weak-re-arm-after-boundary fixture (a new same-type swing with `pivot_bar_index > boundary` re-arms the cleared weak level) | **P2-I6 (weak re-arm) may not be accepted until this is directly tested** | OPEN |
+| **TD-B** | Explicit weak-re-arm-after-boundary fixture (a new same-type swing with `pivot_bar_index > boundary` re-arms the cleared weak level) | ~~P2-I6 may not be accepted until this is directly tested~~ — satisfied, see §19 | **CLOSED / TEST-PROVEN (§19)** |
 
 **Correction.** This section originally asserted that *both* debts "are reachable
 by the same swing-exhaustion pattern that made the CHOCH abort constructible
 (§14.3)". For TD-A that claim is **wrong**, and §17 gives the proof: the
 swing-exhaustion pattern cannot reach the BOS fallback, because exhausting the
-protected side necessarily flips the direction. TD-B is unaffected and remains
-OPEN and reachable.
+protected side necessarily flips the direction. TD-B is unaffected: it is
+genuinely reachable, and it was reached and closed at P2-I6-PRE (§19).
 
 ---
 
@@ -794,9 +796,8 @@ availability — production is always the reference side.
 
 ### 15.6 Test debt
 
-Neither TD-A nor TD-B is touched by I1, I2 or I3. TD-A was subsequently
-**RESOLVED** at P2-I5-PRE (§17); **TD-B remains OPEN** and continues to gate
-acceptance of P2-I6 (weak re-arm).
+Neither TD-A nor TD-B is touched by I1, I2 or I3. Both were discharged later:
+TD-A **RESOLVED** at P2-I5-PRE (§17), TD-B **CLOSED** at P2-I6-PRE (§19).
 
 ---
 
@@ -927,8 +928,8 @@ headroom for I5. All P2 diagnostics remain `debugMode`-gated and
 
 ### 16.8 Test debt
 
-I4 touches neither debt. TD-A was resolved by the P2-I5-PRE investigation
-(§17); **TD-B remains OPEN** and continues to gate P2-I6.
+I4 touches neither debt. TD-A was resolved at P2-I5-PRE (§17) and TD-B was
+closed at P2-I6-PRE (§19).
 
 ---
 
@@ -1075,8 +1076,8 @@ both directional fallback branches exercised by controlled injection,
 discriminating mutation tests proving the fallback target matters, and 360
 batch/incremental prefix comparisons with 0 mismatch.
 
-**TD-B remains OPEN and unaffected.** It is genuinely reachable, it still gates
-P2-I6, and it does not gate P2-I5.
+**TD-B was OPEN at the time of this section and is now CLOSED — see §19.** It is
+genuinely reachable, it was reached, and it never gated P2-I5.
 
 ---
 
@@ -1237,5 +1238,171 @@ which partition into high-side and low-side values.
 
 ### 18.7 Test debt
 
-**TD-A RESOLVED** (§17). **TD-B remains OPEN** — no weak re-arm is implemented,
-and it continues to gate P2-I6.
+**TD-A RESOLVED** (§17). TD-B was open at I5 and is now **CLOSED** (§19); no weak
+re-arm is implemented in Pine yet — that is P2-I6.
+
+---
+
+## 19. P2-I6-PRE / TD-B — WEAK RE-ARM
+
+Test file: `tests/unit/test_structure_weak_rearm_contract.py` (50 tests).
+**Status: TD-B CLOSED / TEST-PROVEN.** The mechanism is genuinely reached through
+valid public production state, and every load-bearing condition is pinned.
+
+### 19.1 The exact predicate
+
+All of it lives in the `_EVENT_SWING_VISIBLE` branch (`transitions.py:323-353`).
+Each side has exactly **five** conditions:
+
+```
+swing.swing_type == SWING_HIGH                 # 1  type matches the weak side
+and direction == BULLISH                       # 2  direction matches
+and weak_high is None                          # 3  the slot is EMPTY
+and swing.pivot_bar_index > boundary_index     # 4  STRICT
+and swing.record_id not in broken_ids          # 5  not already consumed
+    -> weak_high = swing
+```
+
+and the bearish mirror (`SWING_LOW` / `BEARISH` / `weak_low` /
+`weak_low_boundary_index`).
+
+There is **no price relation, no relationship label, and no protected-side
+relation** — asserted negatively, not just positively.
+
+### 19.2 Four results that "re-arm after boundary" does not tell you
+
+**1. FIRST after the boundary wins — NOT the newest.** Condition 3 fills the slot
+on the first qualifying swing and ignores every later one. This is the **opposite**
+of protected replacement, where `_most_recent_unbroken` deliberately takes the
+newest. Both rules are exercised on the same fixture shape
+(`test_the_first_qualifying_swing_wins_not_the_newest` vs
+`test_protected_replacement_takes_the_newest_for_contrast`) so the contrast cannot
+be lost. **A Pine port that reused the protected-selection helper for re-arm would
+be wrong.**
+
+**2. An armed weak level is never replaced, and a passed-over swing never returns.**
+A qualifying swing that becomes visible while the slot is still occupied is
+discarded outright. Its `SWING_VISIBLE` event has fired and will not fire again,
+so it cannot arm later when the slot empties.
+
+**3. Condition 5 is UNREACHABLE** — a second defensive branch of exactly the same
+kind as TD-A's protected fallback. Every id in `broken_ids` belongs to a swing that
+was serving as a protected or weak level, and both roles require the swing to have
+been made visible first; `SWING_VISIBLE` fires once per swing. So a swing can never
+already be broken at its own `SWING_VISIBLE`. Proven in two halves: the source half
+(`broken_ids.add` is only ever called with a `broken_swing` drawn from
+protected/weak) and the empirical half (across the campaign seeds, every
+transition's broken swing was confirmed no later than its break candle's
+availability). **Per the §17.5a policy, Pine I6 must retain it defensively.**
+
+**4. CHOCH and BOS feed the SAME mechanism.** Both write the same two boundary
+variables — CHOCH at `:217`/`:251`, BOS at `:290`/`:320` — and one origin-agnostic
+re-arm site reads them. There is exactly one `weak_high = swing` and one
+`weak_low = swing` in the whole file, and the branch never inspects transition
+origin. Boundaries are **never reset**; they only advance.
+
+### 19.3 Boundary semantics
+
+| pivot vs boundary | result |
+|---|---|
+| `pivot < boundary` | no re-arm |
+| `pivot == boundary` | **no re-arm** (strict `>`) |
+| `pivot > boundary` | re-arm |
+
+Proven in both directions. Mutating `>` to `>=` fails the behavioural tests, not
+merely the source guard.
+
+The boundary persists across cycles: after a second BOS moves it forward, a swing
+that would have qualified against the *old* boundary no longer does.
+
+### 19.4 Event ordering
+
+`_EVENT_CANDLE = 0 < _EVENT_SWING_VISIBLE = 1 < _EVENT_RELATIONSHIP = 2`, sorted
+by `(availability_time, kind, tiebreak)`.
+
+**A re-arm can never tie with its own boundary-setting break.** A swing's
+confirmation bar is never before its pivot bar, so a swing whose pivot is past the
+break bar is always confirmed after it. The CANDLE/SWING_VISIBLE tie therefore
+cannot affect re-arm *from that break*.
+
+It can still matter against a **later** candle, and that case is pinned: a high
+pivoting at bar 12 and confirming at bar 14 ties exactly with candle 14's
+availability. With the shipped order, candle 14 sees an empty weak slot and emits
+nothing, then the swing arms — one transition. With `SWING_VISIBLE` moved ahead of
+`CANDLE`, the swing arms first and candle 14 immediately breaks it — a spurious
+second BOS. `test_swapping_the_order_would_produce_a_spurious_second_bos` runs that
+injection to prove the ordering is load-bearing.
+
+### 19.5 The second-BOS cycle
+
+I5 recorded that a repeat same-direction BOS is impossible without re-arm (§18.4).
+TD-B closes that loop:
+
+```
+bootstrap BULLISH  ->  BOS #1 (breaks H2, boundary := 10, slot empties)
+                   ->  H3 (pivot 12 > 10) arms the slot
+                   ->  BOS #2 (breaks H3, boundary := 20, protected := newest low)
+```
+
+Two distinct BOS transitions, two distinct broken swings, protected replacement
+correct at each step, boundary advancing, repeat suppression intact. Proven in both
+directions, and `test_the_cycle_actually_passes_through_a_re_arm` asserts the weak
+slot trace is exactly `None -> H2 -> None -> H3 -> None` so the two breaks cannot
+be an artifact.
+
+The CHOCH-origin cycle is proven too: `BEARISH -> BULLISH_CHOCH (boundary := 10)
+-> H3 arms -> BULLISH_BOS`.
+
+### 19.6 Bounded window
+
+Re-arm reads only the supplied swing stream. Removing the re-arming swing from the
+bounded input leaves the slot empty and the second BOS does not occur — no hidden
+candidate survives outside the stream.
+
+### 19.7 Proof
+
+| measure | value |
+|---|---|
+| TD-B tests | 50 passed |
+| scenarios | 7 |
+| prefix comparisons (batch ↔ incremental) | 168 |
+| re-arm events | 5 |
+| BOS transitions | 9 |
+| CHOCH transitions | 1 |
+| scenarios reaching a second BOS | 2 |
+| mismatches | **0** |
+
+Two source mutations were run against production Python and both were caught
+behaviourally: making the boundary comparison non-strict, and allowing an armed
+weak level to be replaced. The file was restored byte-identically each time.
+
+### 19.8 SEQUENCING DECISION — **A: implement I6 weak re-arm before CHOCH**
+
+The evidence is that re-arm is **origin-agnostic**. It reads two boundary variables
+and never asks which transition kind wrote them, and there is exactly one re-arm
+site for each side. Pine already writes both boundary variables from BOS (P2-I5),
+so implementing re-arm now is complete and correct for every boundary Pine can
+currently produce; when CHOCH lands it will simply write the same two variables and
+the existing re-arm code will pick them up unchanged.
+
+Choosing B (CHOCH first) would leave the proven second-BOS cycle unreachable in
+Pine for another phase without making re-arm any easier. Choosing C (split) would
+create a distinction — BOS-origin vs CHOCH-origin re-arm — that **does not exist in
+the source** and would have to be un-invented later.
+
+One consequence to carry into I6: Pine's I5 CHOCH *suppression guard* does not set
+a boundary, and must not start doing so. It suppresses a BOS; it is not a CHOCH.
+Until CHOCH is implemented, a candle that Python would treat as a CHOCH leaves
+Pine's boundaries untouched, so Pine and Python diverge from that candle onward —
+exactly the scope limit already recorded in §18.2, unchanged by I6.
+
+### 19.9 Test debt — final state
+
+| # | status |
+|---|---|
+| **TD-A** | **RESOLVED** (§17) — unreachable, semantics pinned, Pine keeps it defensively |
+| **TD-B** | **CLOSED / TEST-PROVEN** (§19) — reachable, reached, every condition pinned |
+
+Both P2 test debts are now discharged. **A third defensive-but-unreachable branch
+was found along the way** (re-arm condition 5, §19.2), and is handled the same way:
+pinned, documented, and reproduced in Pine rather than optimised away.
