@@ -41,7 +41,7 @@
 // analytical window (that is `lookbackWindow`, still 300) and it changes no
 // analytical rule. 1800 is the validated horizon; see C_P1_MIN_CALC_BARS below
 // and docs/architecture/BTRC_V1_P1_PERFORMANCE_OPTIMIZATION.md §18.
-indicator("BTMM + POI + BTRC Scanner [P1 DEV]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, calc_bars_count = 1800)
+indicator("BTMM + POI + BTRC Scanner [P2 DEV]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, calc_bars_count = 1800)
 
 // -----------------------------------------------------------------------------
 // INPUTS — debug/visual controls (client defaults: conservative & clean).
