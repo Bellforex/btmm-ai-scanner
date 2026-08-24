@@ -322,8 +322,7 @@ def test_pine_existence_scans_short_circuit() -> None:
     trendline cost.
     """
     settling_assignments = (
-        "reactionStart := ri",
-        "oppositeBetween := true",
+        "reactionStart := i",
         "integrityOk := false",
         "confTime := touch.meaningfulConfTime",
         "confIdx := j",
@@ -347,24 +346,48 @@ def test_pine_existence_scans_short_circuit() -> None:
     )
 
 
-def test_pine_derived_detectors_stay_behind_the_change_gate() -> None:
-    """Equal levels / S/R / trendlines must not run unconditionally per bar."""
-    lines = _code_lines()
-    gate_indices = [
+def _swing_change_gate_index(lines: list[str]) -> int:
+    """Index of the gate that actually guards the SWING-DERIVED detectors.
+
+    Anchored to the equal-levels call and searched backwards, not to the first
+    textual ``if changed``: P1-SR-PERF-3 added a separate swing-keyed gate for
+    candidate/fold reconciliation which legitimately runs before S/R publishes,
+    and a first-match heuristic would mistake it for this one.
+    """
+    call = next(
         index
         for index, line in enumerate(lines)
-        if line.strip().startswith("if changed")
+        if "f_detectEqualLevels(" in line and not line.strip().startswith("f_")
+    )
+    for index in range(call, -1, -1):
+        if lines[index].strip() == "if changed":
+            return index
+    raise AssertionError("the swing-derived detector gate is missing")
+
+
+def _call_sites(lines: list[str], call: str) -> list[int]:
+    """Invocation lines for a Pine function, excluding its own definition."""
+    sites = [
+        index
+        for index, line in enumerate(lines)
+        if call in line and not line.strip().startswith("f_")
     ]
-    assert gate_indices, "the derived-detector change gate is missing"
-    gate = gate_indices[0]
-    for call in ("f_detectEqualLevels(", "f_detectSR(", "f_detectTrendlines("):
-        call_sites = [
-            index
-            for index, line in enumerate(lines)
-            if call in line and not line.strip().startswith("f_")
-        ]
-        assert call_sites, f"missing call site for {call}"
-        assert all(index > gate for index in call_sites), (
+    assert sites, f"missing call site for {call}"
+    return sites
+
+
+def test_pine_swing_derived_detectors_stay_behind_the_change_gate() -> None:
+    """Equal levels and trendlines must not run unconditionally per bar.
+
+    Both are pure functions of the confirmed-swing set — a trendline's
+    confirmation comes from a touch SWING, not from a bar — so the swing-set
+    fingerprint is a sound gate for them. S/R is deliberately excluded; see
+    ``test_pine_support_resistance_is_not_gated_on_swing_change``.
+    """
+    lines = _code_lines()
+    gate = _swing_change_gate_index(lines)
+    for call in ("f_detectEqualLevels(", "f_detectTrendlines("):
+        assert all(index > gate for index in _call_sites(lines, call)), (
             f"{call} is invoked outside the swing-set change gate"
         )
 
@@ -420,4 +443,576 @@ def test_pine_analytical_window_default_is_unchanged() -> None:
     assert 'input.int(300, "Analytical window' in code, (
         "the provisional 300-bar analytical window default was changed; that is a "
         "semantic change, not a performance optimisation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1-CLOSEOUT (C1) — support/resistance must advance on candle growth alone.
+#
+# domain/support_resistance.py:80 searches `range(search_start_index, n)` for the
+# reaction start, and `n` grows with every candle, so a reaction can first
+# satisfy its gate on a candle that introduces no new swing. The Python
+# incremental analyzer says so outright at analyzer.py:923 — "Must run every
+# candle (not only when confirmed_swings changes): a reaction's bounded window
+# can newly resolve purely from candle growth with no new swing involved."
+#
+# Gating the Pine S/R detector on the swing-set fingerprint therefore delayed a
+# real state transition until the next swing mutation. These guards pin the
+# corrected wiring. The behavioural proof against the production Python
+# implementation lives in test_pine_p1_sr_candle_growth_semantics.py.
+# ---------------------------------------------------------------------------
+
+
+def test_pine_support_resistance_advances_outside_the_swing_change_gate() -> None:
+    """C1.6-A/C: unresolved reactions must advance on every confirmed bar.
+
+    An unresolved reaction has to be able to advance — and an already-resolved
+    one has to be able to publish — without waiting for the swing set to mutate.
+    P1-SR-PERF-2 does that by advancing trackers unconditionally; only the walk
+    over the resolved set is event-gated.
+    """
+    lines = _code_lines()
+    gate = _swing_change_gate_index(lines)
+    main_sites = [
+        index
+        for index in _call_sites(lines, "f_advanceSRTracker(")
+        if "f_srTrackerIndex" not in lines[index]
+        and not lines[index].lstrip().startswith("SRTracker advanced")
+    ]
+    assert main_sites, "the per-bar tracker advance is missing"
+    assert all(index < gate for index in main_sites), (
+        "tracker advancement sits behind the swing-set change gate, which "
+        "delays reaction confirmations Python publishes on the same bar"
+    )
+
+
+def test_pine_support_resistance_publication_is_not_gated_on_swing_change() -> None:
+    """The published S/R state must move with the detector, not with the gate."""
+    lines = _code_lines()
+    gate = _swing_change_gate_index(lines)
+    offenders: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith(
+            ("latestSRTop :=", "latestSRBottom :=", "latestSRType :=")
+        ):
+            continue
+        if index > gate:
+            offenders.append((index + 1, stripped))
+    assert not offenders, (
+        f"S/R publication sits inside the swing-set change gate: {offenders}"
+    )
+
+
+def test_pine_sr_tracker_state_is_persistent() -> None:
+    """§18: the frontier only works if its state survives across bars."""
+    code = _code_only(_source())
+    for declaration in (
+        "type SRTracker",
+        "var array<int>       srKeys",
+        "var array<SRTracker> srTrk",
+        "var array<SRRec>     srCached",
+        "var bool             srSeeded",
+    ):
+        assert declaration in code, f"missing persistent frontier state: {declaration}"
+
+
+def test_pine_sr_walk_is_event_gated_not_per_bar() -> None:
+    """§18/§19: no unconditional full S/R reconstruction on every bar.
+
+    The brute-force detector must be gone, and the walk that replaced it must
+    sit behind a condition that includes both triggers — a tracker resolution
+    moving, and the swing set changing.
+    """
+    lines = _code_lines()
+    code = "\n".join(lines)
+    assert "f_detectSR" not in code, "the brute-force per-bar S/R detector is back"
+    assert "f_evaluateReaction" not in code, "the rescanning reaction evaluator is back"
+    sites = _call_sites(lines, "f_walkSR(")
+    assert len(sites) == 1, f"expected exactly one walk call site, got {sites}"
+    guard = next(
+        line.strip()
+        for line in reversed(lines[: sites[0]])
+        if line.strip().startswith("if ")
+    )
+    assert "srTrackerChanged" in guard and "changed" in guard, (
+        f"the walk gate must react to BOTH triggers: {guard!r}"
+    )
+
+
+def test_pine_sr_tracker_state_is_retired_at_the_window_edge() -> None:
+    """§21: tracker arrays must not grow without bound."""
+    code = _code_only(_source())
+    assert "int srMinKey = absFirst * C_SR_KEY_STRIDE" in code, (
+        "the window-edge retirement bound is missing"
+    )
+    assert "array.shift(srKeys)" in code and "array.shift(srTrk)" in code, (
+        "retired trackers are never removed from the frontier arrays"
+    )
+
+
+def test_pine_sr_tracker_mutation_stays_inside_the_closed_bar_gate() -> None:
+    """§24: no unresolved tracker may advance on a forming bar."""
+    lines = _code_lines()
+    confirmed_gate = next(
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "if barstate.isconfirmed"
+    )
+    for token in ("array.set(srTrk", "array.shift(srTrk)", "array.clear(srCached)"):
+        sites = [index for index, line in enumerate(lines) if token in line]
+        assert sites, f"missing frontier mutation site for {token}"
+        for index in sites:
+            assert index > confirmed_gate, (
+                f"{token} mutates frontier state before the closed-bar gate"
+            )
+            assert lines[index].startswith(" "), (
+                f"{token} is at top level — it must stay inside the "
+                "barstate.isconfirmed block"
+            )
+
+
+def test_pine_sr_fingerprint_only_gates_debug_drawing() -> None:
+    """C1.6-C: the S/R fingerprint is a drawing gate, never an analytical one.
+
+    It exists so that per-bar recomputation does not become a per-bar
+    clear-and-redraw. If it ever guards the detector or the published state, the
+    delayed-confirmation defect is back in a new disguise.
+    """
+    lines = _code_lines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if "srChanged" not in stripped:
+            continue
+        if stripped.startswith(("bool srChanged", "srChanged :=")):
+            continue  # declaration / assignment
+        assert "debugMode" in stripped, (
+            f"line {index + 1}: srChanged is used outside a debugMode drawing "
+            f"guard — it must never gate analytical state: {stripped}"
+        )
+
+
+def test_pine_support_resistance_stays_inside_the_closed_bar_gate() -> None:
+    """C1.6-D: running every bar must not mean running on the forming bar."""
+    lines = _code_lines()
+    confirmed_gate = next(
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "if barstate.isconfirmed"
+    )
+    for index in _call_sites(lines, "f_walkSR("):
+        assert index > confirmed_gate, "the S/R walk runs before the closed-bar gate"
+        assert lines[index].startswith(" "), (
+            "the S/R walk is at top level — it must stay inside the "
+            "barstate.isconfirmed block"
+        )
+
+
+def test_pine_reaction_scan_is_bounded_by_available_candles() -> None:
+    """C1.6-D: the reaction search may not read beyond the confirmed window."""
+    code = _code_only(_source())
+    assert "while i < nAbs" in code, (
+        "the reaction-start scan no longer carries its upper bound"
+    )
+    assert "int nAbs = absFirst + array.size(highs)" in code, (
+        "the reaction scan's bound is no longer derived from the available candles"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1-SR-ORDERING — the resolved S/R set must carry Python's canonical order.
+#
+# support_resistance.py:303 ends the detector with a STABLE ascending sort on
+# confirmation_time_utc. The Pine walk had no final sort, so its last element —
+# which is what the P1_sr_* parity scalars publish — could be an older zone than
+# Python's latest whenever both directions qualified.
+# ---------------------------------------------------------------------------
+
+
+def _pine_block_bounds(lines: list[str], definition: str) -> tuple[int, int]:
+    """(definition line, first line at top level after it) for a Pine function."""
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith(definition)
+    )
+    end = next(
+        index
+        for index, line in enumerate(lines[start + 1 :], start=start + 1)
+        if line and not line.startswith(" ")
+    )
+    return start, end
+
+
+def test_pine_sr_walk_applies_the_canonical_final_order() -> None:
+    """The walk must end in Python's order, ties included."""
+    code = _code_only(_source())
+    assert (
+        "probeTime > keyTime or (probeTime == keyTime and probeIdx > keyIdx)" in code
+    ), (
+        "the canonical (confirmationTime, insertionIndex) ordering key is gone — "
+        "without it Pine can publish an older zone than Python's latest"
+    )
+    lines = _code_lines()
+    walk_def, next_top_level = _pine_block_bounds(lines, "f_walkSR(")
+    body = [
+        line.strip()
+        for line in lines[walk_def + 1 : next_top_level]
+        if line.strip() and not line.strip().startswith("//")
+    ]
+    assert body[-1] == "ordered", (
+        f"f_walkSR must return the canonically ordered set, not {body[-1]!r}"
+    )
+
+
+def test_pine_publishes_the_canonically_latest_zone() -> None:
+    """The parity scalars read the LAST element of the ordered set."""
+    code = _code_only(_source())
+    assert "SRRec srLast = array.get(srs, array.size(srs) - 1)" in code, (
+        "the published S/R scalar no longer reads the canonically latest zone"
+    )
+
+
+def test_pine_sr_ordering_runs_only_when_the_set_is_rebuilt() -> None:
+    """The sort must live inside the walk, not on the per-bar path."""
+    lines = _code_lines()
+    sort_line = next(
+        index
+        for index, line in enumerate(lines)
+        if "probeTime == keyTime and probeIdx > keyIdx" in line
+    )
+    walk_def, next_top_level = _pine_block_bounds(lines, "f_walkSR(")
+    assert walk_def < sort_line < next_top_level, (
+        "the canonical sort escaped f_walkSR and may now run every bar"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1-SR-PERF-3 — semantic pair/fold frontier.
+#
+# Measurement on canonical FXCM controls showed ~650-680 origin x touch visits
+# per genuinely new semantic pair. The fold cache removes that redundancy; these
+# guards stop it being removed, weakened, or turned back into a full rebuild.
+# ---------------------------------------------------------------------------
+
+
+def test_pine_declares_the_fold_and_candidate_types() -> None:
+    code = _code_only(_source())
+    assert "type SRCand" in code, "the semantic candidate type is missing"
+    assert "type SRFold" in code, "the persistent fold type is missing"
+
+
+def test_pine_fold_and_candidate_state_is_persistent() -> None:
+    code = _code_only(_source())
+    for declaration in (
+        "var array<SRCand> srCandSupport",
+        "var array<SRCand> srCandResist",
+        "var array<int>    srOppSupport",
+        "var array<int>    srOppResist",
+        "var array<SRCand> srSnap",
+        "var array<SRFold> srFold",
+        "var array<SRFold> srFoldKeep",
+        "var array<int>    srDirty",
+    ):
+        assert declaration in code, f"missing persistent frontier state: {declaration}"
+
+
+def test_pine_fold_cache_is_consulted_before_recomputing() -> None:
+    """A cached fold must be reusable; otherwise the frontier does nothing."""
+    code = _code_only(_source())
+    assert "f_srFoldFind(" in code, "no fold lookup exists"
+    assert "cached.hasZone" in code, "the cached fold result is never republished"
+
+
+def test_pine_fold_invalidation_and_retirement_exist() -> None:
+    code = _code_only(_source())
+    assert "f_srApplyDelta(" in code, "swing-delta invalidation is missing"
+    assert "f_srSwingHasKey(" in code, "fold retirement by origin survival is missing"
+    assert "srFoldKeep" in code, "retirement must rebuild from survivors"
+
+
+def test_pine_swing_delta_is_a_linear_merge() -> None:
+    """The delta must not scan the old snapshot once per new swing.
+
+    Both lists are ascending by pivot-end time, so reconciliation is a two-cursor
+    merge. A nested membership search here would just move the quadratic cost.
+    """
+    lines = _code_lines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith("f_srApplyDelta(")
+    )
+    end = next(
+        index
+        for index, line in enumerate(lines)
+        if index > start and line and not line.startswith((" ", "\t"))
+    )
+    body = lines[start:end]
+    merge = [line for line in body if "while i < oldN or j < newN" in line]
+    assert merge, "f_srApplyDelta no longer uses the two-cursor merge"
+
+
+def test_pine_reference_atr_is_stored_not_reconstructed() -> None:
+    """referenceAtr must be carried, never recovered by dividing zoneDepth."""
+    code = _code_only(_source())
+    assert "float referenceAtr" in code, "SRFold/SRCand must carry referenceAtr"
+    offenders = [
+        (number, line.strip())
+        for number, line in enumerate(_code_lines(), start=1)
+        if "zoneDepth /" in line or "zoneDepth/" in line
+    ]
+    assert not offenders, (
+        "referenceAtr is being reconstructed by dividing zoneDepth, which "
+        f"introduces avoidable float error: {offenders}"
+    )
+
+
+def test_pine_fold_retirement_never_removes_while_iterating() -> None:
+    """Index-based removal mid-loop is how the earlier Pine defects happened."""
+    code = _code_only(_source())
+    assert "array.remove(" not in code, (
+        "array.remove reintroduced — retirement must rebuild from survivors so "
+        "no index can be invalidated mid-loop"
+    )
+
+
+def test_pine_candidate_lists_carry_absolute_indices() -> None:
+    """Cached candidates must not hold window-relative indices.
+
+    pivotEndIdx shifts every bar as the 300-bar window slides; a cached
+    candidate holding one would silently address the wrong candle.
+    """
+    code = _code_only(_source())
+    assert "int   pivotEndAbs" in code, "SRCand must carry an ABSOLUTE pivot index"
+    lines = _code_lines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith("f_walkSR(")
+    )
+    end = next(
+        index
+        for index, line in enumerate(lines)
+        if index > start and line and not line.startswith((" ", "\t"))
+    )
+    offenders = [
+        (start + offset + 1, line.strip())
+        for offset, line in enumerate(lines[start:end])
+        if "pivotEndIdx" in line
+    ]
+    assert not offenders, f"f_walkSR reads a window-relative pivot index: {offenders}"
+
+
+def test_pine_dirty_set_drives_fold_recomputation() -> None:
+    """Only origins whose own reaction moved may lose their cached fold."""
+    code = _code_only(_source())
+    assert "array.clear(srDirty)" in code, "the dirty set is never reset per bar"
+    assert "array.push(srDirty, dirtyOrigin)" in code, (
+        "reaction changes no longer record which origin they affect"
+    )
+    assert "if foldIdx >= 0 and not isDirty" in code, (
+        "the walk no longer reuses folds for clean origins"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1-PERF-4 — bounded historical execution.
+#
+# TradingView's Basic plan gives the whole script 20 seconds to execute its
+# accessible history, and PERF-3 still tripped it on D1. `calc_bars_count` caps
+# how many trailing bars are executed at all. That is only sound because every
+# value a bar reads is pruned to `lookbackWindow` except the Wilder ATR, which
+# is an IIR recurrence — so the horizon has to cover the window PLUS the bars
+# the ATR needs to forget its seed. These guards pin that arithmetic into the
+# source, and pin the properties that make the horizon safe at all.
+# ---------------------------------------------------------------------------
+
+_P1_CALC_BARS = 1800
+_P1_MIN_CALC_BARS = 1250
+_P1_LOOKBACK = 300
+_P1_PROTECTED = 300
+_P1_WARMUP_CEILING = 950
+
+
+def test_pine_declares_the_validated_calc_bars_count() -> None:
+    code = _code_only(_source())
+    assert f"calc_bars_count = {_P1_CALC_BARS}" in code, (
+        "the indicator declaration no longer carries the validated historical "
+        "execution horizon"
+    )
+    assert "indicator(" in code
+
+
+def test_pine_calc_bars_count_is_not_reduced_below_the_approved_value() -> None:
+    """A smaller horizon is a semantic change, not a performance knob.
+
+    Below the approved value the oldest protected bars read an ATR that still
+    remembers the truncation seed, and the published outputs stop matching
+    full-history execution.
+    """
+    import re
+
+    match = re.search(r"calc_bars_count\s*=\s*(\d+)", _code_only(_source()))
+    assert match is not None, "calc_bars_count is missing from the declaration"
+    declared = int(match.group(1))
+    assert declared >= _P1_CALC_BARS, (
+        f"calc_bars_count was lowered to {declared}; {_P1_CALC_BARS} is the "
+        "validated horizon"
+    )
+
+
+def test_pine_mirrors_the_horizon_in_named_constants() -> None:
+    """The declaration takes a literal, so the constants must be kept in step."""
+    code = _code_only(_source())
+    assert f"int C_P1_CALC_BARS     = {_P1_CALC_BARS}" in code
+    assert f"int C_P1_MIN_CALC_BARS = {_P1_MIN_CALC_BARS}" in code
+
+
+def test_pine_validity_floor_covers_window_plus_atr_warmup() -> None:
+    assert _P1_MIN_CALC_BARS >= _P1_LOOKBACK + _P1_WARMUP_CEILING, (
+        "the insufficient-history floor no longer covers a full analytical "
+        "window plus the measured ATR warm-up"
+    )
+
+
+def test_pine_horizon_keeps_every_protected_bar_valid() -> None:
+    processed_at_earliest = _P1_CALC_BARS - (_P1_PROTECTED - 1)
+    assert processed_at_earliest >= _P1_MIN_CALC_BARS, (
+        "the earliest protected bar would be published while still inside the "
+        "ATR warm-up"
+    )
+
+
+def test_pine_uses_bar_index_only_as_dataset_capacity_metadata() -> None:
+    """The one property that makes calc_bars_count safe to add at all.
+
+    TradingView renumbers bars when calc_bars_count is set: the first executed
+    bar becomes bar_index 0. Any ANALYTICAL value derived from bar_index would
+    silently shift with the horizon, so the engine derives its absolute
+    positions from its own confirmedBarCount instead.
+
+    P1-PERF-4A admits exactly one exception: ``last_bar_index`` as dataset-size
+    metadata for the capacity gate. That reads how much history exists, never
+    where a bar sits, so the horizon cannot move it into an identity, a key, an
+    ordering or a geometry.
+    """
+    code = _code_only(_source())
+    # `last_bar_index` contains the substring, so remove it before looking for
+    # bare uses — otherwise the capacity gate would mask a real regression.
+    bare = code.replace("last_bar_index", "")
+    assert "bar_index" not in bare, (
+        "bar_index is referenced outside the capacity gate; under "
+        "calc_bars_count its origin moves with the horizon, so it cannot be "
+        "used for analytical state"
+    )
+    uses = [line.strip() for line in _code_lines() if "last_bar_index" in line]
+    assert uses == ["int  p1DatasetBars = last_bar_index + 1"], (
+        f"last_bar_index may only feed the capacity gate; found {uses}"
+    )
+
+
+def test_pine_capacity_metadata_stays_out_of_the_analytical_engine() -> None:
+    """Capacity is a product gate, not an input to any measurement."""
+    lines = _code_lines()
+    gate = next(
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "if barstate.isconfirmed"
+    )
+    gate_indent = len(lines[gate]) - len(lines[gate].lstrip())
+    end = len(lines)
+    for index in range(gate + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped and (len(lines[index]) - len(lines[index].lstrip())) <= gate_indent:
+            end = index
+            break
+    offenders = [
+        index + 1
+        for index in range(gate, end)
+        if "last_bar_index" in lines[index]
+        or "p1DatasetBars" in lines[index]
+        or "p1CapacityOk" in lines[index]
+    ]
+    assert not offenders, (
+        f"capacity metadata reached the confirmed analytical block at lines "
+        f"{offenders}; it must only gate publication"
+    )
+
+
+def test_pine_separates_capacity_from_warmup() -> None:
+    """The two history questions must stay distinguishable in the source.
+
+    Collapsing them back into one comparison is how PERF-4 came to answer only
+    the warm-up question while appearing to answer both.
+    """
+    code = _code_only(_source())
+    assert "bool p1CapacityOk  = p1DatasetBars >= C_P1_CALC_BARS" in code, (
+        "the dataset-capacity gate is missing or no longer checks the selected horizon"
+    )
+    assert "bool p1WarmupOk    = confirmedBarCount >= C_P1_MIN_CALC_BARS" in code, (
+        "the per-bar warm-up gate is missing"
+    )
+    assert "bool p1HistoryOk   = p1CapacityOk and p1WarmupOk" in code, (
+        "publication must require BOTH capacity and warm-up"
+    )
+
+
+def test_pine_capacity_requirement_is_the_selected_horizon_not_the_floor() -> None:
+    """1250 is a per-bar warm-up floor, never the dataset-capacity requirement.
+
+    A 1300-bar run contains a few warm bars and is still outside the validated
+    contract, so capacity has to be measured against 1800.
+    """
+    code = _code_only(_source())
+    assert "p1DatasetBars >= C_P1_MIN_CALC_BARS" not in code, (
+        "capacity is being checked against the warm-up floor; that would admit "
+        "runs far shorter than the validated horizon"
+    )
+
+
+def test_pine_status_message_does_not_guess_the_cause() -> None:
+    """Short symbol history and a lowered setting are indistinguishable here."""
+    code = _code_only(_source())
+    assert "INSUFFICIENT CALCULATED HISTORY" in code, (
+        "the bounded insufficient-history status indication is missing"
+    )
+    assert "restore Calculated bars" not in code, (
+        "the status claims the user lowered the setting, but a short symbol "
+        "history produces the same state and the script cannot tell them apart"
+    )
+
+
+def test_pine_withholds_outputs_when_history_is_insufficient() -> None:
+    """Wrong-but-plausible output is worse than no output."""
+    code = _code_only(_source())
+    assert "bool p1HistoryOk   = p1CapacityOk and p1WarmupOk" in code, (
+        "the insufficient-history guard is missing"
+    )
+    lines = _code_lines()
+    plots = [line for line in lines if line.startswith("plot(") and "P1_" in line]
+    assert len(plots) == 9, f"expected nine parity plots, found {len(plots)}"
+    ungated = [line for line in plots if "p1HistoryOk ?" not in line]
+    assert not ungated, (
+        f"these parity outputs publish without the history guard: {ungated}"
+    )
+
+
+def test_pine_history_guard_is_publication_only() -> None:
+    """The guard must not become an analytical rule.
+
+    It may suppress publication; it may not change what the engine computes or
+    stores, or the confirmed-bar boundary would start depending on chart length.
+    """
+    lines = _code_lines()
+    gate = next(
+        index
+        for index, line in enumerate(lines)
+        if line.strip() == "if barstate.isconfirmed"
+    )
+    gate_indent = len(lines[gate]) - len(lines[gate].lstrip())
+    end = len(lines)
+    for index in range(gate + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped and (len(lines[index]) - len(lines[index].lstrip())) <= gate_indent:
+            end = index
+            break
+    inside = [index + 1 for index in range(gate, end) if "p1HistoryOk" in lines[index]]
+    assert not inside, (
+        f"the history guard is referenced inside the confirmed-bar block at "
+        f"lines {inside}; it must only gate publication"
     )

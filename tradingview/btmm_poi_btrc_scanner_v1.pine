@@ -36,7 +36,12 @@
 // displacement/equal-level/zone semantics) is preserved unchanged.
 // =============================================================================
 
-indicator("BTMM + POI + BTRC Scanner [P1 DEV]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
+// P1-PERF-4: calc_bars_count bounds the HISTORICAL EXECUTION HORIZON — the
+// number of trailing bars TradingView runs the script over. It is NOT the
+// analytical window (that is `lookbackWindow`, still 300) and it changes no
+// analytical rule. 1800 is the validated horizon; see C_P1_MIN_CALC_BARS below
+// and docs/architecture/BTRC_V1_P1_PERFORMANCE_OPTIMIZATION.md §18.
+indicator("BTMM + POI + BTRC Scanner [P1 DEV]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, calc_bars_count = 1800)
 
 // -----------------------------------------------------------------------------
 // INPUTS — debug/visual controls (client defaults: conservative & clean).
@@ -91,6 +96,46 @@ float C_LEG_STRONG_SHARE              = 0.80     // configuration.py:60
 int SWING_HIGH = 1
 int SWING_LOW  = -1
 
+// -----------------------------------------------------------------------------
+// P1-PERF-4 — BOUNDED HISTORICAL EXECUTION
+//
+// The engine reads history through exactly one channel that outlives the
+// analytical window: the incremental Wilder ATR in `wAtr`. Everything else a
+// bar reads (candles, pivots, swings, trackers, folds) is pruned to
+// `lookbackWindow`. So a truncated execution differs from a full-history one
+// only while its ATR still remembers its own seed.
+//
+// Wilder ATR is an IIR filter: a seed discrepancy decays by (P-1)/P per bar.
+// The largest warm-up measured before the truncated series became IDENTICAL to
+// the full-history series was 920 bars on canonical FXCM data and 945 bars on
+// adversarial fixtures that deliberately distort the seed.
+//
+//   C_P1_MIN_CALC_BARS = lookbackWindow + warm-up = 300 + 950 = 1250
+//     A bar is analytically valid once the engine has processed this many
+//     confirmed bars, because only then is the ATR exact at the LEFT EDGE of
+//     that bar's 300-bar window.
+//
+//   C_P1_CALC_BARS = 1800 (also the calc_bars_count in the declaration above)
+//     The selected execution horizon AND the required dataset capacity. Makes
+//     the earliest of the last 300 bars valid with 251 bars to spare, while
+//     cutting D1 historical execution by roughly two thirds.
+//
+// Three numbers that are easy to confuse, so state them plainly:
+//
+//   300  = the analytical rolling window (`lookbackWindow`).
+//   1250 = the per-bar warm-up floor INSIDE an adequately sized run.
+//   1800 = the dataset capacity the product requires, and the default the
+//          declaration asks TradingView for.
+//
+// 1250 is deliberately NOT the minimum allowed "Calculated bars" setting. It is
+// the point at which an individual bar inside a full-size run becomes exact; it
+// says nothing about whether the validated horizon is present at all. A 1300-bar
+// run would contain a few warm bars and still be outside the validated contract,
+// so P1-PERF-4A checks capacity against 1800 and warm-up against 1250, and
+// publishes only when both hold.
+int C_P1_CALC_BARS     = 1800
+int C_P1_MIN_CALC_BARS = 1250
+
 // =============================================================================
 // USER-DEFINED TYPES — minimal analytical records (semantic content only; no UUID).
 // =============================================================================
@@ -125,6 +170,39 @@ type SRRec
     float zoneDepth
     int   touchCount
     int   confirmationTime     // availability of first confirming candle
+
+type SRCand
+    int   key                  // pivotEndTime — the stable semantic swing identity
+    int   swingType
+    float price
+    float referenceAtr         // carried directly; never re-derived from zoneDepth
+    int   meaningfulConfTime
+    int   pivotEndAbs          // ABSOLUTE pivot-end index, so a window shift cannot stale it
+
+type SRFold
+    int   originKey            // SRCand.key of this fold's origin; the cache is ascending on it
+    int   originAbs            // absolute pivot-end index, matched against the dirty set
+    int   originType
+    float zoneTop
+    float zoneBottom
+    float referenceAtr         // authoritative value, stored not reconstructed
+    float zoneDepth
+    bool  hasZone              // false = "cached: this origin publishes nothing"
+    int   touchCount
+    int   confirmationTime
+
+type SRTracker
+    int   originAbs            // absolute index of the origin swing's pivot-end candle
+    int   searchStartAbs       // absolute index of the first candle this reaction may use
+    float zoneTop
+    float zoneBottom
+    bool  isSupport
+    int   lastCheckedAbs       // highest absolute index already examined for a reaction start
+    int   reactionStartAbs     // na until the first qualifying close is found
+    float anchor               // running min(low) / max(high) from searchStartAbs
+    bool  permanent            // the bounded window is full; nothing can change it now
+    int   confirmingAbs        // na unless the reaction currently qualifies
+    int   confirmingTime       // availability time of the confirming candle
 
 type TrendlineRec
     int   orientation          // SWING_LOW anchors => BULLISH, SWING_HIGH anchors => BEARISH
@@ -211,6 +289,44 @@ var array<float> pvPrice = array.new<float>()
 var array<float> pvAtr   = array.new<float>()
 var array<float> pvTie   = array.new<float>()
 
+// -----------------------------------------------------------------------------
+// P1-SR-PERF-2 — persistent S/R reaction frontier state.
+//
+// srKeys is kept ASCENDING and packs originAbs into the high bits, so retiring
+// every tracker whose origin has left the active window is a prefix removal.
+// srTrk is parallel to it. srCached holds the last walk result so that a bar
+// which changes neither the swing set nor any tracker resolution costs nothing
+// beyond the tracker advances.
+// -----------------------------------------------------------------------------
+var array<int>       srKeys   = array.new<int>()
+var array<SRTracker> srTrk    = array.new<SRTracker>()
+var array<SRRec>     srCached = array.new<SRRec>()
+var bool             srSeeded = false
+
+// -----------------------------------------------------------------------------
+// P1-SR-PERF-3 — semantic pair/fold frontier state.
+//
+// Measured on canonical FXCM M1/M5/M15 (900-bar replays, lookback 300): the walk
+// performed ~650-680 origin x touch visits for every genuinely NEW semantic pair,
+// so almost all of it re-derived relationships that had not changed. Caching each
+// origin's fold and invalidating it from the swing DELTA removed ~60% of that
+// work with byte-identical output, proven at every prefix against the production
+// Python oracle (tests/unit/test_pine_p1_sr_frontier_model.py).
+//
+// srCand* hold ABSOLUTE pivot indices, never window indices, so a cached
+// candidate cannot go stale when the 300-bar window slides. srSnap is the
+// previous swing set in ascending key order, which makes the delta an O(A) merge
+// (detect_confirmed_swings emits swings ascending by pivot-end time).
+// -----------------------------------------------------------------------------
+var array<SRCand> srCandSupport = array.new<SRCand>()   // support origins, ascending confirmation time
+var array<SRCand> srCandResist  = array.new<SRCand>()   // resistance origins, ascending confirmation time
+var array<int>    srOppSupport  = array.new<int>()      // HIGH confirmation times, ascending
+var array<int>    srOppResist   = array.new<int>()      // LOW  confirmation times, ascending
+var array<SRCand> srSnap        = array.new<SRCand>()   // previous swing set, ascending key
+var array<SRFold> srFold        = array.new<SRFold>()   // fold cache, ascending originKey
+var array<SRFold> srFoldKeep    = array.new<SRFold>()   // reusable survivor buffer for retirement
+var array<int>    srDirty       = array.new<int>()      // origin ABS indices whose reaction moved
+
 // Reusable scratch buffers (P1-PERF-1): avoid per-call array allocation in the
 // hot path. Each is cleared by its owner before use and is never aliased across
 // two live users at the same time.
@@ -236,10 +352,13 @@ var int   latestSRType         = na
 var float latestTLNormSlope    = na
 var int   latestTLOrient       = na
 
-// Swing-set change detection (so heavy derived detectors run only on change).
+// Swing-set change detection (so SWING-DERIVED detectors run only on change).
+// S/R is deliberately NOT behind this gate — see the P1-CLOSEOUT note in MAIN.
 var int lastSwingCount       = na
 var int lastSwingConfTime    = na
 var int lastSwingFingerprint = na
+// S/R zone-set fingerprint — debug-drawing gate only, never an analytical gate.
+var int lastSRFingerprint    = na
 
 // Persistent draw-object handles (bounded, redrawn on change).
 var array<label> swingLabelObjs = array.new<label>()
@@ -590,101 +709,381 @@ f_measureLeg(array<float> highs, array<float> lows, array<float> opens, array<fl
     [classification, dirEff, dirShare]
 
 // =============================================================================
-// SR REACTION — support_resistance._evaluate_reaction. Returns confirming candle
-// window index, or na. Faithful port of the standard-reaction gate.
+// P1-SR-PERF-2 — INCREMENTAL SUPPORT/RESISTANCE REACTION FRONTIER
+//
+// support_resistance.py:80 searches `range(search_start_index, n)` for the
+// reaction start and then evaluates a bounded window from there, so a reaction
+// resolves as candles arrive, independently of swings — analyzer.py:923 states
+// the requirement outright. P1-CLOSEOUT therefore lifted S/R out of the
+// swing-change gate, but recomputing the whole detector every confirmed bar put
+// the script back on TradingView's Basic 20s boundary (intermittent RE10110 on
+// M1).
+//
+// This frontier keeps the corrected publication timing and removes the rescan.
+// Per confirmed bar it advances only UNRESOLVED trackers; the origin x touch
+// walk re-runs only when the swing set or some tracker's resolution actually
+// changed, because the walk's output is a pure function of exactly those two
+// things. Everything else is carried forward.
+//
+// A tracker is identified by (originAbs, searchStartAbs) — both absolute
+// confirmed-bar indices, so a window shift cannot invalidate the key, and no
+// UUID or random identity is introduced. Keys are packed into one int and kept
+// ASCENDING, which makes retirement a prefix removal: the origin index lives in
+// the high bits, so "every tracker whose origin has left the window" is exactly
+// the front of the array.
+//
+// Window safety: a tracker is retired the moment its origin leaves the active
+// window, and originAbs < reactionStartAbs < confirmingAbs < end always holds,
+// so a live tracker can never reference a candle that has already scrolled out.
+//
+// The algorithm is validated against the production Python implementation at
+// every prefix — including the 300-bar rollover — in
+// tests/unit/test_pine_p1_sr_frontier_model.py.
 // =============================================================================
-f_evaluateReaction(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, int searchStart, float zoneTop, float zoneBottom, bool isSupport) =>
-    int n = array.size(highs)
-    int result = na
-    float zoneHeight = zoneTop - zoneBottom
-    if zoneHeight > 0.0 and searchStart < n
-        // P1-PERF-1: the original loop kept walking to the end of the window after
-        // the first qualifying close had already fixed `reactionStart` (the
-        // `if na(reactionStart)` guard made every later iteration a no-op). This
-        // stops at the same index; it is the dominant read in the S/R detector.
-        int reactionStart = na
-        int ri = searchStart
-        while ri < n
-            if isSupport and array.get(closes, ri) > zoneTop
-                reactionStart := ri
-                break
-            if not isSupport and array.get(closes, ri) < zoneBottom
-                reactionStart := ri
-                break
-            ri += 1
-        if not na(reactionStart)
-            float anchor = na
-            if isSupport
-                anchor := array.get(lows, searchStart)
-                for i = searchStart to reactionStart
-                    anchor := math.min(anchor, array.get(lows, i))
+
+// Key stride: 2^22. Both components are absolute bar indices, so this is safe
+// for any chart shorter than 4,194,304 confirmed bars.
+int C_SR_KEY_STRIDE = 4194304
+
+// Index of `key` in an ascending array, or -1.
+f_srFind(array<int> keys, int key) =>
+    int lo = 0
+    int hi = array.size(keys) - 1
+    int found = -1
+    while lo <= hi
+        int mid = int((lo + hi) / 2)
+        int probe = array.get(keys, mid)
+        if probe == key
+            found := mid
+            break
+        if probe < key
+            lo := mid + 1
+        else
+            hi := mid - 1
+    found
+
+// First position in an ascending array whose key is >= `key`.
+f_srLowerBound(array<int> keys, int key) =>
+    int lo = 0
+    int hi = array.size(keys)
+    while lo < hi
+        int mid = int((lo + hi) / 2)
+        if array.get(keys, mid) < key
+            lo := mid + 1
+        else
+            hi := mid
+    lo
+
+// Advance one tracker by the candles that have arrived since it was last seen.
+// Returns a tracker whose confirmingAbs is what a full _evaluate_reaction over
+// the candles available NOW would return — reached without any rescan:
+//   * before the reaction starts, each candle is examined at most ONCE per
+//     tracker, and the anchor is accumulated in that same pass (which also
+//     keeps it valid after the window's left edge passes searchStart);
+//   * after it starts, only the bounded <= C_REACTION_WINDOW_BARS slice is read,
+//     at most C_REACTION_WINDOW_BARS times, before `permanent` latches.
+f_advanceSRTracker(SRTracker t, array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, array<int> availT, int absFirst) =>
+    SRTracker outT = t
+    if not t.permanent
+        int nAbs = absFirst + array.size(highs)
+        float zoneHeight = t.zoneTop - t.zoneBottom
+        if zoneHeight <= 0.0
+            outT := SRTracker.new(t.originAbs, t.searchStartAbs, t.zoneTop, t.zoneBottom, t.isSupport, nAbs - 1, na, na, true, na, na)
+        else
+            int reactionStart = t.reactionStartAbs
+            float anchor = t.anchor
+            int lastChecked = t.lastCheckedAbs
+            if na(reactionStart)
+                int scanFrom = math.max(lastChecked + 1, t.searchStartAbs)
+                int i = scanFrom
+                while i < nAbs
+                    int w = i - absFirst
+                    float extreme = t.isSupport ? array.get(lows, w) : array.get(highs, w)
+                    anchor := na(anchor) ? extreme : (t.isSupport ? math.min(anchor, extreme) : math.max(anchor, extreme))
+                    bool breached = t.isSupport ? (array.get(closes, w) > t.zoneTop) : (array.get(closes, w) < t.zoneBottom)
+                    if breached
+                        reactionStart := i
+                        break
+                    i += 1
+                lastChecked := nAbs - 1
+            if na(reactionStart)
+                outT := SRTracker.new(t.originAbs, t.searchStartAbs, t.zoneTop, t.zoneBottom, t.isSupport, lastChecked, na, anchor, false, na, na)
             else
-                anchor := array.get(highs, searchStart)
-                for i = searchStart to reactionStart
-                    anchor := math.max(anchor, array.get(highs, i))
-            int windowEnd = math.min(reactionStart + C_REACTION_WINDOW_BARS, n) // exclusive
-            if windowEnd > reactionStart
-                float mfe = na
-                float zoneClearance = na
-                int mfeIdx = reactionStart
-                if isSupport
-                    float hh = array.get(highs, reactionStart)
-                    for i = reactionStart to windowEnd - 1
-                        if array.get(highs, i) > hh
-                            hh := array.get(highs, i)
-                            mfeIdx := i
-                    mfe := hh - anchor
-                    zoneClearance := math.max(0.0, hh - zoneTop)
-                else
-                    float ll = array.get(lows, reactionStart)
-                    for i = reactionStart to windowEnd - 1
-                        if array.get(lows, i) < ll
-                            ll := array.get(lows, i)
-                            mfeIdx := i
-                    mfe := anchor - ll
-                    zoneClearance := math.max(0.0, zoneBottom - ll)
-                float refAtr = array.get(atr, reactionStart)
-                if not na(refAtr) and refAtr != 0.0
-                    float atrRatio = mfe / refAtr
-                    float clearanceRatio = zoneClearance / zoneHeight
-                    [legClass, legEff, legShare] = f_measureLeg(highs, lows, opens, closes, atr, reactionStart, mfeIdx, isSupport)
-                    bool meets = atrRatio >= C_REACTION_STD_ATR_RATIO and clearanceRatio >= C_REACTION_STD_ZONE_CLEAR_RATIO and legEff >= C_REACTION_STD_DIR_EFF and legShare >= C_REACTION_STD_DIR_SHARE
-                    if meets
-                        result := mfeIdx
-    result
+                int windowEnd = math.min(reactionStart + C_REACTION_WINDOW_BARS, nAbs)  // exclusive
+                bool isFull = windowEnd == reactionStart + C_REACTION_WINDOW_BARS
+                int confAbs = na
+                int confTime = na
+                if windowEnd > reactionStart
+                    int rsW = reactionStart - absFirst
+                    int weW = windowEnd - absFirst
+                    float mfe = na
+                    float zoneClearance = na
+                    int mfeW = rsW
+                    if t.isSupport
+                        float hh = array.get(highs, rsW)
+                        for i2 = rsW to weW - 1
+                            if array.get(highs, i2) > hh
+                                hh := array.get(highs, i2)
+                                mfeW := i2
+                        mfe := hh - anchor
+                        zoneClearance := math.max(0.0, hh - t.zoneTop)
+                    else
+                        float ll = array.get(lows, rsW)
+                        for i2 = rsW to weW - 1
+                            if array.get(lows, i2) < ll
+                                ll := array.get(lows, i2)
+                                mfeW := i2
+                        mfe := anchor - ll
+                        zoneClearance := math.max(0.0, t.zoneBottom - ll)
+                    float refAtr = array.get(atr, rsW)
+                    if not na(refAtr) and refAtr != 0.0
+                        float atrRatio = mfe / refAtr
+                        float clearanceRatio = zoneClearance / zoneHeight
+                        [legClass, legEff, legShare] = f_measureLeg(highs, lows, opens, closes, atr, rsW, mfeW, t.isSupport)
+                        if atrRatio >= C_REACTION_STD_ATR_RATIO and clearanceRatio >= C_REACTION_STD_ZONE_CLEAR_RATIO and legEff >= C_REACTION_STD_DIR_EFF and legShare >= C_REACTION_STD_DIR_SHARE
+                            confAbs := reactionStart + (mfeW - rsW)
+                            confTime := array.get(availT, mfeW)
+                outT := SRTracker.new(t.originAbs, t.searchStartAbs, t.zoneTop, t.zoneBottom, t.isSupport, lastChecked, reactionStart, anchor, isFull, confAbs, confTime)
+    outT
+
+// Find the tracker for (originAbs, searchStartAbs), creating and advancing it on
+// first sight. Returns its index in the ascending key/tracker arrays.
+f_srTrackerIndex(array<int> keys, array<SRTracker> trk, int originAbs, int searchStartAbs, float zoneTop, float zoneBottom, bool isSupport, array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, array<int> availT, int absFirst) =>
+    int key = originAbs * C_SR_KEY_STRIDE + searchStartAbs
+    int idx = f_srFind(keys, key)
+    if idx < 0
+        SRTracker fresh = SRTracker.new(originAbs, searchStartAbs, zoneTop, zoneBottom, isSupport, searchStartAbs - 1, na, na, false, na, na)
+        SRTracker advanced = f_advanceSRTracker(fresh, highs, lows, opens, closes, atr, availT, absFirst)
+        int pos = f_srLowerBound(keys, key)
+        array.insert(keys, pos, key)
+        array.insert(trk, pos, advanced)
+        idx := pos
+    idx
+
 
 // =============================================================================
-// SUPPORT / RESISTANCE — domain/support_resistance.detect_support_resistance_zones.
+// P1-SR-PERF-3 — fold-cache helpers.
+//
+// Every loop below is bounded by A (confirmed swings inside the 300-bar window;
+// measured max 73, theoretical max 150) or by F (cached folds, F <= A). No loop
+// crosses two unbounded collections, and no array is mutated while an index into
+// it is being reused.
 // =============================================================================
-f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, array<int> availT, array<SwingRec> swings) =>
+
+// Index of `key` in a fold array kept ascending by originKey, or -1. Safe on an
+// empty array: hi = -1 makes the loop body unreachable.
+f_srFoldFind(array<SRFold> folds, int key) =>
+    int lo = 0
+    int hi = array.size(folds) - 1
+    int found = -1
+    while lo <= hi
+        int mid = int((lo + hi) / 2)
+        int probe = array.get(folds, mid).originKey
+        if probe == key
+            found := mid
+            break
+        if probe < key
+            lo := mid + 1
+        else
+            hi := mid - 1
+    found
+
+// First position whose originKey is >= key. Safe on an empty array: returns 0.
+f_srFoldLowerBound(array<SRFold> folds, int key) =>
+    int lo = 0
+    int hi = array.size(folds)
+    while lo < hi
+        int mid = int((lo + hi) / 2)
+        if array.get(folds, mid).originKey < key
+            lo := mid + 1
+        else
+            hi := mid
+    lo
+
+// Is `key` present among the live swings? They are ascending by pivotEndTime, so
+// this is a binary search. Safe on an empty array.
+f_srSwingHasKey(array<SwingRec> swings, int key) =>
+    int lo = 0
+    int hi = array.size(swings) - 1
+    bool found = false
+    while lo <= hi
+        int mid = int((lo + hi) / 2)
+        int probe = array.get(swings, mid).pivotEndTime
+        if probe == key
+            found := true
+            break
+        if probe < key
+            lo := mid + 1
+        else
+            hi := mid - 1
+    found
+
+// Insertion sort SRCand by meaningfulConfTime. The size never changes, so
+// iterating with `for ... in` while reordering elements is safe, and the a < 1
+// guard keeps the counted prefix out of Pine's reversed-range trap. The previous
+// build ran this sort on EVERY walk; it now runs only on a swing delta.
+f_srSortCandByConfTime(array<SRCand> cands) =>
+    for [a, _u910] in cands
+        if a < 1
+            continue
+        SRCand keyCand = array.get(cands, a)
+        int b = a - 1
+        bool placed = false
+        while b >= 0 and not placed
+            if array.get(cands, b).meaningfulConfTime > keyCand.meaningfulConfTime
+                array.set(cands, b + 1, array.get(cands, b))
+                b -= 1
+            else
+                placed := true
+        array.set(cands, b + 1, keyCand)
+
+// Rebuild the orientation candidate lists and the ascending snapshot. O(A) plus
+// two insertion sorts over a small A. Absolute indices are baked in here, once.
+f_srRebuildCandidates(array<SwingRec> swings, int absFirst, array<SRCand> candS, array<SRCand> candR, array<int> oppS, array<int> oppR, array<SRCand> snap) =>
+    array.clear(candS)
+    array.clear(candR)
+    array.clear(oppS)
+    array.clear(oppR)
+    array.clear(snap)
+    for [k, _u911] in swings
+        SwingRec sw = array.get(swings, k)
+        SRCand cand = SRCand.new(sw.pivotEndTime, sw.swingType, sw.price, sw.referenceAtr, sw.meaningfulConfTime, sw.pivotEndIdx + absFirst)
+        array.push(snap, cand)
+        if sw.swingType == SWING_LOW
+            array.push(candS, cand)
+            array.push(oppR, sw.meaningfulConfTime)
+        else
+            array.push(candR, cand)
+            array.push(oppS, sw.meaningfulConfTime)
+    f_srSortCandByConfTime(candS)
+    f_srSortCandByConfTime(candR)
+    array.sort(oppS, order.ascending)
+    array.sort(oppR, order.ascending)
+
+// Apply a swing delta to the fold cache.
+//
+// The delta itself is an O(A) merge of two ascending-by-key lists — the previous
+// snapshot and the live swing set — so it never scans the old array once per new
+// item. Invalidation then follows the rule proven in the model:
+//
+//   * an OPPOSITE-type change feeds the has-opposite-between test for every
+//     origin of that orientation, so it takes the whole orientation;
+//   * a SAME-type change can only alter a fold if it lies inside that origin's
+//     zone, because zone geometry is the fold's first gate on every touch and
+//     depends on nothing else;
+//   * an origin that no longer exists retires outright.
+//
+// Retirement rebuilds the array from survivors instead of removing by index, so
+// no index can be invalidated mid-loop — safe for empty, single, adjacent, first,
+// last and all-removed cases alike.
+f_srApplyDelta(array<SwingRec> swings, array<SRCand> snap, array<SRFold> folds, array<SRFold> keep) =>
+    chgType  = array.new<int>()
+    chgPrice = array.new<float>()
+    int i = 0
+    int j = 0
+    int oldN = array.size(snap)
+    int newN = array.size(swings)
+    while i < oldN or j < newN
+        bool haveOld = i < oldN
+        bool haveNew = j < newN
+        bool takeOld = false
+        bool takeNew = false
+        // The two keys are read ONLY where both cursors are in range, so neither
+        // is ever na and neither array is ever indexed one past the end. That
+        // also keeps the comparison out of Pine's na-comparison trap, which is
+        // the defect class that produced the original zero-swing bug.
+        if haveOld and haveNew
+            int oldKey = array.get(snap, i).key
+            int newKey = array.get(swings, j).pivotEndTime
+            if oldKey == newKey
+                i += 1
+                j += 1
+            else if oldKey < newKey
+                takeOld := true
+            else
+                takeNew := true
+        else if haveOld
+            takeOld := true
+        else
+            takeNew := true
+        if takeOld
+            SRCand gone = array.get(snap, i)
+            array.push(chgType, gone.swingType)
+            array.push(chgPrice, gone.price)
+            i += 1
+        if takeNew
+            SwingRec added = array.get(swings, j)
+            array.push(chgType, added.swingType)
+            array.push(chgPrice, added.price)
+            j += 1
+
+    bool supportOppDelta = false
+    bool resistOppDelta = false
+    for [c, _u912] in chgType
+        if array.get(chgType, c) == SWING_HIGH
+            supportOppDelta := true    // a HIGH is the opposite of a SUPPORT origin
+        else
+            resistOppDelta := true
+
+    array.clear(keep)
+    for [f, _u913] in folds
+        SRFold fold = array.get(folds, f)
+        bool isSupport = fold.originType == SWING_LOW
+        bool drop = not f_srSwingHasKey(swings, fold.originKey)
+        if not drop and (isSupport ? supportOppDelta : resistOppDelta)
+            drop := true
+        if not drop
+            float touchTol = C_SR_TOUCH_TOL_ATR * fold.referenceAtr
+            float pierceTol = C_SR_PIERCE_TOL_ATR * fold.referenceAtr
+            for [c2, _u914] in chgType
+                if not drop and array.get(chgType, c2) == fold.originType
+                    float p = array.get(chgPrice, c2)
+                    bool inside = isSupport ? (p <= fold.zoneTop + touchTol and p >= fold.zoneBottom - pierceTol) : (p >= fold.zoneBottom - touchTol and p <= fold.zoneTop + pierceTol)
+                    if inside
+                        drop := true
+        if not drop
+            array.push(keep, fold)
+    array.clear(folds)
+    for [g, _u915] in keep
+        array.push(folds, array.get(keep, g))
+
+// =============================================================================
+// SUPPORT / RESISTANCE WALK — domain/support_resistance.detect_support_resistance_zones.
+//
+// Identical control flow, ordering and tie-breaking to the previous batch
+// detector; the ONLY change is that each reaction evaluation is now a tracker
+// lookup instead of a forward scan. The `has opposite between` existence test
+// also uses a monotone cursor over the opposite-type confirmation times rather
+// than rescanning every swing per touch — `oi` is ascending by confirmation
+// time and `lastTouchTime` never decreases, so the cursor only moves forward.
+// =============================================================================
+f_walkSR(array<float> highs, array<float> lows, array<float> opens, array<float> closes, array<float> atr, array<int> availT, array<SRCand> candS, array<SRCand> candR, array<int> oppS, array<int> oppR, array<SRFold> folds, array<int> dirty, array<int> keys, array<SRTracker> trk, int absFirst) =>
     array<SRRec> out = array.new<SRRec>()
-    originTypes = array.from(SWING_LOW, SWING_HIGH)
     for ot = 0 to 1
-        int originType = array.get(originTypes, ot)
-        bool isSupport = originType == SWING_LOW
-        int oppositeType = isSupport ? SWING_HIGH : SWING_LOW
-        oi = array.new<int>()
-        for [k, _u599] in swings
-            if array.get(swings, k).swingType == originType
-                array.push(oi, k)
-        // order by meaningfulConfTime (insertion sort)
-        for [a, _u603] in oi
-            if a < 1
-                continue
-            int key = array.get(oi, a)
-            int b = a - 1
-            bool placed = false
-            while b >= 0 and not placed
-                if array.get(swings, array.get(oi, b)).meaningfulConfTime > array.get(swings, key).meaningfulConfTime
-                    array.set(oi, b + 1, array.get(oi, b))
-                    b -= 1
-                else
-                    placed := true
-            array.set(oi, b + 1, key)
+        bool isSupport = ot == 0
+        int originType = isSupport ? SWING_LOW : SWING_HIGH
+        array<SRCand> oi = isSupport ? candS : candR
+        array<int> opp = isSupport ? oppS : oppR
 
         for [oo, _u615] in oi
-            SwingRec origin = array.get(swings, array.get(oi, oo))
-            int originIdx = origin.pivotEndIdx
+            SRCand origin = array.get(oi, oo)
+
+            // P1-SR-PERF-3: reuse this origin's fold unless one of ITS OWN
+            // reactions moved. Everything else the fold depends on — ordering,
+            // geometry, the opposite-swing test — is swing-derived, and a swing
+            // change has already invalidated the affected folds via f_srApplyDelta.
+            bool isDirty = false
+            for [d, _u916] in dirty
+                if array.get(dirty, d) == origin.pivotEndAbs
+                    isDirty := true
+                    break
+            int foldIdx = f_srFoldFind(folds, origin.key)
+            if foldIdx >= 0 and not isDirty
+                SRFold cached = array.get(folds, foldIdx)
+                if cached.hasZone
+                    array.push(out, SRRec.new(cached.originType, cached.zoneTop, cached.zoneBottom, cached.zoneDepth, cached.touchCount, cached.confirmationTime))
+                continue
+
             float zoneDepth = C_SR_ZONE_DEPTH_ATR * origin.referenceAtr
             float zoneTop = na
             float zoneBottom = na
@@ -694,35 +1093,72 @@ f_detectSR(array<float> highs, array<float> lows, array<float> opens, array<floa
             else
                 zoneTop := origin.price
                 zoneBottom := zoneTop - zoneDepth
-            int originReaction = f_evaluateReaction(highs, lows, opens, closes, atr, originIdx + 1, zoneTop, zoneBottom, isSupport)
-            if not na(originReaction)
+            int originTi = f_srTrackerIndex(keys, trk, origin.pivotEndAbs, origin.pivotEndAbs + 1, zoneTop, zoneBottom, isSupport, highs, lows, opens, closes, atr, availT, absFirst)
+            int touchCount = 0
+            int firstConfTime = na
+            if not na(array.get(trk, originTi).confirmingAbs)
                 float touchTol = C_SR_TOUCH_TOL_ATR * origin.referenceAtr
                 float pierceTol = C_SR_PIERCE_TOL_ATR * origin.referenceAtr
-                int touchCount = 0
-                int firstConfTime = na
                 int lastTouchTime = origin.meaningfulConfTime
+                int cursor = 0
                 for [tt, _u634] in oi
-                    SwingRec touch = array.get(swings, array.get(oi, tt))
+                    SRCand touch = array.get(oi, tt)
                     if touch.meaningfulConfTime > lastTouchTime
                         bool geomOk = isSupport ? (touch.price <= zoneTop + touchTol and touch.price >= zoneBottom - pierceTol) : (touch.price >= zoneBottom - touchTol and touch.price <= zoneTop + pierceTol)
                         if geomOk
-                            // P1-PERF-1: existence test — stop at the first witness.
-                            bool oppositeBetween = false
-                            for [s, _u640] in swings
-                                SwingRec sw = array.get(swings, s)
-                                if sw.swingType == oppositeType and lastTouchTime < sw.meaningfulConfTime and sw.meaningfulConfTime < touch.meaningfulConfTime
-                                    oppositeBetween := true
-                                    break
+                            while cursor < array.size(opp) and array.get(opp, cursor) <= lastTouchTime
+                                cursor += 1
+                            bool oppositeBetween = cursor < array.size(opp) and array.get(opp, cursor) < touch.meaningfulConfTime
                             if oppositeBetween
-                                int touchReaction = f_evaluateReaction(highs, lows, opens, closes, atr, touch.pivotEndIdx + 1, zoneTop, zoneBottom, isSupport)
-                                if not na(touchReaction)
+                                int touchTi = f_srTrackerIndex(keys, trk, origin.pivotEndAbs, touch.pivotEndAbs + 1, zoneTop, zoneBottom, isSupport, highs, lows, opens, closes, atr, availT, absFirst)
+                                SRTracker touchTracker = array.get(trk, touchTi)
+                                if not na(touchTracker.confirmingAbs)
                                     touchCount += 1
                                     if na(firstConfTime)
-                                        firstConfTime := array.get(availT, touchReaction)
+                                        firstConfTime := touchTracker.confirmingTime
                                     lastTouchTime := touch.meaningfulConfTime
-                if not na(firstConfTime)
-                    array.push(out, SRRec.new(originType, zoneTop, zoneBottom, zoneDepth, touchCount, firstConfTime))
-    out
+            bool hasZone = not na(firstConfTime)
+            SRFold fresh = SRFold.new(origin.key, origin.pivotEndAbs, originType, zoneTop, zoneBottom, origin.referenceAtr, zoneDepth, hasZone, touchCount, firstConfTime)
+            if foldIdx >= 0
+                array.set(folds, foldIdx, fresh)
+            else
+                array.insert(folds, f_srFoldLowerBound(folds, origin.key), fresh)
+            if hasZone
+                array.push(out, SRRec.new(originType, zoneTop, zoneBottom, zoneDepth, touchCount, firstConfTime))
+
+    // P1-SR-ORDERING: Python closes detect_support_resistance_zones with
+    // `results.sort(key=confirmation_time_utc)` (support_resistance.py:303), and
+    // list.sort is STABLE — so equal confirmation times keep the insertion order
+    // built above (SUPPORT orientation first, then RESISTANCE; within each,
+    // ascending origin meaningfulConfTime). Pine had no final sort at all, which
+    // let it publish an older zone than Python's canonical latest whenever both
+    // directions qualified. Both halves of the rule are reproduced explicitly
+    // with a composite (confirmationTime, insertionIndex) key, so nothing rests
+    // on incidental Pine array behaviour. Runs only when the resolved set is
+    // rebuilt, and the set is tiny (bounded by the qualifying origins).
+    ordIdx = array.new<int>()
+    for [z0, _u860] in out
+        array.push(ordIdx, z0)
+    for [a2, _u862] in ordIdx
+        if a2 < 1
+            continue
+        int keyIdx = array.get(ordIdx, a2)
+        int keyTime = array.get(out, keyIdx).confirmationTime
+        int b2 = a2 - 1
+        bool placed2 = false
+        while b2 >= 0 and not placed2
+            int probeIdx = array.get(ordIdx, b2)
+            int probeTime = array.get(out, probeIdx).confirmationTime
+            if probeTime > keyTime or (probeTime == keyTime and probeIdx > keyIdx)
+                array.set(ordIdx, b2 + 1, probeIdx)
+                b2 -= 1
+            else
+                placed2 := true
+        array.set(ordIdx, b2 + 1, keyIdx)
+    ordered = array.new<SRRec>()
+    for [s2, _u876] in ordIdx
+        array.push(ordered, array.get(out, array.get(ordIdx, s2)))
+    ordered
 
 // =============================================================================
 // TRENDLINES — domain/trendlines.detect_trendlines.
@@ -913,7 +1349,7 @@ if barstate.isconfirmed
                 haveLow := true
         si2 -= 1
 
-    // ---- recompute derived detectors only when the swing set changes ----
+    // ---- swing-set fingerprint (needed by BOTH gates below) ----
     // P1-PERF-1: (count, last confirmation time) alone could not see a change
     // confined to the MIDDLE of the list — which the window's left edge can cause,
     // because the alternation chain is re-seeded at that edge on every bar. The
@@ -927,6 +1363,102 @@ if barstate.isconfirmed
         SwingRec sf = array.get(swings, k)
         newFingerprint := (newFingerprint * 31 + sf.swingType + sf.meaningfulConfTime % 1000000 + k) % 1000000007
     bool changed = na(lastSwingCount) or newCount != lastSwingCount or newConfTime != lastSwingConfTime or newFingerprint != lastSwingFingerprint
+
+    // ---- SUPPORT / RESISTANCE — advanced on EVERY confirmed bar ----
+    //
+    // P1-CLOSEOUT (C1): S/R must NOT sit behind the swing-set change gate. Its
+    // reaction search runs forward to the end of the available candles
+    // (support_resistance.py:80 `for index in range(search_start_index, n)`), so a
+    // reaction can first satisfy its gate on a candle that introduces NO new
+    // swing. The Python incremental analyzer states this explicitly at
+    // analyzer.py:923 — "Must run every candle (not only when confirmed_swings
+    // changes): a reaction's bounded window can newly resolve purely from candle
+    // growth with no new swing involved." Gating S/R on the swing fingerprint
+    // therefore DELAYED a real state transition until the next swing mutation.
+    //
+    // Equal levels and trendlines are NOT exposed to this: both are pure
+    // functions of the confirmed-swing set (a trendline's confirmation comes from
+    // a touch SWING, not from a bar), so they stay behind the gate.
+    //
+    // P1-SR-PERF-2: recomputing the whole detector here every bar was correct but
+    // put the script back on the Basic 20s boundary. The reaction frontier below
+    // keeps the timing and removes the rescan.
+
+    // (a) retire trackers whose origin has left the active window. Keys are
+    //     ascending with originAbs in the high bits, so this is a prefix removal.
+    int srMinKey = absFirst * C_SR_KEY_STRIDE
+    while array.size(srKeys) > 0 and array.get(srKeys, 0) < srMinKey
+        array.shift(srKeys)
+        array.shift(srTrk)
+
+    // (b) the ONLY unconditional per-bar S/R work: advance unresolved trackers.
+    //     Permanent ones are skipped outright. A tracker whose resolution moves
+    //     names its origin via SRTracker.originAbs, which is what P1-SR-PERF-3
+    //     uses to re-run exactly that one fold instead of all of them.
+    bool srTrackerChanged = false
+    array.clear(srDirty)
+    for [ti, _u940] in srKeys
+        SRTracker before = array.get(srTrk, ti)
+        if not before.permanent
+            SRTracker after = f_advanceSRTracker(before, wHigh, wLow, wOpen, wClose, wAtr, wAvailT, absFirst)
+            array.set(srTrk, ti, after)
+            bool resolutionMoved = na(after.confirmingAbs) != na(before.confirmingAbs)
+            if not resolutionMoved and not na(after.confirmingAbs)
+                resolutionMoved := after.confirmingAbs != before.confirmingAbs
+            if resolutionMoved
+                srTrackerChanged := true
+                int dirtyOrigin = before.originAbs
+                bool alreadyDirty = false
+                for [dd, _u941] in srDirty
+                    if array.get(srDirty, dd) == dirtyOrigin
+                        alreadyDirty := true
+                        break
+                if not alreadyDirty
+                    array.push(srDirty, dirtyOrigin)
+            else if after.permanent != before.permanent
+                srTrackerChanged := true
+
+    // (c) P1-SR-PERF-3: a swing change rebuilds the orientation candidate lists
+    //     and retires only the folds the delta can reach. The delta must run
+    //     BEFORE the rebuild, because it compares the previous snapshot against
+    //     the live swing set.
+    if changed or not srSeeded
+        f_srApplyDelta(swings, srSnap, srFold, srFoldKeep)
+        f_srRebuildCandidates(swings, absFirst, srCandSupport, srCandResist, srOppSupport, srOppResist, srSnap)
+
+    // (d) the walk's output is a pure function of (swing set, tracker
+    //     resolutions), so re-run it only when one of those actually moved — and
+    //     inside it, only the folds those changes actually reach.
+    if not srSeeded or srTrackerChanged or changed
+        srSeeded := true
+        array<SRRec> srFresh = f_walkSR(wHigh, wLow, wOpen, wClose, wAtr, wAvailT, srCandSupport, srCandResist, srOppSupport, srOppResist, srFold, srDirty, srKeys, srTrk, absFirst)
+        array.clear(srCached)
+        for [fi, _u950] in srFresh
+            array.push(srCached, array.get(srFresh, fi))
+
+    // srCached is in Python's canonical order (ascending confirmationTime,
+    // stable), so its LAST element is the most recently confirmed zone — which
+    // is what this parity scalar means.
+    array<SRRec> srs = srCached
+    latestSRTop := na
+    latestSRBottom := na
+    latestSRType := na
+    if array.size(srs) > 0
+        SRRec srLast = array.get(srs, array.size(srs) - 1)
+        latestSRTop := srLast.zoneTop
+        latestSRBottom := srLast.zoneBottom
+        latestSRType := srLast.zoneType
+
+    // Debug-only: gate the DRAWING on whether the zone set actually changed, so
+    // that analytical progression never becomes a per-bar clear-and-redraw.
+    int newSRFingerprint = 0
+    for [k2, _u898] in srs
+        SRRec srf = array.get(srs, k2)
+        newSRFingerprint := (newSRFingerprint * 31 + srf.zoneType + srf.confirmationTime % 1000000 + srf.touchCount + k2) % 1000000007
+    bool srChanged = na(lastSRFingerprint) or newSRFingerprint != lastSRFingerprint
+    lastSRFingerprint := newSRFingerprint
+
+    // ---- recompute SWING-DERIVED detectors only when the swing set changes ----
     if changed
         lastSwingCount := newCount
         lastSwingConfTime := newConfTime
@@ -942,17 +1474,6 @@ if barstate.isconfirmed
                 latestEqualHigh := e.representativePrice
             else
                 latestEqualLow := e.representativePrice
-
-        // SUPPORT / RESISTANCE
-        array<SRRec> srs = f_detectSR(wHigh, wLow, wOpen, wClose, wAtr, wAvailT, swings)
-        latestSRTop := na
-        latestSRBottom := na
-        latestSRType := na
-        if array.size(srs) > 0
-            SRRec sr = array.get(srs, array.size(srs) - 1)
-            latestSRTop := sr.zoneTop
-            latestSRBottom := sr.zoneBottom
-            latestSRType := sr.zoneType
 
         // TRENDLINES
         array<TrendlineRec> tls = f_detectTrendlines(wClose, wAtr, swings, scTlAtr)
@@ -983,15 +1504,6 @@ if barstate.isconfirmed
                 EqualLevelRec e = array.get(eqs, k)
                 line ln = line.new(x1 = e.firstTime, y1 = e.representativePrice, x2 = e.confirmationTime, y2 = e.representativePrice, xloc = xloc.bar_time, color = e.clusterType == SWING_HIGH ? color.orange : color.blue, style = line.style_dotted, width = 1)
                 array.push(eqLineObjs, ln)
-        if debugMode and showSR
-            f_clearBoxes(srBoxObjs)
-            int startK = math.max(0, array.size(srs) - maxDrawPerFamily)
-            for [k, _u864] in srs
-                if k < startK
-                    continue
-                SRRec sr = array.get(srs, k)
-                box bx = box.new(left = sr.confirmationTime, top = sr.zoneTop, right = time_close, bottom = sr.zoneBottom, xloc = xloc.bar_time, border_color = sr.zoneType == SWING_LOW ? color.green : color.red, bgcolor = color.new(sr.zoneType == SWING_LOW ? color.green : color.red, 88))
-                array.push(srBoxObjs, bx)
         if debugMode and showTrendlines
             f_clearLines(tlLineObjs)
             int startK = math.max(0, array.size(tls) - maxDrawPerFamily)
@@ -1002,25 +1514,73 @@ if barstate.isconfirmed
                 line ln = line.new(x1 = tl.anchor1Time, y1 = tl.anchor1Price, x2 = tl.anchor2Time, y2 = tl.anchor2Price, xloc = xloc.bar_time, color = tl.orientation == SWING_LOW ? color.green : color.red, style = line.style_solid, width = 1)
                 array.push(tlLineObjs, ln)
 
+    // S/R drawings sit OUTSIDE the swing-change gate because the zone set now
+    // advances on candle growth alone; they are redrawn only when that set
+    // actually changed, and stay capped per family.
+    if debugMode and showSR and srChanged
+        f_clearBoxes(srBoxObjs)
+        int startSR = math.max(0, array.size(srs) - maxDrawPerFamily)
+        for [k, _u1030] in srs
+            if k < startSR
+                continue
+            SRRec srd = array.get(srs, k)
+            box bx = box.new(left = srd.confirmationTime, top = srd.zoneTop, right = time_close, bottom = srd.zoneBottom, xloc = xloc.bar_time, border_color = srd.zoneType == SWING_LOW ? color.green : color.red, bgcolor = color.new(srd.zoneType == SWING_LOW ? color.green : color.red, 88))
+            array.push(srBoxObjs, bx)
+
+// P1-PERF-4A — HISTORY GUARD: CAPACITY *and* WARM-UP.
+//
+// These are two different questions and PERF-4 answered only the second:
+//
+//   CAPACITY — does the dataset TradingView actually handed this script contain
+//              the approved execution horizon at all? A user who lowers the
+//              generated "Calculated bars" input, or a symbol with a short
+//              history, silently shrinks the run. Answered from dataset
+//              metadata in O(1); no scan, no state.
+//
+//   WARM-UP  — has THIS bar accumulated enough causal history INSIDE that
+//              dataset for its own 300-bar window to carry an exact ATR?
+//              Answered from confirmedBarCount.
+//
+// last_bar_index is documented as one less than the total number of bars
+// available to the script, so the accessible count is last_bar_index + 1 =
+// min(chart bars, "Calculated bars"). Both terms are monotonically
+// non-decreasing while the script runs: a newly opened realtime bar can only
+// add to the chart, and the cap is fixed for the run. An open realtime bar can
+// therefore never push the count BELOW what the historical pass saw, so no
+// downward tolerance is needed here and none is applied — 1799 accessible bars
+// must fail, because 1800 is the validated product horizon.
+//
+// FAIL CLOSED. Insufficient history is not a reason to publish a partially
+// validated answer computed from whatever happens to exist; that answer sits
+// outside the validated P1 history contract. All nine outputs go na and the
+// debug table says so, without guessing which of the two causes applied.
+//
+// Publication guard only: no analytical rule, no stored state and no
+// confirmed-bar boundary is affected, and last_bar_index is used NOWHERE else.
+int  p1DatasetBars = last_bar_index + 1
+bool p1CapacityOk  = p1DatasetBars >= C_P1_CALC_BARS
+bool p1WarmupOk    = confirmedBarCount >= C_P1_MIN_CALC_BARS
+bool p1HistoryOk   = p1CapacityOk and p1WarmupOk
+
 // -----------------------------------------------------------------------------
 // DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
 // -----------------------------------------------------------------------------
-bool dispFastNow = barstate.isconfirmed and debugMode and showDisplacement and not na(latestDispCode) and math.abs(latestDispCode) >= 1
+bool dispFastNow = p1HistoryOk and barstate.isconfirmed and debugMode and showDisplacement and not na(latestDispCode) and math.abs(latestDispCode) >= 1
 plotshape(dispFastNow and latestDispCode > 0, title = "Displacement up", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.tiny)
 plotshape(dispFastNow and latestDispCode < 0, title = "Displacement down", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.tiny)
 
 // =============================================================================
 // PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
 // =============================================================================
-plot(latestSwingHighPrice, "P1_swing_high_price", color = color.teal,   display = display.data_window)
-plot(latestSwingLowPrice,  "P1_swing_low_price",  color = color.maroon, display = display.data_window)
-plot(latestDispCode,       "P1_disp_code",        color = color.gray,   display = display.data_window)
-plot(latestDispRatio,      "P1_disp_ratio",       color = color.gray,   display = display.data_window)
-plot(latestEqualHigh,      "P1_equal_high",       color = color.orange, display = display.data_window)
-plot(latestEqualLow,       "P1_equal_low",        color = color.blue,   display = display.data_window)
-plot(latestSRTop,          "P1_sr_top",           color = color.green,  display = display.data_window)
-plot(latestSRBottom,       "P1_sr_bottom",        color = color.red,    display = display.data_window)
-plot(latestTLNormSlope,    "P1_tl_norm_slope",    color = color.purple, display = display.data_window)
+plot(p1HistoryOk ? latestSwingHighPrice : na, "P1_swing_high_price", color = color.teal,   display = display.data_window)
+plot(p1HistoryOk ? latestSwingLowPrice  : na, "P1_swing_low_price",  color = color.maroon, display = display.data_window)
+plot(p1HistoryOk ? latestDispCode       : na, "P1_disp_code",        color = color.gray,   display = display.data_window)
+plot(p1HistoryOk ? latestDispRatio      : na, "P1_disp_ratio",       color = color.gray,   display = display.data_window)
+plot(p1HistoryOk ? latestEqualHigh      : na, "P1_equal_high",       color = color.orange, display = display.data_window)
+plot(p1HistoryOk ? latestEqualLow       : na, "P1_equal_low",        color = color.blue,   display = display.data_window)
+plot(p1HistoryOk ? latestSRTop          : na, "P1_sr_top",           color = color.green,  display = display.data_window)
+plot(p1HistoryOk ? latestSRBottom       : na, "P1_sr_bottom",        color = color.red,    display = display.data_window)
+plot(p1HistoryOk ? latestTLNormSlope    : na, "P1_tl_norm_slope",    color = color.purple, display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)
@@ -1030,7 +1590,7 @@ f_row(table t, int r, string k, string v) =>
 // (inside the guarded branch) means no table object is created at all in normal
 // client-style mode.
 if barstate.islast and debugMode
-    var table dbg = table.new(position.top_right, 2, 10, border_width = 1)
+    var table dbg = table.new(position.top_right, 2, 11, border_width = 1)
     f_row(dbg, 0, "P1 DEV — latest confirmed", "")
     f_row(dbg, 1, "Swing High", na(latestSwingHighPrice) ? "-" : str.tostring(latestSwingHighPrice, format.mintick))
     f_row(dbg, 2, "Swing Low",  na(latestSwingLowPrice)  ? "-" : str.tostring(latestSwingLowPrice, format.mintick))
@@ -1041,3 +1601,4 @@ if barstate.islast and debugMode
     f_row(dbg, 7, "SR top",     na(latestSRTop)     ? "-" : str.tostring(latestSRTop, format.mintick))
     f_row(dbg, 8, "SR bottom",  na(latestSRBottom)  ? "-" : str.tostring(latestSRBottom, format.mintick))
     f_row(dbg, 9, "TL n-slope", na(latestTLNormSlope) ? "-" : str.tostring(latestTLNormSlope, "#.###"))
+    f_row(dbg, 10, "Calc history", p1HistoryOk ? str.tostring(p1DatasetBars) + " bars, warm " + str.tostring(confirmedBarCount) + " OK" : "INSUFFICIENT CALCULATED HISTORY (dataset " + str.tostring(p1DatasetBars) + "/" + str.tostring(C_P1_CALC_BARS) + ", warm " + str.tostring(confirmedBarCount) + "/" + str.tostring(C_P1_MIN_CALC_BARS) + ")")
