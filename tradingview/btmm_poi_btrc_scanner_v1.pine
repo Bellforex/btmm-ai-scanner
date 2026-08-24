@@ -469,7 +469,7 @@ var int   p2LastBrokenKey = C_ST_NA
 var float p2LastBrokenLvl = na
 var int   p2WeakHighBound = C_ST_NA  // not plotted; TD-B/I6 consumes it
 var int   p2WeakLowBound  = C_ST_NA
-var int   p2Suppressed    = C_ST_NA  // not plotted; CHOCH-guard hit count
+var int   p2ChochAborts   = C_ST_NA  // not plotted; CHOCH abort count
 
 // Swing-set change detection (so SWING-DERIVED detectors run only on change).
 // S/R is deliberately NOT behind this gate — see the P1-CLOSEOUT note in MAIN.
@@ -939,10 +939,11 @@ f_p2MostRecentUnbroken(array<StructSwingView> views, array<int> visOrder, int wa
 //   I4  direction bootstrap on RELATIONSHIP events           (:355-381)
 //   I5  BULLISH_BOS / BEARISH_BOS on CANDLE events           (:255-321)
 //   I6  weak re-arm on SWING_VISIBLE events                  (:328-353)
+//   I7  BULLISH_CHOCH / BEARISH_CHOCH on CANDLE events       (:183-253)
 //
-// NOT IMPLEMENTED HERE: CHOCH emission, direction flips and CHOCH abort
-// mutation. Note that the I5 CHOCH price guard is a BOS suppressor only: it
-// still sets no boundary, so it cannot feed the I6 re-arm below.
+// The bounded batch-equivalent Structure walk is now semantically complete.
+// What remains for a later phase is the PERSISTENT INCREMENTAL FRONTIER: this
+// walk is still recomputed from the bounded window on every confirmed bar.
 //
 // EVENT ORDER. Python sorts every event by (availability_time, kind, tiebreak)
 // with CANDLE=0 < SWING_VISIBLE=1 < RELATIONSHIP=2 (:75-77, :135). Each of the
@@ -975,7 +976,7 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
     int loLabel    = C_ST_NA
     int hiSwingKey = C_ST_NA
     int loSwingKey = C_ST_NA
-    int suppressed = 0
+    int chochAborts = 0
     array<int> brokenKeys = array.new<int>()
     array<int> visOrder   = array.new<int>()
     array<StructEventRec> events = array.new<StructEventRec>()
@@ -1011,15 +1012,58 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
                 float barClose = array.get(closes, ci)
                 int   barAbs   = absFirst + ci
 
-                // CHOCH PRICE GUARD -- BOS SUPPRESSION ONLY (see banner above).
-                bool chochGuard = false
-                if dir == C_ST_DIR_BEARISH and protHighIx >= 0
-                    chochGuard := barClose > array.get(views, protHighIx).pivotPrice
-                if dir == C_ST_DIR_BULLISH and protLowIx >= 0
-                    chochGuard := barClose < array.get(views, protLowIx).pivotPrice
+                // ---- P2-I7: CHOCH (transitions.py:170-175, :183-253).
+                //
+                // Exactly one candidate can be set, because the direction is
+                // either BULLISH or BEARISH, never both. Strict, close-only:
+                //   BEARISH and close > protectedHigh -> BULLISH_CHOCH
+                //   BULLISH and close < protectedLow  -> BEARISH_CHOCH
+                bool chochHigh = dir == C_ST_DIR_BEARISH and protHighIx >= 0 and barClose > array.get(views, protHighIx).pivotPrice
+                bool chochLow  = dir == C_ST_DIR_BULLISH and protLowIx  >= 0 and barClose < array.get(views, protLowIx).pivotPrice
 
-                if chochGuard
-                    suppressed := suppressed + 1
+                if chochHigh or chochLow
+                    // PRECEDENCE. Python handles CHOCH first and `continue`s past
+                    // the BOS block on BOTH exits -- success (:253) and abort
+                    // (:190/:224). So once the CHOCH predicate is true, BOS is
+                    // never evaluated on this candle, whatever happens below.
+                    // This `if` IS that precedence: there is no separate
+                    // suppression path any more.
+                    int chochBrokenIx = chochHigh ? protHighIx : protLowIx
+                    StructSwingView chochBroken = array.get(views, chochBrokenIx)
+                    int chochWant = chochHigh ? SWING_LOW : SWING_HIGH
+                    // PRE-MUTATION ABORT. The replacement search happens BEFORE
+                    // anything is consumed or written: Python tests the result
+                    // for None and `continue`s while broken_ids, direction,
+                    // protected, weak and the boundaries are all still untouched
+                    // (:186-190 / :220-224). brokenKeys is deliberately NOT
+                    // written above this line -- doing so would leak state on
+                    // the abort path.
+                    int chochReplIx = f_p2MostRecentUnbroken(views, visOrder, chochWant, brokenKeys)
+                    if chochReplIx < 0
+                        // ABORT: zero mutation, and BOS still skipped.
+                        chochAborts := chochAborts + 1
+                    else
+                        array.push(brokenKeys, chochBroken.stableKey)
+                        int chochAvail = math.max(array.get(availT, ci), chochBroken.meaningfulConfTime)
+                        array.push(events, StructEventRec.new(chochHigh ? C_ST_TR_BULLISH_CHOCH : C_ST_TR_BEARISH_CHOCH, chochBroken.stableKey, chochBroken.pivotPrice, barClose, array.get(openT, ci), chochAvail, array.get(views, chochReplIx).stableKey))
+                        // Only ONE boundary moves -- the NEW direction's weak
+                        // side (:217 / :251). The opposite boundary is left
+                        // exactly as it was.
+                        if chochHigh
+                            dir        := C_ST_DIR_BULLISH
+                            protHighIx := -1
+                            protLowIx  := chochReplIx
+                            weakHighBoundaryAbs := barAbs
+                        else
+                            dir        := C_ST_DIR_BEARISH
+                            protLowIx  := -1
+                            protHighIx := chochReplIx
+                            weakLowBoundaryAbs := barAbs
+                        // BOTH weak levels clear -- unlike BOS, which clears only
+                        // its own side (:215-216 / :249-250).
+                        weakHighIx := -1
+                        weakLowIx  := -1
+                        lastChange := chochAvail
                 else
                     // Strict, close-only, no tolerance (transitions.py:176-181).
                     bool bosHigh = dir == C_ST_DIR_BULLISH and weakHighIx >= 0 and barClose > array.get(views, weakHighIx).pivotPrice
@@ -1119,7 +1163,7 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
     int protLowKey  = protLowIx  >= 0 ? array.get(views, protLowIx).stableKey  : C_ST_NA
     int weakHighKey = weakHighIx >= 0 ? array.get(views, weakHighIx).stableKey : C_ST_NA
     int weakLowKey  = weakLowIx  >= 0 ? array.get(views, weakLowIx).stableKey  : C_ST_NA
-    [dir, protHighKey, protLowKey, weakHighKey, weakLowKey, lastChange, events, brokenKeys, weakHighBoundaryAbs, weakLowBoundaryAbs, suppressed]
+    [dir, protHighKey, protLowKey, weakHighKey, weakLowKey, lastChange, events, brokenKeys, weakHighBoundaryAbs, weakLowBoundaryAbs, chochAborts]
 
 // =============================================================================
 // EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
@@ -1910,7 +1954,7 @@ if barstate.isconfirmed
     // CONFIRMED window state -- wClose/wOpenT/wAvailT are pushed above from the
     // just-closed bar -- so it inherits the confirmed-bar gate and never reads a
     // forming value, an intrabar price, or a wick.
-    [p2bDir, p2bProtHigh, p2bProtLow, p2bWeakHigh, p2bWeakLow, _p2bLastChange, p2bEvents, _p2bBroken, p2bWhBound, p2bWlBound, p2bSupp] = f_p2StructureWalk(p2Swings, p2Rels, f_p2OrderRelationships(p2Rels), f_p2OrderSwings(p2Swings), wClose, wAvailT, wOpenT, absFirst)
+    [p2bDir, p2bProtHigh, p2bProtLow, p2bWeakHigh, p2bWeakLow, _p2bLastChange, p2bEvents, _p2bBroken, p2bWhBound, p2bWlBound, p2bAborts] = f_p2StructureWalk(p2Swings, p2Rels, f_p2OrderRelationships(p2Rels), f_p2OrderSwings(p2Swings), wClose, wAvailT, wOpenT, absFirst)
     p2Direction   := p2bDir
     p2ProtHighKey := p2bProtHigh
     p2ProtLowKey  := p2bProtLow
@@ -1918,7 +1962,7 @@ if barstate.isconfirmed
     p2WeakLowKey  := p2bWeakLow
     p2WeakHighBound := p2bWhBound
     p2WeakLowBound  := p2bWlBound
-    p2Suppressed    := p2bSupp
+    p2ChochAborts   := p2bAborts
     p2TransCount    := array.size(p2bEvents)
     p2LastTransCode := C_ST_NA
     p2LastBrokenKey := C_ST_NA

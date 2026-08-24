@@ -1,7 +1,7 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
 Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15–§20 record what has actually shipped.
+P2-I0 test-proven contract; §15–§21 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -15,11 +15,12 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I5-PRE | TD-A BOS protected-fallback contract (§17) | **TD-A RESOLVED** — author-accepted |
 | P2-I5 | BOS (§18) | committed `8be961d` |
 | P2-I6-PRE | TD-B weak re-arm contract (§19) | committed `3c855aa` |
-| P2-I6 | weak re-arm (§20) | implemented, **uncommitted**, awaiting author review |
-| P2-I7 | CHOCH | **not started**; no debt gates it (§20.7) |
+| P2-I6 | weak re-arm (§20) | committed `00c183a` |
+| P2-I7 | CHOCH (§21) | implemented, **uncommitted**, awaiting author review |
+| — | **bounded batch-equivalent Structure semantics COMPLETE** | persistent incremental frontier not started (§21.9) |
 
 §1–§13 were written before implementation and are preserved as the design of
-record; where a detail was refined by testing, §14–§20 are authoritative.
+record; where a detail was refined by testing, §14–§21 are authoritative.
 
 ---
 
@@ -1534,3 +1535,153 @@ Requirements already test-backed, to be honoured when CHOCH is implemented:
 
 When CHOCH lands, the I5 suppression guard is replaced by the real handler; until
 then it must keep setting no boundary.
+
+---
+
+## 21. P2-I7 — CHOCH (delivered, uncommitted)
+
+Test file: `tests/unit/test_p2_choch_parity.py` (48 tests). With this phase the
+**bounded batch-equivalent Structure walk is semantically complete**: relationships,
+bootstrap, BOS, weak re-arm and CHOCH.
+
+### 21.1 What replaced what
+
+The I5 CHOCH *price guard* — a BOS suppressor that emitted nothing and mutated
+nothing — is **gone**, not kept alongside. There is now exactly one CHOCH
+predicate path, and the `if` that used to suppress BOS **is** the precedence:
+
+```
+if chochHigh or chochLow:        # CHOCH predicate -> BOS is never evaluated
+    replacement = most_recent_unbroken(opposite side)
+    if replacement is absent: abort        # zero mutation
+    else:                      succeed
+else:
+    ... BOS ...
+```
+
+A guard asserts `chochGuard` and `suppressed` no longer appear anywhere, and that
+`bool chochHigh` / `bool chochLow` each occur exactly once.
+
+### 21.2 What CHOCH does that BOS does not
+
+| | BOS | CHOCH |
+|---|---|---|
+| consumes | the **weak** level | the **protected** level |
+| direction | unchanged | **flips** |
+| weak levels cleared | its own side only | **both** |
+| outgoing protected | untouched | **nulled** |
+| boundaries moved | its own side | **exactly one** — the *new* direction's weak side |
+| can abort | no | **yes** |
+
+**Only one boundary moves.** `BULLISH_CHOCH` writes `weak_high_boundary_index`
+(`transitions.py:217`) and leaves the low boundary alone; `BEARISH_CHOCH` mirrors
+it (`:251`). This is worth stating because "a CHOCH clears both weak levels" makes
+"it updates both boundaries" sound natural — it does not.
+
+### 21.3 The abort, and its ordering
+
+The replacement search happens **before any mutation**. Python tests the result
+for `None` and `continue`s while `broken_ids`, direction, protected, weak and both
+boundaries are all still untouched (`:186-190` / `:220-224`). The Pine
+transcription keeps that order, and a guard asserts every mutation site occurs
+textually after the search — so consuming the broken key early, the classic way to
+get this wrong, fails the build.
+
+The natural abort is reached by **exhausting** candidates, not by injection: a
+chain of alternating CHOCHs consumes one protected swing per flip until no
+unbroken opposite-side swing remains, after which every later candle aborts and
+changes nothing.
+
+### 21.4 A reachability result: abort and a live BOS predicate are mutually exclusive
+
+The phase brief asked for a fixture where the CHOCH predicate is true, the
+replacement is unavailable, **and** the raw BOS predicate is also true — to prove
+the abort still suppresses BOS. **That case cannot exist.**
+
+A `BEARISH_CHOCH` aborts only when no unbroken visible HIGH exists. A live BOS
+predicate requires an armed `weak_high`, and an armed weak high *is* an unbroken
+visible high — so the candidate set is non-empty and the CHOCH cannot abort. The
+bullish mirror is symmetric.
+
+Consequence: mutating the model to let BOS run after an abort produces **zero**
+parity failures. That is not a fixture gap; it is the exclusivity above.
+`test_abort_and_a_live_bos_predicate_are_mutually_exclusive` states the argument
+and checks it at every prefix of every campaign scenario, and the Pine equivalent
+of the mutation — moving BOS out of the CHOCH `else` — is caught by four source
+guards. **Precedence still matters, but only on the success path.**
+
+This is the fourth branch in P2 that is real in the source yet not discriminable
+by behaviour, after TD-A's protected fallback, TD-B's broken-id filter and the
+first-vs-newest re-arm rule (§20.2). All four are transcribed faithfully and
+guarded at the source.
+
+### 21.5 CHOCH → re-arm → BOS
+
+The end-to-end proof that I6 is genuinely origin-agnostic:
+
+```
+BEARISH -> BULLISH_CHOCH (weak_high boundary := 10, both weak slots cleared)
+        -> H3 (pivot 12 > 10) re-arms weak_high through the UNCHANGED I6 branch
+        -> BULLISH_BOS breaks it, boundary advances to 20
+```
+
+The I6 re-arm code was not touched in this phase. `test_the_re_arm_between_them_actually_happened`
+asserts the weak-slot trace is exactly `None → H3 → None`, so the two transitions
+cannot be an artifact.
+
+### 21.6 Event ordering
+
+Unchanged: `CANDLE < SWING_VISIBLE < RELATIONSHIP`. Pinned for CHOCH by a fixture
+where a low pivots at bar 10 and confirms at bar 10, tying with candle 10's
+availability. `CANDLE` runs first, so that low is **not yet a replacement
+candidate** when the CHOCH resolves and the protected low becomes the bar-8 swing
+instead. Reversing the two kinds would select the bar-10 swing.
+
+### 21.7 Proof
+
+| measure | value |
+|---|---|
+| CHOCH parity tests | 48 passed |
+| campaign scenarios | 13 |
+| prefix comparisons | 312 |
+| bullish / bearish CHOCH | both > 0 |
+| aborting scenarios | > 0 |
+| BOS after CHOCH, re-arms after CHOCH | both > 0 |
+| mismatches | **0** |
+| I6 re-arm / I5 BOS parity (re-run on the unified model) | 42 / 51 passed |
+| Pine foundation guards | 77 passed |
+| all Structure tests | 299 passed |
+| full suite | **1896 passed / 0 failed** |
+| plot consumers | 26 / 64 (**0 delta**) |
+
+Mutations caught — Pine source: consuming the broken key before the search;
+clearing only one weak side; removing the direction flip; moving BOS out of the
+CHOCH `else`. Model behaviour: only one weak side cleared (21 failures); no
+direction flip (27); broken key consumed early (4). All files restored
+byte-identically.
+
+### 21.8 Resources
+
+| measure | I6 | I7 | delta |
+|---|---|---|---|
+| lines | 2,237 | 2,281 | +44 (31 code) |
+| bytes | 122,172 | 127,631 | +5,459 |
+| plots | 26 | 26 | **0** |
+| `array.new` / for / while / types | — | — | **0 each** |
+| `var` | 75 | 75 | 0 (one renamed) |
+
+CHOCH reuses the existing event walk, `f_p2MostRecentUnbroken`, `brokenKeys`, the
+transition array and the boundary state. No duplicated search pass, no second
+broken set, no new record type. Worst case per confirmed bar is unchanged from
+I5: **O(C + S² + R² + B·S)**.
+
+### 21.9 What is NOT done
+
+The walk is still **recomputed from the bounded window on every confirmed bar**.
+That is correct and batch-equivalent, but it is not the persistent incremental
+frontier. Nothing about the semantics changes when that lands; what changes is how
+often the walk runs.
+
+### 21.10 Test debt
+
+TD-A **RESOLVED** (§17), TD-B **CLOSED** (§19). No debt is open.

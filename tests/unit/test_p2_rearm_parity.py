@@ -24,9 +24,11 @@ The prohibition is therefore enforced as a **source guard**
 equivalence depends on `conf_bar >= pivot_bar` and on the boundary rule, and a
 future change to either would break it silently.
 
-SCOPE. I6 adds re-arm only. CHOCH is still unimplemented in Pine, and the I5
-CHOCH price guard remains a BOS suppressor that sets no boundary — so it cannot
-feed re-arm. `test_choch_suppression_still_sets_no_boundary` holds that line.
+SCOPE NOTE. These tests were written at P2-I6, when CHOCH was still a
+suppression-only guard. P2-I7 replaced that with real CHOCH handling, so the two
+scope tests at the end now assert the I7 behaviour: CHOCH sets a boundary and the
+UNCHANGED I6 re-arm branch picks it up — which is the whole point of having made
+re-arm origin-agnostic.
 """
 
 from __future__ import annotations
@@ -581,30 +583,39 @@ def test_re_arm_holds_no_state_across_the_window_edge() -> None:
 # 17 — the CHOCH suppression guard is still only a suppressor
 # ---------------------------------------------------------------------------
 
-def test_choch_suppression_still_sets_no_boundary() -> None:
-    """I6 must not let the I5 price guard become a CHOCH: it may not set a
-    boundary, and therefore may not trigger a re-arm."""
+def test_choch_now_sets_a_boundary_that_the_unchanged_re_arm_branch_reads() -> None:
+    """P2-I7 turned the guard into a real CHOCH. The I6 re-arm branch was not
+    modified, and it consumes the CHOCH-written boundary exactly as it consumes a
+    BOS-written one — the origin-agnostic property TD-B predicted."""
     candles, swings = _build(_bos._PRECEDENCE_BULL, _bos._PRECEDENCE_NEUTRAL)
-    walk = _pine_walk(candles, swings)
-    assert walk.suppressed >= 1, "the guard fired"
-    assert walk.transitions == [], "no BOS"
-    assert walk.weak_high_boundary == -1, "suppression must not set a boundary"
-    assert walk.weak_low_boundary == -1
-    assert walk.broken == [], "suppression must consume nothing"
+    walk, _ = _assert_parity(candles, swings)
+    assert walk.transitions, "a real CHOCH is emitted"
+    assert all(code in (2, -2) for code, *_ in walk.transitions)
+    assert walk.broken, "the protected level is consumed"
+    assert max(walk.weak_high_boundary, walk.weak_low_boundary) >= 0, (
+        "a successful CHOCH must write one boundary"
+    )
 
 
-def test_pine_suppression_path_still_mutates_only_the_counter() -> None:
+def test_pine_choch_abort_path_mutates_only_the_counter() -> None:
+    """The abort path is the successor of the old suppression path and must still
+    change nothing at all."""
+    import re
     text = PINE.read_text(encoding="utf-8")
     candle = text.split("if pick == 0")[1].split("            else if pick == 1")[0]
-    taken = candle.split("if chochGuard")[1].split("\n                else\n")[0]
-    import re
-    assert set(re.findall(r"(\w+)\s*:=", taken)) == {"suppressed"}, taken
+    abort = candle.split("if chochReplIx < 0")[1].split("                    else")[0]
+    code = "\n".join(
+        line for line in abort.splitlines() if not line.strip().startswith("//")
+    )
+    assert set(re.findall(r"(\w+)\s*:=", code)) == {"chochAborts"}, code
+    for token in ("array.push", "StructEventRec"):
+        assert token not in code, f"abort must not {token}"
 
 
-def test_no_choch_transition_is_emitted_anywhere() -> None:
+def test_choch_transition_codes_are_now_reachable() -> None:
     text = PINE.read_text(encoding="utf-8")
     for code in ("C_ST_TR_BULLISH_CHOCH", "C_ST_TR_BEARISH_CHOCH"):
-        assert text.count(code) == 1, f"{code} used beyond its declaration"
+        assert text.count(code) >= 2, f"{code} is declared but never emitted"
 
 
 # ---------------------------------------------------------------------------

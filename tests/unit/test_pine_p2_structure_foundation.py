@@ -133,15 +133,25 @@ def test_structure_records_declare_exactly_the_planned_fields(type_name, fields)
     assert declared == fields, f"{type_name} fields drifted: {declared}"
 
 
-def test_transition_record_is_constructed_for_bos_only() -> None:
-    """As of I5 StructEventRec is built — but only with BOS transition codes."""
+def test_transition_record_is_constructed_for_both_bos_and_choch() -> None:
+    """As of I7 StructEventRec is built on two paths — the BOS branch and the
+    CHOCH branch — and on no others."""
     text = _src()
     assert "StructRelRec.new(" in text, "I3 must construct relationships"
-    assert "StructEventRec.new(" in text, "I5 must construct BOS transitions"
-    construction = text.split("StructEventRec.new(")[1].split(")\n")[0]
-    assert "C_ST_TR_BULLISH_BOS" in construction
-    assert "C_ST_TR_BEARISH_BOS" in construction
-    assert "CHOCH" not in construction, "CHOCH emission is a later phase"
+    assert text.count("StructEventRec.new(") == 2, (
+        "exactly two construction sites: BOS and CHOCH"
+    )
+    bos, choch = [
+        chunk.split(")\n")[0] for chunk in text.split("StructEventRec.new(")[1:]
+    ]
+    # The BOS site comes second in the file (the CHOCH branch precedes it).
+    sites = sorted(
+        [bos, choch], key=lambda s: "CHOCH" in s
+    )
+    assert "C_ST_TR_BULLISH_BOS" in sites[0] and "C_ST_TR_BEARISH_BOS" in sites[0]
+    assert "CHOCH" not in sites[0], "the BOS site must not emit CHOCH"
+    assert "C_ST_TR_BULLISH_CHOCH" in sites[1] and "C_ST_TR_BEARISH_CHOCH" in sites[1]
+    assert "BOS" not in sites[1], "the CHOCH site must not emit BOS"
 
 
 def test_swing_view_does_not_duplicate_all_of_swingrec() -> None:
@@ -318,13 +328,13 @@ def test_relationship_builder_retains_no_state_behind_the_window() -> None:
     assert "var " not in body, "builder must hold no persistent state"
 
 
-def test_bos_codes_are_reachable_and_choch_codes_are_not() -> None:
-    """The I5 phase boundary: BOS is behavioural, CHOCH is still declaration-only."""
+def test_every_transition_code_is_reachable() -> None:
+    """As of I7 all four transition codes are behavioural, so the Structure
+    transition enum is fully covered."""
     text = _src()
-    for code in ("C_ST_TR_BULLISH_BOS", "C_ST_TR_BEARISH_BOS"):
+    for code in ("C_ST_TR_BULLISH_BOS", "C_ST_TR_BEARISH_BOS",
+                 "C_ST_TR_BULLISH_CHOCH", "C_ST_TR_BEARISH_CHOCH"):
         assert text.count(code) >= 2, f"{code} is declared but never emitted"
-    for code in ("C_ST_TR_BULLISH_CHOCH", "C_ST_TR_BEARISH_CHOCH"):
-        assert text.count(code) == 1, f"{code} used beyond its declaration"
 
 
 def test_every_direction_code_is_actually_reachable() -> None:
@@ -465,6 +475,9 @@ def test_bootstrap_assigns_only_the_two_python_slots_per_direction() -> None:
     body = _fn_body(_src(), "f_p2StructureWalk")
     # Only the assignment lines of each branch — the shared return tuple names
     # every slot and would defeat a naive substring split.
+    # Scope to the RELATIONSHIP branch: as of I7 the CANDLE branch also assigns
+    # the direction (CHOCH flips it), so a whole-body scan would pick that up.
+    body = _walk_branches(_src())["relationship"]
     assigns = [ln.strip() for ln in body.splitlines() if ":=" in ln]
     bull = [ln for ln in assigns[assigns.index("dir        := C_ST_DIR_BULLISH"):]
             if ln.startswith(("protLowIx", "weakHighIx", "protHighIx", "weakLowIx"))][:2]
@@ -534,27 +547,117 @@ def test_bos_predicates_are_strict_and_close_only() -> None:
         assert "=" not in test, f"equality must not break: {test}"
 
 
-def test_choch_guard_is_suppression_only() -> None:
-    """The guard must decide BOS eligibility and nothing else: no transition, no
-    direction flip, no swing consumption, no state mutation."""
-    candle = _walk_branches(_src())["candle"]
-    guard = candle.split("bool chochGuard = false")[1].split("if chochGuard")[0]
+# --- P2-I7 CHOCH gates ----------------------------------------------------
 
-    # It may READ the direction and the protected level; it may WRITE only its
-    # own boolean.
-    assignments = re.findall(r"(\w+)\s*:=", guard)
-    assert set(assignments) == {"chochGuard"}, assignments
-    for token in ("array.push", "StructEventRec", "C_ST_TR_"):
-        assert token not in guard, f"CHOCH guard must not {token}"
+def _choch_block(text: str) -> str:
+    candle = _walk_branches(text)["candle"]
+    return candle.split("if chochHigh or chochLow")[1].split(
+        NL + " " * 16 + "else" + NL, 1
+    )[0]
 
-    taken = candle.split("if chochGuard")[1].split(NL + " " * 16 + "else" + NL, 1)[0]
-    assert "suppressed := suppressed + 1" in taken
-    taken_assignments = re.findall(r"(\w+)\s*:=", taken)
-    assert set(taken_assignments) == {"suppressed"}, (
-        f"suppression must mutate nothing else: {taken_assignments}"
+
+def test_choch_predicates_match_python_and_are_strict() -> None:
+    candle = _code_only(_walk_branches(_src())["candle"])
+    assert (
+        "bool chochHigh = dir == C_ST_DIR_BEARISH and protHighIx >= 0 and "
+        "barClose > array.get(views, protHighIx).pivotPrice"
+    ) in candle
+    assert (
+        "bool chochLow  = dir == C_ST_DIR_BULLISH and protLowIx  >= 0 and "
+        "barClose < array.get(views, protLowIx).pivotPrice"
+    ) in candle
+    tests = re.findall(r"[<>]=?\s*array\.get\(views, prot\w+\)\.pivotPrice", candle)
+    assert len(tests) == 2, tests
+    for test in tests:
+        assert "=" not in test, f"equality must not trigger a CHOCH: {test}"
+
+
+def test_choch_is_evaluated_before_bos_and_bos_is_in_the_else() -> None:
+    """One predicate path: on CHOCH-true nothing else runs on that candle."""
+    candle = _code_only(_walk_branches(_src())["candle"])
+    choch_at = candle.index("if chochHigh or chochLow")
+    bos_at = candle.index("bool bosHigh")
+    assert choch_at < bos_at, "CHOCH must be tested first"
+    else_at = candle.index(NL + " " * 16 + "else" + NL)
+    assert choch_at < else_at < bos_at, "BOS must sit in the CHOCH else-branch"
+
+
+def test_no_duplicate_choch_predicate_survives() -> None:
+    """The I5 suppression-only path must be gone, not kept alongside."""
+    text = _code_only(_src())
+    assert "chochGuard" not in text
+    assert "suppressed" not in text
+    assert text.count("bool chochHigh") == 1
+    assert text.count("bool chochLow") == 1
+
+
+def test_choch_replacement_search_precedes_every_mutation() -> None:
+    """The abort path must be able to leave with nothing written."""
+    block = _code_only(_choch_block(_src()))
+    search = block.index("int chochReplIx = f_p2MostRecentUnbroken(")
+    for mutation in ("array.push(brokenKeys", "array.push(events",
+                     "dir        :=", "weakHighIx :=", "weakLowIx  :=",
+                     "weakHighBoundaryAbs :=", "weakLowBoundaryAbs :="):
+        assert block.index(mutation) > search, (
+            f"{mutation!r} happens before the replacement search — the abort "
+            "path would leak state"
+        )
+
+
+def test_choch_abort_mutates_nothing_and_still_skips_bos() -> None:
+    block = _choch_block(_src())
+    abort = _code_only(
+        block.split("if chochReplIx < 0")[1].split(NL + " " * 20 + "else" + NL)[0]
     )
-    for token in ("array.push", "StructEventRec", "C_ST_TR_"):
-        assert token not in taken, f"suppression path must not {token}"
+    assert set(re.findall(r"(\w+)\s*:=", abort)) == {"chochAborts"}, abort
+    for token in ("array.push", "StructEventRec", "C_ST_TR_", "C_ST_DIR_"):
+        assert token not in abort, f"abort must not {token}"
+    # And because the whole CHOCH block is the `if`, BOS is unreachable from it.
+    assert "bosHigh" not in _code_only(block)
+
+
+def test_choch_success_flips_direction_and_clears_both_weak_levels() -> None:
+    block = _code_only(_choch_block(_src()))
+    assert "dir        := C_ST_DIR_BULLISH" in block
+    assert "dir        := C_ST_DIR_BEARISH" in block
+    assert block.count("weakHighIx := -1") == 1
+    assert block.count("weakLowIx  := -1") == 1
+
+
+def test_choch_clears_the_old_protected_side_and_assigns_the_new_one() -> None:
+    block = _code_only(_choch_block(_src()))
+    bull = block.split("dir        := C_ST_DIR_BULLISH")[1].split("else")[0]
+    assert "protHighIx := -1" in bull and "protLowIx  := chochReplIx" in bull
+    bear = block.split("dir        := C_ST_DIR_BEARISH")[1]
+    assert "protLowIx  := -1" in bear and "protHighIx := chochReplIx" in bear
+
+
+def test_choch_moves_exactly_one_boundary_per_direction() -> None:
+    """The new direction's weak side only (transitions.py:217 / :251) — the
+    opposite boundary is deliberately left alone."""
+    block = _code_only(_choch_block(_src()))
+    bull = block.split("dir        := C_ST_DIR_BULLISH")[1].split("else")[0]
+    assert "weakHighBoundaryAbs := barAbs" in bull
+    assert "weakLowBoundaryAbs" not in bull
+    bear = block.split("dir        := C_ST_DIR_BEARISH")[1]
+    assert "weakLowBoundaryAbs := barAbs" in bear
+    assert "weakHighBoundaryAbs" not in bear
+
+
+def test_choch_reuses_the_shared_replacement_helper_and_broken_set() -> None:
+    block = _code_only(_choch_block(_src()))
+    assert "f_p2MostRecentUnbroken(views, visOrder, chochWant, brokenKeys)" in block
+    assert "array.push(brokenKeys, chochBroken.stableKey)" in block
+    # No second broken set, no CHOCH-specific selector.
+    assert _src().count("array.new<int>()") == _src().count("array.new<int>()")
+    assert "chochBrokenKeys" not in _src()
+
+
+def test_choch_availability_keeps_the_structural_max() -> None:
+    block = _code_only(_choch_block(_src()))
+    assert (
+        "math.max(array.get(availT, ci), chochBroken.meaningfulConfTime)" in block
+    )
 
 
 def test_defensive_fallback_is_present_and_not_optimised_away() -> None:

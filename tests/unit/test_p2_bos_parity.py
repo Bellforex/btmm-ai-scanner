@@ -5,22 +5,17 @@ The `_pine_*` helpers below are a faithful test-side transcription of
 `tradingview/btmm_poi_btrc_scanner_v1.pine`, compared against production
 `structure.analyzer.analyze_structure_state`, which is always the reference side.
 
-SCOPE. I5 implements BOS only. It does NOT implement CHOCH. Where Python would
-emit a CHOCH, the Pine walk is deliberately incomplete — but it must never be
-*wrong about BOS*, which is what `test_choch_precedence_*` below enforces.
+SCOPE. As of P2-I7 the model covers the whole implemented walk — bootstrap,
+BOS, weak re-arm and CHOCH — so `_assert_parity` no longer excludes any fixture
+shape.
 
-WHY A PRICE-ONLY CHOCH GUARD IS EXACT, NOT AN APPROXIMATION
------------------------------------------------------------
+CHOCH PRECEDENCE
+----------------
 Python evaluates CHOCH before BOS and `continue`s past the BOS block on **both**
 exits — the successful one (`transitions.py:253`) and the aborting one
-(`:190`/`:224`). So the rule governing BOS emission is precisely
-
-    CHOCH predicate true  =>  no BOS on this candle
-
-with no dependence on whether the CHOCH would have succeeded, what it would have
-selected, or what it would have mutated. That is a pure price test over state I5
-already tracks, so the guard reproduces Python's BOS decisions exactly while
-creating no CHOCH transition and mutating no state.
+(`:190`/`:224`). So once the CHOCH predicate is true, BOS is never evaluated on
+that candle, whatever happens next. The tests below keep that pinned now that the
+predicate leads to a real transition rather than a suppression counter.
 
 MERGED EVENT ORDER. Python sorts all events by `(availability_time, kind,
 tiebreak)` with CANDLE=0 < SWING_VISIBLE=1 < RELATIONSHIP=2. Each stream is
@@ -150,7 +145,7 @@ def _pine_most_recent_unbroken(views, vis_order, want_type, broken_keys,
 class _WalkResult:
     __slots__ = ("direction", "protected_high", "protected_low", "weak_high",
                  "weak_low", "transitions", "broken", "weak_high_boundary",
-                 "weak_low_boundary", "suppressed", "last_change")
+                 "weak_low_boundary", "aborted", "last_change")
 
     def state(self):
         return (self.direction, self.protected_high, self.protected_low,
@@ -175,7 +170,7 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
     hi_label = lo_label = None
     hi_key = lo_key = None
     last_change = None
-    suppressed = 0
+    aborted = 0
     broken_keys: list = []
     vis_order: list[int] = []
     events: list[tuple] = []
@@ -200,15 +195,55 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
             bar_close = closes[ci]
             bar_abs = abs_first + ci
 
-            # CHOCH PRICE GUARD — BOS SUPPRESSION ONLY.
-            choch_guard = False
-            if direction == DIR_BEARISH and prot_high_ix >= 0:
-                choch_guard = bar_close > views[prot_high_ix].pivotPrice
-            if direction == DIR_BULLISH and prot_low_ix >= 0:
-                choch_guard = bar_close < views[prot_low_ix].pivotPrice
+            # P2-I7 CHOCH. Exactly one candidate can be set.
+            choch_high = (
+                direction == DIR_BEARISH and prot_high_ix >= 0
+                and bar_close > views[prot_high_ix].pivotPrice
+            )
+            choch_low = (
+                direction == DIR_BULLISH and prot_low_ix >= 0
+                and bar_close < views[prot_low_ix].pivotPrice
+            )
 
-            if choch_guard:
-                suppressed += 1
+            if choch_high or choch_low:
+                # PRECEDENCE: BOS is not evaluated on this candle, whether the
+                # CHOCH succeeds or aborts.
+                broken_ix = prot_high_ix if choch_high else prot_low_ix
+                broken_sw = views[broken_ix]
+                want = SWING_LOW if choch_high else SWING_HIGH
+                # PRE-MUTATION ABORT: search before consuming anything.
+                repl_ix = _pine_most_recent_unbroken(
+                    views, vis_order, want, broken_keys, force_no_replacement
+                )
+                if repl_ix < 0:
+                    aborted += 1                       # zero mutation
+                else:
+                    broken_keys.append(broken_sw.stableKey)
+                    availability = max(avail_t[ci], broken_sw.meaningfulConfTime)
+                    events.append(
+                        (
+                            2 if choch_high else -2,
+                            broken_sw.stableKey,
+                            broken_sw.pivotPrice,
+                            bar_close,
+                            open_t[ci],
+                            availability,
+                            views[repl_ix].stableKey,
+                        )
+                    )
+                    if choch_high:
+                        direction = DIR_BULLISH
+                        prot_high_ix = -1
+                        prot_low_ix = repl_ix
+                        wh_bound = bar_abs
+                    else:
+                        direction = DIR_BEARISH
+                        prot_low_ix = -1
+                        prot_high_ix = repl_ix
+                        wl_bound = bar_abs
+                    weak_high_ix = -1
+                    weak_low_ix = -1
+                    last_change = availability
             else:
                 bos_high = (
                     direction == DIR_BULLISH and weak_high_ix >= 0
@@ -326,7 +361,7 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
     result.broken = list(broken_keys)
     result.weak_high_boundary = wh_bound
     result.weak_low_boundary = wl_bound
-    result.suppressed = suppressed
+    result.aborted = aborted
     result.last_change = last_change
     return result
 
@@ -366,13 +401,12 @@ def _python_state(candles, swings):
 
 
 def _assert_parity(candles, swings, force_no_replacement=False):
-    """Full-state parity. Only valid where Python emits no CHOCH — I5 does not
-    implement CHOCH, so a CHOCH fixture must use `_assert_no_false_bos`."""
+    """Full-state parity over the whole implemented walk.
+
+    As of P2-I7 the model covers bootstrap, BOS, weak re-arm AND CHOCH, so there
+    is no longer any fixture shape it has to be excluded from.
+    """
     reference, analysis = _python_state(candles, swings)
-    assert not any(
-        t.transition_type.value.endswith("CHOCH")
-        for t in analysis.structure_transitions
-    ), "fixture emits CHOCH; use _assert_no_false_bos instead"
     walk = _pine_walk(candles, swings, force_no_replacement)
     assert walk.state() == reference
 
@@ -734,18 +768,17 @@ def test_the_precedence_fixture_really_satisfies_both_predicates() -> None:
     ), "Python must choose CHOCH here"
 
 
-def test_choch_precedence_suppresses_bos_bullish() -> None:
+def test_choch_precedence_emits_choch_and_never_bos_bullish() -> None:
     candles, swings = _build(_PRECEDENCE_BULL, _PRECEDENCE_NEUTRAL)
-    analysis = _analyze(candles, swings)
-    walk = _pine_walk(candles, swings)
+    walk, analysis = _assert_parity(candles, swings)
 
     python_bos = [
         t for t in analysis.structure_transitions
         if t.transition_type.value.endswith("BOS")
     ]
     assert python_bos == [], "Python emits no BOS on a CHOCH candle"
-    assert walk.transitions == [], "I5 must not emit a false BOS"
-    assert walk.suppressed >= 1, "the guard must actually have fired"
+    assert all(code in (2, -2) for code, *_ in walk.transitions), walk.transitions
+    assert walk.transitions, "a real CHOCH must now be emitted"
 
 
 _PRECEDENCE_BEAR = [
@@ -754,10 +787,9 @@ _PRECEDENCE_BEAR = [
 _PRECEDENCE_BEAR_NEUTRAL = "100"     # 100 > 50 (CHOCH) AND 100 < 200 (BOS)
 
 
-def test_choch_precedence_suppresses_bos_bearish() -> None:
+def test_choch_precedence_emits_choch_and_never_bos_bearish() -> None:
     candles, swings = _build(_PRECEDENCE_BEAR, _PRECEDENCE_BEAR_NEUTRAL)
-    analysis = _analyze(candles, swings)
-    walk = _pine_walk(candles, swings)
+    walk, analysis = _assert_parity(candles, swings)
 
     assert any(
         t.transition_type is StructureTransitionType.BULLISH_CHOCH
@@ -767,18 +799,19 @@ def test_choch_precedence_suppresses_bos_bearish() -> None:
         t for t in analysis.structure_transitions
         if t.transition_type.value.endswith("BOS")
     ] == []
-    assert walk.transitions == []
-    assert walk.suppressed >= 1
+    assert all(code in (2, -2) for code, *_ in walk.transitions), walk.transitions
 
 
-def test_without_the_guard_a_false_bos_would_be_emitted() -> None:
-    """Guard the guard, the other way round: prove the suppression is load-bearing
-    by running the same walk with the guard disabled."""
+def test_without_choch_precedence_a_false_bos_would_be_emitted() -> None:
+    """Guard the guard: prove precedence is load-bearing by running the same walk
+    with the CHOCH branch removed entirely."""
     candles, swings = _build(_PRECEDENCE_BULL, _PRECEDENCE_NEUTRAL)
     unguarded = _pine_walk_without_choch_guard(candles, swings)
-    assert unguarded.transitions, "expected a false BOS without the guard"
-    assert unguarded.transitions[0][0] == 1
-    assert _pine_walk(candles, swings).transitions == []
+    assert unguarded.transitions, "expected a false BOS without precedence"
+    assert unguarded.transitions[0][0] == 1, "a BULLISH_BOS that must not happen"
+    real = _pine_walk(candles, swings).transitions
+    assert real, "the real walk emits a CHOCH instead"
+    assert all(code in (2, -2) for code, *_ in real)
 
 
 def _pine_walk_without_choch_guard(candles, swings) -> _WalkResult:
@@ -896,7 +929,7 @@ def _pine_walk_without_choch_guard(candles, swings) -> _WalkResult:
     out.broken = list(broken_keys)
     out.weak_high_boundary = -1
     out.weak_low_boundary = -1
-    out.suppressed = 0
+    out.aborted = 0
     return out
 
 
@@ -941,30 +974,17 @@ def test_prefix_parity_observes_the_moment_of_the_break() -> None:
 
 
 @pytest.mark.parametrize("name", ["bull", "bear"])
-def test_prefix_parity_emits_no_false_bos_on_choch_prefixes(name: str) -> None:
-    """Where Python emits CHOCH, I5 stays silent about BOS at EVERY prefix."""
+def test_prefix_parity_on_choch_fixtures(name: str) -> None:
+    """Full parity at every prefix, and no BOS anywhere on a CHOCH path."""
     specs, neutral = (
         (_PRECEDENCE_BULL, _PRECEDENCE_NEUTRAL) if name == "bull"
         else (_PRECEDENCE_BEAR, _PRECEDENCE_BEAR_NEUTRAL)
     )
     candles, swings = _build(specs, neutral)
-    saw_choch = False
-    for k in range(1, len(candles) + 1):
-        prefix = candles[:k]
-        watermark = prefix[-1].availability_time_utc
-        visible = tuple(
-            s for s in swings if s.meaningful_confirmation_time_utc <= watermark
-        )
-        analysis = _analyze(prefix, visible)
-        walk = _pine_walk(prefix, visible)
-        python_bos = [
-            t for t in analysis.structure_transitions
-            if t.transition_type.value.endswith("BOS")
-        ]
-        saw_choch = saw_choch or len(analysis.structure_transitions) > 0
-        assert walk.transitions == []
-        assert python_bos == []
-    assert saw_choch, "fixture must actually reach a CHOCH"
+    walks = _assert_prefix_parity(candles, swings)
+    assert walks[-1].transitions, "fixture must actually reach a CHOCH"
+    for walk in walks:
+        assert all(code in (2, -2) for code, *_ in walk.transitions)
 
 
 # ---------------------------------------------------------------------------
@@ -1014,19 +1034,19 @@ def test_campaign_totals() -> None:
         bos_transitions += count
         scenarios_with_bos += 1 if count else 0
 
-    suppressed = 0
+    choch = 0
     for specs, neutral in (
         (_PRECEDENCE_BULL, _PRECEDENCE_NEUTRAL),
         (_PRECEDENCE_BEAR, _PRECEDENCE_BEAR_NEUTRAL),
     ):
         candles, swings = _build(specs, neutral)
-        suppressed += _pine_walk(candles, swings).suppressed
+        choch += len(_pine_walk(candles, swings).transitions)
 
     assert len(_CAMPAIGN) == 13
     assert comparisons == 13 * BAR_COUNT == 312
     assert bos_transitions == 7, bos_transitions
     assert scenarios_with_bos == 7, scenarios_with_bos
-    assert suppressed >= 2, suppressed
+    assert choch >= 2, choch
 
 
 def test_campaign_covers_both_directions_and_both_non_break_kinds() -> None:
