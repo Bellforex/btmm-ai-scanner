@@ -150,7 +150,7 @@ def _pine_most_recent_unbroken(views, vis_order, want_type, broken_keys,
 class _WalkResult:
     __slots__ = ("direction", "protected_high", "protected_low", "weak_high",
                  "weak_low", "transitions", "broken", "weak_high_boundary",
-                 "weak_low_boundary", "suppressed")
+                 "weak_low_boundary", "suppressed", "last_change")
 
     def state(self):
         return (self.direction, self.protected_high, self.protected_low,
@@ -174,6 +174,7 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
     wh_bound = wl_bound = -1
     hi_label = lo_label = None
     hi_key = lo_key = None
+    last_change = None
     suppressed = 0
     broken_keys: list = []
     vis_order: list[int] = []
@@ -247,10 +248,41 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
                         prot_high_ix = new_prot_ix
                         weak_low_ix = -1
                         wl_bound = bar_abs
+                    last_change = availability
             ci += 1
 
         elif pick == 1:
-            vis_order.append(swing_order[si])
+            v_ix = swing_order[si]
+            vs = views[v_ix]
+            vis_order.append(v_ix)
+
+            # P2-I6 weak re-arm. Five conditions, FIRST qualifying swing wins —
+            # condition 3 (`weak slot unset`) blocks every later candidate, so
+            # this must NOT reuse the newest-wins protected selector.
+            if (
+                vs.swingType == SWING_HIGH
+                and direction == DIR_BULLISH
+                and weak_high_ix < 0
+                and vs.pivotStartAbs > wh_bound
+                and vs.stableKey not in broken_keys
+            ):
+                weak_high_ix = v_ix
+                last_change = (
+                    vs.meaningfulConfTime if last_change is None
+                    else max(last_change, vs.meaningfulConfTime)
+                )
+            if (
+                vs.swingType == SWING_LOW
+                and direction == DIR_BEARISH
+                and weak_low_ix < 0
+                and vs.pivotStartAbs > wl_bound
+                and vs.stableKey not in broken_keys
+            ):
+                weak_low_ix = v_ix
+                last_change = (
+                    vs.meaningfulConfTime if last_change is None
+                    else max(last_change, vs.meaningfulConfTime)
+                )
             si += 1
 
         else:
@@ -277,6 +309,8 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
                     weak_low_ix = next(
                         i for i, v in enumerate(views) if v.stableKey == lo_key
                     )
+                if direction != DIR_UNDETERMINED and last_change is None:
+                    last_change = r[3]
             ri += 1
 
     def key_of(ix):
@@ -293,6 +327,7 @@ def _pine_walk(candles, swings, force_no_replacement=False) -> _WalkResult:
     result.weak_high_boundary = wh_bound
     result.weak_low_boundary = wl_bound
     result.suppressed = suppressed
+    result.last_change = last_change
     return result
 
 
@@ -340,6 +375,14 @@ def _assert_parity(candles, swings, force_no_replacement=False):
     ), "fixture emits CHOCH; use _assert_no_false_bos instead"
     walk = _pine_walk(candles, swings, force_no_replacement)
     assert walk.state() == reference
+
+    # `current_state.availability_time_utc` is the walk's last_change, falling
+    # back to the final candle when nothing ever changed (analyzer.py:404-408).
+    expected_availability = (
+        walk.last_change if walk.last_change is not None
+        else candles[-1].availability_time_utc
+    )
+    assert analysis.current_state.availability_time_utc == expected_availability
     return walk, analysis
 
 

@@ -334,20 +334,83 @@ def test_every_direction_code_is_actually_reachable() -> None:
         assert text.count(code) >= 2, f"{code} is declared but never assigned"
 
 
-def test_no_weak_re_arm_state_yet() -> None:
-    """I5 owns BOS. Weak RE-ARM after the boundary is P2-I6 / TD-B.
+# --- P2-I6 weak re-arm gates ----------------------------------------------
 
-    The boundary index may be written (BOS sets it) but must not yet be READ by
-    any swing-visible gate, which is what re-arming would require.
-    """
-    swing_branch = _walk_branches(_src())["swing"]
-    assert "weakHighBoundaryAbs" not in swing_branch
-    assert "weakLowBoundaryAbs" not in swing_branch
-    assert "weakHighIx :=" not in swing_branch
-    assert "weakLowIx :=" not in swing_branch
-    assert "array.push(visOrder" in swing_branch, (
-        "the swing branch must still register the replacement candidate"
+def test_re_arm_lives_inside_the_swing_visible_branch() -> None:
+    """Not a second pass over the visible swings, and not a post-walk sweep."""
+    branches = _walk_branches(_src())
+    swing = _code_only(branches["swing"])
+    assert "weakHighIx := vIx" in swing
+    assert "weakLowIx := vIx" in swing
+    assert "array.push(visOrder" in swing, (
+        "the branch must still register the protected replacement candidate"
     )
+    # The other two branches must not re-arm.
+    for other in ("candle", "relationship"):
+        body = _code_only(branches[other])
+        assert "weakHighIx := vIx" not in body
+        assert "weakLowIx := vIx" not in body
+
+
+def test_re_arm_conditions_match_python_exactly() -> None:
+    swing = _code_only(_walk_branches(_src())["swing"])
+    assert (
+        "vs.swingType == SWING_HIGH and dir == C_ST_DIR_BULLISH and weakHighIx < 0 "
+        "and vs.pivotStartAbs > weakHighBoundaryAbs and "
+        "array.indexof(brokenKeys, vs.stableKey) < 0"
+    ) in swing
+    assert (
+        "vs.swingType == SWING_LOW and dir == C_ST_DIR_BEARISH and weakLowIx < 0 "
+        "and vs.pivotStartAbs > weakLowBoundaryAbs and "
+        "array.indexof(brokenKeys, vs.stableKey) < 0"
+    ) in swing
+
+
+def test_re_arm_boundary_comparison_is_strict() -> None:
+    swing = _code_only(_walk_branches(_src())["swing"])
+    comparisons = re.findall(r"pivotStartAbs\s*[<>]=?\s*weak\w+BoundaryAbs", swing)
+    assert len(comparisons) == 2, comparisons
+    for comparison in comparisons:
+        assert "=" not in comparison, f"boundary must be strict: {comparison}"
+
+
+def test_re_arm_requires_an_empty_slot() -> None:
+    """Condition 3 is what makes FIRST-after-boundary win instead of newest."""
+    swing = _code_only(_walk_branches(_src())["swing"])
+    assert "weakHighIx < 0" in swing
+    assert "weakLowIx < 0" in swing
+
+
+def test_re_arm_does_not_reuse_the_protected_selector() -> None:
+    """Protected replacement takes the NEWEST candidate; re-arm takes the FIRST.
+    Sharing a helper would make one of them wrong."""
+    swing = _code_only(_walk_branches(_src())["swing"])
+    assert "f_p2MostRecentUnbroken" not in swing
+    assert "f_p2Order" not in swing
+    assert "array.sort" not in swing
+
+
+def test_re_arm_never_moves_the_boundary() -> None:
+    swing = _code_only(_walk_branches(_src())["swing"])
+    assert "weakHighBoundaryAbs :=" not in swing
+    assert "weakLowBoundaryAbs :=" not in swing
+    assert "weakHighBoundaryAbs" in swing, "but it must READ the boundary"
+    assert "weakLowBoundaryAbs" in swing
+
+
+def test_re_arm_is_origin_agnostic() -> None:
+    """It must not ask which transition wrote the boundary, so that CHOCH can
+    later populate the same state without changing this code."""
+    swing = _code_only(_walk_branches(_src())["swing"])
+    for token in ("C_ST_TR_", "StructEventRec", "chochGuard", "boundaryOrigin",
+                  "lastBreakType"):
+        assert token not in swing, f"re-arm must not branch on {token}"
+
+
+def test_re_arm_holds_no_pending_candidate_state() -> None:
+    swing = _code_only(_walk_branches(_src())["swing"])
+    assert "var " not in swing
+    assert "array.new" not in swing, "no candidate queue"
 
 
 def _walk_branches(text: str) -> dict[str, str]:

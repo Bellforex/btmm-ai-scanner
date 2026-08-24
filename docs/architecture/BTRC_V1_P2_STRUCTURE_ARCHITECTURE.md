@@ -1,7 +1,7 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
 Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15–§19 record what has actually shipped.
+P2-I0 test-proven contract; §15–§20 record what has actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -14,12 +14,12 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I4 | initial direction bootstrap (§16) | committed `5707034` |
 | P2-I5-PRE | TD-A BOS protected-fallback contract (§17) | **TD-A RESOLVED** — author-accepted |
 | P2-I5 | BOS (§18) | committed `8be961d` |
-| P2-I6-PRE | TD-B weak re-arm contract (§19) | tests + docs, **uncommitted**, awaiting author review |
-| P2-I6 | weak re-arm | **not started**; TD-B now CLOSED, so unblocked |
-| P2-I7 | CHOCH | **not started** |
+| P2-I6-PRE | TD-B weak re-arm contract (§19) | committed `3c855aa` |
+| P2-I6 | weak re-arm (§20) | implemented, **uncommitted**, awaiting author review |
+| P2-I7 | CHOCH | **not started**; no debt gates it (§20.7) |
 
 §1–§13 were written before implementation and are preserved as the design of
-record; where a detail was refined by testing, §14–§19 are authoritative.
+record; where a detail was refined by testing, §14–§20 are authoritative.
 
 ---
 
@@ -1406,3 +1406,131 @@ exactly the scope limit already recorded in §18.2, unchanged by I6.
 Both P2 test debts are now discharged. **A third defensive-but-unreachable branch
 was found along the way** (re-arm condition 5, §19.2), and is handled the same way:
 pinned, documented, and reproduced in Pine rather than optimised away.
+
+---
+
+## 20. P2-I6 — WEAK RE-ARM (delivered, uncommitted)
+
+Test file: `tests/unit/test_p2_rearm_parity.py` (42 tests), on top of the
+`test_p2_bos_parity.py` model extended with the re-arm branch.
+
+### 20.1 What shipped
+
+Nine lines of code inside the **existing** `SWING_VISIBLE` branch of
+`f_p2StructureWalk` — no second pass, no post-walk sweep, no new state:
+
+```
+if type == HIGH and dir == BULLISH and weakHighIx < 0
+        and pivotStartAbs > weakHighBoundaryAbs
+        and indexof(brokenKeys, stableKey) < 0
+    weakHighIx := vIx
+    lastChange := max(lastChange, meaningfulConfTime)
+```
+
+plus the bearish mirror. Every Python element already had a Pine counterpart, so
+**no field was added**: `weakHighIx`/`weakLowIx`, `weakHighBoundaryAbs`/
+`weakLowBoundaryAbs` and `brokenKeys` all come from I5.
+
+### 20.2 The rule, and a correction to how it is enforced
+
+Weak re-arm takes the **FIRST** qualifying swing after the boundary; protected
+replacement takes the **NEWEST** eligible candidate. The port transcribes the
+source rule and a guard forbids reusing `f_p2MostRecentUnbroken`.
+
+**However — the two rules are provably equivalent for the weak side.** Suppose
+swing S arms the slot and another visible unbroken same-type swing H has a larger
+pivot index. Validation forces `conf_bar >= pivot_bar`, so H became visible at or
+after `pivot_H + 1`.
+
+* If the slot was empty when H became visible, H would have armed, so the slot
+  could not still be empty for S.
+* So the slot was occupied at H's visibility and was emptied by a break at index
+  `B_new`, with `visible_H <= B_new + 1`, hence `pivot_H <= B_new`. S must clear
+  that boundary: `pivot_S > B_new >= pivot_H` — contradicting `pivot_H > pivot_S`.
+
+So no fixture can discriminate the two rules, and substituting the newest-wins
+selector into the re-arm produces **zero** parity failures. That is a property of
+the input contract, not a gap in the fixtures, and it is recorded rather than
+papered over: `test_first_qualifying_and_newest_eligible_coincide_for_re_arm`
+states the argument and checks it empirically across the campaign.
+
+The prohibition is therefore a **source guard**, not a behavioural one. The
+equivalence rests on `conf_bar >= pivot_bar` and on the boundary rule; if either
+changes the rules diverge, and only that guard would notice.
+
+This is the **third** defensive-or-unenforceable-by-test branch found in P2, after
+TD-A's protected fallback and TD-B's broken-id filter. All three are transcribed
+faithfully rather than optimised away.
+
+### 20.3 Invariants held
+
+| property | how |
+|---|---|
+| strict `>` boundary | `<`, `==`, `>` all tested, both directions |
+| slot must be empty | occupied slot not replaced; passed-over swing never returns |
+| type and direction filters | a LOW cannot arm the weak high, and vice versa |
+| broken-id filter | present in Pine and model; unreachable, retained per §17.5a |
+| **re-arm never moves the boundary** | branch reads `weak*BoundaryAbs`, never assigns it |
+| origin-agnostic | branch contains no `C_ST_TR_`, no `chochGuard`, no origin flag |
+| no pending-candidate state | branch has no `var`, no `array.new` |
+| CHOCH guard still only suppresses | sets no boundary, so it cannot feed re-arm |
+
+### 20.4 Proof
+
+| measure | value |
+|---|---|
+| I6 parity tests | 42 passed |
+| campaign scenarios | 10 |
+| prefix comparisons | 240 |
+| re-arm events | 7 |
+| second-BOS cycles | 2 (bullish and bearish) |
+| mismatches | **0** |
+| I5 BOS parity (re-run on the extended model) | 51 passed |
+| Pine foundation guards | 68 passed |
+| all Structure tests | 290 passed |
+| full suite | **1839 passed / 0 failed** |
+| plot consumers | 26 / 64 (**0 delta**) |
+
+The parity comparison was **strengthened** in this phase: `_assert_parity` now
+also checks the published `current_state.availability_time_utc`, which the re-arm
+updates. All 51 I5 tests still pass against the now-more-faithful model.
+
+Mutations caught: boundary `>` → `>=`, dropping the empty-slot condition, and
+letting re-arm move the boundary (Pine source); boundary `>` → `>=` and
+occupied-slot replacement (model, 5 and 8 parity failures respectively). Files
+restored byte-identically each time.
+
+### 20.5 Resources
+
+| measure | I5 | I6 | delta |
+|---|---|---|---|
+| lines | 2,199 | 2,237 | +38 (9 code, rest comment) |
+| bytes | 119,541 | 124,409 | +4,868 |
+| plots | 26 | 26 | **0** |
+| `array.new` / for / while / types / var | — | — | **0 each** |
+
+Complexity: **O(1) additional work per SWING_VISIBLE event** — two guarded
+comparisons plus one `array.indexof` over the bounded broken-key list. No sort, no
+history traversal, no candidate accumulation.
+
+### 20.6 Test debt
+
+TD-A **RESOLVED** (§17), TD-B **CLOSED** (§19). Both discharged; nothing gates
+P2-I7.
+
+### 20.7 Carried forward into P2-I7 (CHOCH)
+
+Requirements already test-backed, to be honoured when CHOCH is implemented:
+
+* CHOCH is evaluated **before** BOS, and `continue`s past it on **both** exits;
+* predicate is a strict close break of the protected level;
+* success flips the direction and consumes the protected swing;
+* the new protected level is `_most_recent_unbroken` of the opposite side;
+* **both** weak levels clear;
+* the boundary for the new direction's weak side is set to the break candle index
+  — the same variables §20 already reads, so re-arm needs no change;
+* abort (no replacement available) mutates **nothing** and still skips BOS for
+  that candle.
+
+When CHOCH lands, the I5 suppression guard is replaced by the real handler; until
+then it must keep setting no boundary.

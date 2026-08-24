@@ -938,9 +938,11 @@ f_p2MostRecentUnbroken(array<StructSwingView> views, array<int> visOrder, int wa
 //
 //   I4  direction bootstrap on RELATIONSHIP events           (:355-381)
 //   I5  BULLISH_BOS / BEARISH_BOS on CANDLE events           (:255-321)
+//   I6  weak re-arm on SWING_VISIBLE events                  (:328-353)
 //
-// NOT IMPLEMENTED HERE: CHOCH emission, direction flips, CHOCH abort mutation,
-// and weak re-arm on SWING_VISIBLE (that gate is P2-I6 / TD-B).
+// NOT IMPLEMENTED HERE: CHOCH emission, direction flips and CHOCH abort
+// mutation. Note that the I5 CHOCH price guard is a BOS suppressor only: it
+// still sets no boundary, so it cannot feed the I6 re-arm below.
 //
 // EVENT ORDER. Python sorts every event by (availability_time, kind, tiebreak)
 // with CANDLE=0 < SWING_VISIBLE=1 < RELATIONSHIP=2 (:75-77, :135). Each of the
@@ -1051,9 +1053,45 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
                 ci := ci + 1
 
             else if pick == 1
-                // Becomes eligible as a replacement candidate. No weak re-arm:
-                // that gate is P2-I6 / TD-B.
-                array.push(visOrder, array.get(swingOrder, si))
+                int vIx = array.get(swingOrder, si)
+                StructSwingView vs = array.get(views, vIx)
+                // Becomes eligible as a PROTECTED replacement candidate.
+                array.push(visOrder, vIx)
+
+                // ---- P2-I6: WEAK RE-ARM (transitions.py:328-353).
+                //
+                // Five conditions per side, and nothing else -- no price
+                // relation, no relationship label, no protected-side relation:
+                //   1 swing type matches the weak side
+                //   2 direction matches
+                //   3 the weak slot is UNSET
+                //   4 pivot index STRICTLY past the boundary
+                //   5 the swing is not already broken
+                //
+                // FIRST QUALIFYING SWING WINS -- not the newest. Condition 3
+                // blocks every later candidate, so the slot fills once and is
+                // never replaced; a swing passed over while the slot was
+                // occupied does NOT return when it later empties. This is the
+                // OPPOSITE of protected replacement, which deliberately takes
+                // the NEWEST candidate, so f_p2MostRecentUnbroken must NOT be
+                // used here.
+                //
+                // Condition 5 is defensive: a swing cannot already be broken at
+                // its own SWING_VISIBLE, because broken keys always refer to
+                // swings that were previously protected or weak and therefore
+                // already visible. Retained deliberately (architecture 17.5a),
+                // and no runtime assertion claims it cannot occur.
+                //
+                // ORIGIN-AGNOSTIC. This reads the boundary variables without
+                // asking which transition wrote them, so when CHOCH lands it
+                // will populate the same state with no change here. The boundary
+                // is READ ONLY in this branch -- re-arming never moves it.
+                if vs.swingType == SWING_HIGH and dir == C_ST_DIR_BULLISH and weakHighIx < 0 and vs.pivotStartAbs > weakHighBoundaryAbs and array.indexof(brokenKeys, vs.stableKey) < 0
+                    weakHighIx := vIx
+                    lastChange := lastChange == C_ST_NA ? vs.meaningfulConfTime : math.max(lastChange, vs.meaningfulConfTime)
+                if vs.swingType == SWING_LOW and dir == C_ST_DIR_BEARISH and weakLowIx < 0 and vs.pivotStartAbs > weakLowBoundaryAbs and array.indexof(brokenKeys, vs.stableKey) < 0
+                    weakLowIx := vIx
+                    lastChange := lastChange == C_ST_NA ? vs.meaningfulConfTime : math.max(lastChange, vs.meaningfulConfTime)
                 si := si + 1
 
             else
