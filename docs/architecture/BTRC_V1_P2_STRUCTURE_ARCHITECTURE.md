@@ -684,3 +684,91 @@ Two production branches are exercised only indirectly by P2-I0. Each is a
 
 Both are reachable by the same swing-exhaustion pattern that made the CHOCH abort
 constructible (§14.3); neither blocks P2-I1 or P2-I2.
+
+---
+
+## 15. P2-I1 / P2-I2 / P2-I3 — DELIVERED
+
+### 15.1 What shipped
+
+| phase | content | commit |
+|---|---|---|
+| **P2-I1** | Structure enum codes (`C_ST_DIR_*`, `C_ST_REL_*`, `C_ST_TR_*`, `C_ST_NA`) and records (`StructSwingView`, `StructRelRec`, `StructEventRec`), declarations only | `0df061f` |
+| **P2-I2** | `f_p2BuildSwingView` — canonical adapter from P1's confirmed `SwingRec` list | `0df061f` |
+| **P2-I3** | `C_ST_REL_EQUAL_TOL_ATR`, `f_p2ClassifyRelationship`, `f_p2BuildRelationships`, 3 debug diagnostics | (this section) |
+
+I3 introduces **no** bootstrap, direction mutation, protected/weak state, BOS,
+CHOCH or `StructEventRec` construction. It emits labels and nothing else.
+
+### 15.2 Relationship semantics as implemented
+
+```
+tol   = 0.10 x CURRENT swing referenceAtr      (relationships.py:59-61)
+delta > +tol  ->  HIGHER      (strict, :63)
+delta < -tol  ->  LOWER       (strict, :69)
+otherwise     ->  EQUAL       (:74)
+availability  =  max(current.meaningfulConfTime, previous.meaningfulConfTime)   (:95)
+predecessor   =  previous swing OF THE SAME TYPE
+```
+
+Both comparisons are **strict**, so a delta of exactly `+tol` or exactly `-tol`
+lands in the EQUAL band. The tolerance is scaled by the **current** swing's ATR —
+not the predecessor's, not a median, not the bar ATR. That asymmetry is
+observable and is pinned by test.
+
+### 15.3 NON-OBVIOUS FACT 1 — API ORDER IS NOT EVENT CHRONOLOGY
+
+`detect_swing_relationships` filters `highs` first, then `lows`, and appends in
+that order (`relationships.py:86-91`). The published tuple is therefore:
+
+> **ALL HIGH relationships, followed by ALL LOW relationships.**
+
+This is **Python API/output ordering**. It is emphatically **NOT** structure-event
+chronology. A LOW relationship can become available strictly *earlier* in time
+than a HIGH relationship that precedes it in the tuple.
+
+**Any later phase that consumes relationships as a time-ordered event stream must
+re-sort by availability under the merged event key — never iterate the published
+tuple and call it chronology.** `f_p2BuildRelationships` reproduces the published
+order with two typed passes because that is the contract it is porting; the
+ordering is a serialization detail, not a semantic one.
+
+### 15.4 NON-OBVIOUS FACT 2 — LEFT-EDGE SEMANTICS
+
+Relationships are derived **only** from the bounded canonical P1 swing view.
+
+Python classifies exactly the bounded input it is handed. When P1's window
+advances and the oldest same-type swing drops out of `views`, the new first swing
+of that type has no predecessor and yields **no relationship** — precisely what
+Python returns for the same bounded input.
+
+**Pine must not secretly remember a predecessor that has left the bounded input.**
+Retaining one would produce a relationship Python does not produce, and would
+diverge silently and permanently. `f_p2BuildRelationships` holds no persistent
+state: the output array is rebuilt from `views` on every confirmed bar and
+discarded. This is a hard invariant, guarded by test.
+
+### 15.5 I3 proof
+
+| measure | value |
+|---|---|
+| deterministic seeds | 8 |
+| prefix comparisons | 56 |
+| relationships compared | 32 |
+| relationship labels reached | **6 / 6** (HH, LH, EH, HL, LL, EL) |
+| mismatches | **0** |
+| Pine foundation guards | 45 passed |
+| relationship parity tests | 32 passed |
+| full suite | **1578 passed / 0 failed** |
+| plot consumers | 20 / 64 |
+
+Parity method: a test-side transcription of the Pine algorithm is compared
+against **production** `detect_swing_relationships` on every case, asserting
+relationship code, current swing identity, predecessor identity **and**
+availability — production is always the reference side.
+
+### 15.6 Test debt — still open
+
+**TD-A** and **TD-B** (§14.10) remain **OPEN** and unchanged. TD-A continues to
+gate acceptance of P2-I5 (BOS); TD-B continues to gate acceptance of P2-I6 (weak
+re-arm). Neither is touched by I1, I2, I3 or I4.

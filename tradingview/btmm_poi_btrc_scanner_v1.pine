@@ -131,6 +131,13 @@ int C_ST_TR_BEARISH_BOS   = -1
 int C_ST_TR_BULLISH_CHOCH = 2
 int C_ST_TR_BEARISH_CHOCH = -2
 
+// StructureConfiguration.swing_relationship_equal_tolerance_atr_multiplier
+// (structure/configuration.py:10). Author-approved by reuse from the 1B-H
+// equal-level tolerance; it is the ONLY numeric threshold the Structure
+// milestone owns. Named rather than inlined so the multiplier never appears as
+// an anonymous 0.10 literal in the classifier.
+float C_ST_REL_EQUAL_TOL_ATR = 0.10
+
 // -----------------------------------------------------------------------------
 // P1-PERF-4 — BOUNDED HISTORICAL EXECUTION
 //
@@ -431,12 +438,15 @@ var int   latestTLOrient       = na
 // Written by the adapter, read only by the debug-gated P2_* plots below. No
 // analytical value consumes these, so they cannot influence P1 output.
 var int   p2SwingCount    = na
-var int   p2LastKey       = na
+var int   p2LastKey       = na   // retained for I4+; not plotted (budget)
 var int   p2LastType      = na
 var float p2LastPrice     = na
 var float p2LastAtr       = na
 var int   p2LastConfTime  = na
 var int   p2LastStartAbs  = na
+var int   p2RelCount      = na   // P2-I3
+var int   p2LastHighRel   = na
+var int   p2LastLowRel    = na
 
 // Swing-set change detection (so SWING-DERIVED detectors run only on change).
 // S/R is deliberately NOT behind this gate — see the P1-CLOSEOUT note in MAIN.
@@ -692,6 +702,69 @@ f_p2BuildSwingView(array<SwingRec> swings, array<int> openT, int absFirst) =>
         SwingRec s = array.get(swings, i)
         int startTime = s.pivotStartIdx >= 0 and s.pivotStartIdx < nT ? array.get(openT, s.pivotStartIdx) : s.pivotEndTime
         array.push(out, StructSwingView.new(s.pivotEndTime, s.swingType, s.price, s.referenceAtr, s.meaningfulConfTime, startTime, absFirst + s.pivotStartIdx))
+    out
+
+// =============================================================================
+// P2-I3 — RELATIONSHIP CLASSIFICATION (structure/relationships.py)
+// -----------------------------------------------------------------------------
+// Labels ONLY. This phase does not bootstrap direction, does not select
+// protected or weak levels, and emits no BOS or CHOCH.
+// =============================================================================
+
+// Pure transcription of _classify_label (relationships.py:53-79). No state, no
+// mutation, no candle access.
+//
+//   tolerance = 0.10 * CURRENT swing's referenceAtr        <- current, not
+//     predecessor, not a median, not the bar ATR (relationships.py:59-61)
+//   price >  predecessor + tolerance -> HIGHER   (strict, :63)
+//   price <  predecessor - tolerance -> LOWER    (strict, :69)
+//   otherwise                        -> EQUAL    (:74)
+//
+// Because both comparisons are strict, a delta of exactly +tolerance or exactly
+// -tolerance lands in the EQUAL band.
+f_p2ClassifyRelationship(StructSwingView cur, StructSwingView prev) =>
+    int code = C_ST_NA
+    if cur.swingType == prev.swingType
+        float tol = C_ST_REL_EQUAL_TOL_ATR * cur.referenceAtr
+        bool isHigh = cur.swingType == SWING_HIGH
+        if cur.pivotPrice > prev.pivotPrice + tol
+            code := isHigh ? C_ST_REL_HIGHER_HIGH : C_ST_REL_HIGHER_LOW
+        else if cur.pivotPrice < prev.pivotPrice - tol
+            code := isHigh ? C_ST_REL_LOWER_HIGH : C_ST_REL_LOWER_LOW
+        else
+            code := isHigh ? C_ST_REL_EQUAL_HIGH : C_ST_REL_EQUAL_LOW
+    code
+
+// Transcription of detect_swing_relationships (relationships.py:82-116).
+//
+// ORDERING. Python filters `highs` then `lows` and appends in that order
+// (:86-91), so the published tuple is ALL HIGH relationships followed by ALL LOW
+// relationships — NOT chronologically interleaved. The two passes below
+// reproduce that exactly; interleaving would silently change the output order.
+//
+// PREDECESSOR. Python compares `group[index]` to `group[index-1]` within the
+// type-filtered list. This walks per type rather than assuming the predecessor
+// is two positions back: alternation does make `i-2` correct today, but the
+// per-type walk needs no such assumption and matches the Python shape directly.
+//
+// HISTORY BOUNDARY. Python classifies exactly the bounded input it is handed.
+// `views` is P1's live canonical swing list, so when the window advances and the
+// oldest same-type swing drops out, the new first swing of that type simply has
+// no predecessor and yields no relationship — the same result Python gives for
+// the same bounded input. No predecessor state is retained behind P1's window;
+// retaining any would diverge from Python.
+f_p2BuildRelationships(array<StructSwingView> views) =>
+    array<StructRelRec> out = array.new<StructRelRec>()
+    for pass = 0 to 1
+        int wantType = pass == 0 ? SWING_HIGH : SWING_LOW
+        int prevIdx = -1
+        for [i, _p2r] in views
+            StructSwingView v = array.get(views, i)
+            if v.swingType == wantType
+                if prevIdx >= 0
+                    StructSwingView pv = array.get(views, prevIdx)
+                    array.push(out, StructRelRec.new(v.stableKey, pv.stableKey, f_p2ClassifyRelationship(v, pv), math.max(v.meaningfulConfTime, pv.meaningfulConfTime)))
+                prevIdx := i
     out
 
 // =============================================================================
@@ -1466,6 +1539,19 @@ if barstate.isconfirmed
         p2LastConfTime := lastView.meaningfulConfTime
         p2LastStartAbs := lastView.pivotStartAbs
 
+    // ---- P2-I3: relationship labels. Derived purely from the adapted view, so
+    // it inherits the confirmed-bar gate; no candle or forming-bar value is read.
+    array<StructRelRec> p2Rels = f_p2BuildRelationships(p2Swings)
+    p2RelCount := array.size(p2Rels)
+    p2LastHighRel := na
+    p2LastLowRel := na
+    for [ri, _p2d] in p2Rels
+        StructRelRec r = array.get(p2Rels, ri)
+        if r.relationshipCode == C_ST_REL_HIGHER_HIGH or r.relationshipCode == C_ST_REL_LOWER_HIGH or r.relationshipCode == C_ST_REL_EQUAL_HIGH
+            p2LastHighRel := r.relationshipCode
+        else
+            p2LastLowRel := r.relationshipCode
+
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
     // directions are known.
@@ -1735,7 +1821,9 @@ plot(debugMode and p1HistoryOk ? p2LastPrice    : na, "P2_last_swing_price",    
 plot(debugMode and p1HistoryOk ? p2LastAtr      : na, "P2_last_swing_atr",      color = color.new(color.gray, 0),  display = display.data_window)
 plot(debugMode and p1HistoryOk ? p2LastStartAbs : na, "P2_last_pivot_start_abs", color = color.new(color.gray, 0), display = display.data_window)
 plot(debugMode and p1HistoryOk and not na(p2LastConfTime) ? p2LastConfTime / 1000 : na, "P2_last_conf_time", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and not na(p2LastKey) ? p2LastKey / 1000 : na, "P2_last_swing_key", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2RelCount    : na, "P2_relationship_count", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastHighRel : na, "P2_last_high_relationship", color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode and p1HistoryOk ? p2LastLowRel  : na, "P2_last_low_relationship", color = color.new(color.gray, 0), display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)

@@ -132,13 +132,14 @@ def test_structure_records_declare_exactly_the_planned_fields(type_name, fields)
     assert declared == fields, f"{type_name} fields drifted: {declared}"
 
 
-def test_future_records_are_declared_but_never_constructed() -> None:
-    """I1 authorises declarations only. A constructor call would mean behaviour."""
+def test_transition_record_is_declared_but_never_constructed() -> None:
+    """StructRelRec is constructed as of I3. StructEventRec must not be —
+    building one would mean BOS/CHOCH emission, which is I5."""
     text = _src()
     assert "type StructRelRec" in text
     assert "type StructEventRec" in text
-    assert "StructRelRec.new(" not in text
-    assert "StructEventRec.new(" not in text
+    assert "StructRelRec.new(" in text, "I3 must construct relationships"
+    assert "StructEventRec.new(" not in text, "transition emission is I5, not I3"
 
 
 def test_swing_view_does_not_duplicate_all_of_swingrec() -> None:
@@ -154,6 +155,21 @@ def test_swing_view_does_not_duplicate_all_of_swingrec() -> None:
 # ---------------------------------------------------------------------------
 # P2-I2 — adapter
 # ---------------------------------------------------------------------------
+
+NL = chr(10)
+
+
+def _fn_body(text: str, name: str) -> str:
+    """Body of a Pine function, up to the next top-level banner or definition."""
+    start = text.index(NL + name + "(")
+    rest = text[start + 1 :]
+    end = len(rest)
+    for marker in (NL + "// ====", NL + "f_p2"):
+        idx = rest.find(marker, len(name))
+        if idx != -1:
+            end = min(end, idx)
+    return rest[:end]
+
 
 def _adapter_body(text: str) -> str:
     start = text.index("f_p2BuildSwingView(")
@@ -232,13 +248,72 @@ def test_adapter_runs_only_inside_the_confirmed_bar_block() -> None:
 # Forbidden behaviour — the phase gate
 # ---------------------------------------------------------------------------
 
-def test_no_relationship_classification_yet() -> None:
+def test_every_relationship_code_is_actually_reachable() -> None:
+    """As of I3 each label must be produced by the classifier, not just declared.
+    A code that appears only once is a declared-but-unreachable label."""
     text = _src()
     for code in ("C_ST_REL_HIGHER_HIGH", "C_ST_REL_LOWER_HIGH", "C_ST_REL_EQUAL_HIGH",
                  "C_ST_REL_HIGHER_LOW", "C_ST_REL_LOWER_LOW", "C_ST_REL_EQUAL_LOW"):
-        assert text.count(code) == 1, (
-            f"{code} appears {text.count(code)} times; I1 permits the declaration only"
-        )
+        assert text.count(code) >= 2, f"{code} is declared but never assigned"
+
+
+def test_relationship_tolerance_is_a_named_constant() -> None:
+    """No anonymous 0.10 literal in the classifier."""
+    text = _src()
+    assert "float C_ST_REL_EQUAL_TOL_ATR = 0.10" in text
+    body = _fn_body(text, "f_p2ClassifyRelationship")
+    assert "C_ST_REL_EQUAL_TOL_ATR * cur.referenceAtr" in body
+    assert "0.10" not in body, "classifier must not inline the multiplier"
+
+
+def test_classifier_uses_current_swing_atr_not_predecessor() -> None:
+    body = _fn_body(_src(), "f_p2ClassifyRelationship")
+    assert "cur.referenceAtr" in body
+    assert "prev.referenceAtr" not in body, "tolerance must use the CURRENT swing ATR"
+
+
+def test_classifier_boundaries_are_strict() -> None:
+    body = _fn_body(_src(), "f_p2ClassifyRelationship")
+    assert "cur.pivotPrice > prev.pivotPrice + tol" in body
+    assert "cur.pivotPrice < prev.pivotPrice - tol" in body
+    assert ">=" not in body and "<=" not in body, (
+        "non-strict comparison would move the equal-band edges"
+    )
+
+
+def test_classifier_is_pure() -> None:
+    """No persistent state, no candle access, no swing detection."""
+    body = _fn_body(_src(), "f_p2ClassifyRelationship")
+    for token in ("var ", "wHigh", "wLow", "close", "high[", "low[", "timenow",
+                  "array.push"):
+        assert token not in body, f"classifier must not reference {token}"
+
+
+def test_relationship_builder_reproduces_python_output_order() -> None:
+    """Python filters highs then lows and appends in that order, so the tuple is
+    all-highs-then-all-lows, NOT chronologically interleaved."""
+    body = _fn_body(_src(), "f_p2BuildRelationships")
+    assert "for pass = 0 to 1" in body
+    assert "pass == 0 ? SWING_HIGH : SWING_LOW" in body
+
+
+def test_relationship_builder_walks_per_type_not_two_back() -> None:
+    """A hardcoded i-2 would rely on alternation; the per-type walk does not."""
+    body = _fn_body(_src(), "f_p2BuildRelationships")
+    assert "prevIdx" in body
+    assert "i - 2" not in body and "i-2" not in body
+
+
+def test_relationship_availability_is_the_later_confirmation() -> None:
+    body = _fn_body(_src(), "f_p2BuildRelationships")
+    assert "math.max(v.meaningfulConfTime, pv.meaningfulConfTime)" in body
+
+
+def test_relationship_builder_retains_no_state_behind_the_window() -> None:
+    """Python classifies exactly the bounded input it receives, so Pine must not
+    keep a predecessor that has dropped out of P1's live swing list."""
+    body = _fn_body(_src(), "f_p2BuildRelationships")
+    assert "var " not in body, "builder must hold no persistent state"
 
 
 def test_no_transition_emission_yet() -> None:
