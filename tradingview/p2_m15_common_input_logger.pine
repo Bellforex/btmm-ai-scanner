@@ -1,0 +1,176 @@
+//@version=6
+
+// =============================================================================
+// BTMM P2 M15 COMMON INPUT LOGGER
+// -----------------------------------------------------------------------------
+// A STANDALONE extraction tool. It contains NO P1 measurement logic, NO P2
+// Structure logic, no plots, no drawings, no labels, no boxes. It reads only the
+// native chart series (time / open / high / low / close / time_close) and writes
+// the exact parity input window to Pine Logs so it can be carried into the local
+// Python parity environment.
+//
+// WHY THIS EXISTS. TradingView Basic paywalls CSV export and the Table View is
+// virtualised, so ~3,600 cells cannot be transcribed safely by hand. Pine Logs
+// can emit historical records once, and every record carries a checksum, so a
+// single wrong digit downstream is REJECTED rather than silently accepted.
+//
+// DIGEST CONTRACT -- identical to the frozen parity probe, deliberately:
+//   canonical encoding   na -> 0 ; x>=0 -> 2x+2 ; x<0 -> -2x+1
+//   prices               round(price / syminfo.mintick)  (integer ticks)
+//   times                raw Pine MILLISECONDS, never divided, never stringified
+//                        before encoding
+//   step(acc, v)         (acc*BASE + v % MOD) % MOD
+//   record  r            fold over the 6 fields in the fixed order below
+//   sequence h           fold over records, OLDEST -> NEWEST
+//   field order          time, open, high, low, close, time_close
+//
+// SAFETY. Read-only. No orders, no strategy.*, no request.*, no alerts.
+// =============================================================================
+
+indicator("BTMM P2 M15 COMMON INPUT LOGGER", overlay = false)
+
+// ---- target window ----------------------------------------------------------
+// Pinned as inputs so the same script can extract a different window later
+// without editing source. Defaults are the captured parity snapshot.
+int TARGET_LAST_MS  = input.int(1787722200000, "Target LAST bar open time (ms)")
+int EXPECT_FIRST_MS = input.int(1786984200000, "Expected FIRST bar open time (ms)")
+int EXPECT_H1       = input.int(192040354,     "Expected input hash 1")
+int EXPECT_H2       = input.int(862722483,     "Expected input hash 2")
+
+int P2L_SCHEMA   = 1
+int TARGET_COUNT = 600
+int CHUNK_SIZE   = 50
+
+int MOD1  = 1000000007
+int MOD2  = 1000000009
+int BASE1 = 1000003
+int BASE2 = 1000033
+
+// ---- digest helpers (byte-equivalent to the parity probe) --------------------
+f_p2lEnc(int v) =>
+    na(v) ? 0 : (v >= 0 ? 2 * v + 2 : -2 * v + 1)
+
+f_p2lStep(int acc, int v, int base, int mod) =>
+    (acc * base + (v % mod)) % mod
+
+// Zero-pad an index to 3 digits so log lines sort lexicographically.
+f_p2lPad3(int i) =>
+    (i < 10 ? "00" : i < 100 ? "0" : "") + str.tostring(i)
+
+// ---- bounded collection: CLOSED bars only, capped at the target ------------
+// barstate.isconfirmed excludes the forming bar. The strict time guard makes a
+// repeated confirmation idempotent. `time <= TARGET_LAST_MS` caps the window at
+// the top, and the rolling shift keeps the LATEST 600 -- so the window is
+// derived from real bar times, never from wall-clock subtraction, and session /
+// weekend gaps survive untouched.
+var array<int> p2lT  = array.new<int>()
+var array<int> p2lO  = array.new<int>()
+var array<int> p2lH  = array.new<int>()
+var array<int> p2lL  = array.new<int>()
+var array<int> p2lC  = array.new<int>()
+var array<int> p2lTC = array.new<int>()
+var int p2lLastSeen = na
+
+if barstate.isconfirmed and time <= TARGET_LAST_MS and (na(p2lLastSeen) or time > p2lLastSeen)
+    p2lLastSeen := time
+    array.push(p2lT,  time)
+    array.push(p2lO,  int(math.round(open  / syminfo.mintick)))
+    array.push(p2lH,  int(math.round(high  / syminfo.mintick)))
+    array.push(p2lL,  int(math.round(low   / syminfo.mintick)))
+    array.push(p2lC,  int(math.round(close / syminfo.mintick)))
+    array.push(p2lTC, time_close)
+    while array.size(p2lT) > TARGET_COUNT
+        array.shift(p2lT)
+        array.shift(p2lO)
+        array.shift(p2lH)
+        array.shift(p2lL)
+        array.shift(p2lC)
+        array.shift(p2lTC)
+
+// ---- emission: once, on the last confirmed historical bar -------------------
+// barstate.islastconfirmedhistory fires exactly once per script run and never on
+// a realtime tick, so the log cannot be spammed.
+if barstate.islastconfirmedhistory
+    int n = array.size(p2lT)
+    int firstMs = n > 0 ? array.get(p2lT, 0) : na
+    int lastMs  = n > 0 ? array.get(p2lT, n - 1) : na
+
+    // ---- pass 1: sequence hashes over the whole window ----
+    int h1 = 0
+    int h2 = 0
+    if n > 0
+        for i = 0 to n - 1
+            int r1 = 0
+            int r2 = 0
+            int eT  = f_p2lEnc(array.get(p2lT,  i))
+            int eO  = f_p2lEnc(array.get(p2lO,  i))
+            int eH  = f_p2lEnc(array.get(p2lH,  i))
+            int eL  = f_p2lEnc(array.get(p2lL,  i))
+            int eC  = f_p2lEnc(array.get(p2lC,  i))
+            int eTC = f_p2lEnc(array.get(p2lTC, i))
+            r1 := f_p2lStep(r1, eT,  BASE1, MOD1)
+            r2 := f_p2lStep(r2, eT,  BASE2, MOD2)
+            r1 := f_p2lStep(r1, eO,  BASE1, MOD1)
+            r2 := f_p2lStep(r2, eO,  BASE2, MOD2)
+            r1 := f_p2lStep(r1, eH,  BASE1, MOD1)
+            r2 := f_p2lStep(r2, eH,  BASE2, MOD2)
+            r1 := f_p2lStep(r1, eL,  BASE1, MOD1)
+            r2 := f_p2lStep(r2, eL,  BASE2, MOD2)
+            r1 := f_p2lStep(r1, eC,  BASE1, MOD1)
+            r2 := f_p2lStep(r2, eC,  BASE2, MOD2)
+            r1 := f_p2lStep(r1, eTC, BASE1, MOD1)
+            r2 := f_p2lStep(r2, eTC, BASE2, MOD2)
+            h1 := f_p2lStep(h1, r1, BASE1, MOD1)
+            h2 := f_p2lStep(h2, r2, BASE2, MOD2)
+
+    bool okCount = n == TARGET_COUNT
+    bool okFirst = not na(firstMs) and firstMs == EXPECT_FIRST_MS
+    bool okLast  = not na(lastMs)  and lastMs  == TARGET_LAST_MS
+    bool okHash  = h1 == EXPECT_H1 and h2 == EXPECT_H2
+    bool allOk   = okCount and okFirst and okLast and okHash
+
+    // Metadata first, and it always carries the ACTUAL computed values so a
+    // failure is diagnosable rather than silent.
+    log.info("P2META|schema=" + str.tostring(P2L_SCHEMA) + "|count=" + str.tostring(n) + "|first=" + (na(firstMs) ? "NA" : str.tostring(firstMs)) + "|last=" + (na(lastMs) ? "NA" : str.tostring(lastMs)) + "|mintick=" + str.tostring(syminfo.mintick) + "|h1=" + str.tostring(h1) + "|h2=" + str.tostring(h2) + "|status=" + (allOk ? "OK" : "MISMATCH"))
+
+    if not allOk
+        // Phase 5: never emit an apparently-valid dataset. Explain instead.
+        log.error("P2FAIL|okCount=" + (okCount ? "1" : "0") + "|okFirst=" + (okFirst ? "1" : "0") + "|okLast=" + (okLast ? "1" : "0") + "|okHash=" + (okHash ? "1" : "0") + "|expectCount=" + str.tostring(TARGET_COUNT) + "|expectFirst=" + str.tostring(EXPECT_FIRST_MS) + "|expectLast=" + str.tostring(TARGET_LAST_MS) + "|expectH1=" + str.tostring(EXPECT_H1) + "|expectH2=" + str.tostring(EXPECT_H2))
+        log.error("P2FAIL|no P2RAW rows emitted; window does not match the parity snapshot")
+    else
+        // ---- pass 2: rows + chunk checksums ----
+        int c1 = 0
+        int c2 = 0
+        for i = 0 to n - 1
+            int r1 = 0
+            int r2 = 0
+            int vT  = array.get(p2lT,  i)
+            int vO  = array.get(p2lO,  i)
+            int vH  = array.get(p2lH,  i)
+            int vL  = array.get(p2lL,  i)
+            int vC  = array.get(p2lC,  i)
+            int vTC = array.get(p2lTC, i)
+            r1 := f_p2lStep(r1, f_p2lEnc(vT),  BASE1, MOD1)
+            r2 := f_p2lStep(r2, f_p2lEnc(vT),  BASE2, MOD2)
+            r1 := f_p2lStep(r1, f_p2lEnc(vO),  BASE1, MOD1)
+            r2 := f_p2lStep(r2, f_p2lEnc(vO),  BASE2, MOD2)
+            r1 := f_p2lStep(r1, f_p2lEnc(vH),  BASE1, MOD1)
+            r2 := f_p2lStep(r2, f_p2lEnc(vH),  BASE2, MOD2)
+            r1 := f_p2lStep(r1, f_p2lEnc(vL),  BASE1, MOD1)
+            r2 := f_p2lStep(r2, f_p2lEnc(vL),  BASE2, MOD2)
+            r1 := f_p2lStep(r1, f_p2lEnc(vC),  BASE1, MOD1)
+            r2 := f_p2lStep(r2, f_p2lEnc(vC),  BASE2, MOD2)
+            r1 := f_p2lStep(r1, f_p2lEnc(vTC), BASE1, MOD1)
+            r2 := f_p2lStep(r2, f_p2lEnc(vTC), BASE2, MOD2)
+
+            log.info("P2RAW|i=" + f_p2lPad3(i) + "|t=" + str.tostring(vT) + "|o=" + str.tostring(vO) + "|h=" + str.tostring(vH) + "|l=" + str.tostring(vL) + "|c=" + str.tostring(vC) + "|tc=" + str.tostring(vTC) + "|r1=" + str.tostring(r1) + "|r2=" + str.tostring(r2))
+
+            c1 := f_p2lStep(c1, r1, BASE1, MOD1)
+            c2 := f_p2lStep(c2, r2, BASE2, MOD2)
+            if (i % CHUNK_SIZE) == CHUNK_SIZE - 1
+                log.info("P2CHUNK|start=" + f_p2lPad3(i - CHUNK_SIZE + 1) + "|end=" + f_p2lPad3(i) + "|h1=" + str.tostring(c1) + "|h2=" + str.tostring(c2))
+                c1 := 0
+                c2 := 0
+
+// The script plots nothing; it is an extraction tool, not an indicator.
+plot(na, "P2L_NO_OUTPUT", display = display.none)
