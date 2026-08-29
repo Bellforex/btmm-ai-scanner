@@ -1,7 +1,10 @@
 # BTRC-V1 — P2 Structure Architecture and Contract
 
-Status: **PARTIALLY IMPLEMENTED.** §1–§13 are the original design; §14 is the
-P2-I0 test-proven contract; §15–§22 record what has actually shipped.
+Status: **CLOSED** — see `BTRC_V1_P2_STRUCTURE_CLOSURE.md` for the formal
+closure record (real-data Python↔Pine parity HARD PASS, 15/15 field digests +
+2/2 overall state digests, atomic anchor 1787949000000). §1–§13 are the
+original design; §14 is the P2-I0 test-proven contract; §15–§22 record what
+actually shipped.
 
 Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 `21502e182b729e8a7e365076c7defef2b3e90b3d`.
@@ -18,8 +21,8 @@ Branch `pine-p2-structure`, cut from the frozen P1 checkpoint
 | P2-I6 | weak re-arm (§20) | committed `00c183a` |
 | P2-I7 | CHOCH (§21) | committed `f43a296` |
 | — | **bounded batch-equivalent Structure semantics COMPLETE** | |
-| P2-I8-PRE | consolidation review (§22) | tests + docs, **uncommitted**, awaiting author review |
-| P2-I8 | persistent incremental frontier | **not started** |
+| P2-I8-PRE | consolidation review (§22) | committed `54d19db` |
+| P2-I8 | persistent incremental frontier | **closed as NOT REQUIRED** — runtime gate proved `INCREMENTAL_FRONTIER_RUNTIME_MANDATORY = FALSE` (see closure record) |
 
 §1–§13 were written before implementation and are preserved as the design of
 record; where a detail was refined by testing, §14–§22 are authoritative.
