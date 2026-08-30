@@ -3684,6 +3684,12 @@ if barstate.islastconfirmedhistory and not p3bMetaDone
                 famStar := f_p3pStep(famStar, r1, P3P_BASE1, P3P_MOD1)
             if ty == 17 or ty == 18
                 famReference := f_p3pStep(famReference, r1, P3P_BASE1, P3P_MOD1)
+                // DIAGNOSTIC. Reference zones are a COPY of P1's published
+                // srCached, so when this family disagrees the question is which
+                // ZONES differ, not which hash. There are only a handful, so
+                // emitting them costs nothing and turns a hash mismatch into a
+                // row-level diff against the offline replay.
+                log.info("P3BREF|type=" + str.tostring(ty) + "|dir=" + str.tostring(array.get(poiDirection, p)) + "|top=" + str.tostring(int(math.round(array.get(poiZoneTop, p) / syminfo.mintick))) + "|bot=" + str.tostring(int(math.round(array.get(poiZoneBottom, p) / syminfo.mintick))) + "|cand=" + str.tostring(array.get(poiCandTime, p)) + "|conf=" + str.tostring(array.get(poiConfirmTime, p)) + "|avail=" + str.tostring(array.get(poiAvailTime, p)) + "|sf=" + str.tostring(array.get(poiSrcFirst, p)) + "|sc=" + str.tostring(array.get(poiSrcCount, p)) + "|sl=" + str.tostring(array.get(poiSrcLast, p)))
 
             lcStatus    := f_p3pStep(lcStatus,    e12, P3P_BASE1, P3P_MOD1)
             lcTrCount   := f_p3pStep(lcTrCount,   e13, P3P_BASE1, P3P_MOD1)
