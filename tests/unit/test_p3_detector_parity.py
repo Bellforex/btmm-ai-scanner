@@ -36,6 +36,7 @@ from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolumeKind
 from btmm_ai_scanner.contracts.types import SemVer
+from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
@@ -81,6 +82,8 @@ _TYPE_CODE = {
     PoiType.BEARISH_PRESSURE_WICK: M.TYPE_BEARISH_PRESSURE_WICK,
     PoiType.BUY_TO_SELL_CANDLE: M.TYPE_BUY_TO_SELL_CANDLE,
     PoiType.SELL_TO_BUY_CANDLE: M.TYPE_SELL_TO_BUY_CANDLE,
+    PoiType.BASE_RALLY: M.TYPE_BASE_RALLY,
+    PoiType.BASE_DROP: M.TYPE_BASE_DROP,
 }
 _DIR_CODE = {
     PoiDirection.BULLISH: M.DIR_BULLISH,
@@ -176,6 +179,7 @@ _PRODUCTION_DETECTORS = (
     detect_single_candle_reversals,
     detect_pressure_wicks,
     detect_reversal_candles,
+    detect_bases,
 )
 
 
@@ -358,6 +362,69 @@ def test_reversal_candle_confirmation_on_the_third_probe_bar() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P3-I4 — base formations (the only ATR-dependent family)
+# ---------------------------------------------------------------------------
+
+
+def _warm_prefix(count: int) -> list[NormalizedCandle]:
+    """Identical 1.00-range candles: Wilder ATR-14 converges to exactly 1.00."""
+    return [_candle(i, "100", "100.5", "99.5", "100") for i in range(count)]
+
+
+def test_base_rally_and_base_drop_on_the_warm_atr_branch() -> None:
+    """With >= 14 warm bars the real ATR gates the base height, not the fallback."""
+    warm = _warm_prefix(20)
+    base_a = _candle(20, "100", "100.35", "99.65", "100")
+    base_b = _candle(21, "100", "100.35", "99.65", "100")
+    rally = _candle(22, "100", "103", "99.9", "102.9")
+    found = _assert_parity((*warm, base_a, base_b, rally))
+    assert any(t[0] == M.TYPE_BASE_RALLY for t in found)
+
+    drop = _candle(22, "100", "100.1", "97", "97.1")
+    assert any(
+        t[0] == M.TYPE_BASE_DROP for t in _assert_parity((*warm, base_a, base_b, drop))
+    )
+
+
+def test_base_height_gate_uses_the_real_atr_not_the_departure_range() -> None:
+    """0.70 height passes against ATR 1.00; 0.80 fails — the fallback would pass both."""
+    warm = _warm_prefix(20)
+    departure = _candle(22, "100", "103", "99.9", "102.9")
+
+    tight_a = _candle(20, "100", "100.35", "99.65", "100")
+    tight_b = _candle(21, "100", "100.35", "99.65", "100")
+    passing = _assert_parity((*warm, tight_a, tight_b, departure))
+    assert any(t[0] == M.TYPE_BASE_RALLY for t in passing)
+
+    wide_a = _candle(20, "100", "100.40", "99.60", "100")
+    wide_b = _candle(21, "100", "100.40", "99.60", "100")
+    rejected = _assert_parity((*warm, wide_a, wide_b, departure))
+    assert not any(t[0] == M.TYPE_BASE_RALLY for t in rejected)
+
+
+def test_base_atr_fallback_branch_when_the_series_is_still_cold() -> None:
+    """Under 14 candles ATR-14 is None, so the departure range is the reference."""
+    base_a = _candle(0, "100", "100.40", "99.60", "100")
+    base_b = _candle(1, "100", "100.40", "99.60", "100")
+    departure = _candle(2, "100", "103", "99.9", "102.9")
+    found = _assert_parity((base_a, base_b, departure))
+    assert any(t[0] == M.TYPE_BASE_RALLY for t in found)
+
+
+def test_every_qualifying_base_length_emits_its_own_poi() -> None:
+    """Production does NOT pick one best base per departure."""
+    # 0.50-wide base bars: the Wilder ATR drifts to ~0.87 over the run, so the
+    # 0.75*ATR height gate still admits them (a 0.70-wide base would not).
+    warm = _warm_prefix(20)
+    flat = [_candle(20 + i, "100", "100.25", "99.75", "100") for i in range(4)]
+    departure = _candle(24, "100", "103", "99.9", "102.9")
+    found = _assert_parity((*warm, *flat, departure))
+    rallies = [t for t in found if t[0] == M.TYPE_BASE_RALLY]
+    assert len(rallies) >= 2, "multiple base lengths must each emit"
+    assert len({t[6] for t in rallies}) >= 2, "source counts must differ"
+
+
+# ---------------------------------------------------------------------------
 # Randomized differential campaign — the real proof
 # ---------------------------------------------------------------------------
 
@@ -442,6 +509,8 @@ def test_the_campaign_actually_produces_every_fixed_window_type() -> None:
         M.TYPE_BEARISH_PRESSURE_WICK,
         M.TYPE_BUY_TO_SELL_CANDLE,
         M.TYPE_SELL_TO_BUY_CANDLE,
+        M.TYPE_BASE_RALLY,
+        M.TYPE_BASE_DROP,
     }
     assert expected.issubset(seen), f"campaign never produced {expected - seen}"
 
@@ -571,3 +640,32 @@ def test_pine_reversal_candle_emits_only_on_the_first_qualifying_probe() -> None
     """This is what makes the delayed-confirmation emission exactly-once."""
     code = _pine_code()
     assert "if confirmIdx == wn - 1" in code
+
+
+def test_pine_declares_the_atr_dependent_detector() -> None:
+    code = _pine_code()
+    assert "f_poiDetectBases(int wn) =>" in code
+
+
+def test_pine_bases_reads_the_continuous_p1_atr_at_the_last_base_candle() -> None:
+    """Never a window-local ATR, and indexed at di - 1, not the departure."""
+    code = _pine_code()
+    assert "array.get(wAtr, di - 1)" in code
+    assert "compute_atr" not in code
+
+
+def test_pine_bases_uses_the_bases_specific_atr_fallback_rule() -> None:
+    """`is None or == 0` here; the lifecycle's `> 0` rule is deliberately separate."""
+    code = _pine_code()
+    assert "na(atrRaw) or atrRaw == 0 ? departureRange : atrRaw" in code
+
+
+def test_pine_bases_skips_zero_range_members_instead_of_rejecting() -> None:
+    code = _pine_code()
+    assert "minRange != 0 and overlap / minRange < C_POI_BASE_OVERLAP_MIN" in code
+
+
+def test_pine_bases_checks_every_length_at_the_departure_bar() -> None:
+    code = _pine_code()
+    assert "for length = C_POI_BASE_MIN_CANDLES to C_POI_BASE_MAX_CANDLES" in code
+    assert "int si = di - length" in code

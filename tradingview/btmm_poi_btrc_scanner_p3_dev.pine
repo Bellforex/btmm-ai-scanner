@@ -2907,3 +2907,93 @@ f_poiDetectReversalCandles(int wn) =>
                             if confirmIdx == wn - 1
                                 bool strong = ratio >= C_POI_REV_RATIO_STRONG and eff >= C_POI_REV_BODY_EFF_STRONG and closePos >= C_POI_REV_CLOSE_POS_STRONG
                                 f_poiEmit(typeCode, direction, array.get(wHigh, ci), array.get(wLow, ci), strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, ci), 1, array.get(wOpenT, ci), array.get(wOpenT, ci), array.get(wAvailT, confirmIdx))
+
+// =============================================================================
+// P3-I4 — ATR-DEPENDENT DETECTOR (base formations)
+// -----------------------------------------------------------------------------
+// Bases are the ONLY detector family that consumes ATR directly. It reads the
+// CONTINUOUS Wilder ATR the frozen P1 engine already maintains (wAtr), never a
+// window-local recomputation: production calls compute_atr_series over the whole
+// candle array, so a ring-local ATR would diverge exactly the way P1-PERF-4
+// documented for truncated execution.
+//
+// The reference ATR is taken at the LAST BASE candle (production indexes
+// atr_values[end - 1], where `end` is the departure), NOT at the departure.
+//
+// Production loops (start, length) over the whole array with
+// `departure = candles[start + length]`. For a departure at index d the
+// qualifying pairs are exactly start = d - length for length 2..6, so this
+// detector checks five candidate bases at the departure bar and is bounded by
+// C_POI_BASE_MAX_CANDLES + 1 bars. Every qualifying (start, length) emits its
+// own POI: production does NOT pick a single best base per departure.
+// =============================================================================
+
+f_poiDetectBases(int wn) =>
+    int di = wn - 1
+    if di >= C_POI_BASE_MIN_CANDLES
+        float departureRange = f_poiRange(di)
+        if departureRange > 0
+            for length = C_POI_BASE_MIN_CANDLES to C_POI_BASE_MAX_CANDLES
+                int si = di - length
+                if si >= 0
+                    float maxBaseRange = 0.0
+                    float baseHigh = array.get(wHigh, si)
+                    float baseLow = array.get(wLow, si)
+                    for b = si to di - 1
+                        maxBaseRange := math.max(maxBaseRange, f_poiRange(b))
+                        baseHigh := math.max(baseHigh, array.get(wHigh, b))
+                        baseLow := math.min(baseLow, array.get(wLow, b))
+
+                    bool ok = maxBaseRange > 0
+                    if ok and maxBaseRange > C_POI_SMALL_CANDLE_STANDARD * departureRange
+                        ok := false
+
+                    float ratio = ok ? departureRange / maxBaseRange : 0.0
+                    if ok and ratio < C_POI_OB_RATIO_STANDARD
+                        ok := false
+
+                    float baseHeight = baseHigh - baseLow
+                    if ok
+                        // Production: `atr_values[end - 1]`, falling back to the
+                        // departure range when the ATR is unavailable or zero.
+                        // The comparison is `is None or == 0` here, which is the
+                        // BASES rule; the lifecycle uses `> 0` instead, so the
+                        // two are deliberately not shared.
+                        float atrRaw = array.get(wAtr, di - 1)
+                        float referenceAtr = na(atrRaw) or atrRaw == 0 ? departureRange : atrRaw
+                        if baseHeight > C_POI_BASE_HEIGHT_ATR_MULT * referenceAtr
+                            ok := false
+                        else if baseHeight > C_POI_BASE_HEIGHT_DEP_MULT * departureRange
+                            ok := false
+
+                    if ok and baseHeight > 0
+                        float baseMidpoint = (baseHigh + baseLow) / 2
+                        for b = si to di - 1
+                            if ok
+                                float candleMid = (array.get(wHigh, b) + array.get(wLow, b)) / 2
+                                if math.abs(candleMid - baseMidpoint) > C_POI_BASE_MIDPOINT_DRIFT * baseHeight
+                                    ok := false
+
+                    if ok
+                        for b = si to di - 2
+                            if ok
+                                float overlapTop = math.min(array.get(wHigh, b), array.get(wHigh, b + 1))
+                                float overlapBottom = math.max(array.get(wLow, b), array.get(wLow, b + 1))
+                                float overlap = math.max(0.0, overlapTop - overlapBottom)
+                                float minRange = math.min(f_poiRange(b), f_poiRange(b + 1))
+                                // A zero-range member is SKIPPED, not rejected.
+                                if minRange != 0 and overlap / minRange < C_POI_BASE_OVERLAP_MIN
+                                    ok := false
+
+                    if ok
+                        int typeCode = 0
+                        int direction = 0
+                        if f_poiIsBullCandle(di) and array.get(wClose, di) > baseHigh
+                            typeCode := C_POI_BASE_RALLY
+                            direction := C_POI_DIR_BULLISH
+                        else if f_poiIsBearCandle(di) and array.get(wClose, di) < baseLow
+                            typeCode := C_POI_BASE_DROP
+                            direction := C_POI_DIR_BEARISH
+                        if typeCode != 0
+                            bool strong = ratio >= C_POI_OB_RATIO_STRONG and maxBaseRange <= C_POI_SMALL_CANDLE_STRONG * departureRange
+                            f_poiEmit(typeCode, direction, baseHigh, baseLow, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, si), length + 1, array.get(wOpenT, di), array.get(wOpenT, si), array.get(wAvailT, di))

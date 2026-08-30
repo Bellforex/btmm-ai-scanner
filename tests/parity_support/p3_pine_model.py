@@ -30,8 +30,10 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from itertools import pairwise
 
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
+from btmm_ai_scanner.measurements.atr import compute_atr_series
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 
 # ---- vocabulary (mirrors the C_POI_* constants in the Pine appendix) --------
@@ -523,24 +525,141 @@ NO_ATR_DETECTORS: tuple[Detector, ...] = (
 )
 
 
+def _detect_bases(
+    w: Sequence[NormalizedCandle],
+    atr_w: Sequence[Decimal | None],
+    cfg: PoiConfiguration,
+) -> list[ModelPoi]:
+    """Every qualifying (start, length) emits its own POI, as production does."""
+    wn = len(w)
+    di = wn - 1
+    out: list[ModelPoi] = []
+    if di < cfg.base_min_candles:
+        return out
+    departure = w[di]
+    departure_range = _range(departure)
+    if departure_range == _ZERO:
+        return out
+
+    for length in range(cfg.base_min_candles, cfg.base_max_candles + 1):
+        si = di - length
+        if si < 0:
+            continue
+        base = w[si:di]
+        max_base_range = max(_range(c) for c in base)
+        if max_base_range == _ZERO:
+            continue
+        if max_base_range > cfg.small_candle_ratio_standard * departure_range:
+            continue
+        ratio = departure_range / max_base_range
+        if ratio < cfg.order_block_size_ratio_standard:
+            continue
+
+        base_high = max(c.high for c in base)
+        base_low = min(c.low for c in base)
+        base_height = base_high - base_low
+
+        atr_raw = atr_w[di - 1]
+        reference_atr = (
+            departure_range if atr_raw is None or atr_raw == _ZERO else atr_raw
+        )
+        if base_height > cfg.base_height_atr_multiplier * reference_atr:
+            continue
+        if base_height > cfg.base_height_departure_multiplier * departure_range:
+            continue
+
+        if base_height > _ZERO:
+            base_midpoint = (base_high + base_low) / _TWO
+            drift_ok = all(
+                abs(((c.high + c.low) / _TWO) - base_midpoint)
+                <= cfg.base_midpoint_drift_ratio * base_height
+                for c in base
+            )
+            if not drift_ok:
+                continue
+
+        overlap_ok = True
+        for left, right in pairwise(base):
+            overlap_top = min(left.high, right.high)
+            overlap_bottom = max(left.low, right.low)
+            overlap = max(_ZERO, overlap_top - overlap_bottom)
+            min_range = min(_range(left), _range(right))
+            if min_range == _ZERO:
+                continue
+            if overlap / min_range < cfg.base_overlap_ratio_minimum:
+                overlap_ok = False
+                break
+        if not overlap_ok:
+            continue
+
+        if _is_bull(departure) and departure.close > base_high:
+            poi_type, direction = TYPE_BASE_RALLY, DIR_BULLISH
+        elif _is_bear(departure) and departure.close < base_low:
+            poi_type, direction = TYPE_BASE_DROP, DIR_BEARISH
+        else:
+            continue
+
+        strong = (
+            ratio >= cfg.order_block_size_ratio_strong
+            and max_base_range <= cfg.small_candle_ratio_strong * departure_range
+        )
+        out.append(
+            ModelPoi(
+                poi_type,
+                direction,
+                base_high,
+                base_low,
+                TIER_STRONG if strong else TIER_STANDARD,
+                _ms(base[0]),
+                length + 1,
+                _ms(departure),
+                _ms(base[0]),
+                _ms(departure, availability=True),
+            )
+        )
+    return out
+
+
+#: Detectors that consume the continuous ATR series.
+AtrDetector = Callable[
+    [Sequence[NormalizedCandle], Sequence[Decimal | None], PoiConfiguration],
+    list[ModelPoi],
+]
+
+ATR_DETECTORS: tuple[AtrDetector, ...] = (_detect_bases,)
+
+
 def run_frontier(
     candles: Sequence[NormalizedCandle],
     configuration: PoiConfiguration,
     detectors: tuple[Detector, ...] = NO_ATR_DETECTORS,
+    atr_detectors: tuple[AtrDetector, ...] = ATR_DETECTORS,
     ring: int = RING,
 ) -> list[ModelPoi]:
     """Replay the Pine per-bar frontier and return the accumulated registry.
 
     Emission is exactly-once by identity, exactly as `f_poiEmit` guards with
     `f_poiFind`. The registry is append-only and never pruned.
+
+    The ATR series is computed ONCE over the whole stream with the production
+    function and sliced to each window, mirroring Pine's continuous `wAtr`.
+    Recomputing it per window would diverge from production, which builds the
+    series over the entire candle array.
     """
+    atr_all = compute_atr_series(tuple(candles), 14)
     registry: list[ModelPoi] = []
     seen: set[tuple[int, int, int, int]] = set()
     for t in range(len(candles)):
-        window = candles[max(0, t + 1 - ring) : t + 1]
+        first = max(0, t + 1 - ring)
+        window = candles[first : t + 1]
+        window_atr = atr_all[first : t + 1]
+        emitted: list[ModelPoi] = []
         for detector in detectors:
-            for poi in detector(window, configuration):
-                if poi.identity not in seen:
-                    seen.add(poi.identity)
-                    registry.append(poi)
+            emitted.extend(detector(window, configuration))
+        for atr_detector in atr_detectors:
+            emitted.extend(atr_detector(window, window_atr, configuration))
+        for poi in emitted:
+            if poi.identity not in seen:
+                seen.add(poi.identity)
+                registry.append(poi)
     return registry
