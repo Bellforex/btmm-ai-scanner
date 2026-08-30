@@ -2605,3 +2605,187 @@ f_poiIsCoreType(int typeCode) =>
 var int p3RegistrySize = 0
 if barstate.isconfirmed
     p3RegistrySize := array.size(poiType)
+
+// =============================================================================
+// P3-I2 — FIXED-WINDOW DETECTORS  (order blocks, FVG, engulfing, stars,
+//         single-candle reversals)
+// -----------------------------------------------------------------------------
+// Each detector runs on the CONFIRMED bar that production would use as the
+// candidate's confirming candle, and emits exactly the POIs whose confirmation
+// is that bar. That makes emission exactly-once without any rescan: batch
+// production assigns confirmation_time = the confirming candle's availability,
+// so "emit at t" and "batch over the whole array" produce the same set.
+//
+// All five read the P1 window arrays (wOpen/wHigh/wLow/wClose/wOpenT/wAvailT)
+// that the frozen P2 engine already maintains — no second candle store, and no
+// second ATR implementation.
+//
+// Window index convention: `wn` is the current window size, so `wn - 1` is the
+// bar just confirmed. Detectors that need k predecessors require wn >= k + 1.
+// =============================================================================
+
+// Candle metrics, transcribed from measurements/candle_metrics.py.
+f_poiRange(int wi) =>
+    array.get(wHigh, wi) - array.get(wLow, wi)
+
+f_poiBody(int wi) =>
+    math.abs(array.get(wClose, wi) - array.get(wOpen, wi))
+
+f_poiBodyEff(int wi) =>
+    float r = f_poiRange(wi)
+    r == 0 ? 0.0 : f_poiBody(wi) / r
+
+f_poiUpperWick(int wi) =>
+    array.get(wHigh, wi) - math.max(array.get(wOpen, wi), array.get(wClose, wi))
+
+f_poiLowerWick(int wi) =>
+    math.min(array.get(wOpen, wi), array.get(wClose, wi)) - array.get(wLow, wi)
+
+f_poiBullClosePos(int wi) =>
+    float r = f_poiRange(wi)
+    r == 0 ? 0.0 : (array.get(wClose, wi) - array.get(wLow, wi)) / r
+
+f_poiBearClosePos(int wi) =>
+    float r = f_poiRange(wi)
+    r == 0 ? 0.0 : (array.get(wHigh, wi) - array.get(wClose, wi)) / r
+
+f_poiIsBullCandle(int wi) =>
+    array.get(wClose, wi) > array.get(wOpen, wi)
+
+f_poiIsBearCandle(int wi) =>
+    array.get(wClose, wi) < array.get(wOpen, wi)
+
+// Emit one POI if its identity is not already in the registry. Production emits
+// each semantic POI once; the registry preserves that across the sliding window.
+f_poiEmit(int typeCode, int direction, float zoneTop, float zoneBottom, int tier, int srcFirstT, int srcCount, int srcLastT, int candT, int confT) =>
+    if f_poiFind(typeCode, srcFirstT, srcCount, srcLastT) == -1
+        f_poiAppend(PoiRec.new(typeCode, direction, zoneTop, zoneBottom, candT, confT, confT, tier, srcFirstT, srcCount, srcLastT))
+
+// ---- ORDER BLOCKS (order_blocks.py:27) --------------------------------------
+// Adjacent pair only: production performs NO backward search for "the last
+// opposite candle before an impulse". Zone is the ORIGIN candle's full range.
+f_poiDetectOrderBlocks(int wn) =>
+    if wn >= 2
+        int oi = wn - 2
+        int di = wn - 1
+        float originRange = f_poiRange(oi)
+        if originRange > 0
+            float ratio = f_poiRange(di) / originRange
+            if ratio >= C_POI_OB_RATIO_STANDARD
+                int typeCode = 0
+                int direction = 0
+                if f_poiIsBearCandle(oi) and f_poiIsBullCandle(di) and array.get(wClose, di) > array.get(wHigh, oi)
+                    typeCode := C_POI_BUY_ORDER_BLOCK
+                    direction := C_POI_DIR_BULLISH
+                else if f_poiIsBullCandle(oi) and f_poiIsBearCandle(di) and array.get(wClose, di) < array.get(wLow, oi)
+                    typeCode := C_POI_SELL_ORDER_BLOCK
+                    direction := C_POI_DIR_BEARISH
+                if typeCode != 0
+                    int tier = ratio >= C_POI_OB_RATIO_STRONG ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD
+                    f_poiEmit(typeCode, direction, array.get(wHigh, oi), array.get(wLow, oi), tier, array.get(wOpenT, oi), 2, array.get(wOpenT, di), array.get(wOpenT, oi), array.get(wAvailT, di))
+
+// ---- FAIR VALUE GAPS (fair_value_gaps.py:25) --------------------------------
+// STRICT inequality, NO minimum gap size, middle candle unconstrained, and no
+// strength tier at all (production builds FVGs without one).
+f_poiDetectFvg(int wn) =>
+    if wn >= 3
+        int fi = wn - 3
+        int mi = wn - 2
+        int ti = wn - 1
+        int typeCode = 0
+        int direction = 0
+        float zoneTop = 0.0
+        float zoneBottom = 0.0
+        if array.get(wLow, ti) > array.get(wHigh, fi)
+            typeCode := C_POI_BUY_FAIR_VALUE_GAP
+            direction := C_POI_DIR_BULLISH
+            zoneTop := array.get(wLow, ti)
+            zoneBottom := array.get(wHigh, fi)
+        else if array.get(wHigh, ti) < array.get(wLow, fi)
+            typeCode := C_POI_SELL_FAIR_VALUE_GAP
+            direction := C_POI_DIR_BEARISH
+            zoneTop := array.get(wLow, fi)
+            zoneBottom := array.get(wHigh, ti)
+        if typeCode != 0
+            f_poiEmit(typeCode, direction, zoneTop, zoneBottom, C_POI_TIER_NA, array.get(wOpenT, fi), 3, array.get(wOpenT, ti), array.get(wOpenT, fi), array.get(wAvailT, ti))
+        int _unusedMi = mi
+
+// ---- ENGULFING (engulfing.py:27) --------------------------------------------
+// Range ratio + opposite colours ONLY. Production has no body-engulfment test,
+// so a candle whose body does not span its predecessor still qualifies.
+f_poiDetectEngulfing(int wn) =>
+    if wn >= 2
+        int ei = wn - 2
+        int gi = wn - 1
+        float engulfedRange = f_poiRange(ei)
+        if engulfedRange > 0
+            float ratio = f_poiRange(gi) / engulfedRange
+            if ratio >= C_POI_OB_RATIO_STANDARD
+                int typeCode = 0
+                int direction = 0
+                if f_poiIsBearCandle(ei) and f_poiIsBullCandle(gi)
+                    typeCode := C_POI_BULLISH_ENGULFING
+                    direction := C_POI_DIR_BULLISH
+                else if f_poiIsBullCandle(ei) and f_poiIsBearCandle(gi)
+                    typeCode := C_POI_BEARISH_ENGULFING
+                    direction := C_POI_DIR_BEARISH
+                if typeCode != 0
+                    int tier = ratio >= C_POI_OB_RATIO_STRONG ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD
+                    f_poiEmit(typeCode, direction, array.get(wHigh, ei), array.get(wLow, ei), tier, array.get(wOpenT, ei), 2, array.get(wOpenT, gi), array.get(wOpenT, ei), array.get(wAvailT, gi))
+
+// ---- THREE-CANDLE STARS (three_candle_stars.py:29) --------------------------
+// Doji middle by body efficiency; third must close beyond the FIRST candle's
+// midpoint. No gap rules and no size rules. Zone is the MIDDLE candle.
+f_poiDetectStars(int wn) =>
+    if wn >= 3
+        int fi = wn - 3
+        int mi = wn - 2
+        int ti = wn - 1
+        if f_poiRange(mi) > 0
+            float middleEff = f_poiBodyEff(mi)
+            if middleEff <= C_POI_DOJI_BODY_EFF_STANDARD
+                float firstMidpoint = (array.get(wHigh, fi) + array.get(wLow, fi)) / 2
+                int typeCode = 0
+                int direction = 0
+                if f_poiIsBearCandle(fi) and f_poiIsBullCandle(ti) and array.get(wClose, ti) > firstMidpoint
+                    typeCode := C_POI_MORNING_STAR
+                    direction := C_POI_DIR_BULLISH
+                else if f_poiIsBullCandle(fi) and f_poiIsBearCandle(ti) and array.get(wClose, ti) < firstMidpoint
+                    typeCode := C_POI_EVENING_STAR
+                    direction := C_POI_DIR_BEARISH
+                if typeCode != 0
+                    int tier = middleEff <= C_POI_DOJI_BODY_EFF_STRONG ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD
+                    f_poiEmit(typeCode, direction, array.get(wHigh, mi), array.get(wLow, mi), tier, array.get(wOpenT, fi), 3, array.get(wOpenT, ti), array.get(wOpenT, fi), array.get(wAvailT, ti))
+
+// ---- SINGLE-CANDLE REVERSALS (single_candle_reversals.py:32) ----------------
+// Hammer / shooting star by wick share, body efficiency and opposite wick.
+// No trend filter. Zone is the WICK only.
+f_poiDetectSingleCandleReversals(int wn) =>
+    if wn >= 1
+        int ci = wn - 1
+        float candleRange = f_poiRange(ci)
+        if candleRange > 0
+            float lwShare = f_poiLowerWick(ci) / candleRange
+            float uwShare = f_poiUpperWick(ci) / candleRange
+            float eff = f_poiBodyEff(ci)
+            bool hammerOk = lwShare >= C_POI_HSS_WICK_SHARE_STANDARD and eff <= C_POI_HSS_BODY_EFF_STANDARD and uwShare <= C_POI_HSS_OPP_WICK_STANDARD
+            bool starOk = uwShare >= C_POI_HSS_WICK_SHARE_STANDARD and eff <= C_POI_HSS_BODY_EFF_STANDARD and lwShare <= C_POI_HSS_OPP_WICK_STANDARD
+            int typeCode = 0
+            int direction = 0
+            float zoneTop = 0.0
+            float zoneBottom = 0.0
+            bool strong = false
+            if hammerOk
+                typeCode := C_POI_HAMMER
+                direction := C_POI_DIR_BULLISH
+                zoneTop := math.min(array.get(wOpen, ci), array.get(wClose, ci))
+                zoneBottom := array.get(wLow, ci)
+                strong := lwShare >= C_POI_HSS_WICK_SHARE_STRONG and eff <= C_POI_HSS_BODY_EFF_STRONG and uwShare <= C_POI_HSS_OPP_WICK_STRONG
+            else if starOk
+                typeCode := C_POI_SHOOTING_STAR
+                direction := C_POI_DIR_BEARISH
+                zoneTop := array.get(wHigh, ci)
+                zoneBottom := math.max(array.get(wOpen, ci), array.get(wClose, ci))
+                strong := uwShare >= C_POI_HSS_WICK_SHARE_STRONG and eff <= C_POI_HSS_BODY_EFF_STRONG and lwShare <= C_POI_HSS_OPP_WICK_STRONG
+            if typeCode != 0
+                f_poiEmit(typeCode, direction, zoneTop, zoneBottom, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, ci), 1, array.get(wOpenT, ci), array.get(wOpenT, ci), array.get(wAvailT, ci))
