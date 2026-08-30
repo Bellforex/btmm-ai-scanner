@@ -592,7 +592,10 @@ def test_pine_detectors_emit_through_the_identity_guarded_helper() -> None:
     code = _pine_code()
     detector_region = code.split("P3-I2")[-1] if "P3-I2" in code else code
     assert detector_region.count("f_poiEmit(") >= 5
-    assert "f_poiFind(typeCode, srcFirstT, srcCount, srcLastT) == -1" in code
+    assert (
+        "f_poiFind(typeCode, srcFirstT, srcCount, srcLastT, "
+        "f_poiTicks(zoneBottom), f_poiTicks(zoneTop)) == -1" in code
+    )
 
 
 def test_pine_detector_zones_match_the_production_geometry_owners() -> None:

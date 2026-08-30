@@ -31,6 +31,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import pairwise
+from typing import Any
 
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.measurements.atr import compute_atr_series
@@ -663,3 +664,33 @@ def run_frontier(
                 seen.add(poi.identity)
                 registry.append(poi)
     return registry
+
+
+def project_reference_zones(zones: Sequence[Any]) -> list[ModelPoi]:
+    """Project P1 support/resistance zones, transcribing f_poiDetectReferenceZones.
+
+    Not a candle detector: production copies bounds verbatim and inherits the
+    P1 record's own times, all three of which are the confirmation time.
+    EQH/EQL clusters are lifecycle-ineligible P3 CONTEXT and are not projected.
+    """
+    out: list[ModelPoi] = []
+    for zone in zones:
+        is_support = zone.zone_type.value == "SUPPORT"
+        poi_type = TYPE_SUPPORT_ZONE if is_support else TYPE_RESISTANCE_ZONE
+        direction = DIR_BULLISH if is_support else DIR_BEARISH
+        confirm_ms = int(zone.confirmation_time_utc.timestamp() * 1000)
+        out.append(
+            ModelPoi(
+                poi_type,
+                direction,
+                zone.zone_top,
+                zone.zone_bottom,
+                TIER_NA,
+                confirm_ms,
+                1,
+                confirm_ms,
+                confirm_ms,
+                confirm_ms,
+            )
+        )
+    return out

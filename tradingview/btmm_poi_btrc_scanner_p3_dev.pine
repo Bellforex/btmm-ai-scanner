@@ -2522,19 +2522,27 @@ f_poiTicks(float price) =>
     na(price) ? 0 : int(math.round(price / syminfo.mintick))
 
 // Identity equality. Mirrors Python's semantic key: same type over the same
-// contiguous source-candle run.
-f_poiSameIdentity(int i, int typeCode, int srcFirst, int srcCount, int srcLast) =>
-    array.get(poiType, i) == typeCode and array.get(poiSrcFirst, i) == srcFirst and array.get(poiSrcCount, i) == srcCount and array.get(poiSrcLast, i) == srcLast
+// contiguous source-candle run, plus the zone bounds.
+//
+// WHY BOUNDS ARE PART OF IDENTITY. Reference zones are projections of P1
+// records and have NO source candles, so their (first, count, last) triple
+// degenerates to the confirmation time. Two support zones confirmed by the
+// same candle but built from different origin swings would then collide.
+// Including the bounds separates them. For every candle-derived family the
+// bounds are a deterministic function of the source candles already in the
+// identity, so this refines and never splits.
+f_poiSameIdentity(int i, int typeCode, int srcFirst, int srcCount, int srcLast, int lowTicks, int highTicks) =>
+    array.get(poiType, i) == typeCode and array.get(poiSrcFirst, i) == srcFirst and array.get(poiSrcCount, i) == srcCount and array.get(poiSrcLast, i) == srcLast and f_poiTicks(array.get(poiZoneBottom, i)) == lowTicks and f_poiTicks(array.get(poiZoneTop, i)) == highTicks
 
 // Registry lookup by identity. Returns the index, or -1 when absent.
 // Scans newest-first: a re-emitted POI is almost always recent, so the common
 // case exits after a handful of comparisons.
-f_poiFind(int typeCode, int srcFirst, int srcCount, int srcLast) =>
+f_poiFind(int typeCode, int srcFirst, int srcCount, int srcLast, int lowTicks, int highTicks) =>
     int found = -1
     int n = array.size(poiType)
     int i = n - 1
     while i >= 0 and found == -1
-        if f_poiSameIdentity(i, typeCode, srcFirst, srcCount, srcLast)
+        if f_poiSameIdentity(i, typeCode, srcFirst, srcCount, srcLast, lowTicks, highTicks)
             found := i
         i -= 1
     found
@@ -2658,7 +2666,7 @@ f_poiIsBearCandle(int wi) =>
 // Emit one POI if its identity is not already in the registry. Production emits
 // each semantic POI once; the registry preserves that across the sliding window.
 f_poiEmit(int typeCode, int direction, float zoneTop, float zoneBottom, int tier, int srcFirstT, int srcCount, int srcLastT, int candT, int confT) =>
-    if f_poiFind(typeCode, srcFirstT, srcCount, srcLastT) == -1
+    if f_poiFind(typeCode, srcFirstT, srcCount, srcLastT, f_poiTicks(zoneBottom), f_poiTicks(zoneTop)) == -1
         f_poiAppend(PoiRec.new(typeCode, direction, zoneTop, zoneBottom, candT, confT, confT, tier, srcFirstT, srcCount, srcLastT))
 
 // ---- ORDER BLOCKS (order_blocks.py:27) --------------------------------------
@@ -2997,3 +3005,32 @@ f_poiDetectBases(int wn) =>
                         if typeCode != 0
                             bool strong = ratio >= C_POI_OB_RATIO_STRONG and maxBaseRange <= C_POI_SMALL_CANDLE_STRONG * departureRange
                             f_poiEmit(typeCode, direction, baseHigh, baseLow, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, si), length + 1, array.get(wOpenT, di), array.get(wOpenT, si), array.get(wAvailT, di))
+
+// =============================================================================
+// P3-I5 — REFERENCE ZONE PROJECTION (support / resistance)
+// -----------------------------------------------------------------------------
+// These are NOT candle detectors: production projects existing P1 records 1:1
+// (reference_zones.py:26), copying bounds verbatim and inheriting the P1
+// record's own times. So this reads the S/R zones the frozen P1 engine already
+// published (srCached) instead of re-running any S/R detection.
+//
+// All three POI timestamps collapse to the zone's confirmation time, because
+// the P1 finalizer sets a zone's availability to its confirmation time
+// (domain/analyzer.py:377).
+//
+// Reference zones carry NO strength tier: production builds them without one.
+//
+// EQH/EQL clusters are the other half of production's reference projection but
+// are lifecycle-INELIGIBLE and therefore P3 CONTEXT (AD-6); they are
+// deliberately not emitted here.
+// =============================================================================
+
+f_poiDetectReferenceZones() =>
+    int m = array.size(srCached)
+    if m > 0
+        for zi = 0 to m - 1
+            SRRec z = array.get(srCached, zi)
+            bool isSupport = z.zoneType == SWING_LOW
+            int typeCode = isSupport ? C_POI_SUPPORT_ZONE : C_POI_RESISTANCE_ZONE
+            int direction = isSupport ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH
+            f_poiEmit(typeCode, direction, z.zoneTop, z.zoneBottom, C_POI_TIER_NA, z.confirmationTime, 1, z.confirmationTime, z.confirmationTime, z.confirmationTime)
