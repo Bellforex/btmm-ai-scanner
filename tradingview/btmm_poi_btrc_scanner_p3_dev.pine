@@ -2572,6 +2572,7 @@ f_poiAppend(PoiRec rec) =>
     array.push(poiLastWinBreach, false)
     array.push(poiTapCount, 0)
     array.push(poiInTap, false)
+    array.push(poiReported, C_POI_LC_NO_BREACH)
     array.size(poiType) - 1
 
 // Inclusive wick overlap — the production interaction test verbatim
@@ -3034,3 +3035,208 @@ f_poiDetectReferenceZones() =>
             int typeCode = isSupport ? C_POI_SUPPORT_ZONE : C_POI_RESISTANCE_ZONE
             int direction = isSupport ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH
             f_poiEmit(typeCode, direction, z.zoneTop, z.zoneBottom, C_POI_TIER_NA, z.confirmationTime, 1, z.confirmationTime, z.confirmationTime, z.confirmationTime)
+
+// =============================================================================
+// P3-I6 — PERSISTENT POI LIFECYCLE
+// -----------------------------------------------------------------------------
+// Production's walk LOOKS AHEAD: a breach at bar i is resolved by scanning up
+// to three bars forward for a reclaim, then up to three bars past the reclaim
+// for a fast displacement leg. Pine sees one confirmed bar at a time, so a
+// naive port would have to re-walk each POI's whole post-origin history every
+// bar — unbounded work, and the thing AD-5 forbids.
+//
+// THE COMMITTED BOUNDARY. An episode's outcome is final only once the windows
+// it depends on are complete:
+//
+//   * a bar that does not breach is final immediately;
+//   * a breach whose 3-bar reclaim window is complete is final, because no
+//     later bar can produce an EARLIER reclaim;
+//   * a reclaim is final as soon as it is found, for the same reason;
+//   * a reclaim WITHOUT displacement is provisional until the displacement
+//     window completes, because a later fast leg upgrades it to a false
+//     invalidation;
+//   * genuine invalidation needs a full window, so it is final by construction.
+//
+// poiResumeIdx holds that boundary and advances only past final outcomes;
+// everything after it is re-derived each bar. An episode spans at most
+// 1 + 3 + 3 = 7 bars, so the re-walk is a handful of iterations per POI per
+// bar rather than a function of history.
+//
+// The reported status at bar T is therefore identical to
+// run_poi_lifecycle(candles[0..T]) — INCLUDING the provisional tail production
+// itself produces on a truncated window. The prefix campaign asserts exactly
+// that equivalence at every bar.
+//
+// Absolute confirmed-bar indices are used throughout; a window index is
+// (absolute - absFirst). Since the boundary never lags more than ~8 bars, the
+// 300-bar P1 window always contains the span being re-walked.
+// =============================================================================
+
+// Provisional (reported) status, distinct from the committed status.
+var array<int> poiReported = array.new<int>()
+
+// ---- leg speed classification (measurements/legs.py, transcribed) ----------
+// Returns true iff the leg classifies FAST or STRONG_FAST, which is the only
+// thing the lifecycle asks of it.
+f_poiLegQualifies(int fromAbs, int toAbs, int absFirst, int dir) =>
+    int barCount = toAbs - fromAbs + 1
+    bool qualifies = false
+    if barCount > 0
+        int wFrom = fromAbs - absFirst
+        int wTo = toAbs - absFirst
+        float startPrice = array.get(wOpen, wFrom)
+        float endPrice = array.get(wClose, wTo)
+        float netDistance = math.abs(endPrice - startPrice)
+
+        array.clear(scPoiRange)
+        float pathDistance = 0.0
+        int directionalCloses = 0
+        for w = wFrom to wTo
+            pathDistance := pathDistance + f_poiRange(w)
+            float atrW = array.get(wAtr, w)
+            if not na(atrW)
+                array.push(scPoiRange, atrW)
+            bool directional = dir == C_POI_DIR_BULLISH ? array.get(wClose, w) >= array.get(wOpen, w) : array.get(wClose, w) <= array.get(wOpen, w)
+            if directional
+                directionalCloses += 1
+
+        // Production medians only the KNOWN ATR values and yields 0 when none
+        // are known, which then classifies the leg SLOW_OR_UNCLEAR.
+        array.sort(scPoiRange, order.ascending)
+        float referenceAtr = f_medianOfSorted(scPoiRange)
+        float share = directionalCloses / barCount
+
+        if referenceAtr != 0 and pathDistance != 0
+            float speed = netDistance / (barCount * referenceAtr)
+            float efficiency = netDistance / pathDistance
+            bool strong = speed >= C_POI_LEG_STRONG_SPEED and efficiency >= C_POI_LEG_STRONG_EFFICIENCY and share >= C_POI_LEG_STRONG_SHARE
+            bool fast = speed >= C_POI_LEG_FAST_SPEED and efficiency >= C_POI_LEG_FAST_EFFICIENCY and share >= C_POI_LEG_FAST_SHARE
+            qualifies := strong or fast
+    qualifies
+
+// Per-bar tolerance at an absolute index, with the production ATR fallback.
+f_poiTolAt(int absIdx, int absFirst, float zoneHeight, float atrMult, float heightMult) =>
+    int wi = absIdx - absFirst
+    f_poiTolerance(zoneHeight, f_poiReferenceAtr(array.get(wAtr, wi), f_poiRange(wi)), atrMult, heightMult)
+
+// ---- advance ONE POI by one confirmed bar ----------------------------------
+f_poiAdvanceLifecycle(int i, int absFirst, int cbc) =>
+    int tAbs = cbc - 1
+    int wLast = tAbs - absFirst
+    float zTop = array.get(poiZoneTop, i)
+    float zBot = array.get(poiZoneBottom, i)
+    float zoneHeight = zTop - zBot
+    int dir = array.get(poiDirection, i)
+
+    // Taps are an INDEPENDENT subsystem: they keep counting after a terminal
+    // invalidation, exactly as production does.
+    bool touching = f_poiTouches(i, array.get(wHigh, wLast), array.get(wLow, wLast))
+    if touching and not array.get(poiInTap, i)
+        array.set(poiTapCount, i, array.get(poiTapCount, i) + 1)
+        array.set(poiInTap, i, true)
+    else if not touching
+        array.set(poiInTap, i, false)
+
+    if not array.get(poiTerminal, i)
+        int status = array.get(poiStatus, i)
+        int commitIdx = array.get(poiResumeIdx, i)
+        int commitStatus = status
+        bool terminal = false
+        int idx = commitIdx
+        int n = cbc
+
+        // The boundary never lags more than one episode, so this loop runs a
+        // handful of times; the guard is a backstop, never a semantic bound.
+        int guard = 0
+        while idx < n and not terminal and guard < 64
+            guard += 1
+            float overshoot = f_poiTolAt(idx, absFirst, zoneHeight, C_POI_OVERSHOOT_TOL_ATR_MULT, C_POI_OVERSHOOT_TOL_HEIGHT_MULT)
+            if f_poiIsBreach(dir, zTop, zBot, array.get(wClose, idx - absFirst), overshoot)
+                status := C_POI_LC_CLOSE_BREACH_CANDIDATE
+                int windowEnd = math.min(idx + 1 + C_POI_RECLAIM_WINDOW_BARS, n)
+                bool windowComplete = (idx + 1 + C_POI_RECLAIM_WINDOW_BARS) <= n
+
+                int reclaimIdx = -1
+                for j = idx + 1 to windowEnd - 1
+                    if reclaimIdx == -1
+                        float contact = f_poiTolAt(j, absFirst, zoneHeight, C_POI_CONTACT_TOL_ATR_MULT, C_POI_CONTACT_TOL_HEIGHT_MULT)
+                        if f_poiIsReclaim(dir, zTop, zBot, array.get(wClose, j - absFirst), contact)
+                            reclaimIdx := j
+
+                if reclaimIdx != -1
+                    status := C_POI_LC_RECLAIM_CONFIRMED
+                    int dispEnd = math.min(reclaimIdx + 1 + C_POI_DISPLACEMENT_WINDOW_BARS, n)
+                    bool dispComplete = (reclaimIdx + 1 + C_POI_DISPLACEMENT_WINDOW_BARS) <= n
+                    int dispIdx = -1
+                    for k = reclaimIdx + 1 to dispEnd - 1
+                        if dispIdx == -1
+                            float contactK = f_poiTolAt(k, absFirst, zoneHeight, C_POI_CONTACT_TOL_ATR_MULT, C_POI_CONTACT_TOL_HEIGHT_MULT)
+                            if f_poiIsDisplacement(dir, zTop, zBot, array.get(wClose, k - absFirst), contactK)
+                                if f_poiLegQualifies(reclaimIdx + 1, k, absFirst, dir)
+                                    dispIdx := k
+
+                    bool episodeFinal = false
+                    if dispIdx != -1
+                        // DISPLACEMENT_AFTER_RECLAIM then FALSE_INVALIDATION are
+                        // emitted back to back on the same candle; the settled
+                        // status is the false invalidation.
+                        status := C_POI_LC_FALSE_INVALIDATION_CONFIRMED
+                        episodeFinal := true
+                    else
+                        status := C_POI_LC_RECLAIM_WITHOUT_DISPLACEMENT
+                        episodeFinal := dispComplete
+                    idx := reclaimIdx + 1
+                    if episodeFinal
+                        commitIdx := idx
+                        commitStatus := status
+                else
+                    int windowCount = windowEnd - (idx + 1)
+                    int qualifying = 0
+                    for j = idx + 1 to windowEnd - 1
+                        float ov = f_poiTolAt(j, absFirst, zoneHeight, C_POI_OVERSHOOT_TOL_ATR_MULT, C_POI_OVERSHOOT_TOL_HEIGHT_MULT)
+                        if f_poiIsBreach(dir, zTop, zBot, array.get(wClose, j - absFirst), ov)
+                            qualifying += 1
+
+                    bool bar3 = false
+                    if windowCount == C_POI_RECLAIM_WINDOW_BARS and qualifying >= 2
+                        float ovLast = f_poiTolAt(windowEnd - 1, absFirst, zoneHeight, C_POI_OVERSHOOT_TOL_ATR_MULT, C_POI_OVERSHOOT_TOL_HEIGHT_MULT)
+                        bar3 := f_poiIsBreach(dir, zTop, zBot, array.get(wClose, (windowEnd - 1) - absFirst), ovLast)
+
+                    if bar3
+                        status := C_POI_LC_GENUINE_INVALIDATION_CONFIRMED
+                        terminal := true
+                        idx := windowEnd
+                        commitIdx := idx
+                        commitStatus := status
+                    else
+                        if windowCount > 0
+                            status := C_POI_LC_RECLAIM_FAILED
+                        idx := windowEnd
+                        if windowComplete
+                            commitIdx := idx
+                            commitStatus := status
+            else
+                idx := idx + 1
+                commitIdx := idx
+                commitStatus := status
+
+        array.set(poiResumeIdx, i, commitIdx)
+        array.set(poiStatus, i, commitStatus)
+        array.set(poiReported, i, status)
+        if terminal
+            array.set(poiTerminal, i, true)
+
+// ---- advance EVERY live POI by one confirmed bar ---------------------------
+// Terminal POIs are skipped for the walk (their state is frozen in source) but
+// still receive tap updates, because taps keep counting after invalidation.
+f_poiAdvanceAllLifecycles(int absFirst, int cbc) =>
+    int m = array.size(poiType)
+    if m > 0
+        for i = 0 to m - 1
+            // A POI becomes live on the first confirmed bar whose availability
+            // is strictly later than its own (lifecycle.py:165-170).
+            if array.get(poiResumeIdx, i) == C_ST_NA
+                if array.get(wAvailT, cbc - 1 - absFirst) > array.get(poiAvailTime, i)
+                    array.set(poiResumeIdx, i, cbc - 1)
+            if array.get(poiResumeIdx, i) != C_ST_NA
+                f_poiAdvanceLifecycle(i, absFirst, cbc)
