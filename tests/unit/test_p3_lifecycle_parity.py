@@ -515,3 +515,102 @@ def test_pine_leg_medians_only_known_atr_values() -> None:
 def test_pine_poi_becomes_live_on_strictly_later_availability() -> None:
     code = _pine_code()
     assert "> array.get(poiAvailTime, i)" in code
+
+
+# ---------------------------------------------------------------------------
+# P3-I7 — downstream projection
+# ---------------------------------------------------------------------------
+
+_RELEVANT = (9, 10)
+
+
+def _oracle_downstream(result: Any) -> tuple[int, int, int, tuple[int, int, int]]:
+    events = [
+        (
+            L.TR_CODE[t.transition_type],
+            _ms(t.event_time_utc),
+            _ms(t.availability_time_utc),
+        )
+        for t in result.transitions
+    ]
+    last = events[-1] if events else (-99, -99, -99)
+    return (
+        L.LC_CODE[result.final_status],
+        len(events),
+        sum(1 for e in events if e[0] in _RELEVANT),
+        last,
+    )
+
+
+def _assert_downstream_parity(
+    candles: tuple[NormalizedCandle, ...], direction: PoiDirection
+) -> Any:
+    atr_values = _atr(candles)
+    cursor = L.PoiLifecycleCursor(
+        zone_top=_TOP,
+        zone_bottom=_BOTTOM,
+        direction=direction,
+        availability_ms=_ms(candles[0].event_time_utc),
+        configuration=_CONFIG,
+    )
+    for t in range(len(candles)):
+        cursor.advance(candles, atr_values, t)
+        expected = _oracle_downstream(
+            _oracle(candles[: t + 1], atr_values[: t + 1], direction)
+        )
+        assert cursor.downstream_projection() == expected, f"prefix {t}"
+    return cursor
+
+
+def test_downstream_projection_matches_production_at_every_prefix() -> None:
+    _assert_downstream_parity(
+        _stream([_INSIDE, _BREACH_B, _RECLAIM_B, _FAST_B, _ABOVE, _ABOVE]),
+        PoiDirection.BULLISH,
+    )
+    _assert_downstream_parity(
+        _stream([_INSIDE, _BREACH_B, _SUSTAIN_B, _SUSTAIN_B, _SUSTAIN_B, _BELOW]),
+        PoiDirection.BULLISH,
+    )
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_downstream_projection_randomized(seed: int) -> None:
+    _assert_downstream_parity(_random_stream(seed, 80), PoiDirection.BULLISH)
+
+
+def test_a_relevant_event_is_counted_once_and_never_re_emitted() -> None:
+    """A terminal POI must not keep re-reporting its invalidation."""
+    specs = [_INSIDE, _BREACH_B, _SUSTAIN_B, _SUSTAIN_B, _SUSTAIN_B] + [_ABOVE] * 40
+    cursor = _assert_downstream_parity(_stream(specs), PoiDirection.BULLISH)
+    assert cursor.relevant_count() == 1
+    assert cursor.last_transition()[0] == 10
+
+
+def test_only_the_two_btmm_relevant_codes_are_counted_as_relevant() -> None:
+    cursor = _assert_downstream_parity(
+        _stream([_INSIDE, _BREACH_B, _RECLAIM_B, _FAST_B, _ABOVE]),
+        PoiDirection.BULLISH,
+    )
+    assert cursor.relevant_count() == 1
+    assert cursor.transition_count() > cursor.relevant_count(), (
+        "breach and reclaim are transitions but are not downstream-relevant"
+    )
+
+
+def test_pine_exposes_the_downstream_tallies() -> None:
+    code = _pine_code()
+    for name in (
+        "poiCommTransCount",
+        "poiCommRelevant",
+        "poiRepTransCount",
+        "poiRepRelevant",
+        "poiRepLastCode",
+        "poiRepLastEvent",
+        "poiRepLastAvail",
+    ):
+        assert name in code, name
+    assert "f_poiIsDownstreamRelevant(int code) =>" in code
+    assert (
+        "code == C_POI_TR_FALSE_INVALIDATION_CONFIRMED or "
+        "code == C_POI_TR_GENUINE_INVALIDATION_CONFIRMED" in code
+    )

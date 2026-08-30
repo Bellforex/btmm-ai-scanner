@@ -467,5 +467,35 @@ class PoiLifecycleCursor:
     def transitions(self) -> list[ModelTransition]:
         return [*self.committed, *self.pending]
 
+    # ---- P3-I7 downstream projection --------------------------------------
+    #
+    # BTMM reads only two transition types (btmm/analyzer.py:644-649) and
+    # addresses an event by POI identity plus its timing, so the projection
+    # exposes the tally and the latest event rather than a growing list.
+
+    RELEVANT_CODES = (9, 10)
+
+    def transition_count(self) -> int:
+        return len(self.transitions())
+
+    def relevant_count(self) -> int:
+        return sum(1 for t in self.transitions() if t.code in (9, 10))
+
+    def last_transition(self) -> tuple[int, int, int]:
+        """(code, event ms, availability ms); C_ST_NA triple when none yet."""
+        events = self.transitions()
+        if not events:
+            return (-99, -99, -99)
+        last = events[-1]
+        return (last.code, last.event_ms, last.availability_ms)
+
+    def downstream_projection(self) -> tuple[int, int, int, tuple[int, int, int]]:
+        return (
+            self.state_code(),
+            self.transition_count(),
+            self.relevant_count(),
+            self.last_transition(),
+        )
+
     def state_code(self) -> int:
         return LC_CODE[self.reported_status]
