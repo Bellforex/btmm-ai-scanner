@@ -2945,8 +2945,13 @@ f_poiDetectReversalCandles(int wn) =>
                             float midpoint = (array.get(wHigh, ci) + array.get(wLow, ci)) / 2
                             int confirmIdx = -1
                             int probeEnd = math.min(ci + 1 + C_POI_REV_CONFIRM_WINDOW, wn)
-                            for p = ci + 1 to probeEnd - 1
-                                if confirmIdx == -1
+                            // EMPTY-RANGE GUARD. Pine's `for` counts DOWN when
+                            // `to` < `from`, so an empty probe window would step
+                            // BACKWARDS off the window instead of not running at
+                            // all -- Python's range() is simply empty here. Clamp
+                            // the bound and gate the body so the two agree.
+                            for p = ci + 1 to math.max(ci + 1, probeEnd - 1)
+                                if p < probeEnd and confirmIdx == -1
                                     bool hit = direction == C_POI_DIR_BULLISH ? array.get(wClose, p) > midpoint : array.get(wClose, p) < midpoint
                                     if hit
                                         confirmIdx := p
@@ -3209,8 +3214,10 @@ f_poiAdvanceLifecycle(int i, int absFirst, int cbc) =>
                 bool windowComplete = (idx + 1 + C_POI_RECLAIM_WINDOW_BARS) <= n
 
                 int reclaimIdx = -1
-                for j = idx + 1 to windowEnd - 1
-                    if reclaimIdx == -1
+                // EMPTY-RANGE GUARD (see f_poiDetectReversalCandles): an
+                // incomplete reclaim window must run ZERO times, not backwards.
+                for j = idx + 1 to math.max(idx + 1, windowEnd - 1)
+                    if j < windowEnd and reclaimIdx == -1
                         float contact = f_poiTolAt(j, absFirst, zoneHeight, C_POI_CONTACT_TOL_ATR_MULT, C_POI_CONTACT_TOL_HEIGHT_MULT)
                         if f_poiIsReclaim(dir, zTop, zBot, array.get(wClose, j - absFirst), contact)
                             reclaimIdx := j
@@ -3224,8 +3231,10 @@ f_poiAdvanceLifecycle(int i, int absFirst, int cbc) =>
                     int dispEnd = math.min(reclaimIdx + 1 + C_POI_DISPLACEMENT_WINDOW_BARS, n)
                     bool dispComplete = (reclaimIdx + 1 + C_POI_DISPLACEMENT_WINDOW_BARS) <= n
                     int dispIdx = -1
-                    for k = reclaimIdx + 1 to dispEnd - 1
-                        if dispIdx == -1
+                    // EMPTY-RANGE GUARD: an incomplete displacement window must
+                    // run ZERO times, not backwards.
+                    for k = reclaimIdx + 1 to math.max(reclaimIdx + 1, dispEnd - 1)
+                        if k < dispEnd and dispIdx == -1
                             float contactK = f_poiTolAt(k, absFirst, zoneHeight, C_POI_CONTACT_TOL_ATR_MULT, C_POI_CONTACT_TOL_HEIGHT_MULT)
                             if f_poiIsDisplacement(dir, zTop, zBot, array.get(wClose, k - absFirst), contactK)
                                 if f_poiLegQualifies(reclaimIdx + 1, k, absFirst, dir)
@@ -3263,10 +3272,13 @@ f_poiAdvanceLifecycle(int i, int absFirst, int cbc) =>
                 else
                     int windowCount = windowEnd - (idx + 1)
                     int qualifying = 0
-                    for j = idx + 1 to windowEnd - 1
-                        float ov = f_poiTolAt(j, absFirst, zoneHeight, C_POI_OVERSHOOT_TOL_ATR_MULT, C_POI_OVERSHOOT_TOL_HEIGHT_MULT)
-                        if f_poiIsBreach(dir, zTop, zBot, array.get(wClose, j - absFirst), ov)
-                            qualifying += 1
+                    // EMPTY-RANGE GUARD: same hazard, and here the body has no
+                    // condition of its own, so the guard becomes the body.
+                    for j = idx + 1 to math.max(idx + 1, windowEnd - 1)
+                        if j < windowEnd
+                            float ov = f_poiTolAt(j, absFirst, zoneHeight, C_POI_OVERSHOOT_TOL_ATR_MULT, C_POI_OVERSHOOT_TOL_HEIGHT_MULT)
+                            if f_poiIsBreach(dir, zTop, zBot, array.get(wClose, j - absFirst), ov)
+                                qualifying += 1
 
                     bool bar3 = false
                     if windowCount == C_POI_RECLAIM_WINDOW_BARS and qualifying >= 2
@@ -3361,3 +3373,48 @@ f_poiAdvanceAllLifecycles(int absFirst, int cbc) =>
                     array.set(poiResumeIdx, i, cbc - 1)
             if array.get(poiResumeIdx, i) != C_ST_NA
                 f_poiAdvanceLifecycle(i, absFirst, cbc)
+
+// =============================================================================
+// P3-I8 — PER-BAR DRIVER
+// =============================================================================
+// Everything above this line is a library: pure functions over the P1 window
+// and the POI registry. NOTHING CALLED THEM. P3 shipped with no entry point, so
+// the registry stayed empty on every real execution while the synthetic suite
+// stayed green -- those tests drive the Python transcription of these functions
+// directly, which proves the SEMANTICS but never that the script invokes them.
+// The atomic real-data capture at anchor 1787949000000 reported nregistry=0 and
+// exposed it. This block is the missing entry point; it adds no new semantics.
+//
+// Order per confirmed bar mirrors the verified model exactly:
+//
+//   1. DETECTION -- p3_pine_model.run_frontier: every detector over the current
+//      window, with emission guarded exactly-once by identity inside f_poiEmit,
+//      so re-running a bar cannot duplicate a POI.
+//   2. LIFECYCLE -- PoiLifecycleCursor.advance for every registered POI, via
+//      f_poiAdvanceAllLifecycles.
+//
+// The two steps cannot interfere within one bar: a POI emitted on this bar
+// carries this bar's availability, and f_poiAdvanceAllLifecycles only starts a
+// POI once a confirmed bar's availability is STRICTLY later, so it first moves
+// on the NEXT bar. That is the same gate lifecycle.py:165-170 applies.
+//
+// absFirst is recomputed here rather than shared: it is a local of the P1
+// confirmed-bar block, and confirmedBarCount - windowSize reproduces it exactly
+// (P1 computes it the same way, from the same two quantities).
+//
+// Runs only on CONFIRMED bars, so the forming realtime bar never mutates P3
+// state -- the non-repaint contract the whole port is built on.
+
+if barstate.isconfirmed
+    int p3Wn = array.size(wClose)
+    if p3Wn > 0
+        f_poiDetectOrderBlocks(p3Wn)
+        f_poiDetectFvg(p3Wn)
+        f_poiDetectEngulfing(p3Wn)
+        f_poiDetectStars(p3Wn)
+        f_poiDetectSingleCandleReversals(p3Wn)
+        f_poiDetectPressureWicks(p3Wn)
+        f_poiDetectReversalCandles(p3Wn)
+        f_poiDetectBases(p3Wn)
+        f_poiDetectReferenceZones()
+        f_poiAdvanceAllLifecycles(confirmedBarCount - p3Wn, confirmedBarCount)

@@ -462,3 +462,111 @@ def test_the_downstream_relevance_helper_follows_its_constants() -> None:
         "int C_POI_TR_GENUINE_INVALIDATION_CONFIRMED",
     ):
         assert text.index(constant) < helper, constant
+
+
+#: Every P3 entry point that MUST be reachable from the bar loop. Detection and
+#: the lifecycle walk are pure functions, so defining them proves nothing about
+#: runtime: the whole engine can be present, correct and never execute.
+_MUST_BE_CALLED = (
+    "f_poiDetectOrderBlocks",
+    "f_poiDetectFvg",
+    "f_poiDetectEngulfing",
+    "f_poiDetectStars",
+    "f_poiDetectSingleCandleReversals",
+    "f_poiDetectPressureWicks",
+    "f_poiDetectReversalCandles",
+    "f_poiDetectBases",
+    "f_poiDetectReferenceZones",
+    "f_poiAdvanceAllLifecycles",
+)
+
+
+def _call_sites(text: str, name: str) -> list[int]:
+    """Line numbers where `name` is CALLED rather than defined."""
+    sites: list[int] = []
+    for number, line in enumerate(text.splitlines(), 1):
+        code = line.split("//", 1)[0]
+        if name not in code:
+            continue
+        if re.match(rf"\s*{name}\s*\(.*\)\s*=>", code):
+            continue  # the definition
+        if re.search(rf"(?<![A-Za-z0-9_]){name}\s*\(", code):
+            sites.append(number)
+    return sites
+
+
+def test_every_p3_entry_point_is_actually_called() -> None:
+    """A defined-but-never-called engine is an empty registry at runtime.
+
+    This is the regression guard for the P3-ACCEL-3 finding: the detectors and
+    the lifecycle walk were fully implemented and parity-verified, but nothing
+    invoked them, so every real execution produced nregistry=0 while the whole
+    synthetic suite stayed green. Synthetic tests drive the Python
+    transcription directly and can never catch that; only a call-site check on
+    the Pine source can.
+    """
+    text = _p3_text()
+    uncalled = [name for name in _MUST_BE_CALLED if not _call_sites(text, name)]
+    assert not uncalled, (
+        "P3 functions are defined but never called, so the registry can only "
+        f"ever be empty at runtime: {uncalled}"
+    )
+
+
+def test_the_driver_runs_only_on_confirmed_bars() -> None:
+    """A forming bar must never mutate P3 state."""
+    text = _p3_text()
+    marker = "// P3-I8 — PER-BAR DRIVER"
+    assert marker in text, "the P3 per-bar driver block is missing"
+    driver = text[text.index(marker) :]
+    assert "if barstate.isconfirmed" in driver
+    for name in _MUST_BE_CALLED:
+        assert _call_sites(driver, name), f"{name} is not called from the driver"
+
+
+def test_no_for_loop_can_iterate_backwards_off_a_clamped_window() -> None:
+    """Pine's `for` counts DOWN when `to` < `from`; Python's range() is empty.
+
+    Every P3 window bound is built with `math.min(start + k, n)`, so whenever the
+    window is incomplete the bound collapses to `start` and `to` becomes
+    `start - 1`. Python does nothing; Pine walks BACKWARDS off the end of the
+    window and reads index `n`, which is exactly the RE10045 array-bounds fault
+    the first driver build hit on bar 9. Any such loop must clamp its bound with
+    `math.max(<from>, ...)` and gate its body.
+    """
+    lines = _p3_text().splitlines()
+    clamped_vars: set[str] = set()
+    for line in lines:
+        code = line.split("//", 1)[0]
+        assigned = re.match(r"\s*(?:int\s+)?(\w+)\s*:?=\s*math\.min\(", code)
+        if assigned:
+            clamped_vars.add(assigned.group(1))
+
+    offenders: list[str] = []
+    for number, line in enumerate(lines, 1):
+        code = line.split("//", 1)[0]
+        loop = re.search(r"\bfor\s+\w+\s*=\s*(.+?)\s+to\s+(.+?)\s*$", code)
+        if not loop:
+            continue
+        upper = loop.group(2).strip()
+        bound = re.match(r"(\w+)\s*-\s*1$", upper)
+        if bound and bound.group(1) in clamped_vars:
+            offenders.append(f"line {number}: {code.strip()}")
+
+    assert not offenders, (
+        "these loops use an unclamped `math.min` bound and will iterate "
+        "BACKWARDS when the window is incomplete:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_driver_detects_before_advancing_lifecycles() -> None:
+    """The model's per-bar order: run_frontier, then cursor.advance."""
+    text = _p3_text()
+    driver = text[text.index("// P3-I8 — PER-BAR DRIVER") :]
+    advance = _call_sites(driver, "f_poiAdvanceAllLifecycles")[0]
+    for name in _MUST_BE_CALLED:
+        if name == "f_poiAdvanceAllLifecycles":
+            continue
+        assert _call_sites(driver, name)[0] < advance, (
+            f"{name} must run before the lifecycle advance"
+        )
