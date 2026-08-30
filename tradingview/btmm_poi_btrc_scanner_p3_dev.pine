@@ -2389,6 +2389,11 @@ int C_POI_TR_RECLAIM_FAILED                       = 8
 int C_POI_TR_FALSE_INVALIDATION_CONFIRMED         = 9   // consumed by BTMM
 int C_POI_TR_GENUINE_INVALIDATION_CONFIRMED       = 10  // consumed by BTMM
 
+// The only two transition types any downstream consumer reads
+// (btmm/analyzer.py:644-649).
+f_poiIsDownstreamRelevant(int code) =>
+    code == C_POI_TR_FALSE_INVALIDATION_CONFIRMED or code == C_POI_TR_GENUINE_INVALIDATION_CONFIRMED
+
 // ---- production POI configuration (poi/configuration.py, verbatim) ---------
 float C_POI_OB_RATIO_STANDARD        = 2.0
 float C_POI_OB_RATIO_STRONG          = 3.0
@@ -2511,6 +2516,31 @@ var array<int>  poiSustained    = array.new<int>()
 var array<bool> poiLastWinBreach = array.new<bool>()
 var array<int>  poiTapCount     = array.new<int>()
 var array<bool> poiInTap        = array.new<bool>()
+
+// Provisional (reported) status, kept distinct from the committed status:
+// the walk re-derives it every bar, while the committed one only advances
+// past final outcomes.
+var array<int>  poiReported      = array.new<int>()
+
+// Downstream projection state (P3-I7). BTMM addresses a lifecycle event by
+// POI identity plus its timing, so the registry carries the COMMITTED event
+// tally and the latest committed event, then re-derives the pending tail
+// each bar exactly as the status does. That is what stops a later bar from
+// re-emitting an event it already reported.
+//
+// These are declared HERE, beside the rest of the registry, because
+// f_poiAppend below pushes to every one of them and Pine resolves
+// identifiers in source order.
+var array<int> poiCommTransCount = array.new<int>()
+var array<int> poiCommLastCode   = array.new<int>()
+var array<int> poiCommLastEvent  = array.new<int>()
+var array<int> poiCommLastAvail  = array.new<int>()
+var array<int> poiCommRelevant   = array.new<int>()
+var array<int> poiRepTransCount  = array.new<int>()
+var array<int> poiRepLastCode    = array.new<int>()
+var array<int> poiRepLastEvent   = array.new<int>()
+var array<int> poiRepLastAvail   = array.new<int>()
+var array<int> poiRepRelevant    = array.new<int>()
 
 // -----------------------------------------------------------------------------
 // PRIMITIVES
@@ -3081,30 +3111,6 @@ f_poiDetectReferenceZones() =>
 // (absolute - absFirst). Since the boundary never lags more than ~8 bars, the
 // 300-bar P1 window always contains the span being re-walked.
 // =============================================================================
-
-// Provisional (reported) status, distinct from the committed status.
-var array<int> poiReported = array.new<int>()
-
-// ---- P3-I7 downstream projection state -------------------------------------
-// BTMM addresses a lifecycle event by POI identity plus its timing, so the
-// registry carries the COMMITTED event tally and the latest committed event,
-// then re-derives the pending tail each bar exactly as the status does. That
-// is what stops a later bar from re-emitting an event it already reported.
-var array<int> poiCommTransCount = array.new<int>()
-var array<int> poiCommLastCode   = array.new<int>()
-var array<int> poiCommLastEvent  = array.new<int>()
-var array<int> poiCommLastAvail  = array.new<int>()
-var array<int> poiCommRelevant   = array.new<int>()
-var array<int> poiRepTransCount  = array.new<int>()
-var array<int> poiRepLastCode    = array.new<int>()
-var array<int> poiRepLastEvent   = array.new<int>()
-var array<int> poiRepLastAvail   = array.new<int>()
-var array<int> poiRepRelevant    = array.new<int>()
-
-// The only two transition types any downstream consumer reads
-// (btmm/analyzer.py:644-649).
-f_poiIsDownstreamRelevant(int code) =>
-    code == C_POI_TR_FALSE_INVALIDATION_CONFIRMED or code == C_POI_TR_GENUINE_INVALIDATION_CONFIRMED
 
 // ---- leg speed classification (measurements/legs.py, transcribed) ----------
 // Returns true iff the leg classifies FAST or STRONG_FAST, which is the only

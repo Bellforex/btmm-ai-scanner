@@ -414,3 +414,51 @@ def test_p3_contains_no_trading_or_execution_surface() -> None:
         "request.security",
     ):
         assert banned not in code, f"P3 DEV must not contain {banned}"
+
+
+# ---------------------------------------------------------------------------
+# Declaration order — Pine resolves identifiers in source order
+# ---------------------------------------------------------------------------
+
+
+def test_every_registry_array_is_declared_before_it_is_used() -> None:
+    """TradingView rejected an earlier build with
+
+        Error at 2575:16  Undeclared identifier "poiReported"
+
+    because `f_poiAppend` sits in the foundation but pushed to arrays that were
+    introduced further down the file. Pine has no forward declarations, so this
+    guard fails locally instead of at the compile gate.
+    """
+    lines = _p3_text().splitlines()
+    declarations: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        match = re.match(r"^var array<[^>]+>\s+(\w+)\s*=", line)
+        if match:
+            declarations.setdefault(match.group(1), index)
+
+    poi_arrays = {name for name in declarations if name.startswith("poi")}
+    assert len(poi_arrays) >= 30, f"expected the full registry, saw {len(poi_arrays)}"
+
+    problems: list[str] = []
+    for index, line in enumerate(lines):
+        if line.strip().startswith("//"):
+            continue
+        for used in re.findall(r"array\.\w+\(\s*(\w+)", line):
+            if used in declarations and index < declarations[used]:
+                problems.append(
+                    f"{used} used on line {index + 1} but declared on "
+                    f"line {declarations[used] + 1}"
+                )
+    assert not problems, "; ".join(problems)
+
+
+def test_the_downstream_relevance_helper_follows_its_constants() -> None:
+    """It reads two C_POI_TR_* codes, so it must come after them."""
+    text = _p3_text()
+    helper = text.index("f_poiIsDownstreamRelevant(int code) =>")
+    for constant in (
+        "int C_POI_TR_FALSE_INVALIDATION_CONFIRMED",
+        "int C_POI_TR_GENUINE_INVALIDATION_CONFIRMED",
+    ):
+        assert text.index(constant) < helper, constant
