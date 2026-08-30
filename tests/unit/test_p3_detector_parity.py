@@ -41,6 +41,8 @@ from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
 from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
+from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
+from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
 from btmm_ai_scanner.poi.three_candle_stars import detect_three_candle_stars
 
@@ -75,6 +77,10 @@ _TYPE_CODE = {
     PoiType.SHOOTING_STAR: M.TYPE_SHOOTING_STAR,
     PoiType.MORNING_STAR: M.TYPE_MORNING_STAR,
     PoiType.EVENING_STAR: M.TYPE_EVENING_STAR,
+    PoiType.BULLISH_PRESSURE_WICK: M.TYPE_BULLISH_PRESSURE_WICK,
+    PoiType.BEARISH_PRESSURE_WICK: M.TYPE_BEARISH_PRESSURE_WICK,
+    PoiType.BUY_TO_SELL_CANDLE: M.TYPE_BUY_TO_SELL_CANDLE,
+    PoiType.SELL_TO_BUY_CANDLE: M.TYPE_SELL_TO_BUY_CANDLE,
 }
 _DIR_CODE = {
     PoiDirection.BULLISH: M.DIR_BULLISH,
@@ -168,6 +174,8 @@ _PRODUCTION_DETECTORS = (
     detect_engulfing,
     detect_three_candle_stars,
     detect_single_candle_reversals,
+    detect_pressure_wicks,
+    detect_reversal_candles,
 )
 
 
@@ -289,23 +297,115 @@ def test_zero_range_candles_are_ignored_by_every_detector() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P3-I3 — pressure wicks and reversal candles
+# ---------------------------------------------------------------------------
+
+
+def test_pressure_wick_both_directions_and_zero_opposite_wick_escape() -> None:
+    """The `uw == 0` escape is production's guard against a zero divisor."""
+    bull = _candle(0, "100.60", "101", "100", "101")  # upper wick exactly 0
+    found = _assert_parity((bull,))
+    assert any(t[0] == M.TYPE_BULLISH_PRESSURE_WICK for t in found)
+
+    bear = _candle(0, "100.40", "101", "100", "100")  # lower wick exactly 0
+    assert any(t[0] == M.TYPE_BEARISH_PRESSURE_WICK for t in _assert_parity((bear,)))
+
+
+def test_pressure_wick_baseline_horizon_is_twenty_predecessors() -> None:
+    """A 21-bars-back outlier must not reach the median that gates STRONG."""
+    far_past = _candle(0, "100", "200", "100", "150")
+    filler = [_candle(i, "100", "100.5", "99.5", "100") for i in range(1, 21)]
+    subject = _candle(21, "100.55", "101", "100", "101")
+    _assert_parity((far_past, *filler, subject))
+
+
+def test_reversal_candle_both_directions_with_delayed_confirmation() -> None:
+    prior = [_candle(i, "100", "100.5", "99.5", "100") for i in range(3)]
+    bearish = _candle(3, "102.55", "103", "100", "100.45")
+    follow = _candle(4, "100.45", "102", "100.4", "101.9")
+    found = _assert_parity((*prior, bearish, follow))
+    assert any(t[0] == M.TYPE_SELL_TO_BUY_CANDLE for t in found)
+
+    bullish = _candle(3, "100.45", "103", "100", "102.55")
+    follow_down = _candle(4, "102.55", "102.6", "101", "101.1")
+    assert any(
+        t[0] == M.TYPE_BUY_TO_SELL_CANDLE
+        for t in _assert_parity((*prior, bullish, follow_down))
+    )
+
+
+def test_reversal_candle_unconfirmed_within_three_bars_is_never_emitted() -> None:
+    prior = [_candle(i, "100", "100.5", "99.5", "100") for i in range(3)]
+    candidate = _candle(3, "102.55", "103", "100", "100.45")  # midpoint 101.50
+    misses = [_candle(4 + i, "100.4", "101", "100.3", "100.9") for i in range(3)]
+    found = _assert_parity((*prior, candidate, *misses))
+    assert not any(t[0] == M.TYPE_SELL_TO_BUY_CANDLE for t in found)
+
+
+def test_reversal_candle_confirmation_on_the_third_probe_bar() -> None:
+    prior = [_candle(i, "100", "100.5", "99.5", "100") for i in range(3)]
+    candidate = _candle(3, "102.55", "103", "100", "100.45")
+    late = [
+        _candle(4, "100.4", "101", "100.3", "100.9"),
+        _candle(5, "100.9", "101.2", "100.8", "101.0"),
+        _candle(6, "101", "102", "100.9", "101.9"),  # first close > midpoint
+    ]
+    found = _assert_parity((*prior, candidate, *late))
+    emitted = [t for t in found if t[0] == M.TYPE_SELL_TO_BUY_CANDLE]
+    assert len(emitted) == 1
+    # confirmation timestamp must be the THIRD probe bar's availability
+    assert emitted[0][9] == _ms(late[2].availability_time_utc)
+
+
+# ---------------------------------------------------------------------------
 # Randomized differential campaign — the real proof
 # ---------------------------------------------------------------------------
 
 
 def _random_stream(seed: int, length: int) -> tuple[NormalizedCandle, ...]:
-    """Deterministic pseudo-random OHLC that respects the candle invariants."""
+    """Deterministic pseudo-random OHLC that respects the candle invariants.
+
+    A plain drifting walk never produces reversal candles, so the generator
+    also emits occasional IMPULSE bars (large range, tight wicks, extreme
+    close) and follows some of them with a RETRACE that closes back through
+    the impulse midpoint. Without those shapes the differential campaign would
+    silently skip two of the twelve families — which the coverage test below
+    would then catch.
+    """
     rng = random.Random(seed)
     candles = []
     price = Decimal("100")
+    pending_retrace: Decimal | None = None
     for index in range(length):
-        drift = Decimal(rng.randint(-60, 60)) / Decimal(100)
         open_ = price
-        close = price + drift
-        spread_up = Decimal(rng.randint(0, 80)) / Decimal(100)
-        spread_dn = Decimal(rng.randint(0, 80)) / Decimal(100)
-        high = max(open_, close) + spread_up
-        low = min(open_, close) - spread_dn
+        if pending_retrace is not None:
+            close = pending_retrace
+            pending_retrace = None
+            spread = Decimal(rng.randint(0, 20)) / Decimal(100)
+            high = max(open_, close) + spread
+            low = min(open_, close) - spread
+        elif rng.randint(0, 9) < 2:
+            # impulse: 2.0-3.5 wide, tight wicks -> high body efficiency and an
+            # extreme close position
+            magnitude = Decimal(rng.randint(200, 350)) / Decimal(100)
+            direction = 1 if rng.randint(0, 1) else -1
+            close = open_ + magnitude * direction
+            wick = Decimal(rng.randint(0, 12)) / Decimal(100)
+            high = max(open_, close) + wick
+            low = min(open_, close) - wick
+            if rng.randint(0, 1):
+                midpoint = (high + low) / Decimal(2)
+                overshoot = Decimal(rng.randint(5, 60)) / Decimal(100)
+                pending_retrace = (
+                    midpoint + overshoot if direction < 0 else midpoint - overshoot
+                )
+        else:
+            drift = Decimal(rng.randint(-60, 60)) / Decimal(100)
+            close = open_ + drift
+            spread_up = Decimal(rng.randint(0, 80)) / Decimal(100)
+            spread_dn = Decimal(rng.randint(0, 80)) / Decimal(100)
+            high = max(open_, close) + spread_up
+            low = min(open_, close) - spread_dn
         candles.append(_candle(index, str(open_), str(high), str(low), str(close)))
         price = close
     return tuple(candles)
@@ -338,6 +438,10 @@ def test_the_campaign_actually_produces_every_fixed_window_type() -> None:
         M.TYPE_BEARISH_ENGULFING,
         M.TYPE_HAMMER,
         M.TYPE_SHOOTING_STAR,
+        M.TYPE_BULLISH_PRESSURE_WICK,
+        M.TYPE_BEARISH_PRESSURE_WICK,
+        M.TYPE_BUY_TO_SELL_CANDLE,
+        M.TYPE_SELL_TO_BUY_CANDLE,
     }
     assert expected.issubset(seen), f"campaign never produced {expected - seen}"
 
@@ -433,3 +537,37 @@ def test_pine_detector_zones_match_the_production_geometry_owners() -> None:
         0
     ]
     assert "array.get(wHigh, mi), array.get(wLow, mi)" in stars
+
+
+def test_pine_declares_the_baseline_and_delayed_confirmation_detectors() -> None:
+    code = _pine_code()
+    assert "f_poiDetectPressureWicks(int wn) =>" in code
+    assert "f_poiDetectReversalCandles(int wn) =>" in code
+
+
+def test_pine_pressure_wick_reuses_the_frozen_p1_median_helper() -> None:
+    """No second median implementation, and its own scratch array."""
+    code = _pine_code()
+    assert "f_medianRange(wHigh, wLow, precStart, ci, scPoiRange)" in code
+    assert "var array<float> scPoiRange = array.new<float>()" in code
+
+
+def test_pine_pressure_wick_keeps_both_zero_wick_dominance_escapes() -> None:
+    code = _pine_code()
+    assert "uw == 0 or lw >= C_POI_PW_DOMINANCE_STANDARD * uw" in code
+    assert "lw == 0 or uw >= C_POI_PW_DOMINANCE_STANDARD * lw" in code
+
+
+def test_pine_reversal_candle_keeps_the_inverted_naming() -> None:
+    """AD-3: a RED candidate emits SELL_TO_BUY with BULLISH direction."""
+    code = _pine_code()
+    block = code.split("f_poiDetectReversalCandles")[1]
+    bear_branch = block.split("f_poiIsBearCandle(ci)")[1].split("else if")[0]
+    assert "C_POI_SELL_TO_BUY_CANDLE" in bear_branch
+    assert "C_POI_DIR_BULLISH" in bear_branch
+
+
+def test_pine_reversal_candle_emits_only_on_the_first_qualifying_probe() -> None:
+    """This is what makes the delayed-confirmation emission exactly-once."""
+    code = _pine_code()
+    assert "if confirmIdx == wn - 1" in code

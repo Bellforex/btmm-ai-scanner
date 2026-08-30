@@ -2789,3 +2789,121 @@ f_poiDetectSingleCandleReversals(int wn) =>
                 strong := uwShare >= C_POI_HSS_WICK_SHARE_STRONG and eff <= C_POI_HSS_BODY_EFF_STRONG and lwShare <= C_POI_HSS_OPP_WICK_STRONG
             if typeCode != 0
                 f_poiEmit(typeCode, direction, zoneTop, zoneBottom, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, ci), 1, array.get(wOpenT, ci), array.get(wOpenT, ci), array.get(wAvailT, ci))
+
+// =============================================================================
+// P3-I3 — BASELINE / DELAYED-CONFIRMATION DETECTORS
+//         (pressure wicks, reversal candles)
+// -----------------------------------------------------------------------------
+// Neither uses ATR. Both need more than their own candle:
+//
+//   pressure wicks   the median range of up to 20 predecessors, which is the
+//                    widest dependency in the whole detector set (21 bars) and
+//                    therefore what fixes C_POI_MAX_DEPENDENCY_BARS;
+//   reversal candles a 3-bar size baseline BEFORE the candidate and a DELAYED
+//                    confirmation up to 3 bars AFTER it, so the emitting bar is
+//                    not the candidate bar.
+//
+// The median reuses the frozen P1 helper f_medianRange (identical odd/even
+// semantics to measurements/candle_metrics.median_total_range) rather than
+// introducing a second median implementation. It gets its own scratch array:
+// the P1 comment forbids aliasing one scratch across two live users.
+// =============================================================================
+
+var array<float> scPoiRange = array.new<float>()
+
+// ---- PRESSURE WICKS (pressure_wicks.py:38) ----------------------------------
+// Single candle. The `uw == 0` / `lw == 0` escapes are production's guard
+// against dividing by a zero opposite wick, and are reproduced verbatim.
+// With no predecessors the baseline is the candle's OWN range, which makes the
+// context ratio exactly 1.0 and therefore never STRONG.
+f_poiDetectPressureWicks(int wn) =>
+    if wn >= 1
+        int ci = wn - 1
+        float candleRange = f_poiRange(ci)
+        if candleRange > 0
+            int precStart = math.max(0, ci - C_POI_PW_BASELINE_WINDOW)
+            float baseline = precStart < ci ? f_medianRange(wHigh, wLow, precStart, ci, scPoiRange) : candleRange
+            float rangeContextRatio = baseline > 0 ? candleRange / baseline : 1.0
+
+            float lw = f_poiLowerWick(ci)
+            float uw = f_poiUpperWick(ci)
+            float lwShare = lw / candleRange
+            float uwShare = uw / candleRange
+            float eff = f_poiBodyEff(ci)
+            float bullPos = f_poiBullClosePos(ci)
+            float bearPos = f_poiBearClosePos(ci)
+
+            bool dominanceBull = uw == 0 or lw >= C_POI_PW_DOMINANCE_STANDARD * uw
+            bool dominanceBear = lw == 0 or uw >= C_POI_PW_DOMINANCE_STANDARD * lw
+
+            bool bullCandidate = lwShare >= C_POI_PW_SHARE_STANDARD and eff >= C_POI_PW_BODY_EFF_STANDARD and dominanceBull and bullPos >= C_POI_PW_CLOSE_POS_STANDARD
+            bool bearCandidate = uwShare >= C_POI_PW_SHARE_STANDARD and eff >= C_POI_PW_BODY_EFF_STANDARD and dominanceBear and bearPos >= C_POI_PW_CLOSE_POS_STANDARD
+
+            int typeCode = 0
+            int direction = 0
+            float zoneTop = 0.0
+            float zoneBottom = 0.0
+            bool strong = false
+            if bullCandidate
+                typeCode := C_POI_BULLISH_PRESSURE_WICK
+                direction := C_POI_DIR_BULLISH
+                zoneTop := math.min(array.get(wOpen, ci), array.get(wClose, ci))
+                zoneBottom := array.get(wLow, ci)
+                strong := lwShare >= C_POI_PW_SHARE_STRONG and eff >= C_POI_PW_BODY_EFF_STRONG and lw >= C_POI_PW_DOMINANCE_STRONG * uw and bullPos >= C_POI_PW_CLOSE_POS_STRONG and rangeContextRatio >= C_POI_PW_RANGE_CONTEXT_STRONG
+            else if bearCandidate
+                typeCode := C_POI_BEARISH_PRESSURE_WICK
+                direction := C_POI_DIR_BEARISH
+                zoneTop := array.get(wHigh, ci)
+                zoneBottom := math.max(array.get(wOpen, ci), array.get(wClose, ci))
+                strong := uwShare >= C_POI_PW_SHARE_STRONG and eff >= C_POI_PW_BODY_EFF_STRONG and uw >= C_POI_PW_DOMINANCE_STRONG * lw and bearPos >= C_POI_PW_CLOSE_POS_STRONG and rangeContextRatio >= C_POI_PW_RANGE_CONTEXT_STRONG
+
+            if typeCode != 0
+                f_poiEmit(typeCode, direction, zoneTop, zoneBottom, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, ci), 1, array.get(wOpenT, ci), array.get(wOpenT, ci), array.get(wAvailT, ci))
+
+// ---- REVERSAL CANDLES (reversal_candles.py:36) ------------------------------
+// NAMING IS INVERTED BY DESIGN (AD-3): a RED candidate emits SELL_TO_BUY with
+// BULLISH direction, a GREEN candidate emits BUY_TO_SELL with BEARISH. The name
+// describes the transition being set up, not the candle's own colour.
+//
+// Confirmation is DELAYED: the candidate needs a later close beyond its own
+// midpoint within 3 bars. This detector therefore runs at the CONFIRMING bar
+// and looks back for candidates, emitting only when THIS bar is the FIRST
+// qualifying probe — which is what makes emission exactly-once.
+f_poiDetectReversalCandles(int wn) =>
+    for k = 1 to C_POI_REV_CONFIRM_WINDOW
+        int ci = wn - 1 - k
+        if ci >= C_POI_REV_LOOKBACK
+            float baseline = 0.0
+            for b = ci - C_POI_REV_LOOKBACK to ci - 1
+                baseline := math.max(baseline, f_poiRange(b))
+            if baseline > 0
+                float ratio = f_poiRange(ci) / baseline
+                if ratio >= C_POI_REV_RATIO_STANDARD
+                    float eff = f_poiBodyEff(ci)
+                    if eff >= C_POI_REV_BODY_EFF_STANDARD
+                        int typeCode = 0
+                        int direction = 0
+                        float closePos = 0.0
+                        if f_poiIsBearCandle(ci)
+                            closePos := f_poiBearClosePos(ci)
+                            typeCode := C_POI_SELL_TO_BUY_CANDLE
+                            direction := C_POI_DIR_BULLISH
+                        else if f_poiIsBullCandle(ci)
+                            closePos := f_poiBullClosePos(ci)
+                            typeCode := C_POI_BUY_TO_SELL_CANDLE
+                            direction := C_POI_DIR_BEARISH
+                        if typeCode != 0 and closePos >= C_POI_REV_CLOSE_POS_STANDARD
+                            float midpoint = (array.get(wHigh, ci) + array.get(wLow, ci)) / 2
+                            int confirmIdx = -1
+                            int probeEnd = math.min(ci + 1 + C_POI_REV_CONFIRM_WINDOW, wn)
+                            for p = ci + 1 to probeEnd - 1
+                                if confirmIdx == -1
+                                    bool hit = direction == C_POI_DIR_BULLISH ? array.get(wClose, p) > midpoint : array.get(wClose, p) < midpoint
+                                    if hit
+                                        confirmIdx := p
+                            // Emit ONLY when this bar is the first qualifying
+                            // probe: an earlier one already emitted, a later one
+                            // has not happened yet.
+                            if confirmIdx == wn - 1
+                                bool strong = ratio >= C_POI_REV_RATIO_STRONG and eff >= C_POI_REV_BODY_EFF_STRONG and closePos >= C_POI_REV_CLOSE_POS_STRONG
+                                f_poiEmit(typeCode, direction, array.get(wHigh, ci), array.get(wLow, ci), strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, ci), 1, array.get(wOpenT, ci), array.get(wOpenT, ci), array.get(wAvailT, confirmIdx))

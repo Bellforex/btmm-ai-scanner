@@ -62,6 +62,11 @@ TIER_NA = 0
 TIER_STANDARD = 1
 TIER_STRONG = 2
 
+#: Detector dependency windows, mirroring the C_POI_* constants.
+PW_BASELINE_WINDOW = 20
+REV_LOOKBACK = 3
+REV_CONFIRM_WINDOW = 3
+
 #: Pine's bounded detection ring: the widest production dependency window.
 RING = 21
 
@@ -339,6 +344,166 @@ def _detect_single_candle_reversals(
     ]
 
 
+def _median_total_range(window: Sequence[NormalizedCandle]) -> Decimal:
+    """`f_medianRange` / `median_total_range`: odd -> middle, even -> mean."""
+    if len(window) == 0:
+        return _ZERO
+    ranges = sorted(_range(c) for c in window)
+    mid = len(ranges) // 2
+    if len(ranges) % 2 == 1:
+        return ranges[mid]
+    return (ranges[mid - 1] + ranges[mid]) / _TWO
+
+
+def _detect_pressure_wicks(
+    w: Sequence[NormalizedCandle], cfg: PoiConfiguration
+) -> list[ModelPoi]:
+    wn = len(w)
+    if wn < 1:
+        return []
+    ci = wn - 1
+    c = w[ci]
+    candle_range = _range(c)
+    if candle_range == _ZERO:
+        return []
+
+    prec_start = max(0, ci - PW_BASELINE_WINDOW)
+    preceding = w[prec_start:ci]
+    baseline = _median_total_range(preceding) if len(preceding) > 0 else candle_range
+    range_context = candle_range / baseline if baseline > _ZERO else Decimal("1")
+
+    lw = _lower_wick(c)
+    uw = _upper_wick(c)
+    lw_share = lw / candle_range
+    uw_share = uw / candle_range
+    eff = _body_eff(c)
+    bull_pos = _bull_close_pos(c)
+    bear_pos = _bear_close_pos(c)
+
+    dominance_bull = uw == _ZERO or lw >= cfg.pressure_wick_dominance_standard * uw
+    dominance_bear = lw == _ZERO or uw >= cfg.pressure_wick_dominance_standard * lw
+
+    bull_candidate = (
+        lw_share >= cfg.pressure_wick_share_standard
+        and eff >= cfg.pressure_wick_body_efficiency_standard
+        and dominance_bull
+        and bull_pos >= cfg.pressure_wick_close_position_standard
+    )
+    bear_candidate = (
+        uw_share >= cfg.pressure_wick_share_standard
+        and eff >= cfg.pressure_wick_body_efficiency_standard
+        and dominance_bear
+        and bear_pos >= cfg.pressure_wick_close_position_standard
+    )
+
+    if bull_candidate:
+        poi_type, direction = TYPE_BULLISH_PRESSURE_WICK, DIR_BULLISH
+        zone_top, zone_bottom = min(c.open, c.close), c.low
+        strong = (
+            lw_share >= cfg.pressure_wick_share_strong
+            and eff >= cfg.pressure_wick_body_efficiency_strong
+            and lw >= cfg.pressure_wick_dominance_strong * uw
+            and bull_pos >= cfg.pressure_wick_close_position_strong
+            and range_context >= cfg.pressure_wick_range_context_strong
+        )
+    elif bear_candidate:
+        poi_type, direction = TYPE_BEARISH_PRESSURE_WICK, DIR_BEARISH
+        zone_top, zone_bottom = c.high, max(c.open, c.close)
+        strong = (
+            uw_share >= cfg.pressure_wick_share_strong
+            and eff >= cfg.pressure_wick_body_efficiency_strong
+            and uw >= cfg.pressure_wick_dominance_strong * lw
+            and bear_pos >= cfg.pressure_wick_close_position_strong
+            and range_context >= cfg.pressure_wick_range_context_strong
+        )
+    else:
+        return []
+
+    return [
+        ModelPoi(
+            poi_type,
+            direction,
+            zone_top,
+            zone_bottom,
+            TIER_STRONG if strong else TIER_STANDARD,
+            _ms(c),
+            1,
+            _ms(c),
+            _ms(c),
+            _ms(c, availability=True),
+        )
+    ]
+
+
+def _detect_reversal_candles(
+    w: Sequence[NormalizedCandle], cfg: PoiConfiguration
+) -> list[ModelPoi]:
+    """Delayed confirmation: emit only when THIS bar is the first qualifying probe."""
+    wn = len(w)
+    out: list[ModelPoi] = []
+    for k in range(1, REV_CONFIRM_WINDOW + 1):
+        ci = wn - 1 - k
+        if ci < REV_LOOKBACK:
+            continue
+        candidate = w[ci]
+        baseline = max(_range(c) for c in w[ci - REV_LOOKBACK : ci])
+        if baseline == _ZERO:
+            continue
+        ratio = _range(candidate) / baseline
+        if ratio < cfg.reversal_candidate_size_ratio_standard:
+            continue
+        eff = _body_eff(candidate)
+        if eff < cfg.reversal_body_efficiency_standard:
+            continue
+
+        if _is_bear(candidate):
+            close_pos = _bear_close_pos(candidate)
+            poi_type, direction = TYPE_SELL_TO_BUY_CANDLE, DIR_BULLISH
+        elif _is_bull(candidate):
+            close_pos = _bull_close_pos(candidate)
+            poi_type, direction = TYPE_BUY_TO_SELL_CANDLE, DIR_BEARISH
+        else:
+            continue
+        if close_pos < cfg.reversal_close_position_standard:
+            continue
+
+        midpoint = (candidate.high + candidate.low) / _TWO
+        confirm_idx = -1
+        probe_end = min(ci + 1 + REV_CONFIRM_WINDOW, wn)
+        for p in range(ci + 1, probe_end):
+            hit = (
+                w[p].close > midpoint
+                if direction == DIR_BULLISH
+                else w[p].close < midpoint
+            )
+            if hit:
+                confirm_idx = p
+                break
+        if confirm_idx != wn - 1:
+            continue
+
+        strong = (
+            ratio >= cfg.reversal_candidate_size_ratio_strong
+            and eff >= cfg.reversal_body_efficiency_strong
+            and close_pos >= cfg.reversal_close_position_strong
+        )
+        out.append(
+            ModelPoi(
+                poi_type,
+                direction,
+                candidate.high,
+                candidate.low,
+                TIER_STRONG if strong else TIER_STANDARD,
+                _ms(candidate),
+                1,
+                _ms(candidate),
+                _ms(candidate),
+                _ms(w[confirm_idx], availability=True),
+            )
+        )
+    return out
+
+
 #: The P3-I2 fixed-window detector group, in the Pine execution order.
 Detector = Callable[[Sequence[NormalizedCandle], PoiConfiguration], list[ModelPoi]]
 
@@ -350,11 +515,18 @@ FIXED_WINDOW_DETECTORS: tuple[Detector, ...] = (
     _detect_single_candle_reversals,
 )
 
+#: P3-I3 adds the baseline / delayed-confirmation families.
+NO_ATR_DETECTORS: tuple[Detector, ...] = (
+    *FIXED_WINDOW_DETECTORS,
+    _detect_pressure_wicks,
+    _detect_reversal_candles,
+)
+
 
 def run_frontier(
     candles: Sequence[NormalizedCandle],
     configuration: PoiConfiguration,
-    detectors: tuple[Detector, ...] = FIXED_WINDOW_DETECTORS,
+    detectors: tuple[Detector, ...] = NO_ATR_DETECTORS,
     ring: int = RING,
 ) -> list[ModelPoi]:
     """Replay the Pine per-bar frontier and return the accumulated registry.
