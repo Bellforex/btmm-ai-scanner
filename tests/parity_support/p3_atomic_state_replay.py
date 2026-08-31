@@ -117,11 +117,17 @@ def reference_zone_pois(
         watr = P2R.window_atr(atr_all, terminal, lookback)
         with P2R._TRUNC.injected_atr(watr):
             swings = P2R._DIAG._confirmed_swings(window, measurement)
-        if not swings:
-            continue
-        zones = detect_support_resistance_zones(
-            tuple(window), tuple(swings), measurement
-        )
+            if not swings:
+                continue
+            # The S/R detector recomputes the ATR from whatever candles it is
+            # handed. Production hands it the WHOLE history, so it measures the
+            # continuous Wilder ATR; handing it a bare 300-bar window would make
+            # it measure a cold-started one instead, and its reaction gate reads
+            # those values directly. It therefore has to stay INSIDE the
+            # injection with the swing detector, not outside it.
+            zones = detect_support_resistance_zones(
+                tuple(window), tuple(swings), measurement
+            )
         for poi in M.project_reference_zones(zones):
             if poi.identity not in seen:
                 seen.add(poi.identity)
