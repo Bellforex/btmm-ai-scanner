@@ -3367,10 +3367,46 @@ f_poiAdvanceAllLifecycles(int absFirst, int cbc) =>
     if m > 0
         for i = 0 to m - 1
             // A POI becomes live on the first confirmed bar whose availability
-            // is strictly later than its own (lifecycle.py:165-170).
+            // is strictly later than its own (lifecycle.py:164-170). Production
+            // SCANS the candle array for that bar; it has no notion of when an
+            // engine happened to discover the POI. Most POIs are registered by
+            // the bar that confirms them, so that bar IS the current one and the
+            // distinction never shows. Reference zones are different: they are a
+            // copy of P1's published S/R, and a zone whose origin is outranked by
+            // an earlier same-direction pivot stays invisible until that pivot
+            // leaves the scan range -- so the window can hand P3 a zone whose
+            // availability is already far behind. Starting such a POI HERE would
+            // silently skip its whole early life.
+            //
+            // The scan below is production's, bounded to the window. That is
+            // always enough: the origin is only unblocked once the blocker falls
+            // out of [T-W+1+R, T-R], so the delay is at most W-4 bars and the
+            // bar we need is still retained.
             if array.get(poiResumeIdx, i) == C_ST_NA
                 if array.get(wAvailT, cbc - 1 - absFirst) > array.get(poiAvailTime, i)
-                    array.set(poiResumeIdx, i, cbc - 1)
+                    int nW = array.size(wAvailT)
+                    int startAbs = cbc - 1
+                    for j = 0 to nW - 1
+                        if array.get(wAvailT, j) > array.get(poiAvailTime, i)
+                            startAbs := absFirst + j
+                            break
+                    // Taps are counted per bar as bars arrive, so the bars the
+                    // walk is about to skip have to be replayed here or their
+                    // taps are lost (_compute_freshness_and_taps counts from the
+                    // same start_index). The current bar is left to
+                    // f_poiAdvanceLifecycle, which counts it as usual.
+                    // The guard keeps an empty range from running BACKWARDS,
+                    // which is what a Pine `for` does when `to` < `from`.
+                    if startAbs <= cbc - 2
+                        for k = startAbs to cbc - 2
+                            int wk = k - absFirst
+                            bool tch = f_poiTouches(i, array.get(wHigh, wk), array.get(wLow, wk))
+                            if tch and not array.get(poiInTap, i)
+                                array.set(poiTapCount, i, array.get(poiTapCount, i) + 1)
+                                array.set(poiInTap, i, true)
+                            else if not tch
+                                array.set(poiInTap, i, false)
+                    array.set(poiResumeIdx, i, startAbs)
             if array.get(poiResumeIdx, i) != C_ST_NA
                 f_poiAdvanceLifecycle(i, absFirst, cbc)
 
