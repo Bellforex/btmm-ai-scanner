@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from itertools import pairwise
 from typing import Any
 
@@ -77,6 +77,25 @@ _ZERO = Decimal("0")
 _TWO = Decimal("2")
 
 
+#: Tick used to normalise zone bounds inside the identity, mirroring Pine's
+#: `f_poiTicks(price)` = `int(math.round(price / syminfo.mintick))`. The model
+#: carries no configuration object, so this is a module constant pinned by test
+#: to the value every campaign in this repo actually runs.
+IDENTITY_MINTICK = Decimal("0.01")
+
+
+def _ticks(price: Decimal) -> int:
+    """Price -> integer ticks, with Pine's rounding.
+
+    `math.round` is ties-away-from-zero; Python's built-in `round` is banker's
+    and would disagree at an exact half tick, which is precisely where two
+    neighbouring zones are most likely to sit.
+    """
+    return int(
+        (price / IDENTITY_MINTICK).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
+
+
 @dataclass(frozen=True)
 class ModelPoi:
     """One emitted POI, in the Pine projection (no UUIDs anywhere)."""
@@ -93,9 +112,30 @@ class ModelPoi:
     confirm_time: int
 
     @property
-    def identity(self) -> tuple[int, int, int, int]:
-        """AD-1 identity: type over a contiguous source-candle run."""
-        return (self.poi_type, self.src_first_time, self.src_count, self.src_last_time)
+    def identity(self) -> tuple[int, int, int, int, int, int]:
+        """AD-1 identity: type over a contiguous source-candle run, PLUS the
+        tick-normalised bounds -- mirroring Pine's `f_poiSameIdentity`.
+
+        The bounds are not decoration. Reference zones are projections of P1
+        records and have no source candles, so their (first, count, last) triple
+        degenerates to the confirmation time, and two zones confirmed by the same
+        candle from different origin swings collide without them. That is not
+        hypothetical: on the M5 atomic context a SUPPORT_ZONE at (443562, 443621)
+        shared an identity with one at (443418, 443483) and was silently dropped
+        by the dedup, leaving the replay one POI short of Pine.
+
+        For every candle-derived family the bounds are a deterministic function
+        of the source candles already in the identity, so this refines and never
+        splits -- which is why it cannot disturb the closed M15 result.
+        """
+        return (
+            self.poi_type,
+            self.src_first_time,
+            self.src_count,
+            self.src_last_time,
+            _ticks(self.zone_bottom),
+            _ticks(self.zone_top),
+        )
 
 
 # ---- candle metrics (measurements/candle_metrics.py) ------------------------
