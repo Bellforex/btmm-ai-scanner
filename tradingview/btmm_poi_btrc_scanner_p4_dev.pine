@@ -3648,8 +3648,16 @@ float C_BTMM_SFAST_EFFICIENCY          = 0.75
 float C_BTMM_SFAST_CANDLE_SHARE        = 0.80
 
 // M5 and M15 form setups; M1 is supporting-only. On a single-timeframe chart
-// this is a property of the chart's own timeframe, decided once.
+// both are properties of the chart's own timeframe, decided once.
+//
+// SUPPORTED is not the same as FORMATION, and conflating them is wrong in both
+// directions. analyze_btmm skips any POI whose source_timeframe is outside
+// formation_timeframes | supporting_only_timeframes (analyzer.py:400-416), so
+// on H1, H4 or D1 production creates NO setups at all -- not supporting-only
+// ones. The engine below must create nothing there rather than quietly treating
+// an unsupported chart as a supporting timeframe.
 bool C_BTMM_IS_FORMATION_TF = timeframe.period == "5" or timeframe.period == "15"
+bool C_BTMM_TF_SUPPORTED    = timeframe.period == "1" or C_BTMM_IS_FORMATION_TF
 
 // -----------------------------------------------------------------------------
 // P4-I1 — the setup registry
@@ -3811,16 +3819,20 @@ f_btmmAppend(int poiIdx, int dir, float zTop, float zBot, int candAvail) =>
     array.push(btmmEvLqSrc, C_BTMM_SRC_NA)
 
 // A POI is BTMM-eligible when its type is one of the 18 lifecycle-eligible
-// types, which on a P3 CORE chart is every POI the registry holds. The
-// timeframe test is the chart's own, decided once above.
+// types AND its source timeframe is supported. The timeframe test is the
+// chart's own, decided once above: on an unsupported chart the registry stays
+// empty, which is exactly what production produces there.
 f_btmmSyncSetups() =>
     int m = array.size(poiType)
     int have = array.size(btmmSetupByPoi)
     if m > have
         for i = have to m - 1
+            // The watermark tracks POIs seen and advances on every chart, so an
+            // unsupported timeframe is a setup-creation gate, not a stalled
+            // cursor that would re-scan the whole registry every bar.
             array.push(btmmSetupByPoi, -1)
             int tc = array.get(poiType, i)
-            if tc >= C_POI_CORE_TYPE_MIN and tc <= C_POI_CORE_TYPE_MAX
+            if C_BTMM_TF_SUPPORTED and tc >= C_POI_CORE_TYPE_MIN and tc <= C_POI_CORE_TYPE_MAX
                 f_btmmAppend(i, array.get(poiDirection, i), array.get(poiZoneTop, i), array.get(poiZoneBottom, i), array.get(poiAvailTime, i))
                 array.set(btmmSetupByPoi, i, array.size(btmmPoi) - 1)
 
@@ -3832,16 +3844,6 @@ f_btmmSyncSetups() =>
 // mean; the leg distance is |last.close - first.open|, not the excursion to the
 // favourable extreme; efficiency divides that by the summed high-low path; and
 // the directional-candle test is inclusive, so a doji counts.
-f_btmmMedian(array<float> values) =>
-    int n = array.size(values)
-    float out = 0.0
-    if n > 0
-        array<float> ordered = array.copy(values)
-        array.sort(ordered, order.ascending)
-        int mid = math.floor(n / 2)
-        out := n % 2 == 1 ? array.get(ordered, mid) : (array.get(ordered, mid - 1) + array.get(ordered, mid)) / 2.0
-    out
-
 // Writes [referenceAtr, directionalEfficiency, directionalCandleShare,
 // speedCode] into btmmLegOut for the first `count` bars of setup `s`'s window
 // ring. A scratch array rather than a tuple return because the caller evaluates
@@ -3872,11 +3874,11 @@ f_btmmLeg(int s, int count, bool bull) =>
             float c = array.get(btmmWinC, base + k)
             if bull ? c >= o : c <= o
                 directional += 1
-        refAtr := f_btmmMedian(known)
-        share := directional / count
+        refAtr := f_medianConsume(known)
+        share := directional / float(count)
         float net = math.abs(array.get(btmmWinC, base + count - 1) - array.get(btmmWinO, base))
         if refAtr != 0.0 and path != 0.0
-            float spd = net / (count * refAtr)
+            float spd = net / (float(count) * refAtr)
             eff := net / path
             if spd >= C_BTMM_SFAST_SPEED and eff >= C_BTMM_SFAST_EFFICIENCY and share >= C_BTMM_SFAST_CANDLE_SHARE
                 speed := C_BTMM_SPD_STRONG_FAST
@@ -4046,7 +4048,7 @@ f_btmmAdvance(int m, float prevClose, float o, float h, float l, float c, float 
 // session, then volume. A setup failing two gates reports the first.
 // Returns [kind, cancelReason, blockReason] with kind 0 = CANCEL, 1 = CONFIRM,
 // 2 = BLOCKED.
-f_btmmResolveGates(int ctxDir, int ctxFw, int session, int volume, int liqStatus, bool isFormationTf) =>
+f_btmmResolveGates(int ctxDir, int ctxFw, int session, int volState, int liqStatus, bool isFormationTf) =>
     int kind = 2
     int cancelReason = C_BTMM_CANCEL_NA
     int blockReason = C_BTMM_BLOCK_NA
@@ -4059,11 +4061,11 @@ f_btmmResolveGates(int ctxDir, int ctxFw, int session, int volume, int liqStatus
     else if session == C_BTMM_SESS_INACTIVE
         kind := 0
         cancelReason := C_BTMM_CANCEL_SESSION
-    else if volume == C_BTMM_VOL_FAILS
+    else if volState == C_BTMM_VOL_FAILS
         kind := 0
         cancelReason := C_BTMM_CANCEL_VOLUME
     else
-        bool fullyAligned = ctxDir == C_BTMM_CTX_ALIGNED and ctxFw == C_BTMM_CTX_ALIGNED and session == C_BTMM_SESS_ACTIVE and volume == C_BTMM_VOL_SUPPORTS
+        bool fullyAligned = ctxDir == C_BTMM_CTX_ALIGNED and ctxFw == C_BTMM_CTX_ALIGNED and session == C_BTMM_SESS_ACTIVE and volState == C_BTMM_VOL_SUPPORTS
         if isFormationTf and fullyAligned
             kind := 1
         else if not isFormationTf
@@ -4106,7 +4108,7 @@ f_btmmMaterialize(int s) =>
     int ctxDir = C_BTMM_CTX_PENDING
     int ctxFw = C_BTMM_CTX_PENDING
     int session = C_BTMM_SESS_PENDING
-    int volume = C_BTMM_VOL_PENDING
+    int volState = C_BTMM_VOL_PENDING
     int formGate = C_BTMM_GATE_PENDING
     int evidTime = -1
     int block = C_BTMM_BLOCK_NA
@@ -4218,7 +4220,7 @@ f_btmmMaterialize(int s) =>
                                 ctxDir := evCtxDir
                                 ctxFw := evCtxFw
                                 session := evSess
-                                volume := evVol
+                                volState := evVol
                                 lqStatus := evLiq
                                 evidTime := tEv
                                 if evLiq == C_BTMM_LQS_PRESENT
@@ -4287,7 +4289,7 @@ f_btmmMaterialize(int s) =>
     array.set(btmmCtxDir, s, ctxDir)
     array.set(btmmCtxFw, s, ctxFw)
     array.set(btmmSession, s, session)
-    array.set(btmmVolume, s, volume)
+    array.set(btmmVolume, s, volState)
     array.set(btmmFormGate, s, formGate)
     array.set(btmmEvidTime, s, evidTime)
     array.set(btmmBlock, s, block)
