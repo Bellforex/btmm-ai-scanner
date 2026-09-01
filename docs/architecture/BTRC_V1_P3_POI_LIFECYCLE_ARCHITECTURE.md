@@ -619,3 +619,41 @@ commit `9c2abf3`, leaving the package unimportable and causing `mypy` to abort
 before checking any file. The docstring is now closed. Nothing semantic
 depended on it — parity modules are loaded by file path — and `mypy src` is
 clean across 138 source files.
+
+---
+
+## Part III — Frozen invariant: availability is not discovery
+
+Added at P3 CORE closure. This is a design-of-record rule, not a note.
+
+> **A POI's semantic availability is authoritative. When an engine happens to
+> discover it is implementation timing and carries no semantic weight.**
+
+Production `run_poi_lifecycle` (`poi/lifecycle.py:164-170`) scans the candle
+array for the first bar whose availability exceeds the POI's own, and
+`_compute_freshness_and_taps` counts taps from that same index. Nothing in
+production expresses "the bar we noticed it".
+
+Three consequences bind the Pine port:
+
+1. **Late discovery must not reset a lifecycle.** A POI registered after its
+   availability starts at its availability, not at registration, and the
+   interactions in between are replayed rather than lost.
+2. **Discovery time is diagnostic only.** It never enters POI identity, the
+   canonical state record, or any digest. It may be logged.
+3. **The backfill is bounded, and provably so.** A reference-zone origin hidden
+   by an earlier same-direction pivot resurfaces only when that blocker leaves
+   the scan range `[T-W+1+R, T-R]`, i.e. at `T = A + W - R`. Since the
+   confirmation `C > A`, the delay is strictly less than the window — at most
+   `W - 4`. The bar the lifecycle must start from is therefore always still
+   retained, so the backfill is exact rather than approximate.
+
+This surfaced only through reference zones, because they are projected from P1's
+published S/R rather than detected from the candle under evaluation. For the
+sixteen candle-derived CORE types registration coincides with availability, so
+the distinction is invisible — which is why the defect hid behind eight matching
+detector families for an entire campaign.
+
+Implemented in `f_poiAdvanceAllLifecycles` (`be1df56`); pinned by
+`tests/unit/test_p3_reference_zone_timing.py` and
+`tests/unit/test_p3_reference_zone_backfill_campaign.py`.
