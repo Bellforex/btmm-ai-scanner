@@ -47,6 +47,7 @@ from btmm_ai_scanner.btmm.enums import (
     BtmmLifecycleStatus,
     BtmmLifecycleTransitionType,
     BtmmLiquidityEvidenceStatus,
+    BtmmLiquidityLocation,
     BtmmSessionStatus,
     BtmmVolumePillarStatus,
 )
@@ -59,7 +60,13 @@ from btmm_ai_scanner.contracts.types import SemVer
 from btmm_ai_scanner.domain import MarketMeasurementAnalysis, MixedSymbolAnalysisError
 from btmm_ai_scanner.domain.enums import DerivedOutputType
 from btmm_ai_scanner.poi.analyzer import PoiAnalysis
-from btmm_ai_scanner.poi.enums import PoiDirection, PoiFamily, PoiType
+from btmm_ai_scanner.poi.enums import (
+    PoiDirection,
+    PoiFamily,
+    PoiLifecycleTransitionType,
+    PoiType,
+)
+from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
 from btmm_ai_scanner.poi.observation import PoiObservation
 
 _FP = "a" * 64
@@ -214,11 +221,34 @@ def _evidence(
     )
 
 
+def _false_invalidation(timeframe: Timeframe) -> PoiLifecycleTransition:
+    """The one liquidity signal the engine derives on its own: P3 confirming
+    that a breach of the POI was false (a sweep)."""
+    anchor = _candle(timeframe, 15, ("100.8", "102.2", "100.7", "102.0"))
+    return PoiLifecycleTransition(
+        record_id=UUID("0193f450-bbbb-7000-8000-000000000001"),
+        content_fingerprint=_FP,
+        symbol=InternalSymbol.XAUUSD,
+        timeframe=timeframe,
+        poi_record_id=_POI_ID,
+        transition_type=PoiLifecycleTransitionType.FALSE_INVALIDATION_CONFIRMED,
+        triggering_candle_record_id=anchor.record_id,
+        event_time_utc=anchor.event_time_utc,
+        availability_time_utc=anchor.availability_time_utc,
+        rule_version=SemVer.parse("0.1.0"),
+        contract_version=SemVer.parse("0.1.0"),
+        schema_version=SemVer.parse("0.1.0"),
+        evidence_classification=EvidenceClassification.ENGINEERING_PROVISIONAL,
+        provenance_id=_PROV,
+    )
+
+
 def _run(
     timeframe: Timeframe,
     evidence: tuple[BtmmReviewedEvidence, ...] = (),
     *,
     strong_reaction: bool = True,
+    poi_transitions: tuple[PoiLifecycleTransition, ...] = (),
 ) -> Any:
     candles = _candles(timeframe, strong_reaction=strong_reaction)
     bundle = BtmmTimeframeInput(
@@ -240,7 +270,7 @@ def _run(
         analyzed_timeframes=(timeframe,),
         analyzed_candle_count_by_timeframe=(0,),
         poi_observations=(_poi(timeframe),),
-        poi_lifecycle_transitions=(),
+        poi_lifecycle_transitions=poi_transitions,
         poi_overlap_relationships=(),
         current_poi_states=(),
     )
@@ -540,3 +570,70 @@ def test_a_weak_reaction_never_reaches_the_evidence_gates() -> None:
     assert without.cancellation_reason is not (
         BtmmCancellationReason.NO_LIQUIDITY_EVIDENCE
     )
+
+
+# --------------------------------------------------------------------------
+# The boundary between derived liquidity and reviewed liquidity
+# --------------------------------------------------------------------------
+#
+# Production DOES derive one liquidity fact automatically: a P3
+# FALSE_INVALIDATION_CONFIRMED transition yields LIQUIDITY_AFTER_POI with source
+# RULE_BASED (`liquidity.py:16-29`). That is legitimate, Pine-computable, and
+# must be ported. What it must never do is stand in for review -- and it cannot,
+# because it writes `liquidity_location` and `liquidity_evidence_source` only,
+# while the gate in `_resolve_final_gates` reads `liquidity_evidence_status`,
+# which is assigned from reviewed evidence alone. RULE_BASED is likewise absent
+# from CONTEXT_AND_LIQUIDITY_ALLOWED_SOURCES.
+#
+# These tests hold that separation open end-to-end, because it is exactly the
+# seam a well-meaning "make the scanner confirm something" change would close.
+
+
+def test_automatic_liquidity_describes_location_but_never_confirms() -> None:
+    state = _state(
+        _run(Timeframe.M15, poi_transitions=(_false_invalidation(Timeframe.M15),))
+    )
+
+    assert state.liquidity_location is BtmmLiquidityLocation.LIQUIDITY_AFTER_POI
+    assert state.liquidity_evidence_source is BtmmEvidenceSource.RULE_BASED
+
+    assert state.liquidity_evidence_status is BtmmLiquidityEvidenceStatus.PENDING
+    assert state.primary_state is BtmmLifecycleStatus.BTMM_CANCELLED
+    assert state.cancellation_reason is BtmmCancellationReason.NO_LIQUIDITY_EVIDENCE
+
+
+def test_rule_based_is_not_an_accepted_reviewed_source() -> None:
+    with pytest.raises(ValidationError):
+        _evidence(Timeframe.M15, liquidity_source=BtmmEvidenceSource.RULE_BASED)
+
+
+def test_reviewed_liquidity_source_supersedes_the_derived_one() -> None:
+    """When review does arrive, its source replaces RULE_BASED, so the record
+    never claims a confirmed setup rested on a machine-derived sweep."""
+    state = _state(
+        _run(
+            Timeframe.M15,
+            (_evidence(Timeframe.M15),),
+            poi_transitions=(_false_invalidation(Timeframe.M15),),
+        )
+    )
+    assert state.primary_state is BtmmLifecycleStatus.BTMM_CONFIRMED
+    assert state.liquidity_location is BtmmLiquidityLocation.LIQUIDITY_AFTER_POI
+    assert state.liquidity_evidence_source is BtmmEvidenceSource.EXPERT_LABELLED
+
+
+def test_derived_liquidity_does_not_change_the_no_evidence_outcome() -> None:
+    """Whole-record: the derived sweep changes the two descriptive fields and
+    nothing else about the runtime contract."""
+    without = _state(_run(Timeframe.M15)).model_dump(mode="json")
+    with_sweep = _state(
+        _run(Timeframe.M15, poi_transitions=(_false_invalidation(Timeframe.M15),))
+    ).model_dump(mode="json")
+
+    differing = {k for k in without if without[k] != with_sweep[k]}
+    assert differing <= {
+        "liquidity_location",
+        "liquidity_evidence_source",
+        "record_id",
+        "content_fingerprint",
+    }
