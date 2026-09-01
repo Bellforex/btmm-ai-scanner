@@ -1,6 +1,6 @@
 # BTRC-V1 P4 — BTMM Setup Engine: Pine Architecture
 
-Status: **P4-I0 (contract audit) COMPLETE — implementation authorized**
+Status: **P4 BTMM CORE — CLOSED** (see [closure](BTRC_V1_P4_BTMM_CLOSURE.md))
 Branch: `pine-p4-btmm`
 Predecessor: [P3 POI CORE closure](BTRC_V1_P3_POI_CORE_CLOSURE.md)
 
@@ -373,6 +373,16 @@ report.
 | P4-I9 | persistent cursor + committed frontier |
 | P4-I10 | `CurrentBtmmState` 33-field digest + dual-hash parity contract |
 | P4-I11 | directed / prefix / randomized parity, both modes |
+
+All eleven shipped. Two corrections were required and both came from real data
+rather than from synthetic scenarios: a late-created setup had to be backfilled
+from its POI's own availability (`0c8a4c9`), and setup admission had to reproduce
+production's unsupported-timeframe skip (`c5e3913`). A third finding, the M5
+reference-zone delta, turned out to be the replay harness rather than the port
+(`f4e12fe`).
+
+Then: 72/72 runtime, M15 + M5 + M1 atomic real-data parity, closure — all
+complete. See the closure document for the numbers.
 
 Then: persistence proof, performance, 72/72 runtime matrix, M15+M5+M1
 atomic real-data no-evidence parity, closure.

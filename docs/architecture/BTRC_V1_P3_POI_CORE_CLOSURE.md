@@ -113,3 +113,75 @@ consumed by the CORE contract closed here.
   never visually.
 - **`study.restart()` wedges the study** (`restarting=true`, `bars=0`,
   unrecovered). Use `setSymbol(<same>)` for a clean reinitialisation.
+
+---
+
+## Post-closure extension: M5 reference zones (2026-09-01)
+
+**This closure was not invalidated and was not reopened.** P3 CORE remains closed
+on the M15 contract recorded above, and no P3 semantics were reconsidered. What
+follows is an additional validation the closure never claimed.
+
+### Why the extension was needed
+
+P4 partitions by the source POI's timeframe, and M5 is a *formation* timeframe,
+so closing P4 required M5 real-data parity. P3 closure had only ever been
+established on M15. The gap surfaced immediately: the P4 M5 atomic capture at
+anchor `1788272400000` gave Pine 938 BTMM setups against 937 from the blind
+Python replay, with **all 937 shared setups byte-identical across every canonical
+field** — one extra POI upstream, not a BTMM difference.
+
+### What it turned out to be
+
+The extra record was a `SUPPORT_ZONE` at bounds `(443562, 443621)` confirmed at
+`1788161400000`. Production's own `detect_support_resistance_zones` emits it 205
+times over the windowed projection. The **replay harness** dropped it: the
+test-side model's POI identity was `(poi_type, src_first_time, src_count,
+src_last_time)`, and reference zones have no source candles, so all three time
+fields collapse to the confirmation time. A second support zone confirmed on the
+same candle — bounds `(443418, 443483)` — claimed the identity first, and the
+dedup discarded every emission of the other.
+
+The Pine port never had this problem. `f_poiSameIdentity` compares
+`(typeCode, srcFirst, srcCount, srcLast, lowTicks, highTicks)` and its comment
+states the reason verbatim: reference zones degenerate to their confirmation
+time, so two zones confirmed by the same candle from different origin swings
+would collide without the bounds. **The port anticipated the hazard; the harness
+did not implement it.**
+
+Owner: test tooling. Not production, not P1, not the P3 Pine source, not P4. No
+Pine source changed, so no recompile or recapture was required — the captures
+already taken remain the authoritative Pine output.
+
+Correction: `f4e12fe`, `tests/parity_support/p3_pine_model.py`. The model's
+identity now carries the tick-normalised bounds, rounded ties-away-from-zero to
+mirror `f_poiTicks`. Raw `Decimal` bounds were deliberately not used: Pine
+compares rounded ticks, so Decimals would split where Pine merges and reintroduce
+the divergence from the other side.
+
+### Results
+
+**M5 (new):** 938/938 setups byte-identical, 9/9 field groups, overall
+`H1 817746747` / `H2 538733425`, deterministic across fresh processes.
+`P3_M5_CORE_REAL_DATA_PARITY_ESTABLISHED = TRUE`.
+
+**M15 (revalidated on the frozen closure context):** registry 959, active 156,
+terminal 803, `H1 925825366`, `H2 836263421` — every value identical to the
+closure record above. This is the expected result rather than a fortunate one:
+for every candle-derived family the bounds are a deterministic function of the
+source candles already in the identity, so adding them refines and never splits.
+Only the degenerate reference-zone key could change, and only where two zones
+share a confirmation candle, which happens nowhere in the M15 context.
+
+Full diagnosis:
+`artifacts/p3_parity/P3_M5_REFERENCE_ZONE_EXTENSION_1788272400000.txt`
+Regression: `tests/unit/test_p3_reference_zone_identity_collision.py`
+
+### The lesson worth keeping
+
+A degenerate identity key is invisible until two records collide. This one
+survived P3 closure, a 72/72 runtime matrix and a full M15 real-data proof,
+because the M15 context happens to contain no two reference zones confirmed on
+the same candle. It took a *different timeframe* to produce the collision. When
+an identity is derived rather than natural, test the derivation, not just the
+records it happens to produce.
