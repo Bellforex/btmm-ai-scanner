@@ -335,12 +335,35 @@ def _ms(moment: datetime | None) -> int:
     return -1 if moment is None else int(moment.timestamp() * 1000)
 
 
+def _restamp(
+    candles: tuple[NormalizedCandle, ...], timeframe: Timeframe
+) -> tuple[NormalizedCandle, ...]:
+    """Re-label the loaded candles onto the captured timeframe.
+
+    `load_context_candles` is the P2/P3 loader and stamps M15, which is all
+    those campaigns ever captured. `analyze_btmm` validates that every candle's
+    timeframe agrees with its bundle's, so an M5 or M1 capture has to be
+    re-labelled. Only the two timeframe fields change -- prices, times and
+    identity are untouched -- so the loader stays the single interpretation of a
+    context CSV rather than being forked.
+    """
+    if timeframe is Timeframe.M15:
+        return candles
+    return tuple(
+        c.model_copy(
+            update={"timeframe": timeframe, "source_timeframe": timeframe.value}
+        )
+        for c in candles
+    )
+
+
 def replay(
     candles: tuple[NormalizedCandle, ...],
     mintick: Decimal,
     timeframe: Timeframe,
 ) -> P4ReplayResult:
     """Context -> P3 registry + lifecycle -> production analyze_btmm -> digest."""
+    candles = _restamp(candles, timeframe)
     poi_config = PoiConfiguration(minimum_price_tick=mintick)
     atr_all = compute_atr_series(candles, 14)
 
