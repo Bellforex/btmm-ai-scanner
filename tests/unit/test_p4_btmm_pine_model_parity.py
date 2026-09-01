@@ -1201,3 +1201,152 @@ def test_no_evidence_runtime_coverage_is_the_expected_subset() -> None:
     assert len(reached["stage"]) == 3
     # Derived liquidity works in the runtime; it just never confirms anything.
     assert reached["liquidity_location"] == {"LIQUIDITY_AFTER_POI"}
+
+
+# --------------------------------------------------------------------------
+# Late discovery: semantic availability is not engine discovery
+# --------------------------------------------------------------------------
+#
+# `analyze_btmm` walks a setup from its source POI's availability, whatever bar
+# the POI was found on. Pine only learns a POI exists when P3 emits it, and the
+# reference-zone family comes from a rolling S/R projection that can surface a
+# zone many bars after its own confirmation. A setup created at discovery would
+# skip every bar in between.
+#
+# This was not hypothetical. The first M15 atomic capture disagreed with
+# production on exactly one of 956 setups: a resistance zone whose POI became
+# available at bar 739 was not discovered until bar 892 -- 153 bars later -- and
+# its POI was genuinely invalidated at bar 753, before the setup existed at all.
+# Pine reported POI_REJECTED with no formation stage; production had already
+# cancelled it INTERACTION_INELIGIBLE on an excessive overshoot at bar ~745.
+#
+# The engine therefore backfills a late-created setup over the bars it missed.
+# These tests hold that equivalence, because the defect is invisible in any
+# scenario where every setup exists from bar zero -- which is every synthetic
+# scenario above.
+
+
+def _model_run(
+    candles: tuple[NormalizedCandle, ...],
+    poi: PoiObservation,
+    discover_at: int | None,
+) -> list[M.PineState]:
+    """Run the model, optionally creating the setup late and backfilling it."""
+    engine = M.PineBtmmEngine(configuration=_CONFIG)
+    atrs = compute_atr_series(candles, 14)
+    pine_candles = [
+        M.PineCandle(
+            open=c.open,
+            high=c.high,
+            low=c.low,
+            close=c.close,
+            event_time=_ts(c.event_time_utc),
+            availability_time=_ts(c.availability_time_utc),
+        )
+        for c in candles
+    ]
+    spec = M.PineSetupSpec(
+        poi_key=str(poi.record_id),
+        direction=(
+            M.DIR_BULLISH if poi.direction == PoiDirection.BULLISH else M.DIR_BEARISH
+        ),
+        zone_top=poi.zone_top,
+        zone_bottom=poi.zone_bottom,
+        candidate_availability_time=_ts(poi.availability_time_utc),
+        is_formation_timeframe=True,
+    )
+
+    created = discover_at is None
+    if created:
+        engine.add_setup(spec)
+    for index, pc in enumerate(pine_candles):
+        if not created and index == discover_at:
+            slot = engine.add_setup(spec)
+            M.backfill(engine, slot, pine_candles, atrs, index)
+            created = True
+        if created:
+            engine.advance(pc, atrs[index])
+        else:
+            # No setups yet: the registry is empty, so only the bar cursor moves.
+            engine.total_count += 1
+            engine.prev_close = pc.close
+    _t, states = M.report(engine, {}, {}, {})
+    return states
+
+
+@pytest.mark.parametrize("discover_at", [1, 5, 14, 15, 16, 17, 18, 19])
+def test_a_late_created_setup_backfills_to_the_same_state(discover_at: int) -> None:
+    """Discovering the POI on bar N and backfilling must equal having had it all
+    along -- for every N, including bars after the interaction and after the
+    reaction window has closed."""
+    candles = _confirming_stream()
+    poi = _confirming_poi()
+    assert _model_run(candles, poi, None) == _model_run(candles, poi, discover_at)
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("discover_at", [7, 23, 41])
+def test_late_creation_equivalence_on_random_streams(
+    seed: int, discover_at: int
+) -> None:
+    candles = _stream(seed, 46)
+    poi = _poi(1, PoiDirection.BULLISH, "101.0", "100.0", 2)
+    assert _model_run(candles, poi, None) == _model_run(candles, poi, discover_at)
+
+
+def test_backfill_is_needed_at_all() -> None:
+    """Guard the guard: if a late-created setup with NO backfill already matched,
+    the tests above would be proving nothing."""
+    candles = _confirming_stream()
+    poi = _confirming_poi()
+
+    engine = M.PineBtmmEngine(configuration=_CONFIG)
+    atrs = compute_atr_series(candles, 14)
+    pine_candles = [
+        M.PineCandle(
+            open=c.open,
+            high=c.high,
+            low=c.low,
+            close=c.close,
+            event_time=_ts(c.event_time_utc),
+            availability_time=_ts(c.availability_time_utc),
+        )
+        for c in candles
+    ]
+    spec = M.PineSetupSpec(
+        poi_key=str(poi.record_id),
+        direction=M.DIR_BULLISH,
+        zone_top=poi.zone_top,
+        zone_bottom=poi.zone_bottom,
+        candidate_availability_time=_ts(poi.availability_time_utc),
+        is_formation_timeframe=True,
+    )
+    created = False
+    for index, pc in enumerate(pine_candles):
+        if not created and index == 17:  # after the interaction, no backfill
+            engine.add_setup(spec)
+            created = True
+        if created:
+            engine.advance(pc, atrs[index])
+        else:
+            engine.total_count += 1
+            engine.prev_close = pc.close
+    _t, without = M.report(engine, {}, {}, {})
+
+    assert without != _model_run(candles, poi, None), (
+        "a late-created setup without backfill must NOT already agree, or these "
+        "tests would pass for the wrong reason"
+    )
+
+
+def test_backfill_skips_bars_at_or_before_the_candidate_availability() -> None:
+    """The replay starts at the POI's own availability, not at bar zero: a bar
+    whose availability does not exceed it cannot make the setup form."""
+    candles = _confirming_stream()
+    poi = _confirming_poi()  # becomes available at index 12
+    states = _model_run(candles, poi, 19)
+    assert len(states) == 1
+    # Formation is driven by the first bar strictly after availability, which is
+    # well after bar 0; if the backfill had replayed from bar 0 the setup would
+    # have interacted with the quiet approach instead of the sweep.
+    assert states[0].interaction_class != 0

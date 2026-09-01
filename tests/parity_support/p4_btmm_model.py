@@ -789,9 +789,19 @@ class PineBtmmEngine:
         revisited, and no setup ever re-reads history.
         """
         m = self.total_count
-        window_bars = self.configuration.reaction_window_bars
-
         for i in range(len(self.key)):
+            self.advance_one(i, candle, atr_value)
+        self.total_count = m + 1
+        self.prev_close = candle.close
+
+    def advance_one(
+        self, i: int, candle: PineCandle, atr_value: Decimal | None
+    ) -> None:
+        """Advance ONE setup by one bar, so a late-created setup can be
+        replayed over the bars it missed without disturbing the others."""
+        m = self.total_count
+        window_bars = self.configuration.reaction_window_bars
+        if True:
             is_bullish = self.direction[i] == DIR_BULLISH
 
             # 1. forming: first candle strictly after the candidate availability
@@ -874,9 +884,6 @@ class PineBtmmEngine:
                     self.speed_code[i] = speed
                     self.close_event[i] = candle.event_time
                     self.close_avail[i] = candle.availability_time
-
-        self.total_count = m + 1
-        self.prev_close = candle.close
 
 
 # ---------------------------------------------------------------------------
@@ -1236,3 +1243,32 @@ def report(
             )
         )
     return all_transitions, states
+
+
+def backfill(
+    engine: PineBtmmEngine,
+    slot: int,
+    candles: Sequence[PineCandle],
+    atrs: Sequence[Decimal | None],
+    upto: int,
+) -> None:
+    """Replay a LATE-CREATED setup over the bars it missed.
+
+    Semantic availability is not engine discovery. `analyze_btmm` walks a setup
+    from its source POI's availability whatever bar the POI was found on, but
+    Pine only learns a POI exists when P3 emits it -- and the reference-zone
+    family comes from a rolling projection that can surface a zone many bars
+    after its own confirmation. Without this the setup silently skips every bar
+    in between.
+
+    `upto` is exclusive: the newest bar is advanced by the normal per-bar path
+    immediately afterwards and must not be applied twice.
+    """
+    for j in range(upto):
+        if candles[j].availability_time <= engine.candidate_avail[slot]:
+            continue
+        saved_total, saved_prev = engine.total_count, engine.prev_close
+        engine.total_count = j
+        engine.prev_close = candles[j - 1].close if j > 0 else None
+        engine.advance_one(slot, candles[j], atrs[j])
+        engine.total_count, engine.prev_close = saved_total, saved_prev

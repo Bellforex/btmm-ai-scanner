@@ -289,19 +289,25 @@ def load_verified(text: str) -> ParsedP4Bundle:
 
 
 def to_canonical_rows(parsed: ParsedP4Bundle) -> list[dict[str, object]]:
-    """Context rows in the shape the shared context loader expects."""
+    """Context rows in the EXACT schema the shared loader expects.
+
+    The column set and order are `time,open,high,low,close,time_close`, matching
+    `p2_atomic_state_replay.load_context_candles`, which validates its header
+    strictly. Reusing that loader unchanged is the point: the P2 and P3 campaigns
+    already proved it interprets a context CSV correctly, so P4 must not
+    introduce a second interpretation.
+    """
     mintick = parsed.mintick
     rows: list[dict[str, object]] = []
     for bar in parsed.bars:
         rows.append(
             {
-                "index": bar.index,
                 "time": bar.time,
-                "time_close": bar.time_close,
                 "open": str(Decimal(bar.open_ticks) * mintick),
                 "high": str(Decimal(bar.high_ticks) * mintick),
                 "low": str(Decimal(bar.low_ticks) * mintick),
                 "close": str(Decimal(bar.close_ticks) * mintick),
+                "time_close": bar.time_close,
             }
         )
     return rows
@@ -309,7 +315,7 @@ def to_canonical_rows(parsed: ParsedP4Bundle) -> list[dict[str, object]]:
 
 def write_canonical_csv(parsed: ParsedP4Bundle, path: Path) -> None:
     rows = to_canonical_rows(parsed)
-    header = ["index", "time", "time_close", "open", "high", "low", "close"]
+    header = ["time", "open", "high", "low", "close", "time_close"]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=header)
         writer.writeheader()

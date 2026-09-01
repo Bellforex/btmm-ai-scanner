@@ -3753,6 +3753,8 @@ var array<int>  btmmEvLqStatus = array.new<int>()
 var array<int>  btmmEvLqSrc    = array.new<int>()
 
 var array<int> btmmSetupByPoi = array.new<int>()      // poi index -> setup slot, -1 if none
+//: Slots created on the current bar, so the driver can backfill exactly those.
+var array<int> btmmNewSlots   = array.new<int>()
 
 f_btmmAppend(int poiIdx, int dir, float zTop, float zBot, int candAvail) =>
     bool bull = dir == C_POI_DIR_BULLISH
@@ -3822,7 +3824,9 @@ f_btmmAppend(int poiIdx, int dir, float zTop, float zBot, int candAvail) =>
 // types AND its source timeframe is supported. The timeframe test is the
 // chart's own, decided once above: on an unsupported chart the registry stays
 // empty, which is exactly what production produces there.
+// Returns the setup slots created on this bar, for the caller to backfill.
 f_btmmSyncSetups() =>
+    array.clear(btmmNewSlots)
     int m = array.size(poiType)
     int have = array.size(btmmSetupByPoi)
     if m > have
@@ -3835,6 +3839,7 @@ f_btmmSyncSetups() =>
             if C_BTMM_TF_SUPPORTED and tc >= C_POI_CORE_TYPE_MIN and tc <= C_POI_CORE_TYPE_MAX
                 f_btmmAppend(i, array.get(poiDirection, i), array.get(poiZoneTop, i), array.get(poiZoneBottom, i), array.get(poiAvailTime, i))
                 array.set(btmmSetupByPoi, i, array.size(btmmPoi) - 1)
+                array.push(btmmNewSlots, array.size(btmmPoi) - 1)
 
 // -----------------------------------------------------------------------------
 // P4-I4 — leg measurement (measurements/legs.py)
@@ -3986,60 +3991,94 @@ f_btmmEvaluateWindow(int s, float anchor, float farB, float zoneHeight, bool bul
 // never rescanned. Two stages must see every candle and can never be skipped:
 // the reaction-start scan (its anchor accumulates a running min/max whether or
 // not the reaction starts) and the bounded window buffer.
+f_btmmAdvanceOne(int s, int m, float prevClose, float o, float h, float l, float c, float atrValue, int eventT, int availT) =>
+    bool bull = array.get(btmmDir, s) == C_POI_DIR_BULLISH
+
+    // 1. forming: the first candle strictly after the candidate's availability
+    if array.get(btmmFormIdx, s) < 0 and availT > array.get(btmmCandAvail, s)
+        array.set(btmmFormIdx, s, m)
+        array.set(btmmFormEvent, s, eventT)
+        array.set(btmmFormAvail, s, availT)
+
+    // 2. first interaction
+    if array.get(btmmFormIdx, s) >= 0 and array.get(btmmIntIdx, s) < 0 and m >= array.get(btmmFormIdx, s)
+        int code = f_btmmClassify(m == 0 ? na : prevClose, o, h, l, atrValue, array.get(btmmZTop, s), array.get(btmmZBot, s), array.get(btmmDir, s))
+        if code != C_BTMM_IC_NONE
+            array.set(btmmIntIdx, s, m)
+            array.set(btmmIntCode, s, code)
+            array.set(btmmIntEvent, s, eventT)
+            array.set(btmmIntAvail, s, availT)
+            if f_btmmInteractionEligible(code)
+                array.set(btmmAnchor, s, bull ? l : h)
+
+    // 3. reaction start
+    if array.get(btmmIntIdx, s) >= 0 and f_btmmInteractionEligible(array.get(btmmIntCode, s)) and array.get(btmmRxStart, s) < 0 and m > array.get(btmmIntIdx, s)
+        float anchor = array.get(btmmAnchor, s)
+        bool started = false
+        if bull
+            anchor := math.min(anchor, l)
+            started := c > array.get(btmmEntryB, s)
+        else
+            anchor := math.max(anchor, h)
+            started := c < array.get(btmmEntryB, s)
+        array.set(btmmAnchor, s, anchor)
+        if started
+            array.set(btmmRxStart, s, m)
+            array.set(btmmRxAnchor, s, anchor)
+
+    // 4. bounded reaction window
+    if array.get(btmmRxStart, s) >= 0 and array.get(btmmTier, s) == C_BTMM_RC_NONE and m >= array.get(btmmRxStart, s) and m < array.get(btmmRxStart, s) + C_BTMM_REACTION_WINDOW_BARS
+        int w = array.get(btmmWinCount, s)
+        int slot = s * C_BTMM_REACTION_WINDOW_BARS + w
+        array.set(btmmWinO, slot, o)
+        array.set(btmmWinH, slot, h)
+        array.set(btmmWinL, slot, l)
+        array.set(btmmWinC, slot, c)
+        array.set(btmmWinAtr, slot, atrValue)
+        array.set(btmmWinCount, s, w + 1)
+        if w + 1 == C_BTMM_REACTION_WINDOW_BARS
+            [tier, speed] = f_btmmEvaluateWindow(s, array.get(btmmRxAnchor, s), array.get(btmmFarB, s), array.get(btmmZHeight, s), bull)
+            array.set(btmmTier, s, tier)
+            array.set(btmmSpeed, s, speed)
+            array.set(btmmCloseEvent, s, eventT)
+            array.set(btmmCloseAvail, s, availT)
+
+// Sweep the whole registry for one confirmed bar.
 f_btmmAdvance(int m, float prevClose, float o, float h, float l, float c, float atrValue, int eventT, int availT) =>
     int n = array.size(btmmPoi)
     if n > 0
         for s = 0 to n - 1
-            bool bull = array.get(btmmDir, s) == C_POI_DIR_BULLISH
+            f_btmmAdvanceOne(s, m, prevClose, o, h, l, c, atrValue, eventT, availT)
 
-            // 1. forming: the first candle strictly after the candidate's availability
-            if array.get(btmmFormIdx, s) < 0 and availT > array.get(btmmCandAvail, s)
-                array.set(btmmFormIdx, s, m)
-                array.set(btmmFormEvent, s, eventT)
-                array.set(btmmFormAvail, s, availT)
-
-            // 2. first interaction
-            if array.get(btmmFormIdx, s) >= 0 and array.get(btmmIntIdx, s) < 0 and m >= array.get(btmmFormIdx, s)
-                int code = f_btmmClassify(m == 0 ? na : prevClose, o, h, l, atrValue, array.get(btmmZTop, s), array.get(btmmZBot, s), array.get(btmmDir, s))
-                if code != C_BTMM_IC_NONE
-                    array.set(btmmIntIdx, s, m)
-                    array.set(btmmIntCode, s, code)
-                    array.set(btmmIntEvent, s, eventT)
-                    array.set(btmmIntAvail, s, availT)
-                    if f_btmmInteractionEligible(code)
-                        array.set(btmmAnchor, s, bull ? l : h)
-
-            // 3. reaction start
-            if array.get(btmmIntIdx, s) >= 0 and f_btmmInteractionEligible(array.get(btmmIntCode, s)) and array.get(btmmRxStart, s) < 0 and m > array.get(btmmIntIdx, s)
-                float anchor = array.get(btmmAnchor, s)
-                bool started = false
-                if bull
-                    anchor := math.min(anchor, l)
-                    started := c > array.get(btmmEntryB, s)
-                else
-                    anchor := math.max(anchor, h)
-                    started := c < array.get(btmmEntryB, s)
-                array.set(btmmAnchor, s, anchor)
-                if started
-                    array.set(btmmRxStart, s, m)
-                    array.set(btmmRxAnchor, s, anchor)
-
-            // 4. bounded reaction window
-            if array.get(btmmRxStart, s) >= 0 and array.get(btmmTier, s) == C_BTMM_RC_NONE and m >= array.get(btmmRxStart, s) and m < array.get(btmmRxStart, s) + C_BTMM_REACTION_WINDOW_BARS
-                int w = array.get(btmmWinCount, s)
-                int slot = s * C_BTMM_REACTION_WINDOW_BARS + w
-                array.set(btmmWinO, slot, o)
-                array.set(btmmWinH, slot, h)
-                array.set(btmmWinL, slot, l)
-                array.set(btmmWinC, slot, c)
-                array.set(btmmWinAtr, slot, atrValue)
-                array.set(btmmWinCount, s, w + 1)
-                if w + 1 == C_BTMM_REACTION_WINDOW_BARS
-                    [tier, speed] = f_btmmEvaluateWindow(s, array.get(btmmRxAnchor, s), array.get(btmmFarB, s), array.get(btmmZHeight, s), bull)
-                    array.set(btmmTier, s, tier)
-                    array.set(btmmSpeed, s, speed)
-                    array.set(btmmCloseEvent, s, eventT)
-                    array.set(btmmCloseAvail, s, availT)
+// -----------------------------------------------------------------------------
+// P4-I9b — backfill a LATE-CREATED setup from its POI's own availability
+// -----------------------------------------------------------------------------
+// SEMANTIC AVAILABILITY IS NOT ENGINE DISCOVERY. `analyze_btmm` walks a setup
+// from its source POI's availability_time_utc, whatever bar the POI was found
+// on. Pine only learns a POI exists when P3 emits it, and the reference-zone
+// family is emitted from a rolling S/R projection that can surface a zone many
+// bars after the zone's own confirmation. A setup created at discovery would
+// therefore skip every bar in between -- including, in the case that exposed
+// this, the interaction that production cancels on, leaving the setup to be
+// truncated by a later POI invalidation instead.
+//
+// This is the same defect P3 fixed for POI lifecycles in be1df56; the BTMM
+// cursor needed its own copy of the correction. Measured on the M15 atomic
+// capture: one reference zone whose POI became available at bar 739 was not
+// discovered until bar 892 -- a 153-bar delay, and its POI was genuinely
+// invalidated at bar 753, before the setup existed at all.
+//
+// BOUNDED. The replay covers only the retained analytical window, and only bars
+// strictly after the candidate's availability, so it is at most
+// `lookbackWindow` iterations, once, for a newly created setup. The newest bar
+// is deliberately excluded: the caller advances it immediately afterwards
+// through the normal per-bar path, so it must not be applied twice.
+f_btmmBackfill(int s, int absFirst, int n) =>
+    int candAvail = array.get(btmmCandAvail, s)
+    if n > 1
+        for j = 0 to n - 2
+            if array.get(wAvailT, j) > candAvail
+                f_btmmAdvanceOne(s, absFirst + j, j > 0 ? array.get(wClose, j - 1) : na, array.get(wOpen, j), array.get(wHigh, j), array.get(wLow, j), array.get(wClose, j), array.get(wAtr, j), array.get(wOpenT, j), array.get(wAvailT, j))
 
 // -----------------------------------------------------------------------------
 // P4-I5..I8 — resolution: fixed cost, no candle scan
@@ -4349,12 +4388,11 @@ f_btmmReportCounts() =>
             if array.get(btmmStage, s) == C_BTMM_STAGE_FINAL_GATE
                 array.set(p4Counts, C_P4_N_FINAL_GATE, array.get(p4Counts, C_P4_N_FINAL_GATE) + 1)
 
-// The engine's own confirmed-bar counter. The stage indices are only compared
-// with one another, so any strictly increasing counter serves -- but m == 0
-// must mean "the first bar this engine saw", because that is the case where
-// production falls back to the candle's own open for the canonical-side test.
-var int p4BarIndex = 0
-var float p4PrevClose = na
+// The engine indexes bars by the ABSOLUTE confirmed-bar index, so a bar replayed
+// by the backfill and a bar seen live sit on the same axis and the committed
+// stage indices stay comparable. m == 0 is then genuinely the first confirmed
+// bar of the dataset, which is the case where production falls back to the
+// candle's own open for the canonical-side test.
 
 if barstate.isconfirmed
     int p3Wn = array.size(wClose)
@@ -4374,11 +4412,14 @@ if barstate.isconfirmed
         // Order matters: the setup registry mirrors the POI registry, and the
         // materialization reads the P3 lifecycle facts committed just above.
         f_btmmSyncSetups()
-        f_btmmAdvance(p4BarIndex, p4PrevClose, array.get(wOpen, p3Wn - 1), array.get(wHigh, p3Wn - 1), array.get(wLow, p3Wn - 1), array.get(wClose, p3Wn - 1), array.get(wAtr, p3Wn - 1), array.get(wOpenT, p3Wn - 1), array.get(wAvailT, p3Wn - 1))
+        int p4AbsFirst = confirmedBarCount - p3Wn
+        int p4New = array.size(btmmNewSlots)
+        if p4New > 0
+            for k = 0 to p4New - 1
+                f_btmmBackfill(array.get(btmmNewSlots, k), p4AbsFirst, p3Wn)
+        f_btmmAdvance(confirmedBarCount - 1, p3Wn > 1 ? array.get(wClose, p3Wn - 2) : na, array.get(wOpen, p3Wn - 1), array.get(wHigh, p3Wn - 1), array.get(wLow, p3Wn - 1), array.get(wClose, p3Wn - 1), array.get(wAtr, p3Wn - 1), array.get(wOpenT, p3Wn - 1), array.get(wAvailT, p3Wn - 1))
         f_btmmMaterializeAll()
         f_btmmReportCounts()
-        p4BarIndex += 1
-        p4PrevClose := array.get(wClose, p3Wn - 1)
 
 // ---- P4 diagnostics in the data window (no drawing, no alerts, no orders) ---
 plot(debugMode ? array.get(p4Counts, C_P4_N_REGISTRY)   : na, "P4_setup_registry",  color = color.new(color.gray, 0), display = display.data_window)

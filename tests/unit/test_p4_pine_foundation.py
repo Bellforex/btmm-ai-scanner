@@ -500,3 +500,46 @@ def test_no_function_reassigns_a_global_scalar() -> None:
             if match and match.group(1) in globals_:
                 offenders.append(f"line {i + 1}: {line.strip()}")
     assert offenders == [], offenders
+
+
+# ---------------------------------------------------------------------------
+# Late discovery
+# ---------------------------------------------------------------------------
+
+
+def test_a_late_created_setup_is_backfilled_from_its_own_availability() -> None:
+    """`analyze_btmm` walks a setup from its POI's availability whatever bar the
+    POI was found on; Pine only learns a POI exists when P3 emits it. Without
+    this the engine silently skips the bars in between -- which is exactly what
+    the first M15 atomic capture caught, on a reference zone discovered 153 bars
+    after its POI became available."""
+    code = _code(_p4_appendix())
+    assert "f_btmmBackfill" in code
+    body = code[code.index("f_btmmBackfill(int s") :]
+    body = body[: body.index("\nf_") if "\nf_" in body[1:] else len(body)]
+
+    # bounded by the retained window, and started at the candidate's availability
+    assert "array.get(wAvailT, j) > candAvail" in body
+    # the newest bar is excluded: the driver advances it straight afterwards
+    assert "for j = 0 to n - 2" in body
+    # it advances the ONE new setup, not the registry
+    assert "f_btmmAdvanceOne(s," in body
+
+
+def test_the_driver_backfills_only_the_slots_created_on_this_bar() -> None:
+    code = _code(_p4_text())
+    driver = code[code.rindex("f_btmmSyncSetups()") :]
+    assert "btmmNewSlots" in driver
+    assert "f_btmmBackfill(array.get(btmmNewSlots, k)" in driver
+    # and the sync must clear the list each bar, or old slots would replay again
+    sync = code[code.index("f_btmmSyncSetups() =>") :]
+    assert "array.clear(btmmNewSlots)" in sync[:200]
+
+
+def test_the_engine_indexes_bars_absolutely() -> None:
+    """A backfilled bar and a live bar must sit on the same axis, or the
+    committed stage indices are not comparable."""
+    code = _code(_p4_text())
+    driver = code[code.rindex("f_btmmSyncSetups()") :]
+    assert "f_btmmAdvance(confirmedBarCount - 1," in driver
+    assert "p4BarIndex" not in code, "the private bar counter must be gone"
