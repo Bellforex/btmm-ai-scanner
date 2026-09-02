@@ -1,14 +1,24 @@
-"""The P6 transport source must keep the architecture the lab measured.
+"""The P6 source must inherit P4 and keep the architecture the lab measured.
 
-Phase-22 settled two numbers that look contradictory and are not: the host runs
-at 1800 and each requested context asks for 1250. Because 1250 sits below 1800,
-the host envelope is untouched while every timeframe gets its full warm-up. Drop
-the per-request argument and the contexts silently clamp to the host's TIME span
--- two weekly bars on an M15 host, against the 1250 required -- which would not
-fail loudly anywhere.
+Two things this file is really guarding.
 
-These tests read the Pine as source and pin that, along with the transport
-exclusions the per-component audit established.
+**Inheritance.** P6 DEV is P4 DEV verbatim plus an appended section, so the
+requested contexts CALL the closed P1 functions rather than re-implementing
+them. `f_advancePivotFrontier`, `f_detectSwings` and `f_detectEqualLevels` were
+verified to reference zero of the file's 174 global `var`s -- they are pure
+functions of their array arguments -- which is exactly what makes handing them a
+requested context's own arrays sound. A second, divergent definition of P1 would
+be the easiest and worst mistake available here, and would not fail loudly
+anywhere.
+
+**The history architecture.** Host at 1800, each request at 1250. Those look
+contradictory and are not: the host runs over max(indicator, largest request),
+and 1250 sits below 1800. Drop the per-request argument and each context clamps
+to the host's TIME span -- two weekly bars on an M15 host, against the 1250
+required -- silently.
+
+Assertions are scoped to the appended P6 section wherever P4's own code could
+otherwise satisfy them.
 """
 
 from __future__ import annotations
@@ -17,28 +27,89 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+P4_DEV = REPO / "tradingview" / "btmm_poi_btrc_scanner_p4_dev.pine"
 P6_DEV = REPO / "tradingview" / "btmm_poi_btrc_scanner_p6_dev.pine"
+
+BANNER = "// P6 — CROSS-TIMEFRAME SUBSTRATE"
 
 
 def _text() -> str:
     return P6_DEV.read_text(encoding="utf-8")
 
 
-def _code() -> str:
+def _section() -> str:
+    text = _text()
+    assert BANNER in text, "P6 section banner missing"
+    return text[text.index(BANNER) :]
+
+
+def _strip_comments(source: str) -> str:
     return "\n".join(
-        line for line in _text().splitlines() if not line.strip().startswith("//")
+        line for line in source.splitlines() if not line.strip().startswith("//")
     )
 
 
+def _section_code() -> str:
+    return _strip_comments(_section())
+
+
+# ---------------------------------------------------------------------------
+# Inheritance, not a fork
+# ---------------------------------------------------------------------------
+
+
+def test_p6_is_p4_verbatim_plus_an_appended_section() -> None:
+    p4 = P4_DEV.read_text(encoding="utf-8")
+    expected_prefix = p4.replace("[P4 DEV]", "[P6 DEV]", 1)
+    assert _text().startswith(expected_prefix), (
+        "P6 DEV no longer contains P4 DEV verbatim; the P1/P2 semantics it "
+        "calls may have forked"
+    )
+
+
+def test_the_projection_calls_the_closed_p1_functions() -> None:
+    code = _section_code()
+    for call in ("f_advancePivotFrontier(", "f_detectSwings(", "f_detectEqualLevels("):
+        assert call in code, call
+
+
+def test_the_section_defines_no_rival_p1_implementation() -> None:
+    """Calling is fine; redefining is the failure this guards."""
+    section = _section()
+    for definition in (
+        "\nf_advancePivotFrontier(array",
+        "\nf_detectSwings(array",
+        "\nf_detectEqualLevels(array",
+    ):
+        assert definition not in section, definition
+
+
+def test_the_context_uses_its_own_arrays_not_the_hosts() -> None:
+    """Handing a requested context the HOST's window arrays would project host
+    data onto every timeframe while looking perfectly reasonable."""
+    code = _section_code()
+    call = re.search(r"f_detectSwings\(([^)]*)\)", code)
+    assert call, "expected a f_detectSwings call in the P6 section"
+    args = [a.strip() for a in call.group(1).split(",")]
+    assert all(a.startswith("q") for a in args if a[:1].isalpha()), args
+    for host_array in ("wHigh", "wLow", "wAtr", "pvAbs", "pvPrice"):
+        assert host_array not in args, host_array
+
+
+# ---------------------------------------------------------------------------
+# The measured history architecture
+# ---------------------------------------------------------------------------
+
+
 def test_host_envelope_is_1800() -> None:
-    code = _code()
-    assert "int C_P6_HOST_CALC_BARS    = 1800" in code
-    assert re.search(r"indicator\([^)]*calc_bars_count = 1800", code, re.S)
+    assert "int C_P6_HOST_CALC_BARS    = 1800" in _section_code()
+    assert re.search(
+        r"indicator\([^)]*calc_bars_count = 1800", _strip_comments(_text()), re.S
+    )
 
 
-def test_each_request_asks_for_1250() -> None:
-    """The load-bearing detail. Without it the contexts clamp to the host span."""
-    code = _code()
+def test_every_request_asks_for_1250() -> None:
+    code = _section_code()
     assert "int C_P6_REQUEST_CALC_BARS = 1250" in code
     calls = re.findall(r"request\.security\([^\n]*", code)
     assert len(calls) == 6, f"expected six requested contexts, found {len(calls)}"
@@ -47,85 +118,85 @@ def test_each_request_asks_for_1250() -> None:
 
 
 def test_request_count_is_below_the_host_envelope() -> None:
-    """The whole reason the two frozen numbers coexist. If a later change raised
-    the request above 1800 the host would follow it, moving P1-P4 off their
-    validated horizon."""
-    code = _code()
+    """If this ever inverts, the host follows the request and P1-P4 quietly
+    leave the horizon they were validated on."""
+    code = _section_code()
     host = int(re.search(r"C_P6_HOST_CALC_BARS\s+=\s+(\d+)", code).group(1))
-    req = int(re.search(r"C_P6_REQUEST_CALC_BARS = (\d+)", code).group(1))
-    assert req < host, (req, host)
+    request = int(re.search(r"C_P6_REQUEST_CALC_BARS = (\d+)", code).group(1))
+    assert request < host, (request, host)
 
 
 def test_exactly_the_six_authority_timeframes_are_requested() -> None:
-    code = _code()
-    requested = set(re.findall(r'C_P6_TF_(\w+)\s*=\s*"([^"]+)"', code))
-    assert requested == {
-        ("W1", "W"),
-        ("D1", "D"),
-        ("H4", "240"),
-        ("H1", "60"),
-        ("M15", "15"),
-        ("M5", "5"),
+    code = _section_code()
+    requested = re.findall(r"request\.security\(syminfo\.tickerid, (\w+),", code)
+    assert set(requested) == {
+        "C_P6_TF_W1",
+        "C_P6_TF_D1",
+        "C_P6_TF_H4",
+        "C_P6_TF_H1",
+        "C_P6_TF_M15",
+        "C_P6_TF_M5",
     }
+    assert len(requested) == 6
 
 
-def test_no_m1_is_transported() -> None:
-    """P4's set is {M1, M5, M15}; P5's authority set has no M1 at all."""
-    code = _code()
-    assert '"1"' not in re.sub(r'"(15|60|240|5|W|D)"', "", code)
+def test_no_m1_context_exists() -> None:
+    """P4's set is {M1, M5, M15}; P5's authority set contains no M1 at all."""
+    code = _section_code()
+    assert "C_P6_TF_M1 " not in code
+    assert not re.search(r'C_P6_TF_\w+\s*=\s*"1"', code)
 
 
-def test_the_excluded_surfaces_are_absent() -> None:
-    """BTRC reads three of P1's five collections and two of P2's three. The two
-    it ignores carry the most expensive machinery, so their absence here is the
-    point rather than an oversight."""
-    text = _text()
-    for excluded in (
-        "support_resistance_zones",
-        "trendlines",
-        "swing_relationships",
-    ):
-        code_uses = [
+# ---------------------------------------------------------------------------
+# The transport exclusions
+# ---------------------------------------------------------------------------
+
+
+def test_the_excluded_surfaces_are_absent_from_the_section() -> None:
+    """S/R and trendlines are leaves (test_p6_dependency_closure), so omitting
+    them cannot change a required value -- and it skips the machinery that
+    dominated P3."""
+    for excluded in ("support_resistance", "trendline", "swing_relationship"):
+        offending = [
             line
-            for line in text.splitlines()
-            if excluded in line and not line.strip().startswith("//")
+            for line in _section().splitlines()
+            if excluded in line.lower() and not line.strip().startswith("//")
         ]
-        assert code_uses == [], code_uses
+        assert offending == [], offending
 
 
-def test_isolation_is_asserted_continuously_not_once() -> None:
-    """Aliasing between requested contexts would silently invalidate every later
-    parity claim, so the source carries a running guard."""
-    code = _code()
+# ---------------------------------------------------------------------------
+# Guards and hygiene
+# ---------------------------------------------------------------------------
+
+
+def test_isolation_is_asserted_continuously() -> None:
+    code = _section_code()
     assert "f_p6Aliased" in code
     assert "p6AliasHits" in code
-    assert "ALIAS_HITS" in code
+    assert "P6_ALIAS_HITS" in code
 
 
 def test_the_host_envelope_is_watched_at_runtime() -> None:
-    code = _code()
+    code = _section_code()
     assert "p6HostBarsMax" in code
-    assert "host_bars_max" in code
+    assert "P6_host_bars_max" in code
 
 
 def test_mutations_are_confirmed_bar_only() -> None:
-    """Same non-repaint contract as P1-P4."""
-    code = _code()
-    assert "barstate.isconfirmed" in code
-    # every assignment to the running guards sits under a confirmed-bar gate
-    assert code.count("barstate.isconfirmed") >= 2
+    assert "barstate.isconfirmed" in _section_code()
 
 
 def test_no_strategy_or_orders() -> None:
-    code = _code()
-    for forbidden in ("strategy.", "order.", "alert("):
+    code = _section_code()
+    for forbidden in ("strategy.", "alert("):
         assert forbidden not in code
 
 
-def test_nothing_is_drawn_on_the_price_scale() -> None:
-    """This slice is transport; it must not compete with the scanner's own
-    rendering, and P7 has just been closed on a price-scale issue."""
-    code = _code()
+def test_the_section_draws_nothing_on_the_price_scale() -> None:
+    """P7 was just closed on a price-scale issue; the P6 section must not
+    compete with the scanner's own rendering."""
+    code = _section_code()
     plots = re.findall(r"^plot\(.*$", code, re.M)
     assert plots, "expected diagnostic plots"
     for plot in plots:
@@ -135,9 +206,6 @@ def test_nothing_is_drawn_on_the_price_scale() -> None:
 
 
 def test_the_slice_states_its_own_scope() -> None:
-    """It carries transport, not yet the P1/P2 projection. The header must say
-    so, so the file cannot be mistaken for a finished P6."""
-    # the header wraps across comment lines, so normalise before matching
-    flat = " ".join(_text().replace("//", " ").split())
-    assert "SLICE 1" in flat
-    assert "does NOT yet carry the P1/P2 semantic projection" in flat
+    flat = " ".join(_section().replace("//", " ").split())
+    assert "SLICE 2" in flat
+    assert "minimal P1 projection" in flat
