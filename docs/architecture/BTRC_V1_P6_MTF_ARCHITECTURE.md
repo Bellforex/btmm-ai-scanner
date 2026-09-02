@@ -424,3 +424,115 @@ FEASIBILITY LAB            WRITTEN (p6_feasibility_lab.pine), NOT RUN
 LAB BLOCKER                no TradingView session in the browser profile
 P6 IMPLEMENTATION          NOT STARTED
 ```
+
+---
+
+## 8. First TradingView compile — RUN, and what the live run found
+
+Deployed 2026-09-02 to a new saved script `BTMM + POI + BTRC Scanner [P6 DEV]`,
+created by copying `P4 DEV` and then overwritten wholesale with the repo source.
+
+**Compile: 0 errors, 0 warnings, first attempt.** The construct the feasibility
+lab could not settle on paper — calling `f_detectSwings`, which returns
+`array<SwingRec>` (a UDT array), from inside a `request.security` expression that
+itself declares `var` arrays — compiles and runs. `P6_COMPILE = PASS`.
+
+Attached alongside `P4 DEV` (Basic plan allows 2), status 2, `failed = false`,
+and on price scale `ivPMGXXDSKBJ` — the candles' own scale, consistent with §P7.
+
+### 8a. Deployment integrity: the saved P4 DEV was stale
+
+Copying the editor buffer out and hashing it showed the saved `P4 DEV` script at
+**4388 lines against the repo's 4429**. The 41-line deficit is exactly commit
+`0c8a4c9` (`+100 / −59`), the BTMM late-discovery backfill fix, and the first
+divergence localises to the `btmmNewSlots` region.
+
+**The deployed P4 DEV predates the backfill fix.** P6 was therefore built by
+pasting the full repo P6 file, not by appending to the inherited buffer — which
+would have silently inherited pre-fix P4 semantics into every later parity claim.
+
+The same comparison showed the saved script's non-ASCII comment characters
+mojibaked (`—` stored as its UTF-8 bytes read as Latin-1). That is confined to
+comments and cannot affect Pine semantics, but it made byte comparison
+impossible. The transfer method was replaced with `clip.exe` + UTF-16LE, and the
+editor buffer was then verified byte-identical to the repo file by SHA-256 taken
+in-page — before and after the paste.
+
+### 8b. Two defects the live run found
+
+**Outputs collapsed on forming bars.** Every timeframe reported 0 swings and 0
+equal levels. The projection's outputs were plain locals, so on any host bar
+where the requested context's own bar was still forming they reset to 0 — nearly
+every bar, for a weekly context. They are now `var`, which is also the staleness
+rule BTRC needs of a higher timeframe: hold the last **confirmed** value between
+closes. Guarded by `test_projection_outputs_survive_a_forming_bar`.
+
+**A 1250-bar request cannot make its context warm.** Measured live:
+
+```
+P6_host_bars_max   1799     host 1800 requested, one bar always forming
+W1/D1/H4/H1/M5     1249     confirmed bars, against a request of 1250
+M15                1799     the host's own timeframe ignores the request cap
+P6_ALIAS_HITS         0     six contexts, no aliasing
+```
+
+The host's own publication guard is `confirmedBarCount >= C_P1_MIN_CALC_BARS`
+(1250). A context given 1250 bars can only ever confirm 1249 of them, so it can
+**never** satisfy that guard: `f_p6Warm` would read 0 forever. This is not a
+rounding detail — P1's 1250 is `lookbackWindow + warm-up = 300 + 950`, and one
+bar short of it is one bar short of the Wilder-ATR convergence the contract
+requires.
+
+Rather than change a frozen constant on a partial measurement, the guard was
+split the way the host already splits it — capacity from the context's own
+dataset (`qDataset = last_bar_index + 1`), warm-up from confirmed bars against
+`C_P1_MIN_CALC_BARS` — and the per-context dataset is now published as
+`P6_{TF}_dataset`, so the envelope is measured rather than inferred.
+
+`P6_REQUEST_ENVELOPE = OPEN` — pending that measurement. Note also the M15
+asymmetry: requesting the chart's own timeframe does not create a reduced
+context, so M15 already runs at the host's 1800 while the others run at 1250.
+Raising every request to `C_P1_CALC_BARS` (1800) would remove the asymmetry, keep
+the host at 1800 (`max(1800, 1800)`), and give every context P1's validated
+envelope; the minimal alternative is 1251. **Author decision, not taken here.**
+
+### 8c. The proof that does not need TradingView
+
+P6 correctness is a composition:
+
+1. Pine P1 == production Python on M15 — P1 closure, real-data parity;
+2. production Python branches on no timeframe — proven on real re-timed bars for
+   all six authority timeframes (`test_p1_p2_higher_timeframe_oracle`);
+3. the projection feeds those closed functions exactly what the host feeds them.
+
+Only (3) is new, and only (3) could be wrong without any existing test noticing.
+`test_p6_projection_matches_host_maintenance` closes it by extracting both
+maintenance blocks, renaming the projection's identifiers back to the host's
+through an explicit injective map, and requiring the statement sequences to
+match: the Wilder recurrence, the seven-array window and its prune bound,
+`absFirst`, and both frontier hand-offs.
+
+That test also requires the map to cover every `var` in the projection, which is
+how it found `qDispRange` — declared for a displacement transport this slice does
+not implement, and never read. Removed.
+
+### 8d. Scope still open
+
+The section's own banner says SLICE 2, and that is accurate. Transported today:
+confirmed swings (count, last type/price/confirmation time) and equal-level
+counts. **Not yet transported: displacement observations, and the P2 surface** —
+both of which §3 lists as required. The live smoke, runtime matrix, six-timeframe
+real-data capture and P6 closure all remain.
+
+```
+P6_COMPILE                       PASS (0 errors, first attempt)
+P6_ALIAS_HITS                    0
+P6_HOST_ENVELOPE                 1799/1800, not exceeded
+P6_REQUEST_ENVELOPE              OPEN — 1249 confirmed vs a 1250 guard
+P6_MAINTENANCE_EQUIVALENCE       PROVEN (statement-level, vs the host)
+P4_DEPLOYED_COPY_STALE           TRUE — predates 0c8a4c9
+P6_DISPLACEMENT_TRANSPORT        NOT IMPLEMENTED
+P6_P2_TRANSPORT                  NOT IMPLEMENTED
+P6_SIX_TF_REAL_DATA_PARITY       NOT ESTABLISHED
+P6 CORE                          NOT CLOSED
+```
