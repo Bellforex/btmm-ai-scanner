@@ -357,3 +357,81 @@ def test_the_transport_surface_is_five_things_per_timeframe() -> None:
     """Stated as one number so a future widening is visible: three P1
     collections plus two P2 items, per authority timeframe."""
     assert len(P1_REQUIRED) + len(P2_REQUIRED) == 5
+
+
+# ---------------------------------------------------------------------------
+# Per-component input table (Phase 19)
+# ---------------------------------------------------------------------------
+#
+# The aggregate surface above says WHAT must be transported. This says WHICH
+# COMPONENT needs each piece, which is what determines implementation slicing
+# and lets a slice be proven before the next one exists.
+
+
+def test_t1_consumes_swings_and_both_structure_items() -> None:
+    source = inspect.getsource(trend_engine.assess_trend)
+    assert "confirmed_swings" in source
+    assert "structure_transitions" in source
+    assert "current_state" in source
+    assert "displacement_observations" not in source
+    assert "equal_level_clusters" not in source
+
+
+def test_t2_consumes_displacement_plus_t1() -> None:
+    source = inspect.getsource(regime_engine.assess_regime)
+    assert "displacement_observations" in source
+    assert "assess_trend(" in source
+    # regime reads no structure of its own -- it inherits trend_state from T1
+    assert "structure_transitions" not in source
+
+
+def test_t3_momentum_consumes_displacement_only() -> None:
+    source = inspect.getsource(t3_engine.assess_momentum)
+    assert "displacement_observations" in source
+    assert "confirmed_swings" not in source
+    assert "poi_analysis" not in source
+
+
+def test_t3_breakout_consumes_displacement_levels_and_transitions() -> None:
+    source = inspect.getsource(t3_engine.assess_breakout)
+    assert "displacement_observations" in source
+    assert "equal_level_clusters" in source
+    assert "structure_transitions" in source
+
+
+def test_t3_pullback_is_the_only_consumer_of_poi_lifecycle() -> None:
+    """And it takes the flat collection, so the POI layer is a symbol-level
+    input to exactly one component rather than a per-timeframe substrate."""
+    source = inspect.getsource(t3_engine.assess_pullback)
+    assert "poi_lifecycle_transitions" in source
+    assert "confirmed_swings" in source
+    assert "current_state" in source
+    for other in (
+        t3_engine.assess_momentum,
+        t3_engine.assess_breakout,
+        trend_engine.assess_trend,
+        regime_engine.assess_regime,
+    ):
+        assert "poi_lifecycle_transitions" not in inspect.getsource(other)
+
+
+def test_t5_orchestrates_every_component() -> None:
+    """So T5 cannot be sliced before the others, and the DAG order T1 -> T2
+    holds transitively through it."""
+    source = inspect.getsource(t5_engine.assess_confluence)
+    for call in (
+        "assess_trend(",
+        "assess_regime(",
+        "assess_momentum(",
+        "assess_breakout(",
+        "assess_pullback(",
+        "assess_volatility(",
+        "assess_session(",
+    ):
+        assert call in source, call
+
+
+def test_t5_is_the_only_consumer_of_poi_observations_and_states() -> None:
+    source = inspect.getsource(t5_engine.assess_confluence)
+    assert "poi_analysis.current_poi_states" in source
+    assert "poi_analysis.poi_observations" in source or "poi:" in source

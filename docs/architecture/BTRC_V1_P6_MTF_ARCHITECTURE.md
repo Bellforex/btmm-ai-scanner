@@ -112,6 +112,32 @@ a datetime                                                       (T4 session —
 
 Pinned by `test_p6_mtf_contract.py` so a future widening has to be declared.
 
+### 3b. Per-component input table (Phase 19)
+
+§3a says what must be transported; this says which component needs each piece,
+which is what determines implementation slicing.
+
+| component | timeframes | P1 | P2 | P3 | P4 | raw candles | datetime |
+|---|---|---|---|---|---|---|---|
+| **T1** `assess_trend` | all six, authority order | `confirmed_swings` | `structure_transitions`, `current_state` | — | — | — | — |
+| **T2** `assess_regime` | all six, **its own** `_PRIMARY_ORDER` | `displacement_observations` | — (inherits `trend_state` from T1) | — | — | — | — |
+| **T3** `assess_momentum` | authority set | `displacement_observations` | — | — | — | — | — |
+| **T3** `assess_breakout` | union of present | `displacement_observations`, `equal_level_clusters` | `structure_transitions` | — | — | — | — |
+| **T3** `assess_pullback` | union of present | `confirmed_swings` | `current_state` | `poi_lifecycle_transitions` **(flat)** | — | — | — |
+| **T4** `assess_volatility` | POI timeframe only | — | — | — | — | **yes** | — |
+| **T4** `assess_session` | n/a | — | — | — | — | — | **yes** |
+| **T5** `assess_confluence` | orchestrates all | via components | via components | `current_poi_states`, `poi_observations` | `btmm_observations` | via T4 | via T4 |
+
+Three consequences for slicing:
+
+* **T2 reads no structure of its own.** It takes displacement plus T1's
+  `trend_state`, so implementing T2 before T1 leaves it with no source for its
+  own input. The DAG order is not a style preference.
+* **`assess_pullback` is the only consumer of POI lifecycle**, and it takes the
+  flat collection. No other component references it at all.
+* **T5 cannot be sliced early** — it calls all seven assessments, so it is the
+  last slice by construction.
+
 ## 4. Chronology, staleness and absence — source behaviour
 
 **Absence degrades; it never raises.**
