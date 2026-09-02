@@ -285,6 +285,64 @@ It uses six `request.security` calls, well inside Pine's per-script limit.
 no TradingView session, and signing in is out of bounds. The moment a session
 exists the lab is one paste-and-compile away from settling both questions.
 
+## 5c. Phase-22 lab RESULTS — measured, not predicted
+
+Run on `bellcare1994` / `bellforex` / FX:XAUUSD, host M15. Compiled first
+attempt, 0 errors. Evidence:
+`artifacts/p6_lab/P6_PHASE22_LAB_RESULTS.txt`.
+
+**Q2 — per-context mutable state: PASS.** A `var array<float>` declared INSIDE
+the requested expression persists across that timeframe's bars and accumulates.
+Isolation is proven by the sizes differing per timeframe — aliasing to one
+shared array would have made all six equal, and aliasing to the host would have
+made all six equal to the host bar count. **A six-timeframe stateful engine is
+expressible inside `request.security`.** The §5 concern that it would not be is
+now answered, and answered favourably.
+
+**Q1 — history depth: MIXED, and the controlling variable is the host's
+`calc_bars_count`.** Two runs differing only in that parameter:
+
+| TF | with `calc_bars_count = 1800` | uncapped | vs 1250 |
+|---|---|---|---|
+| W1 | 2 | **2754** | PASS |
+| D1 | 18 | **13294** | PASS |
+| H4 | 112 | **1033** | **FAIL (-217)** |
+| H1 | 450 | **3953** | PASS |
+| M15 | 1800 | 6152 | PASS |
+| M5 | 5401 | 6123 | PASS |
+
+The capped numbers are exactly the host window re-bucketed — 1800 M15 bars is
+18.75 days, which is 2 weeks, 18 days, 112 four-hour and 450 hourly bars,
+matching §5a's offline arithmetic precisely.
+
+> **`calc_bars_count` on the host constrains every `request.security` context to
+> the host's time span.** It is not merely a host-bar budget.
+
+Uncapped, the provider clearly has the depth: `W1_first_close = 34.99`, gold at
+about $35/oz, places the oldest weekly bar in the early 1970s.
+
+**Q3 — lookahead: PASS.** The forming daily close tracks the host's live price
+(4298.19 vs 4298.39) rather than the day's eventual close, while the daily bar
+is still open (`D_ctx_time_close` > `host_time_close`), and the confirmed value
+is the prior completed bar (4328.35). No leak observed.
+
+### The two blockers this leaves, both author decisions
+
+**1. The frozen contracts are mutually exclusive in one script.** P1 freezes
+`calc_bars_count = 1800` AND freezes the 1250-bar warm-up. With 1800, the
+higher timeframes get 2 / 18 / 112 bars — far below 1250. Removing the cap gives
+them their real depth but changes how many host bars the P1-P4 scanner executes
+over, which is precisely what 1800 was validated as. On this evidence both
+cannot hold at once.
+
+**2. H4 = 1033 < 1250, from provider intraday history.** H1 = 3953 over the same
+window is consistent (both reflect roughly 165 days of intraday history), so
+this is a DATA AVAILABILITY limit rather than an architecture cap — and H4 is
+one of the three LOAD-BEARING timeframes for `global_direction`, so it is not a
+shortfall that can be absorbed quietly.
+
+Neither is a mechanical fix, so neither was decided here.
+
 ## 6. Minimal P6 scope, when authorized
 
 **P6 CORE**: transport of P1 `MarketMeasurementAnalysis` and P2
@@ -308,7 +366,12 @@ SAME-TIMESTAMP ORDER       not observable (fixed authority order + rank sort)
 P1 WARM-UP PER TF          1250 bars (W1 = 24 years, D1 = 3.4 years)
 CHART-BAR AGGREGATION      IMPOSSIBLE (M15x1800 = 2.7 weeks ~ 2 W1 bars)
 request.security           MANDATORY for H1/H4/D1/W1, feasibility UNMEASURED
-FEASIBILITY EXPERIMENT     NOT RUN  <-- implementation gate
+PHASE-22 LAB               RUN — Q2 PASS, Q3 PASS, Q1 MIXED
+Q2 per-context var state   PASS (stateful engine IS expressible)
+Q1 uncapped depth          W1/D1/H1/M15/M5 >= 1250; H4 = 1033 FAILS
+calc_bars_count finding    caps EVERY requested context to the host time span
+BLOCKER 1                  1800 host horizon vs 1250 higher-TF warm-up
+BLOCKER 2                  H4 provider history short on a load-bearing TF
 P1/P2 TIMEFRAME-AGNOSTIC   PROVEN on real bars, all six TFs (35f2e67)
 P1/P2 REAL-DATA PER TF     still needs captures for W1/D1/H4/H1
 FEASIBILITY LAB            WRITTEN (p6_feasibility_lab.pine), NOT RUN
