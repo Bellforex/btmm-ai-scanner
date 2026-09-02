@@ -102,13 +102,64 @@ Ruled out by reading the source, unless the live check contradicts it:
 `bar_index` anchoring, rolling-window index anchoring, indicator-local y values,
 and scale distortion from a plotted series.
 
-## 5. Investigation plan (P7, not yet run)
+## 4a. MEASURED: the study is on a different price scale from the candles
 
-1. Reproduce on `bellcare1994` / `bellforex` / `/chart/6cu1b2O7/`, recording for
-   several markers the semantic time, semantic price, and screen position.
-2. Read the live study's price-scale assignment and pane index from the chart
-   model — this directly confirms or kills the leading hypothesis.
-3. Enumerate every study attached to the layout and remove stale duplicates.
+Read live from the chart model on `bellcare1994` / `bellforex` / FX:XAUUSD M15:
+
+```
+mainSeries            priceScale id = ivPMGXXDSKBJ    autoScale = false
+P3 DEV scanner        priceScale id = KAzaqt6eQw3n    autoScale = true
+P6 FEASIBILITY LAB    priceScale id = 0Yabu85nIh35    autoScale = true
+```
+
+**The scanner does not share the candles' price scale.** Its labels, lines and
+boxes are positioned by real price — §3 confirmed that — but those prices are
+mapped onto `KAzaqt6eQw3n`, a *different vertical axis* that auto-scales on its
+own, while the candles sit on `ivPMGXXDSKBJ` with autoscaling switched off.
+
+Two axes, scaling independently, is precisely a mechanism that makes correctly
+anchored objects drift away from their candles when the viewport moves. This
+promotes scale ownership from "leading hypothesis" to **measured fact**, and it
+is consistent with every §3 finding: the coordinates were never the problem.
+
+`P7_ROOT_CAUSE_CANDIDATE_PRICE_SCALE = TRUE`
+
+`P7_DUPLICATE_STUDY_PRESENT = TRUE` was also confirmed — `P3 DEV` and
+`P3 ATOMIC PARITY` were both attached simultaneously. That is a separate
+candidate and is not yet ruled in or out.
+
+### What was changed on the chart, and what was not
+
+To free an indicator slot on the Basic plan (2 maximum) and to test the scale
+hypothesis:
+
+* `P3 ATOMIC PARITY` was **removed from the chart**. Its saved script is
+  untouched and can be re-added from the editor's script list.
+* `P3 DEV` was moved onto the main price scale with
+  `study.setPriceScale(mainSeries.priceScale())`, verified: both now report
+  `ivPMGXXDSKBJ`. This is a chart/layout property, **not** a source change.
+* `P6 FEASIBILITY LAB` was added (it declares `overlay = false`, so it occupies
+  its own pane and reshuffles the layout — worth removing before judging the
+  visual result).
+
+No Pine source was modified and no saved script was deleted.
+
+### Why this is NOT yet a closed defect
+
+The scale is now shared, but the acceptance matrix in §2 has **not** been run.
+A measured cause plus an applied change is not a verified fix, and the layout
+currently contains the lab's extra pane, which confounds any visual check. The
+defect stays **OPEN** until every viewport operation in §2 passes with the
+scanner as the only attached study.
+
+## 5. Investigation plan (P7, remaining)
+
+1. ~~Read the live study's price-scale assignment~~ — **done, see §4a: the
+   scanner was on its own scale.**
+2. Remove the feasibility lab so the layout is scanner-only, then run the §2
+   acceptance matrix with the shared scale in place.
+3. If markers still detach, test the duplicate-study candidate by re-adding
+   `P3 ATOMIC PARITY` and comparing.
 4. Classify the owner: `PRICE_SCALE`, `X_COORDINATE`, `Y_COORDINATE`,
    `OBJECT_REBUILD`, `OVERLAY`, `TABLE_CONFUSION`, `OTHER`.
 5. Apply a **rendering-only** correction.
