@@ -285,3 +285,75 @@ def test_the_provisional_weights_and_bands_are_what_the_port_must_carry() -> Non
     }
     assert config.high_confluence_min == 65
     assert config.watch_only_min == 45
+
+
+# ---------------------------------------------------------------------------
+# The minimal transport surface (Phase 18)
+# ---------------------------------------------------------------------------
+#
+# "P1 + P2, six times over" is what the architecture said before this was
+# traced. It overstates the job. P1 publishes five collections and BTRC reads
+# three; P2 publishes three semantic items and BTRC reads two. The two P1
+# collections nobody reads are also the two most expensive to produce.
+
+P1_COLLECTIONS = (
+    "confirmed_swings",
+    "displacement_observations",
+    "equal_level_clusters",
+    "support_resistance_zones",
+    "trendlines",
+)
+P1_REQUIRED = ("confirmed_swings", "displacement_observations", "equal_level_clusters")
+
+P2_ITEMS = ("swing_relationships", "structure_transitions", "current_state")
+P2_REQUIRED = ("structure_transitions", "current_state")
+
+
+def _btrc_sources() -> str:
+    import pathlib
+
+    package = pathlib.Path(t5_engine.__file__).parent
+    return "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(package.glob("*.py"))
+    )
+
+
+def test_btrc_reads_only_three_of_p1s_five_collections() -> None:
+    text = _btrc_sources()
+    read = {name for name in P1_COLLECTIONS if name in text}
+    assert read == set(P1_REQUIRED)
+
+
+def test_support_resistance_and_trendlines_are_never_read() -> None:
+    """The most valuable exclusion. S/R zones carry the tracker and fold-cache
+    machinery that dominated P3's difficulty, and BTRC wants neither them nor
+    trendlines -- so the higher-timeframe engines P6 stands up do not have to
+    produce either."""
+    text = _btrc_sources()
+    assert "support_resistance_zones" not in text
+    assert "trendlines" not in text
+
+
+def test_btrc_reads_only_two_of_p2s_three_items() -> None:
+    text = _btrc_sources()
+    read = {name for name in P2_ITEMS if name in text}
+    assert read == set(P2_REQUIRED)
+
+
+def test_poi_lifecycle_transitions_are_read_flat_not_per_timeframe() -> None:
+    """Decisive for P6 scope: P3 does NOT have to run on six timeframes.
+
+    The pullback assessment binds `lifecycle` ONCE from the analysis and hands
+    the same flat collection to every timeframe, rather than indexing it by
+    timeframe the way it does for swings and structure state.
+    """
+    source = inspect.getsource(t3_engine)
+    assert "lifecycle = analysis.poi_analysis.poi_lifecycle_transitions" in source
+    # the per-timeframe dicts exist for P1/P2 inputs, but never for POI lifecycle
+    assert "lifecycle_by_tf" not in source
+
+
+def test_the_transport_surface_is_five_things_per_timeframe() -> None:
+    """Stated as one number so a future widening is visible: three P1
+    collections plus two P2 items, per authority timeframe."""
+    assert len(P1_REQUIRED) + len(P2_REQUIRED) == 5

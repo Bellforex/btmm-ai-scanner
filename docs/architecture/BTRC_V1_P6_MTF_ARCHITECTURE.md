@@ -63,11 +63,54 @@ Derived from what each engine reads off `ScannerAnalysis`:
 | T4 volatility / session | raw candles via `candles_by_timeframe` | POI timeframe only |
 | T5 aggregation | the above + `btmm_analysis.btmm_observations` | — |
 
-So P6 must supply, on six timeframes: **P1 `MarketMeasurementAnalysis` and P2
-`StructureAnalysis`**, plus candles for T4.
+### 3a. The minimal transport surface — traced, not assumed
 
-This is the central scope fact: P6 is not a thin projection. It is the P1 and P2
-substrate, six times over.
+An earlier draft of this section said P6 must supply "P1 and P2, six times
+over". Tracing the actual field reads shows that overstates the job, in two ways
+that matter.
+
+**P1 publishes five collections; BTRC reads three.**
+
+| P1 collection | read by BTRC? |
+|---|---|
+| `confirmed_swings` | yes — T1, T3 |
+| `displacement_observations` | yes — T2, T3 |
+| `equal_level_clusters` | yes — T3 |
+| `support_resistance_zones` | **no — zero references** |
+| `trendlines` | **no — zero references** |
+
+The two nobody reads are the two most expensive to produce. S/R zones carry the
+tracker and fold-cache machinery that dominated P3's difficulty and produced its
+hardest divergences, so the higher-timeframe engines P6 stands up do not need
+any of it.
+
+**P2 publishes three semantic items; BTRC reads two** — `structure_transitions`
+and `current_state`. `swing_relationships` is never referenced.
+
+**P3 does NOT need to run on six timeframes.** T3's pullback assessment binds
+`lifecycle = analysis.poi_analysis.poi_lifecycle_transitions` ONCE and hands the
+same flat collection to every timeframe, rather than indexing it by timeframe
+the way it does for swings and structure state. POI lifecycle transitions are a
+symbol-level input, not a per-authority-timeframe one, so P3 stays exactly where
+it is today.
+
+So the per-authority-timeframe payload is **five things**:
+
+```
+P1: confirmed_swings, displacement_observations, equal_level_clusters
+P2: structure_transitions, current_state
+```
+
+plus, once and not per authority timeframe:
+
+```
+P3: poi_analysis.poi_lifecycle_transitions, current_poi_states   (flat)
+P4: btmm_analysis.btmm_observations                              (flat)
+raw candles for the POI's timeframe only                         (T4 volatility)
+a datetime                                                       (T4 session — no transport at all)
+```
+
+Pinned by `test_p6_mtf_contract.py` so a future widening has to be declared.
 
 ## 4. Chronology, staleness and absence — source behaviour
 
@@ -231,7 +274,8 @@ timeframes outside the authority set, no M1 (P5 never reads it).
 P6 ARCHITECTURE            DERIVED
 P5_REQUIRED_TFS            W1, D1, H4, H1, M15, M5
 LOAD-BEARING FOR FUSION    W1, D1, H4
-PER-TF PAYLOAD             P1 measurements + P2 structure (+ candles for T4)
+PER-TF PAYLOAD             3 P1 collections + 2 P2 items (NOT S/R, NOT trendlines)
+P3 PER TF                  NOT REQUIRED (POI lifecycle is read flat)
 ABSENCE BEHAVIOUR          degrade to NEUTRAL, never raise
 STALENESS                  hold-last-confirmed
 SAME-TIMESTAMP ORDER       not observable (fixed authority order + rank sort)
