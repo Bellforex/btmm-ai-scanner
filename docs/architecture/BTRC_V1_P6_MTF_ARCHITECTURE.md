@@ -326,7 +326,52 @@ about $35/oz, places the oldest weekly bar in the early 1970s.
 is still open (`D_ctx_time_close` > `host_time_close`), and the confirmed value
 is the prior completed bar (4328.35). No leak observed.
 
-### The two blockers this leaves, both author decisions
+### RESOLVED: per-request `calc_bars_count` decouples the two envelopes
+
+Pine v6 accepts `calc_bars_count` as a per-call argument to `request.security`.
+Two further runs settle both blockers.
+
+**Requesting 5000** gives W1 2754 (all that exists), D1/H4/H1/M15/M5 all 5000 —
+**and H4 reaching 5000 is the decisive H4 result.** Sampled at its oldest
+retained host bar, H4 already reads 4825 and climbs, while M5 reads `null`, then
+1012, then 5000 — a genuine per-timeframe ramp against real history, not
+padding. So **H4 = 1033 was a request-context default, not a provider or plan
+limit.** But `host_bars` also became 5000: the host executes over
+`max(indicator calc_bars_count, largest request calc_bars_count)`.
+
+**Requesting 1250 — exactly the frozen warm-up — is the answer:**
+
+| | bars |
+|---|---|
+| W1 | 1250 |
+| D1 | 1250 |
+| H4 | 1250 |
+| H1 | 1250 |
+| M5 | 1250 |
+| M15 | 1800 (the host timeframe) |
+| **host_bars** | **1800** |
+
+Because the requirement (1250) sits *below* the frozen host envelope (1800), the
+two decouple for free.
+
+```
+DECISION 1  RESOLVED  keep calc_bars_count = 1800 on the host, pass
+                      calc_bars_count = 1250 on every request.security call.
+                      P1-P4's execution envelope is untouched, so the closed
+                      parity claims stand and need no re-proof.
+DECISION 2  RESOLVED  H4 >= 1250 achievable; 1250 preserved unreduced; no
+                      dependency-horizon audit and no author waiver needed.
+```
+
+Ramp caveat, recorded rather than glossed: at the host's oldest bars the higher
+timeframes have not yet accumulated 1250 (W1 1245, D1 1229, H4 1131, H1 799 at
+the first retained bar), converging to exactly 1250 by the last bar. That
+mirrors P1's own warm-up and affects early-bar state only.
+
+**P6 history gate: PASS on all six timeframes, with every frozen contract
+intact.**
+
+### Superseded — the blockers as they stood before the follow-up runs
 
 **1. The frozen contracts are mutually exclusive in one script.** P1 freezes
 `calc_bars_count = 1800` AND freezes the 1250-bar warm-up. With 1800, the
@@ -370,8 +415,9 @@ PHASE-22 LAB               RUN — Q2 PASS, Q3 PASS, Q1 MIXED
 Q2 per-context var state   PASS (stateful engine IS expressible)
 Q1 uncapped depth          W1/D1/H1/M15/M5 >= 1250; H4 = 1033 FAILS
 calc_bars_count finding    caps EVERY requested context to the host time span
-BLOCKER 1                  1800 host horizon vs 1250 higher-TF warm-up
-BLOCKER 2                  H4 provider history short on a load-bearing TF
+DECISION 1                 RESOLVED — host 1800 + per-request 1250
+DECISION 2                 RESOLVED — H4 reaches 1250 (1033 was a request default)
+P6 HISTORY GATE            PASS on all six timeframes, contracts intact
 P1/P2 TIMEFRAME-AGNOSTIC   PROVEN on real bars, all six TFs (35f2e67)
 P1/P2 REAL-DATA PER TF     still needs captures for W1/D1/H4/H1
 FEASIBILITY LAB            WRITTEN (p6_feasibility_lab.pine), NOT RUN
