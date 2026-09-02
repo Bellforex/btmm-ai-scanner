@@ -1,0 +1,148 @@
+//@version=6
+
+// =============================================================================
+// BTMM + POI + BTRC Scanner  [P6 MTF TRANSPORT — SLICE 1]
+// -----------------------------------------------------------------------------
+// P6 exists for exactly one reason: BTRC fuses timeframes and P4 does not.
+// `trend_engine._resolve_global` reduces W1, D1 and H4 together into a single
+// `global_direction` that feeds AnalyticalPermission, so that value does not
+// exist until three timeframes are in hand. Everything here serves that and
+// nothing else.
+//
+// WHAT THIS SLICE IS. The cross-timeframe TRANSPORT layer and its isolation
+// guards, built on the architecture the Phase-22 lab measured. It does NOT yet
+// carry the P1/P2 semantic projection — that is the next slice, and this file
+// says so rather than implying otherwise.
+//
+// THE MEASURED ARCHITECTURE (artifacts/p6_lab/P6_PHASE22_LAB_RESULTS.txt)
+//
+//   host      calc_bars_count = 1800   <- P1's frozen envelope, UNCHANGED
+//   requests  calc_bars_count = 1250   <- P1's frozen warm-up, per context
+//
+// Those two numbers look like they conflict and do not. The host executes over
+// max(indicator calc_bars_count, largest request calc_bars_count); because the
+// requirement (1250) sits BELOW the frozen host envelope (1800), asking for
+// 1250 leaves the host at exactly 1800 while every requested timeframe gets its
+// full warm-up. Measured, both ways: requesting 5000 pulled the host to 5000;
+// requesting 1250 left it at 1800.
+//
+// Do not "simplify" by dropping the per-request argument. Without it the
+// requested contexts are clamped to the host's TIME SPAN, which on an M15 host
+// is 18.75 days — two W1 bars against the 1250 required.
+//
+// Q2 (measured): a `var` array declared INSIDE a requested expression persists
+// across that timeframe's bars and is isolated per context. That is what makes
+// a stateful six-timeframe engine expressible at all.
+//
+// Q3 (measured): no lookahead. The forming higher-timeframe value tracks the
+// host's live price rather than the eventual close, and the confirmed value is
+// the prior completed bar.
+//
+// WHAT IS DELIBERATELY NOT TRANSPORTED. BTRC reads three of P1's five published
+// collections and two of P2's three. It never reads support_resistance_zones,
+// trendlines or swing_relationships — and the two it ignores are the most
+// expensive to produce, carrying the S/R tracker and fold-cache machinery that
+// dominated P3. POI lifecycle transitions are read once as a flat symbol-level
+// collection, so there are NO six P3 engines. Session needs no transport at all
+// (it is a pure function of a datetime). See tests/unit/test_p6_mtf_contract.py.
+//
+// NON-REPAINT. Every P6 mutation is gated on barstate.isconfirmed, exactly as
+// P1-P4 are. No strategy.*, no orders, no alerts.
+// =============================================================================
+
+indicator("BTMM + POI + BTRC Scanner [P6 MTF TRANSPORT]", overlay = false, calc_bars_count = 1800)
+
+// ---- the frozen contract, as constants so a test can read them --------------
+int C_P6_HOST_CALC_BARS    = 1800   // P1's validated horizon. Do not change.
+int C_P6_REQUEST_CALC_BARS = 1250   // P1's warm-up, per requested context.
+
+// ---- the authority timeframes, in T1's order -------------------------------
+// trend_engine._AUTHORITY_TIMEFRAMES = (W1, D1, H4, H1, M15, M5).
+// T2's regime_engine._PRIMARY_ORDER is DIFFERENT — (D1, H4, W1, H1, M15, M5) —
+// and the two must never share one ordering helper. Only W1/D1/H4 are
+// load-bearing for global_direction; H1/M15/M5 populate per-timeframe
+// assessments and never move it.
+string C_P6_TF_W1  = "W"
+string C_P6_TF_D1  = "D"
+string C_P6_TF_H4  = "240"
+string C_P6_TF_H1  = "60"
+string C_P6_TF_M15 = "15"
+string C_P6_TF_M5  = "5"
+
+// -----------------------------------------------------------------------------
+// The requested-context probe
+// -----------------------------------------------------------------------------
+// A per-context accumulator whose ONLY purpose in this slice is to prove the
+// three properties the next slice depends on: that state persists inside a
+// requested context, that each timeframe's state is its own, and that the
+// context sees its full 1250-bar warm-up.
+//
+// `bar_index` in a requested context equals (bars that context executed - 1),
+// which measures the warm-up without allocating anything. The running sum is a
+// cheap per-context fingerprint: two contexts sharing one aliased state would
+// report identical fingerprints, and they must not.
+f_p6ContextProbe() =>
+    var int   seen = 0
+    var float fingerprint = 0.0
+    seen += 1
+    fingerprint := fingerprint + close
+    [bar_index + 1, seen, fingerprint, time, time_close]
+
+[w1Bars,  w1Seen,  w1Fp,  w1Time,  w1Close]  = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6ContextProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[d1Bars,  d1Seen,  d1Fp,  d1Time,  d1Close]  = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6ContextProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h4Bars,  h4Seen,  h4Fp,  h4Time,  h4Close]  = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6ContextProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h1Bars,  h1Seen,  h1Fp,  h1Time,  h1Close]  = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6ContextProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m15Bars, m15Seen, m15Fp, m15Time, m15Close] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6ContextProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m5Bars,  m5Seen,  m5Fp,  m5Time,  m5Close]  = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6ContextProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+
+// -----------------------------------------------------------------------------
+// Isolation and envelope guards
+// -----------------------------------------------------------------------------
+// Aliasing is the failure mode that would silently invalidate every later
+// parity claim, so it is asserted continuously rather than checked once. Two
+// distinct timeframes must not report identical (bars, fingerprint) pairs.
+f_p6Aliased(float aBars, float aFp, float bBars, float bFp) =>
+    aBars == bBars and aFp == bFp
+
+var int p6AliasHits = 0
+if barstate.isconfirmed
+    bool hit = false
+    hit := hit or f_p6Aliased(w1Bars,  w1Fp,  d1Bars,  d1Fp)
+    hit := hit or f_p6Aliased(d1Bars,  d1Fp,  h4Bars,  h4Fp)
+    hit := hit or f_p6Aliased(h4Bars,  h4Fp,  h1Bars,  h1Fp)
+    hit := hit or f_p6Aliased(h1Bars,  h1Fp,  m15Bars, m15Fp)
+    hit := hit or f_p6Aliased(m15Bars, m15Fp, m5Bars,  m5Fp)
+    if hit
+        p6AliasHits += 1
+
+// The host envelope must remain exactly 1800. If a later change raises a
+// request above the host, this is where it becomes visible instead of silently
+// moving P1-P4 off their validated horizon.
+var int p6HostBarsMax = 0
+if barstate.isconfirmed
+    p6HostBarsMax := math.max(p6HostBarsMax, bar_index + 1)
+
+// A requested context is warmed once it reports its full allotment. W1 is the
+// one timeframe that can legitimately fall short, because the instrument's own
+// weekly history is finite rather than because the request was capped.
+f_p6Warm(int bars) =>
+    bars >= C_P6_REQUEST_CALC_BARS
+
+// -----------------------------------------------------------------------------
+// Diagnostics (data window only; nothing is drawn on the price scale)
+// -----------------------------------------------------------------------------
+plot(w1Bars,  "W1_bars",  display = display.data_window)
+plot(d1Bars,  "D1_bars",  display = display.data_window)
+plot(h4Bars,  "H4_bars",  display = display.data_window)
+plot(h1Bars,  "H1_bars",  display = display.data_window)
+plot(m15Bars, "M15_bars", display = display.data_window)
+plot(m5Bars,  "M5_bars",  display = display.data_window)
+plot(bar_index + 1,  "host_bars",      display = display.data_window)
+plot(p6HostBarsMax,  "host_bars_max",  display = display.data_window)
+plot(p6AliasHits,    "ALIAS_HITS",     display = display.data_window)
+plot(f_p6Warm(w1Bars)  ? 1 : 0, "W1_warm",  display = display.data_window)
+plot(f_p6Warm(d1Bars)  ? 1 : 0, "D1_warm",  display = display.data_window)
+plot(f_p6Warm(h4Bars)  ? 1 : 0, "H4_warm",  display = display.data_window)
+plot(f_p6Warm(h1Bars)  ? 1 : 0, "H1_warm",  display = display.data_window)
+plot(f_p6Warm(m15Bars) ? 1 : 0, "M15_warm", display = display.data_window)
+plot(f_p6Warm(m5Bars)  ? 1 : 0, "M5_warm",  display = display.data_window)
