@@ -133,6 +133,53 @@ P6 would be standing six P1+P2 substrates up on four timeframes with no
 established correctness baseline, so extending P1/P2 real-data parity to at least
 W1, D1 and H4 is a prerequisite of P6 closure, not a follow-up.
 
+## 5a. Quantified history requirement — the hard number
+
+P1 declares its own warm-up in the Pine source:
+
+```
+C_P1_MIN_CALC_BARS = lookbackWindow + warm-up = 300 + 950 = 1250
+C_P1_CALC_BARS     = 1800
+```
+
+**1250 confirmed bars per timeframe**, before P1 produces anything. Applied to
+the six required timeframes:
+
+| TF | warm-up span at 1250 bars |
+|---|---|
+| M5 | 4.3 days |
+| M15 | 13.0 days |
+| H1 | 52.1 days |
+| H4 | 208.3 days (~7 months) |
+| D1 | 1250 days (**3.4 years**) |
+| W1 | 8750 days (**24 years**) |
+
+An M15 chart at `calc_bars_count = 1800` spans **18.75 days — about 2.7 weeks**.
+
+Two consequences, both firm:
+
+1. **Aggregating the higher timeframes from chart bars is impossible.** Building
+   W1 candles out of the chart's own 1800 M15 bars yields about **2 W1 bars
+   against the 1250 P1 needs** — wrong by three orders of magnitude. The same
+   holds for D1 (3.4 years needed, 18.75 days available) and H4. So a
+   "bucket the chart bars" design is not merely inefficient, it cannot work.
+
+2. **`request.security` is therefore mandatory for H1, H4, D1 and W1**, which
+   makes the two open questions in §5 unavoidable rather than optional: whether
+   the array-mutating engine can be evaluated in another timeframe's context at
+   all, and whether TradingView will deliver ~1250 W1 bars (24 years of weekly
+   XAUUSD) and ~1250 D1 bars to a script whose chart timeframe is M15.
+
+Both are measurable, and neither has been measured. That is the whole of the
+implementation gate: not a preference between designs, but an unanswered
+question about whether any design exists.
+
+An honest third possibility has to stay on the table — that the P1 warm-up
+constant, validated for intraday timeframes, is simply not the right contract
+for W1, and that P6 would need an author decision about higher-timeframe warm-up
+rather than a Pine trick. That is a semantics question, not an engineering one,
+and it is out of scope here.
+
 ## 6. Minimal P6 scope, when authorized
 
 **P6 CORE**: transport of P1 `MarketMeasurementAnalysis` and P2
@@ -152,6 +199,9 @@ PER-TF PAYLOAD             P1 measurements + P2 structure (+ candles for T4)
 ABSENCE BEHAVIOUR          degrade to NEUTRAL, never raise
 STALENESS                  hold-last-confirmed
 SAME-TIMESTAMP ORDER       not observable (fixed authority order + rank sort)
+P1 WARM-UP PER TF          1250 bars (W1 = 24 years, D1 = 3.4 years)
+CHART-BAR AGGREGATION      IMPOSSIBLE (M15x1800 = 2.7 weeks ~ 2 W1 bars)
+request.security           MANDATORY for H1/H4/D1/W1, feasibility UNMEASURED
 FEASIBILITY EXPERIMENT     NOT RUN  <-- implementation gate
 P1/P2 PARITY ON W1/D1/H4   NOT ESTABLISHED  <-- closure gate
 P6 IMPLEMENTATION          NOT STARTED
