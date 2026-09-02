@@ -209,3 +209,48 @@ def test_the_slice_states_its_own_scope() -> None:
     flat = " ".join(_section().replace("//", " ").split())
     assert "SLICE 2" in flat
     assert "minimal P1 projection" in flat
+
+
+# ---------------------------------------------------------------------------
+# Defects found by the first live run on TradingView
+# ---------------------------------------------------------------------------
+
+
+def test_the_pine_sources_are_lf_only() -> None:
+    """A CRLF rewrite is invisible to every other test in this file, because
+    Python reads text with universal newlines -- the content compares equal
+    while the bytes, and therefore the deployment hash, do not."""
+    for path in (P4_DEV, P6_DEV):
+        assert b"\r\n" not in path.read_bytes(), f"{path.name} has CRLF endings"
+
+
+def test_projection_outputs_survive_a_forming_bar() -> None:
+    """The first live run returned 0 swings on every timeframe. The outputs were
+    plain locals, so on any host bar where the requested context's own bar was
+    still forming they reset to 0 -- which is most bars, for a weekly context.
+    Persisting them is also the staleness rule BTRC needs: hold last confirmed."""
+    body = _section_code()
+    body = body[body.index("f_p6TfProjection()") :]
+    body = body[: body.index("] = request.security")]
+    for declaration in (
+        "var int   swingCount",
+        "var int   lastType",
+        "var float lastPrice",
+        "var int   lastConfT",
+        "var int   eqCount",
+    ):
+        assert declaration in body, declaration
+
+
+def test_the_history_envelope_is_measured_not_inferred() -> None:
+    """`bars` counts CONFIRMED bars, so it can never reach the requested count
+    while one bar is forming. Capacity has to be read from the context's own
+    dataset, exactly as the host reads p1DatasetBars."""
+    code = _section_code()
+    assert "int qDataset = last_bar_index + 1" in code
+    assert "f_p6Capacity(int dataset)" in code
+    assert "dataset >= C_P6_REQUEST_CALC_BARS" in code
+    # warm-up is P1's validated minimum, not the request size
+    assert "bars >= C_P1_MIN_CALC_BARS" in code
+    for tf in ("W1", "D1", "H4", "H1", "M15", "M5"):
+        assert f'"P6_{tf}_dataset"' in code, tf

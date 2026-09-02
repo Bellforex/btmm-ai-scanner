@@ -4515,11 +4515,20 @@ f_p6TfProjection() =>
     var int   qAtrWarmCount = 0
     var float qFingerprint  = 0.0
 
-    int swingCount = 0
-    int lastType   = C_ST_NA
-    float lastPrice = na
-    int lastConfT  = C_ST_NA
-    int eqCount    = 0
+    // PERSISTENT, not per-call locals. A requested context is evaluated on every
+    // host bar, but its own bar is confirmed only occasionally; plain locals would
+    // reset to 0 on every intervening evaluation and the projection would read
+    // "no swings" between higher-timeframe closes. Holding the last CONFIRMED
+    // value is also the staleness semantics BTRC requires of a higher timeframe.
+    var int   swingCount = 0
+    var int   lastType   = C_ST_NA
+    var float lastPrice  = na
+    var int   lastConfT  = C_ST_NA
+    var int   eqCount    = 0
+
+    // Dataset size AS SEEN BY THIS CONTEXT, so the history envelope is measured
+    // rather than inferred. The host reads capacity the same way (p1DatasetBars).
+    int qDataset = last_bar_index + 1
 
     if barstate.isconfirmed
         // exact incremental Wilder ATR, same rule as the host
@@ -4567,14 +4576,14 @@ f_p6TfProjection() =>
             lastConfT := sr.meaningfulConfTime
         eqCount := array.size(f_detectEqualLevels(qSwings))
 
-    [qBars, swingCount, lastType, lastPrice, lastConfT, eqCount, qFingerprint]
+    [qBars, swingCount, lastType, lastPrice, lastConfT, eqCount, qFingerprint, qDataset]
 
-[w1Bars,  w1Sw,  w1Type,  w1Price,  w1Conf,  w1Eq,  w1Fp ] = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[d1Bars,  d1Sw,  d1Type,  d1Price,  d1Conf,  d1Eq,  d1Fp ] = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[h4Bars,  h4Sw,  h4Type,  h4Price,  h4Conf,  h4Eq,  h4Fp ] = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[h1Bars,  h1Sw,  h1Type,  h1Price,  h1Conf,  h1Eq,  h1Fp ] = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[m15Bars, m15Sw, m15Type, m15Price, m15Conf, m15Eq, m15Fp] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[m5Bars,  m5Sw,  m5Type,  m5Price,  m5Conf,  m5Eq,  m5Fp ] = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[w1Bars,  w1Sw,  w1Type,  w1Price,  w1Conf,  w1Eq,  w1Fp , w1Ds] = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[d1Bars,  d1Sw,  d1Type,  d1Price,  d1Conf,  d1Eq,  d1Fp , d1Ds] = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h4Bars,  h4Sw,  h4Type,  h4Price,  h4Conf,  h4Eq,  h4Fp , h4Ds] = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h1Bars,  h1Sw,  h1Type,  h1Price,  h1Conf,  h1Eq,  h1Fp , h1Ds] = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m15Bars, m15Sw, m15Type, m15Price, m15Conf, m15Eq, m15Fp, m15Ds] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m5Bars,  m5Sw,  m5Type,  m5Price,  m5Conf,  m5Eq,  m5Fp , m5Ds] = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
 
 // -----------------------------------------------------------------------------
 // Isolation and envelope guards
@@ -4598,8 +4607,14 @@ if barstate.isconfirmed
         p6AliasHits := p6AliasHits + 1
     p6HostBarsMax := math.max(p6HostBarsMax, bar_index + 1)
 
+// Mirrors the host's own two-part history guard (p1CapacityOk / p1WarmupOk):
+// capacity is the dataset the context was given, warm-up is CONFIRMED bars against
+// P1's validated minimum. They are separate questions and are reported separately.
+f_p6Capacity(int dataset) =>
+    dataset >= C_P6_REQUEST_CALC_BARS
+
 f_p6Warm(int bars) =>
-    bars >= C_P6_REQUEST_CALC_BARS
+    bars >= C_P1_MIN_CALC_BARS
 
 // -----------------------------------------------------------------------------
 // Diagnostics (data window only; nothing is drawn on the price scale, which P7
@@ -4621,6 +4636,12 @@ plot(w1Eq,    "P6_W1_equal_levels", display = display.data_window)
 plot(d1Eq,    "P6_D1_equal_levels", display = display.data_window)
 plot(w1Price, "P6_W1_last_swing_price", display = display.data_window)
 plot(d1Price, "P6_D1_last_swing_price", display = display.data_window)
+plot(w1Ds,  "P6_W1_dataset",  display = display.data_window)
+plot(d1Ds,  "P6_D1_dataset",  display = display.data_window)
+plot(h4Ds,  "P6_H4_dataset",  display = display.data_window)
+plot(h1Ds,  "P6_H1_dataset",  display = display.data_window)
+plot(m15Ds, "P6_M15_dataset", display = display.data_window)
+plot(m5Ds,  "P6_M5_dataset",  display = display.data_window)
 plot(p6HostBarsMax, "P6_host_bars_max", display = display.data_window)
 plot(p6AliasHits,   "P6_ALIAS_HITS",    display = display.data_window)
 plot(f_p6Warm(w1Bars)  ? 1 : 0, "P6_W1_warm",  display = display.data_window)
