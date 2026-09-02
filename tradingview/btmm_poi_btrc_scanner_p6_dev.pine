@@ -4507,7 +4507,6 @@ f_p6TfProjection() =>
     var array<float> qpPrice = array.new<float>()
     var array<float> qpAtr   = array.new<float>()
     var array<float> qpTie   = array.new<float>()
-    var array<float> qDispRange = array.new<float>()
     var int   qBars         = 0
     var float qAtrPrevFinal = na
     var float qAtrPrevClose = na
