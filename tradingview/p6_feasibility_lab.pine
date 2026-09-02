@@ -1,0 +1,67 @@
+//@version=6
+
+// =============================================================================
+// P6 FEASIBILITY LAB  (experiment only — NOT part of the scanner)
+// -----------------------------------------------------------------------------
+// This script answers the two questions that gate P6, and nothing else. It
+// contains no scanner semantics, draws nothing, and is never shipped.
+//
+// Q1  HISTORY DEPTH.  P1 declares C_P1_MIN_CALC_BARS = 1250 confirmed bars
+//     before it produces anything. An M15 chart at calc_bars_count = 1800 spans
+//     ~18.75 days, so W1/D1/H4 cannot be aggregated from chart bars (~2 W1 bars
+//     against 1250 needed). request.security is therefore mandatory for
+//     H1/H4/D1/W1 — but only if it actually DELIVERS 1250 bars of those
+//     timeframes to a script hosted on M15. That is measured here, not assumed.
+//
+// Q2  PER-CONTEXT MUTABLE STATE.  The scanner engine keeps 128 global
+//     `var array<...>` structures mutated once per confirmed bar. A
+//     request.security expression is evaluated in another timeframe's context;
+//     whether a `var` array declared inside the called function gets its OWN
+//     per-context instance, and accumulates across that timeframe's bars, is
+//     the whole architectural question. If it does, a six-timeframe P1+P2
+//     substrate is expressible. If it does not, P6 needs a different design.
+//
+// Q3  LOOKAHEAD.  The default must not leak future higher-timeframe data. The
+//     probe reports the security-context bar time alongside the chart time so
+//     the relationship can be checked directly rather than trusted.
+// =============================================================================
+
+indicator("P6 FEASIBILITY LAB", overlay = false, calc_bars_count = 1800)
+
+// ---- Q2 probe: a var array declared INSIDE the requested expression ---------
+// Returns [bars seen in this context, array size, first close retained,
+//          this context's bar open time].
+// If the array is per-context and persistent, size == bars and the first close
+// is the oldest bar of that timeframe the engine was given.
+f_probe() =>
+    var array<float> acc = array.new<float>()
+    var int seen = 0
+    seen += 1
+    array.push(acc, close)
+    [seen, array.size(acc), array.size(acc) > 0 ? array.get(acc, 0) : na, time]
+
+[wSeen, wSize, wFirst, wTime] = request.security(syminfo.tickerid, "W",   f_probe())
+[dSeen, dSize, dFirst, dTime] = request.security(syminfo.tickerid, "D",   f_probe())
+[h4Seen, h4Size, h4First, h4Time] = request.security(syminfo.tickerid, "240", f_probe())
+[h1Seen, h1Size, h1First, h1Time] = request.security(syminfo.tickerid, "60",  f_probe())
+[m15Seen, m15Size, m15First, m15Time] = request.security(syminfo.tickerid, "15", f_probe())
+[m5Seen, m5Size, m5First, m5Time] = request.security(syminfo.tickerid, "5",   f_probe())
+
+// ---- report ONCE on the last confirmed historical bar -----------------------
+var bool reported = false
+if barstate.islastconfirmedhistory and not reported
+    reported := true
+    log.info("P6LAB|host_tf=" + timeframe.period + "|host_bars=" + str.tostring(bar_index + 1) + "|host_time=" + str.tostring(time))
+    log.info("P6LAB|tf=W1|seen=" + str.tostring(wSeen) + "|size=" + str.tostring(wSize) + "|first_close=" + str.tostring(wFirst) + "|ctx_time=" + str.tostring(wTime))
+    log.info("P6LAB|tf=D1|seen=" + str.tostring(dSeen) + "|size=" + str.tostring(dSize) + "|first_close=" + str.tostring(dFirst) + "|ctx_time=" + str.tostring(dTime))
+    log.info("P6LAB|tf=H4|seen=" + str.tostring(h4Seen) + "|size=" + str.tostring(h4Size) + "|first_close=" + str.tostring(h4First) + "|ctx_time=" + str.tostring(h4Time))
+    log.info("P6LAB|tf=H1|seen=" + str.tostring(h1Seen) + "|size=" + str.tostring(h1Size) + "|first_close=" + str.tostring(h1First) + "|ctx_time=" + str.tostring(h1Time))
+    log.info("P6LAB|tf=M15|seen=" + str.tostring(m15Seen) + "|size=" + str.tostring(m15Size) + "|first_close=" + str.tostring(m15First) + "|ctx_time=" + str.tostring(m15Time))
+    log.info("P6LAB|tf=M5|seen=" + str.tostring(m5Seen) + "|size=" + str.tostring(m5Size) + "|first_close=" + str.tostring(m5First) + "|ctx_time=" + str.tostring(m5Time))
+
+plot(wSize,  "W1_size",  display = display.data_window)
+plot(dSize,  "D1_size",  display = display.data_window)
+plot(h4Size, "H4_size",  display = display.data_window)
+plot(h1Size, "H1_size",  display = display.data_window)
+plot(m15Size, "M15_size", display = display.data_window)
+plot(m5Size, "M5_size",  display = display.data_window)

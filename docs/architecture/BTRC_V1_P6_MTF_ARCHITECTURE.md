@@ -180,6 +180,42 @@ for W1, and that P6 would need an author decision about higher-timeframe warm-up
 rather than a Pine trick. That is a semantics question, not an engineering one,
 and it is out of scope here.
 
+## 5b. Progress against the two gates
+
+**Gate 2 (P1/P2 unverified on W1/D1/H4/H1) — CLEARED on the Python side.**
+`tests/unit/test_p1_p2_higher_timeframe_oracle.py` (commit `35f2e67`) proves on
+real bars that P1 and P2 produce identical swings, displacement, equal levels,
+S/R zones, structure transitions and current state across all six authority
+timeframes. The structural reason is asserted directly too: neither layer
+contains a single branch on which timeframe it was given. So M15 correctness
+transfers to W1/D1/H4/H1/M5 as a property of the algorithm, and feeding the
+engine genuine weekly bars is a DATA problem rather than a correctness one.
+
+What that does not settle is real higher-timeframe market data: it shows the
+engine is indifferent to the label, not that weekly gold resembles re-timed M15
+gold. Real-data parity per timeframe still needs captures.
+
+**Gate 1 (Pine feasibility) — experiment written, NOT YET RUN.**
+`tradingview/p6_feasibility_lab.pine` is ready and answers exactly three
+questions, none of which should be reasoned about:
+
+* **Q1 history depth** — does `request.security` hand a script hosted on M15
+  the ~1250 W1 and D1 bars P1 requires, or far fewer?
+* **Q2 per-context mutable state** — the decisive one. The probe declares a
+  `var array<float>` *inside* the requested expression and reports its size. If
+  the array is instantiated per security context and accumulates across that
+  timeframe's bars, then a six-timeframe P1+P2 substrate is expressible and P6
+  has a design. If it is not, P6 needs a different one.
+* **Q3 lookahead** — the context bar time is reported alongside the chart time
+  so the default can be checked rather than trusted.
+
+It uses six `request.security` calls, well inside Pine's per-script limit.
+
+**Blocked on environment, not on engineering.** The lab needs the
+`bellcare1994` session on layout `bellforex`; the browser profile currently has
+no TradingView session, and signing in is out of bounds. The moment a session
+exists the lab is one paste-and-compile away from settling both questions.
+
 ## 6. Minimal P6 scope, when authorized
 
 **P6 CORE**: transport of P1 `MarketMeasurementAnalysis` and P2
@@ -203,6 +239,9 @@ P1 WARM-UP PER TF          1250 bars (W1 = 24 years, D1 = 3.4 years)
 CHART-BAR AGGREGATION      IMPOSSIBLE (M15x1800 = 2.7 weeks ~ 2 W1 bars)
 request.security           MANDATORY for H1/H4/D1/W1, feasibility UNMEASURED
 FEASIBILITY EXPERIMENT     NOT RUN  <-- implementation gate
-P1/P2 PARITY ON W1/D1/H4   NOT ESTABLISHED  <-- closure gate
+P1/P2 TIMEFRAME-AGNOSTIC   PROVEN on real bars, all six TFs (35f2e67)
+P1/P2 REAL-DATA PER TF     still needs captures for W1/D1/H4/H1
+FEASIBILITY LAB            WRITTEN (p6_feasibility_lab.pine), NOT RUN
+LAB BLOCKER                no TradingView session in the browser profile
 P6 IMPLEMENTATION          NOT STARTED
 ```
