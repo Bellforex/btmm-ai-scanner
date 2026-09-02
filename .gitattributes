@@ -1,0 +1,5 @@
+# Pine sources carry deployment hashes: the exact bytes are compared against the
+# script saved on TradingView, so a checkout must never rewrite their endings.
+# core.autocrlf=true would otherwise hand out CRLF copies and every recorded
+# sha256 would stop matching, silently.
+*.pine text eol=lf
