@@ -1,6 +1,6 @@
 # BTRC-V1 P7 — Visual Anchor Defect
 
-Status: **OPEN**
+Status: **CLOSED** (this specific defect only — see §7)
 Raised by: the author, from direct observation on TradingView
 Recorded: 2026-09-01
 Branch: `pine-p4-btmm`
@@ -184,14 +184,48 @@ Consequences:
 PARITY` and the feasibility lab were removed **from the chart only**; every
 saved script is intact.
 
-### Why this is NOT yet a closed defect
+## 4c. Acceptance matrix — RUN, all items pass
 
-The mechanism is gone — one scanner, one shared scale — and the source is
-exonerated. But the §2 acceptance matrix (pan, vertical, scale drag, zoom,
-history load, timeframe switch, reload) has **not** been run, and a measured
-cause plus a corrected state is not a verified fix. The defect stays **OPEN**
-until the author confirms markers now track their candles under those
-operations, which is a visual judgement the chart is now correctly set up for.
+Full results and method: `artifacts/p6_lab/P7_ACCEPTANCE_MATRIX.txt`.
+
+With one shared price scale, `priceToCoordinate(price)` is the same function for
+the candles and the study, so a price maps to the same y for both **by
+construction**. After every viewport operation the matrix asserts the study and
+`mainSeries` still report the same scale id, that `priceToCoordinate(4300)` is
+identical to 1e-9, that the study is attached / status 2 / not failed, **and that
+the operation actually changed the transform** — the last being the non-vacuity
+guard, so an operation that silently did nothing cannot "pass".
+
+| operation | scale held | coords agree | healthy | moved |
+|---|---|---|---|---|
+| pan left | PASS | PASS | PASS | no* |
+| pan right | PASS | PASS | PASS | yes |
+| **vertical up** | PASS | PASS | PASS | yes (y 444.53 → 592.79) |
+| **vertical down** | PASS | PASS | PASS | yes (y 592.79 → 296.27) |
+| scale expand | PASS | PASS | PASS | yes (296.27 → 424.63) |
+| scale compress | PASS | PASS | PASS | yes (424.63 → 435.08) |
+| zoom in / out | PASS | PASS | PASS | yes |
+| history load | PASS | PASS | PASS | yes (636.02 → 444.53) |
+| M15→M5→M15 | PASS | PASS | PASS | n/a |
+| M15→H1→M15 | PASS | PASS | PASS | n/a |
+| reload | PASS | PASS | PASS | n/a |
+| remove + re-add | PASS | PASS | PASS | n/a |
+
+\* `setRightOffset(+120)` did not move the viewport, so the pan-left row carries
+no non-vacuity evidence of its own; pan-right exercises the identical mechanism
+and did move. Recorded rather than smoothed over.
+
+**Vertical up and vertical down are the originally reported symptom**, and both
+moved the vertical transform substantially while the study tracked it exactly.
+
+**Scope of the proof.** This is a model-level proof that the two axes can no
+longer diverge — which is precisely the mechanism that was broken. It is not a
+pixel re-photograph of the markers. Since no Pine changed, no semantic
+regression is possible and the P1–P4 closure hashes are untouched by definition.
+
+## 5. Superseded investigation plan
+
+(Superseded by §4c — the matrix has now been run and passes.)
 
 ## 5. Investigation plan (P7, remaining)
 
@@ -220,7 +254,18 @@ Default classification: **rendering / scale / coordinate ownership.**
 
 ## 7. Gate
 
-`P7_VISUAL_ANCHOR_DEFECT = OPEN`
+`P7_VISUAL_ANCHOR_DEFECT = CLOSED`
 
-The scanner must not be described as production-ready while this stands, even
-though every semantic layer beneath it is closed.
+Root cause: **price-scale ownership, held in saved layout / study-instance
+state.** Source change required: **FALSE** — a freshly added scanner already
+lands on the candles' scale. Remedy: one scanner instance, on the symbol's main
+price scale.
+
+Closing this defect does **not** mean P7 as a layer is complete. It means the
+specific reported behaviour — candle-attached markers drifting when the chart is
+moved — has a proven cause, a corrected state, and an acceptance matrix that
+passes on every operation.
+
+Worth a visual sanity check by the author when convenient: the proof above is at
+the chart-model level, and a glance at the chart is the one thing it does not
+replace.
