@@ -1,5 +1,15 @@
-# Pine sources carry deployment hashes: the exact bytes are compared against the
-# script saved on TradingView, so a checkout must never rewrite their endings.
-# core.autocrlf=true would otherwise hand out CRLF copies and every recorded
-# sha256 would stop matching, silently.
+# Pine sources carry deployment hashes: their exact bytes are compared against
+# the script saved on TradingView and against hashes recorded in closure
+# evidence, so a checkout must never decide their line endings. core.autocrlf
+# would otherwise hand out different bytes per machine and every recorded
+# sha256 would stop matching, silently and without a visible character change.
 *.pine text eol=lf
+
+# These two are pinned to CRLF because that is what their RECORDED P2 closure
+# hashes were computed over (3d6d10df... and 17e6d56b..., asserted in
+# tests/unit/test_p2_*.py and BTRC_V1_P2_STRUCTURE_CLOSURE.md). Git stores them
+# as LF, so today those hashes only match on a machine with autocrlf=true --
+# pinning makes the closure evidence reproducible instead of accidental.
+# Do not "tidy" these to LF without re-deriving the P2 closure hashes.
+tradingview/btmm_poi_btrc_scanner_v1.pine text eol=crlf
+tradingview/btmm_poi_btrc_scanner_p2_parity_probe.pine text eol=crlf

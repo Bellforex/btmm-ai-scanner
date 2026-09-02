@@ -4448,15 +4448,30 @@ plot(debugMode ? array.get(p4Counts, C_P4_N_FINAL_GATE) : na, "P4_at_final_gate"
 //
 // THE HISTORY ARCHITECTURE, MEASURED (artifacts/p6_lab/P6_PHASE22_LAB_RESULTS.txt)
 //
-//   host      calc_bars_count = 1800   <- P1's frozen envelope, UNCHANGED
-//   requests  calc_bars_count = 1250   <- P1's frozen warm-up, per context
+//   host      calc_bars_count = 1800                     <- P1's frozen envelope
+//   requests  calc_bars_count = C_P1_MIN_CALC_BARS + 1   <- 1251, see below
 //
 // Those look contradictory and are not: the host runs over max(indicator,
-// largest request), and 1250 sits BELOW 1800, so the host stays at 1800 while
+// largest request), and 1251 sits BELOW 1800, so the host stays at 1800 while
 // every requested timeframe still gets its full warm-up. Measured both ways --
 // requesting 5000 pulled the host to 5000; requesting 1250 left it at 1800.
 // Removing the per-request argument clamps each context to the host's TIME
 // span, which on an M15 host is 18.75 days: two weekly bars against 1250.
+//
+// WHY 1251 AND NOT 1250. calc_bars_count counts the bars the context is GIVEN,
+// and one of them is always the current, still-forming bar. Measured live at
+// 1250: dataset 1250, confirmed 1249. P1's publication guard is
+// `confirmedBarCount >= C_P1_MIN_CALC_BARS`, so a 1250-bar request can never
+// make a context warm -- it is permanently one confirmed bar short of the
+// Wilder-ATR convergence the contract requires. 1251 is the MINIMAL envelope
+// that yields 1250 confirmed plus the forming bar.
+//
+// This is a transport/execution correction. C_P1_MIN_CALC_BARS stays 1250 and
+// no P1/P2/P3/P4 semantics move. The envelope is derived from the semantic
+// minimum rather than written as a literal, so the two can never drift apart,
+// and raising every request to the host's 1800 merely for symmetry is
+// explicitly NOT done: the contract is at least 1250 confirmed bars per
+// context, not identical bar counts across contexts.
 //
 // WHAT IS TRANSPORTED. Only what BTRC reads. Of P1's five published collections
 // it reads three (confirmed swings, displacement, equal levels) and of P2's
@@ -4471,8 +4486,10 @@ plot(debugMode ? array.get(p4Counts, C_P4_N_FINAL_GATE) : na, "P4_at_final_gate"
 // confirmed bars, exactly as the host does.
 // =============================================================================
 
-int C_P6_HOST_CALC_BARS    = 1800   // P1's validated horizon. Do not change.
-int C_P6_REQUEST_CALC_BARS = 1250   // P1's warm-up, per requested context.
+int C_P6_HOST_CALC_BARS    = 1800                       // P1's validated horizon.
+// Derived, never a literal: the request envelope must always be one more than
+// the semantic minimum, because the forming bar occupies one of the bars given.
+int C_P6_REQUEST_CALC_BARS = C_P1_MIN_CALC_BARS + 1     // 1251
 
 // T1's authority order. T2's regime order is DIFFERENT (D1, H4, W1, ...) and the
 // two must never share one ordering helper. Only W1/D1/H4 are load-bearing for

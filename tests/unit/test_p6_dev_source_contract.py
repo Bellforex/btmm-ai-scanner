@@ -108,9 +108,9 @@ def test_host_envelope_is_1800() -> None:
     )
 
 
-def test_every_request_asks_for_1250() -> None:
+def test_every_request_uses_the_derived_envelope() -> None:
     code = _section_code()
-    assert "int C_P6_REQUEST_CALC_BARS = 1250" in code
+    assert "int C_P6_REQUEST_CALC_BARS = C_P1_MIN_CALC_BARS + 1" in code
     calls = re.findall(r"request\.security\([^\n]*", code)
     assert len(calls) == 6, f"expected six requested contexts, found {len(calls)}"
     for call in calls:
@@ -120,10 +120,10 @@ def test_every_request_asks_for_1250() -> None:
 def test_request_count_is_below_the_host_envelope() -> None:
     """If this ever inverts, the host follows the request and P1-P4 quietly
     leave the horizon they were validated on."""
-    code = _section_code()
-    host = int(re.search(r"C_P6_HOST_CALC_BARS\s+=\s+(\d+)", code).group(1))
-    request = int(re.search(r"C_P6_REQUEST_CALC_BARS = (\d+)", code).group(1))
-    assert request < host, (request, host)
+    text = _strip_comments(_text())
+    host = int(re.search(r"C_P6_HOST_CALC_BARS\s+=\s+(\d+)", text).group(1))
+    minimum = int(re.search(r"C_P1_MIN_CALC_BARS = (\d+)", text).group(1))
+    assert minimum + 1 < host, (minimum, host)
 
 
 def test_exactly_the_six_authority_timeframes_are_requested() -> None:
