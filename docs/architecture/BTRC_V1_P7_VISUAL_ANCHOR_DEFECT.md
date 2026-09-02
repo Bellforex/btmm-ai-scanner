@@ -144,13 +144,54 @@ hypothesis:
 
 No Pine source was modified and no saved script was deleted.
 
+### 4b. MEASURED: a freshly added scanner gets the CORRECT scale
+
+The decisive follow-up. Both scanners were removed from the chart and `P4 DEV`
+was re-added from its saved script:
+
+```
+mainSeries                 ivPMGXXDSKBJ   autoScale false
+P4 DEV, freshly added      ivPMGXXDSKBJ   autoScale false   <-- SAME
+Dividends / Splits / Earnings (built-in overlays)
+                           ivPMGXXDSKBJ   autoScale false
+P6 FEASIBILITY LAB (overlay = false)
+                           m2VoDvPjBbsY   autoScale true    <-- correctly its own
+```
+
+**A freshly added scanner shares the candles' price scale.** So the source
+default is correct, and `overlay = true` does what it should. The lab, declared
+`overlay = false`, correctly gets its own scale in its own pane — which is the
+control showing the measurement distinguishes the two cases.
+
+**This changes the ownership of the defect.** The `KAzaqt6eQw3n` assignment seen
+on the P3 DEV instance was **saved-layout state, not a source defect** — the
+study had been separated onto its own scale at some point in that layout, very
+plausibly during the period when two scanner copies were attached at once
+(`P7_DUPLICATE_STUDY_PRESENT = TRUE`), which is exactly when TradingView is
+liable to hand the second instance its own axis.
+
+Consequences:
+
+* **No Pine source change is required or justified.** A source "fix" would be
+  changing code that already behaves correctly.
+* The remedy is layout hygiene: one scanner instance, on the main price scale.
+* The two candidate causes are now linked rather than independent — the
+  duplicate study is the plausible *origin* of the scale split.
+
+### Current chart state
+
+`P4 DEV` alone, on `ivPMGXXDSKBJ`, status 2, not failed. `P3 DEV`, `P3 ATOMIC
+PARITY` and the feasibility lab were removed **from the chart only**; every
+saved script is intact.
+
 ### Why this is NOT yet a closed defect
 
-The scale is now shared, but the acceptance matrix in §2 has **not** been run.
-A measured cause plus an applied change is not a verified fix, and the layout
-currently contains the lab's extra pane, which confounds any visual check. The
-defect stays **OPEN** until every viewport operation in §2 passes with the
-scanner as the only attached study.
+The mechanism is gone — one scanner, one shared scale — and the source is
+exonerated. But the §2 acceptance matrix (pan, vertical, scale drag, zoom,
+history load, timeframe switch, reload) has **not** been run, and a measured
+cause plus a corrected state is not a verified fix. The defect stays **OPEN**
+until the author confirms markers now track their candles under those
+operations, which is a visual judgement the chart is now correctly set up for.
 
 ## 5. Investigation plan (P7, remaining)
 
