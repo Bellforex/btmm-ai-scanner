@@ -4502,6 +4502,79 @@ string C_P6_TF_M15 = "15"
 string C_P6_TF_M5  = "5"
 
 // -----------------------------------------------------------------------------
+// P5 transport extension — ADDITIVE
+// -----------------------------------------------------------------------------
+// Everything below is new. Nothing above it changed, and the projection's first
+// fourteen return positions are untouched: the extension is appended as ONE
+// object in position 15.
+//
+// WHY AN OBJECT AND NOT MORE SCALARS. Pine caps the COMBINED tuple elements
+// returned by every request.* call in one script at 127. The measured inventory
+// is 84 here and 114 in the atomic twin, so the ~20 extra values P5 needs —
+// 6 x 34 = 204 — cannot be spelled as a wider tuple. One appended object costs
+// one element per context instead of twenty, landing this file at 90.
+//
+// WHY THESE FIELDS. The complete P5 transport audit
+// (docs/architecture/BTRC_V1_P5_TRANSPORT_AUDIT.md) found no input requiring a
+// new semantic engine. Every field here is a bounded REDUCTION of state this
+// context already maintains for the closed P6 surface — no second ATR, swing
+// detector, equal-level detector or structure walk is introduced.
+//
+// WHY RAW VALUES. P6 transports evidence; P5 owns thresholds. The displacement
+// speed ratios cross unmodified rather than as an "expansion" verdict, because
+// 1.50 is RegimeEngineConfiguration and 2.00 is T3 configuration. An earlier
+// draft carried a CHOCH alternation COUNT and was withdrawn for the same
+// reason: `_alternation_count` is parameterised by `range_window`, so shipping
+// its result would freeze a P5 constant in here where nothing could see it go
+// stale. The last four transition TYPES cross instead, and P5 counts.
+//
+// WHY DIRECTION IS ITS OWN FIELD. The legacy `dispCode` scalar is
+// `isBull ? cls : -cls`, so bullish NORMAL and bearish NORMAL both encode 0 —
+// direction is destroyed on the commonest classification. `assess_momentum`
+// counts direction regardless of class, so the window carries Dir and Cls
+// separately. The legacy scalar keeps its old position and its old meaning.
+//
+// SLOT ORDER. Both windows are LEFT-ALIGNED, OLDEST -> NEWEST: slot 1 is the
+// oldest retained, slot {count} the newest, and slots above the count hold
+// C_ST_NA. So breakout's `ordered_transitions[-2]` is slot {count-1}, not a
+// fixed slot.
+int C_P5X_TRANS_CAP = 4      // transition window capacity; >= range_window
+int C_P5X_DISP_CAP  = 3      // displacement window capacity; >= momentum_window
+
+type P5TransportExt
+    // --- T1 trend: scalars over this context's FULL confirmed history --------
+    int   stateAvailT      = C_ST_NA
+    int   contStreak       = 0
+    int   priorOppStreak   = 0
+    int   exhaustFlag      = 0
+    // --- bounded transition window ------------------------------------------
+    int   transWindowCount = 0
+    int   trans1Type       = C_ST_NA
+    int   trans2Type       = C_ST_NA
+    int   trans3Type       = C_ST_NA
+    int   trans4Type       = C_ST_NA
+    int   lastTransAvailT  = C_ST_NA
+    // --- bounded displacement window (shared by T2 regime and T3 momentum) ---
+    int   dispWindowCount  = 0
+    int   disp1Dir         = C_ST_NA
+    int   disp1Cls         = C_ST_NA
+    float disp1Ratio       = na
+    int   disp2Dir         = C_ST_NA
+    int   disp2Cls         = C_ST_NA
+    float disp2Ratio       = na
+    int   disp3Dir         = C_ST_NA
+    int   disp3Cls         = C_ST_NA
+    float disp3Ratio       = na
+    int   dispAvailT       = C_ST_NA
+    // --- breakout ------------------------------------------------------------
+    int   dispClsAtTrans   = C_ST_NA
+    // --- pullback ------------------------------------------------------------
+    float pbImpulsePrice   = na
+    float pbOriginPrice    = na
+    float pbPullbackPrice  = na
+    bool  pbValid          = false
+
+// -----------------------------------------------------------------------------
 // The requested-context P1 projection
 // -----------------------------------------------------------------------------
 // Mirrors the host's own confirmed-bar maintenance exactly -- incremental Wilder
@@ -4550,6 +4623,24 @@ f_p6TfProjection() =>
     var int   p2TransCount = 0
     var int   p2LastTrans  = C_ST_NA
     var float p2LastBrokenLvl = na
+
+    // ---- P5 transport extension state (additive) ---------------------------
+    // One per-candle displacement observation, retained for the same window the
+    // candle arrays use. Python emits exactly one observation per candle from
+    // `range_context_window` onward, so pushing once per confirmed bar — and
+    // only once `f_latestDisplacement` has warmed up — reproduces that series.
+    // The window is kept at lookbackWindow rather than at C_P5X_DISP_CAP
+    // because `_displacement_at` matches a TRANSITION's availability time,
+    // which can be older than the last three candles; the three-slot window is
+    // then just the tail of this array.
+    var array<int>   xDspDir   = array.new<int>()
+    var array<int>   xDspCls   = array.new<int>()
+    var array<float> xDspRatio = array.new<float>()
+    var array<int>   xDspAvail = array.new<int>()
+    // The published extension. `var` for the same staleness reason the P1/P2
+    // outputs above are var: a requested context is evaluated on every host bar
+    // but confirms its own only occasionally.
+    var P5TransportExt xExt = P5TransportExt.new()
 
     // Dataset size AS SEEN BY THIS CONTEXT, so the history envelope is measured
     // rather than inferred. The host reads capacity the same way (p1DatasetBars).
@@ -4613,7 +4704,7 @@ f_p6TfProjection() =>
         // globals, so they are as safe to hand a q* window as the P1 functions.
         array<StructSwingView> qP2Swings = f_p2BuildSwingView(qSwings, qOpenT, qAbsFirst)
         array<StructRelRec>    qP2Rels   = f_p2BuildRelationships(qP2Swings)
-        [qP2Dir, _qProtH, _qProtL, _qWeakH, _qWeakL, _qLastChange, qP2Events, _qBroken, _qWhB, _qWlB, _qAborts] = f_p2StructureWalk(qP2Swings, qP2Rels, f_p2OrderRelationships(qP2Rels), f_p2OrderSwings(qP2Swings), qClose, qAvailT, qOpenT, qAbsFirst)
+        [qP2Dir, _qProtH, _qProtL, _qWeakH, _qWeakL, qLastChange, qP2Events, _qBroken, _qWhB, _qWlB, _qAborts] = f_p2StructureWalk(qP2Swings, qP2Rels, f_p2OrderRelationships(qP2Rels), f_p2OrderSwings(qP2Swings), qClose, qAvailT, qOpenT, qAbsFirst)
         p2Dir        := qP2Dir
         p2TransCount := array.size(qP2Events)
         if p2TransCount > 0
@@ -4621,14 +4712,179 @@ f_p6TfProjection() =>
             p2LastTrans      := qLastEv.transitionCode
             p2LastBrokenLvl  := qLastEv.brokenLevel
 
-    [qBars, swingCount, lastType, lastPrice, lastConfT, eqCount, qFingerprint, qDataset, dispCode, dispRatio, p2Dir, p2TransCount, p2LastTrans, p2LastBrokenLvl]
+        // =====================================================================
+        // P5 TRANSPORT EXTENSION — bounded reductions only
+        // ---------------------------------------------------------------------
+        // Every value below is derived from state this context already built for
+        // the fourteen outputs above: qSwings, qP2Events, qAvailT/qOpenT and the
+        // per-candle displacement series. No detector, walk or ATR is re-run.
+        //
+        // The extension is REBUILT from scratch on every confirmed bar rather
+        // than accumulated. That differs deliberately from the legacy fields
+        // above, which hold their last non-empty value: the structure walk is
+        // recomputed over a SLIDING window, so transitions and swings can leave
+        // it, and Python computes every one of these reductions from the current
+        // collections. Carrying a stale slot forward would silently disagree.
+        // =====================================================================
 
-[w1Bars,  w1Sw,  w1Type,  w1Price,  w1Conf,  w1Eq,  w1Fp , w1Ds, w1Dc, w1Dr, w1P2d, w1Tc, w1Lt, w1Bl] = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[d1Bars,  d1Sw,  d1Type,  d1Price,  d1Conf,  d1Eq,  d1Fp , d1Ds, d1Dc, d1Dr, d1P2d, d1Tc, d1Lt, d1Bl] = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[h4Bars,  h4Sw,  h4Type,  h4Price,  h4Conf,  h4Eq,  h4Fp , h4Ds, h4Dc, h4Dr, h4P2d, h4Tc, h4Lt, h4Bl] = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[h1Bars,  h1Sw,  h1Type,  h1Price,  h1Conf,  h1Eq,  h1Fp , h1Ds, h1Dc, h1Dr, h1P2d, h1Tc, h1Lt, h1Bl] = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[m15Bars, m15Sw, m15Type, m15Price, m15Conf, m15Eq, m15Fp, m15Ds, m15Dc, m15Dr, m15P2d, m15Tc, m15Lt, m15Bl] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[m5Bars,  m5Sw,  m5Type,  m5Price,  m5Conf,  m5Eq,  m5Fp , m5Ds, m5Dc, m5Dr, m5P2d, m5Tc, m5Lt, m5Bl] = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+        // ---- per-candle displacement series (dir kept separately, see the type)
+        if not na(qDispCode)
+            int qLastIx = array.size(qClose) - 1
+            array.push(xDspDir, array.get(qClose, qLastIx) >= array.get(qOpen, qLastIx) ? 1 : -1)
+            array.push(xDspCls, math.abs(qDispCode))
+            array.push(xDspRatio, qDispRatio)
+            array.push(xDspAvail, array.get(qAvailT, qLastIx))
+        while array.size(xDspDir) > lookbackWindow
+            array.shift(xDspDir)
+            array.shift(xDspCls)
+            array.shift(xDspRatio)
+            array.shift(xDspAvail)
+
+        P5TransportExt qX = P5TransportExt.new()
+
+        // ---- current_state.availability_time_utc
+        // structure/analyzer.py:404 — the walk's last change, FALLING BACK to
+        // the newest candle's availability when the walk reports none. The
+        // fallback is not cosmetic: an unbroken window would otherwise publish
+        // an absent state time while Python publishes a real one.
+        qX.stateAvailT := qLastChange != C_ST_NA ? qLastChange : array.get(qAvailT, array.size(qAvailT) - 1)
+
+        int qNEv = array.size(qP2Events)
+
+        // ---- transition window, oldest -> newest, left aligned
+        qX.transWindowCount := math.min(qNEv, C_P5X_TRANS_CAP)
+        if qNEv > 0
+            int qBase = qNEv - qX.transWindowCount
+            for qi = 0 to qX.transWindowCount - 1
+                int qCode = array.get(qP2Events, qBase + qi).transitionCode
+                if qi == 0
+                    qX.trans1Type := qCode
+                else if qi == 1
+                    qX.trans2Type := qCode
+                else if qi == 2
+                    qX.trans3Type := qCode
+                else
+                    qX.trans4Type := qCode
+            qX.lastTransAvailT := array.get(qP2Events, qNEv - 1).availabilityTime
+
+        // ---- continuation and prior-opposite streaks
+        // Backward scans over the FULL event array, so neither is capped by the
+        // four-slot window. `while` rather than a descending `for`, which this
+        // codebase has been bitten by before.
+        if qNEv > 0 and (p2Dir == C_ST_DIR_BULLISH or p2Dir == C_ST_DIR_BEARISH)
+            int qCont = p2Dir == C_ST_DIR_BULLISH ? C_ST_TR_BULLISH_BOS : C_ST_TR_BEARISH_BOS
+            int qOpp  = p2Dir == C_ST_DIR_BULLISH ? C_ST_TR_BEARISH_BOS : C_ST_TR_BULLISH_BOS
+            int qa = qNEv - 1
+            while qa >= 0 and array.get(qP2Events, qa).transitionCode == qCont
+                qX.contStreak := qX.contStreak + 1
+                qa := qa - 1
+            // The newest transition is the CHOCH being explained, so it is
+            // excluded from its own evidence: trend_engine.py scans
+            // `transitions[:-1]`, i.e. this scan starts at qNEv - 2.
+            int qb = qNEv - 2
+            while qb >= 0 and array.get(qP2Events, qb).transitionCode == qOpp
+                qX.priorOppStreak := qX.priorOppStreak + 1
+                qb := qb - 1
+
+        // ---- exhaustion: the two most recent swings OF THE RELEVANT TYPE,
+        // which is not the same as the two most recent swings.
+        if (p2Dir == C_ST_DIR_BULLISH or p2Dir == C_ST_DIR_BEARISH) and swingCount > 1
+            int   qWant   = p2Dir == C_ST_DIR_BULLISH ? SWING_HIGH : SWING_LOW
+            float qLatest = na
+            float qPrev   = na
+            int   qc = swingCount - 1
+            while qc >= 0 and na(qPrev)
+                SwingRec qsw = array.get(qSwings, qc)
+                if qsw.swingType == qWant
+                    if na(qLatest)
+                        qLatest := qsw.price
+                    else
+                        qPrev := qsw.price
+                qc := qc - 1
+            if not na(qLatest) and not na(qPrev)
+                bool qExh = p2Dir == C_ST_DIR_BULLISH ? qLatest < qPrev : qLatest > qPrev
+                qX.exhaustFlag := qExh ? 1 : 0
+
+        // ---- displacement window: the tail of the per-candle series
+        int qNDsp = array.size(xDspDir)
+        qX.dispWindowCount := math.min(qNDsp, C_P5X_DISP_CAP)
+        if qX.dispWindowCount > 0
+            int qDBase = qNDsp - qX.dispWindowCount
+            for qj = 0 to qX.dispWindowCount - 1
+                int   qDir = array.get(xDspDir, qDBase + qj)
+                int   qCls = array.get(xDspCls, qDBase + qj)
+                float qRat = array.get(xDspRatio, qDBase + qj)
+                if qj == 0
+                    qX.disp1Dir := qDir
+                    qX.disp1Cls := qCls
+                    qX.disp1Ratio := qRat
+                else if qj == 1
+                    qX.disp2Dir := qDir
+                    qX.disp2Cls := qCls
+                    qX.disp2Ratio := qRat
+                else
+                    qX.disp3Dir := qDir
+                    qX.disp3Cls := qCls
+                    qX.disp3Ratio := qRat
+            qX.dispAvailT := array.get(xDspAvail, qNDsp - 1)
+
+        // ---- _displacement_at: the MAXIMUM class among every displacement
+        // sharing the newest transition's availability time — not the first
+        // match, and not the latest displacement overall.
+        if qNEv > 0
+            int qTargetT = array.get(qP2Events, qNEv - 1).availabilityTime
+            for qk = 0 to array.size(xDspAvail) - 1
+                if array.get(xDspAvail, qk) == qTargetT
+                    int qCandidate = array.get(xDspCls, qk)
+                    if qX.dispClsAtTrans == C_ST_NA or qCandidate > qX.dispClsAtTrans
+                        qX.dispClsAtTrans := qCandidate
+
+        // ---- pullback swing roles (t3_engine._retracement_depth)
+        // Bullish: impulse is the newest SWING_HIGH; origin is the last
+        // SWING_LOW whose pivot start is AT OR BEFORE the impulse's; pullback is
+        // the last SWING_LOW STRICTLY AFTER it. The comparators differ on the
+        // two branches and must not be normalised. The depth ratio itself is NOT
+        // computed here — P5 owns the division and the 0.382 / 0.618 bands.
+        if (p2Dir == C_ST_DIR_BULLISH or p2Dir == C_ST_DIR_BEARISH) and swingCount > 0
+            int qImpType = p2Dir == C_ST_DIR_BULLISH ? SWING_HIGH : SWING_LOW
+            int qCntType = p2Dir == C_ST_DIR_BULLISH ? SWING_LOW  : SWING_HIGH
+            int qImpIx   = -1
+            int qd = swingCount - 1
+            while qd >= 0 and qImpIx < 0
+                if array.get(qSwings, qd).swingType == qImpType
+                    qImpIx := qd
+                qd := qd - 1
+            if qImpIx >= 0
+                SwingRec qImp     = array.get(qSwings, qImpIx)
+                int      qImpStrT = array.get(qOpenT, qImp.pivotStartIdx)
+                float    qOrigin  = na
+                float    qPull    = na
+                for qe = 0 to swingCount - 1
+                    SwingRec qCand = array.get(qSwings, qe)
+                    if qCand.swingType == qCntType
+                        int qCandStrT = array.get(qOpenT, qCand.pivotStartIdx)
+                        if qCandStrT <= qImpStrT
+                            qOrigin := qCand.price
+                        else
+                            qPull := qCand.price
+                if not na(qOrigin) and not na(qPull)
+                    float qLeg = p2Dir == C_ST_DIR_BULLISH ? qImp.price - qOrigin : qOrigin - qImp.price
+                    if qLeg > 0
+                        qX.pbImpulsePrice  := qImp.price
+                        qX.pbOriginPrice   := qOrigin
+                        qX.pbPullbackPrice := qPull
+                        qX.pbValid         := true
+
+        xExt := qX
+
+    [qBars, swingCount, lastType, lastPrice, lastConfT, eqCount, qFingerprint, qDataset, dispCode, dispRatio, p2Dir, p2TransCount, p2LastTrans, p2LastBrokenLvl, xExt]
+
+[w1Bars,  w1Sw,  w1Type,  w1Price,  w1Conf,  w1Eq,  w1Fp , w1Ds, w1Dc, w1Dr, w1P2d, w1Tc, w1Lt, w1Bl, w1Ext] = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[d1Bars,  d1Sw,  d1Type,  d1Price,  d1Conf,  d1Eq,  d1Fp , d1Ds, d1Dc, d1Dr, d1P2d, d1Tc, d1Lt, d1Bl, d1Ext] = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h4Bars,  h4Sw,  h4Type,  h4Price,  h4Conf,  h4Eq,  h4Fp , h4Ds, h4Dc, h4Dr, h4P2d, h4Tc, h4Lt, h4Bl, h4Ext] = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h1Bars,  h1Sw,  h1Type,  h1Price,  h1Conf,  h1Eq,  h1Fp , h1Ds, h1Dc, h1Dr, h1P2d, h1Tc, h1Lt, h1Bl, h1Ext] = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m15Bars, m15Sw, m15Type, m15Price, m15Conf, m15Eq, m15Fp, m15Ds, m15Dc, m15Dr, m15P2d, m15Tc, m15Lt, m15Bl, m15Ext] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m5Bars,  m5Sw,  m5Type,  m5Price,  m5Conf,  m5Eq,  m5Fp , m5Ds, m5Dc, m5Dr, m5P2d, m5Tc, m5Lt, m5Bl, m5Ext] = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6TfProjection(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
 
 // -----------------------------------------------------------------------------
 // Isolation and envelope guards
@@ -4697,3 +4953,55 @@ plot(m15Ds,  "P6_M15_dataset",   display = display.data_window)
 plot(m5Ds,  "P6_M5_dataset",   display = display.data_window)
 plot(p6HostBarsMax, "P6_host_bars_max", display = display.data_window)
 plot(p6AliasHits,   "P6_ALIAS_HITS",    display = display.data_window)
+
+// -----------------------------------------------------------------------------
+// P5 transport extension — live smoke emitter
+// -----------------------------------------------------------------------------
+// ZERO new plots: P6 DEV already sits at 63 of Pine's 64, and the atomic capture
+// proved log.info carries far more than the data window ever could. This emits
+// once, at the live edge, so a deployment can be checked for non-vacuity,
+// correct sentinels and context differentiation without touching the plot budget
+// or any semantic path.
+//
+// It is diagnostic output only. Nothing reads it back, and no field above is
+// computed differently because of it.
+f_p5xLine(string tf, P5TransportExt e) =>
+    na(e) ? "P5X|" + tf + "|NULL_OBJECT" :
+      "P5X|" + tf +
+      "|stateAvailT=" + str.tostring(e.stateAvailT) +
+      "|contStreak=" + str.tostring(e.contStreak) +
+      "|priorOppStreak=" + str.tostring(e.priorOppStreak) +
+      "|exhaustFlag=" + str.tostring(e.exhaustFlag) +
+      "|transWindowCount=" + str.tostring(e.transWindowCount) +
+      "|trans1Type=" + str.tostring(e.trans1Type) +
+      "|trans2Type=" + str.tostring(e.trans2Type) +
+      "|trans3Type=" + str.tostring(e.trans3Type) +
+      "|trans4Type=" + str.tostring(e.trans4Type) +
+      "|lastTransAvailT=" + str.tostring(e.lastTransAvailT) +
+      "|dispWindowCount=" + str.tostring(e.dispWindowCount) +
+      "|disp1Dir=" + str.tostring(e.disp1Dir) +
+      "|disp1Cls=" + str.tostring(e.disp1Cls) +
+      "|disp1Ratio=" + str.tostring(e.disp1Ratio) +
+      "|disp2Dir=" + str.tostring(e.disp2Dir) +
+      "|disp2Cls=" + str.tostring(e.disp2Cls) +
+      "|disp2Ratio=" + str.tostring(e.disp2Ratio) +
+      "|disp3Dir=" + str.tostring(e.disp3Dir) +
+      "|disp3Cls=" + str.tostring(e.disp3Cls) +
+      "|disp3Ratio=" + str.tostring(e.disp3Ratio) +
+      "|dispAvailT=" + str.tostring(e.dispAvailT) +
+      "|dispClsAtTrans=" + str.tostring(e.dispClsAtTrans) +
+      "|pbImpulsePrice=" + str.tostring(e.pbImpulsePrice) +
+      "|pbOriginPrice=" + str.tostring(e.pbOriginPrice) +
+      "|pbPullbackPrice=" + str.tostring(e.pbPullbackPrice) +
+      "|pbValid=" + str.tostring(e.pbValid)
+
+var bool p5xEmitted = false
+if barstate.islast and not p5xEmitted
+    p5xEmitted := true
+    log.info("P5X_META|feed=" + syminfo.prefix + ":" + syminfo.ticker + "|host_tf=" + timeframe.period + "|semanticMin=" + str.tostring(C_P1_MIN_CALC_BARS) + "|request=" + str.tostring(C_P6_REQUEST_CALC_BARS) + "|host=" + str.tostring(C_P6_HOST_CALC_BARS) + "|aliasHits=" + str.tostring(p6AliasHits))
+    log.info(f_p5xLine("W1",  w1Ext))
+    log.info(f_p5xLine("D1",  d1Ext))
+    log.info(f_p5xLine("H4",  h4Ext))
+    log.info(f_p5xLine("H1",  h1Ext))
+    log.info(f_p5xLine("M15", m15Ext))
+    log.info(f_p5xLine("M5",  m5Ext))

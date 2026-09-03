@@ -89,18 +89,24 @@ def combined_elements(source: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def test_p6_dev_returns_six_semantic_tuples_of_fourteen() -> None:
-    assert tuple_returns(P6_DEV.read_text(encoding="utf-8")) == [14] * 6
+def test_p6_dev_returns_six_semantic_tuples_of_fifteen() -> None:
+    """Fourteen preserved scalars plus one appended P5TransportExt object."""
+    assert tuple_returns(P6_DEV.read_text(encoding="utf-8")) == [15] * 6
 
 
 def test_p6_atomic_carries_a_second_family_of_six_capture_requests() -> None:
-    """The reason the twin is the binding constraint."""
-    assert tuple_returns(P6_ATOMIC.read_text(encoding="utf-8")) == [14] * 6 + [5] * 6
+    """The reason the twin is the binding constraint: it repeats DEV's six
+    semantic requests and adds six capture requests DEV does not have."""
+    assert tuple_returns(P6_ATOMIC.read_text(encoding="utf-8")) == [15] * 6 + [5] * 6
 
 
 def test_the_combined_totals() -> None:
-    assert combined_elements(P6_DEV.read_text(encoding="utf-8")) == 84
-    assert combined_elements(P6_ATOMIC.read_text(encoding="utf-8")) == 114
+    """P6 DEV carries the extension; the atomic twin has not been extended yet.
+
+    Measured, never estimated -- the closure evidence quotes these numbers.
+    """
+    assert combined_elements(P6_DEV.read_text(encoding="utf-8")) == 90
+    assert combined_elements(P6_ATOMIC.read_text(encoding="utf-8")) == 120
 
 
 def test_both_files_are_inside_the_limit_today() -> None:
@@ -110,11 +116,23 @@ def test_both_files_are_inside_the_limit_today() -> None:
 
 
 def test_the_limit_is_bounded_from_below_by_an_observed_compile() -> None:
-    """114 compiled with 0 errors, so the ceiling is at least that."""
-    assert combined_elements(P6_ATOMIC.read_text(encoding="utf-8")) == (
-        PROVEN_COMPILING_COMBINED_TOTAL
-    )
+    """The twin compiled at 114 with 0 errors during the closure run, so the
+    ceiling is at least that. It is a HISTORICAL observation, not a property of
+    the current file -- which now stands at 120, above that floor and still
+    below the documented cap."""
+    assert PROVEN_COMPILING_COMBINED_TOTAL == 114
     assert PROVEN_COMPILING_COMBINED_TOTAL <= PINE_COMBINED_TUPLE_LIMIT
+    assert (
+        combined_elements(P6_ATOMIC.read_text(encoding="utf-8"))
+        > PROVEN_COMPILING_COMBINED_TOTAL
+    )
+
+
+def test_the_extension_landed_where_the_projection_said_it_would() -> None:
+    """The design projected 90 for P6 DEV before a line of it was written."""
+    assert combined_elements(P6_DEV.read_text(encoding="utf-8")) == (
+        6 * SELECTED_SEMANTIC_WIDTH
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +168,12 @@ def test_the_selected_shape_fits_p6_dev_comfortably() -> None:
 
 
 def test_the_selected_shape_fits_the_atomic_twin_but_only_just() -> None:
+    """Projected at 120 before implementation, and measured at 120 after."""
     total = 6 * SELECTED_SEMANTIC_WIDTH + 6 * 5
     assert total == 120
     assert total <= PINE_COMBINED_TUPLE_LIMIT
     assert PINE_COMBINED_TUPLE_LIMIT - total == 7
+    assert combined_elements(P6_ATOMIC.read_text(encoding="utf-8")) == total
 
 
 def test_the_atomic_twin_cannot_afford_two_more_capture_scalars() -> None:
