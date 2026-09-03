@@ -49,12 +49,31 @@ already maintains.
 |---|---|---|---|
 | `stateAvailT` | int ms | `current_state.availability_time_utc` | the walk's own availability time |
 | `contStreak` | int | `_continuation_streak` | backward scan of transitions while type == continuation BOS for the current direction |
-| `altCount4` | int | `_alternation_count(window=4)` | CHOCH count among the last 4 transitions |
-| `priorOppStreak` | int | `_prior_opposite_streak` | backward scan from the second-to-last transition while type == opposing BOS |
+| `priorOppStreak` | int | `_prior_opposite_streak` | backward scan from the **second-to-last** transition while type == opposing BOS |
 | `exhaustFlag` | int | `_exhaustion` | bullish: last SWING_HIGH price < previous SWING_HIGH price; bearish: mirrored on lows |
+| `transWindowCount`, `trans1Type`…`trans4Type` | int | the last 4 transition types, oldest → newest | see the correction below |
 
 `current_state.direction` and `analyzed_swing_count` are already transported
 (`p2Dir`, `swingCount`).
+
+**CORRECTION (found while freezing the contract).** The first draft transported
+`altCount4`, the CHOCH count among the last four transitions. That is a
+calibration verdict, not a raw value: `_alternation_count(transitions, window)`
+takes its window from `TrendEngineConfiguration.range_window`, and the result is
+then compared against `range_choch_count`. Shipping the count would freeze the
+first constant inside P6 invisibly — raise `range_window` to 5 and every
+timeframe silently keeps answering for 4.
+
+So the transport carries the last four transition TYPES and P5 counts CHOCHs
+itself. The same window also supplies `ordered_transitions[-2]` for breakout's
+whipsaw test, so one bounded window replaces two separate fields.
+
+**Capacity is not calibration.** The remaining window sizes (4 transitions, 3
+displacements) are transport CAPACITY. The distinction matters because a baked
+threshold is undetectable from outside, whereas a capacity that is too small is
+detectable: P5 knows its own configured window and asserts it fits
+(`test_p5_configuration_fits_the_transport_capacity`). Today the defaults fill
+the capacity exactly, with zero slack.
 
 ### 3b. For `assess_regime` (T2) and `assess_momentum`
 
@@ -85,10 +104,17 @@ needed.
 | field | type | source meaning |
 |---|---|---|
 | `lastTransAvailT` | int ms | `last_transition.availability_time_utc` |
-| `prevTransType` | int | `ordered_transitions[-2].transition_type`, for the FAILED_BREAK whipsaw test |
-| `dispClsAtTrans` | int | `_displacement_at(displacements, last_transition)` — the classification at the breaking candle |
+| `dispClsAtTrans` | int | `_displacement_at(displacements, last_transition)` |
 
-`p2LastTrans` (last transition type) is already transported.
+`p2LastTrans` (last transition type) is already transported, and the whipsaw
+test's `ordered_transitions[-2]` now comes from `trans3Type` in the shared
+transition window rather than from a field of its own.
+
+`dispClsAtTrans` is **not** "the classification of the latest displacement". The
+source matches every displacement whose `availability_time_utc` equals the
+transition's, takes the MAX classification by NORMAL < FAST < VERY_FAST, and
+returns `None` when nothing matches — so the field needs a distinct sentinel for
+the no-match case.
 
 ### 3d. For `assess_pullback`
 
