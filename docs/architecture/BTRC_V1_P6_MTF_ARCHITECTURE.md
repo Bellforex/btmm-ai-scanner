@@ -678,3 +678,75 @@ P6_SIX_TF_SYNTHETIC_PARITY     NOT ESTABLISHED
 P6_SIX_TF_REAL_DATA_PARITY     NOT ESTABLISHED
 P6 CORE                        NOT CLOSED
 ```
+
+---
+
+## 11. The Python side of the differential, and what still gates closure
+
+### 11a. The oracle
+
+`tests/parity_support/p6_projection_oracle.py` produces the five transported
+surfaces from production Python, in Pine's own integer vocabulary
+(`SWING_HIGH=1`, `C_ST_NA=-99`, direction `0/±1`, transitions `±1/±2`,
+displacement `±cls`), so the two sides can be compared field for field.
+
+It **reuses** `p2_atomic_state_replay`'s execution model rather than restating
+it — one continuous Wilder recurrence over the whole context, a 300-bar
+analytical window per terminal, production detectors reached through the
+validated `injected_atr` bridge, and a P2 walk recomputed from the window every
+confirmed bar. Re-deriving that would be a second divergent copy of exactly what
+P2 closure pinned, which is the mistake the Pine section itself avoids.
+
+The canonical compare set is exactly the eleven transported fields, pinned by a
+test so it cannot be widened silently.
+
+### 11b. What the synthetic suite proves — and what it does not
+
+Pine cannot run locally, so **no local test compares Pine against Python**. Said
+plainly because it would be easy to present the suite as more than it is.
+
+`test_p6_six_timeframe_projection` builds six streams with each timeframe's
+natural spacing and its own price behaviour — not one series retimed six times —
+and establishes that all five surfaces come out non-vacuous and differentiated
+on all six, with the last swing price differing on every stream.
+
+Its real content is the **sensitivity** group. Pruning to 150 bars instead of
+300, restarting the Wilder recurrence per window instead of carrying it, and
+reducing a collection from the wrong end each move the projection. Those are the
+three ways the Pine section could be wrong while still compiling and still
+looking reasonable, and a comparison that survived them would prove nothing when
+finally run against real Pine output.
+
+### 11c. The capture design, and the measurement that settled it
+
+The chart viewport and the script see **different amounts of history**. Measured:
+with the chart on W1 the main series had **300 bars loaded**, while the P6
+requests were simultaneously receiving **1251**. So reading OHLC off the chart
+series would feed the oracle a different dataset from the one the projection
+actually consumed, and any resulting "parity" would be an artefact.
+
+The capture must therefore take its input from the script's own history:
+
+* **Inputs** — per timeframe, put the chart on that timeframe so the host sees it
+  directly at `calc_bars_count = 1800`, and log `time,open,high,low,close` from
+  the host. Six captures, each recording feed, row count, first/last timestamps
+  and a SHA-256. Historical bars are immutable, so separate captures are sound
+  for *input*; the atomicity requirement is on the outputs.
+* **Outputs** — one coherent execution on the M15 host, reading all six
+  projections together, exactly as §9 and §10 already do.
+* **Compare** — oracle over the last 1251 input bars ending at the anchor,
+  against the captured Pine outputs.
+
+This uses only mechanisms already proven in this repository (host-side
+`log.info` capture was how P2/P3/P4 took their atomic contexts) and avoids the
+one construct whose feasibility is unverified — returning arrays out of a
+`request.security` context.
+
+```
+P6_ORACLE                        BUILT (five surfaces, Pine vocabulary)
+P6_SYNTHETIC_NON_VACUITY         PASS (six distinct streams, differentiated)
+P6_COMPARISON_SENSITIVITY        PASS (window, ATR continuity, reduction end)
+P6_PINE_VS_PYTHON_DIFFERENTIAL   NOT RUN — requires the atomic capture
+P6_SIX_TF_REAL_DATA_PARITY       NOT ESTABLISHED
+P6 CORE                          NOT CLOSED
+```
