@@ -105,17 +105,41 @@ The depth ratio itself is deliberately NOT computed in P6: it is
 `(impulse - pullback) / leg`, and P5 owns that arithmetic so the division and
 its band comparisons stay in one place.
 
-## 4. Size, and the one thing to verify first
+## 4. Size — and why the tuple cannot carry it (RESOLVED)
 
-Roughly **20 additional values per timeframe**, taking the projection tuple from
-14 to about 34.
+Roughly **20 additional values per timeframe**. The first draft of this section
+proposed widening the projection tuple from 14 to about 34 and flagged the arity
+as a risk to measure. Measurement settled it: **the scalar widening is
+impossible**, and the reason is a script-wide budget rather than a per-call one.
 
-**That tuple width is the implementation risk and must be measured before the
-port is written.** Pine's limit on `request.security` tuple arity is not
-something to assume — the largest this campaign has proven is 14. If 34 does not
-compile, the fallback is to pack related small integers into single values
-(direction and classification are 2-3 bits each) rather than to add request
-contexts, which the author has declined.
+Pine caps the COMBINED tuple elements returned by ALL `request.*` calls in one
+script at 127. The measured inventory (`test_p6_request_tuple_budget`):
+
+```
+P6 DEV     6 semantic x 14                       =  84
+P6 ATOMIC  6 semantic x 14 + 6 capture x 5       = 114   <- compiles today
+widened    6 x 34                                = 204   <- impossible
+```
+
+**Selected representation:** preserve the 14 scalar positions and append ONE
+`P5TransportExt` object per request — 15 elements per context, 90 in P6 DEV.
+
+Two consequences the arithmetic makes visible:
+
+* **The atomic twin, not P6 DEV, is the binding constraint.** It lands at 120 of
+  127, so the atomic capture return cannot gain a transport H1/H2 scalar pair
+  (that reaches 132). The new digest must ride inside a UDT or through
+  `log.info`, which is already how the raw rows travel.
+* **114 is a proven-compiling floor**, observed with 0 errors during the P6
+  closure run, so the headroom above is measured against a limit this campaign
+  has actually approached.
+
+UDT is preferred over bit-packing because the new fields include timestamps,
+prices and ratios, where packing would add encoding, overflow and precision risk
+for no benefit. Packing is a fallback for small enums only, and only if a real
+resource problem survives. If a mixed tuple+UDT return proves unsupported, the
+documented fallback is one FULL UDT per request carrying old 14 and new ~20
+together — never additional request contexts, which the author has declined.
 
 ## 5. Constraints this extension must respect
 
