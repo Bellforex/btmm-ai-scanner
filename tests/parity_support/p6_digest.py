@@ -125,6 +125,18 @@ def encode_ratio(value: Decimal | float | None) -> int:
     return encode_int(scaled)
 
 
+def decode_int(value: int) -> int:
+    """Inverse of `encode_int`.
+
+    The capture logs prices through `f_p6aEncPrice`, so a raw row carries the
+    CANONICALLY ENCODED integer, not the tick count. Decoding is needed to
+    rebuild prices; the encoded form is what the digest folds.
+    """
+    if value == 0:
+        raise ValueError("0 encodes `na`, which has no integer value")
+    return (value - 2) // 2 if value % 2 == 0 else -((value - 1) // 2)
+
+
 def _encode_field(kind: str, raw: Any, mintick: Decimal | float) -> int:
     if kind == "PRICE":
         return encode_price(raw, mintick)

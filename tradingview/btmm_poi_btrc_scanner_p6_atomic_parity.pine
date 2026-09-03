@@ -4824,14 +4824,20 @@ f_p6AtomicCapture(bool emitRaw, string tfName) =>
 
 // Which timeframe exports raw rows this run. One at a time, to stay inside the
 // log volume the feasibility probe actually demonstrated.
-string P6A_CAPTURE_TF = input.string("NONE", "Atomic raw capture timeframe", options = ["NONE", "W1", "D1", "H4", "H1", "M15", "M5"], group = "P6 ATOMIC")
+// "ALL" exports every timeframe in the SAME execution as the snapshot, which is
+// what makes the capture genuinely atomic: the sliding window means six separate
+// runs could never lock to one snapshot, because each run's window has moved on.
+// It is ~8000 rows against the 2501 the feasibility probe demonstrated, so the
+// per-timeframe options remain as the fallback if the log buffer truncates.
+string P6A_CAPTURE_TF = input.string("NONE", "Atomic raw capture timeframe", options = ["NONE", "ALL", "W1", "D1", "H4", "H1", "M15", "M5"], group = "P6 ATOMIC")
+bool P6A_CAPTURE_ALL = P6A_CAPTURE_TF == "ALL"
 
-[w1Rows,  w1First,  w1Last,  w1IH1,  w1IH2 ] = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6AtomicCapture(P6A_CAPTURE_TF == "W1",  "W1"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[d1Rows,  d1First,  d1Last,  d1IH1,  d1IH2 ] = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6AtomicCapture(P6A_CAPTURE_TF == "D1",  "D1"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[h4Rows,  h4First,  h4Last,  h4IH1,  h4IH2 ] = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6AtomicCapture(P6A_CAPTURE_TF == "H4",  "H4"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[h1Rows,  h1First,  h1Last,  h1IH1,  h1IH2 ] = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6AtomicCapture(P6A_CAPTURE_TF == "H1",  "H1"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[m15Rows, m15First, m15Last, m15IH1, m15IH2] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6AtomicCapture(P6A_CAPTURE_TF == "M15", "M15"), calc_bars_count = C_P6_REQUEST_CALC_BARS)
-[m5Rows,  m5First,  m5Last,  m5IH1,  m5IH2 ] = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6AtomicCapture(P6A_CAPTURE_TF == "M5",  "M5"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[w1Rows,  w1First,  w1Last,  w1IH1,  w1IH2 ] = request.security(syminfo.tickerid, C_P6_TF_W1,  f_p6AtomicCapture(P6A_CAPTURE_ALL or P6A_CAPTURE_TF == "W1",  "W1"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[d1Rows,  d1First,  d1Last,  d1IH1,  d1IH2 ] = request.security(syminfo.tickerid, C_P6_TF_D1,  f_p6AtomicCapture(P6A_CAPTURE_ALL or P6A_CAPTURE_TF == "D1",  "D1"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h4Rows,  h4First,  h4Last,  h4IH1,  h4IH2 ] = request.security(syminfo.tickerid, C_P6_TF_H4,  f_p6AtomicCapture(P6A_CAPTURE_ALL or P6A_CAPTURE_TF == "H4",  "H4"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h1Rows,  h1First,  h1Last,  h1IH1,  h1IH2 ] = request.security(syminfo.tickerid, C_P6_TF_H1,  f_p6AtomicCapture(P6A_CAPTURE_ALL or P6A_CAPTURE_TF == "H1",  "H1"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m15Rows, m15First, m15Last, m15IH1, m15IH2] = request.security(syminfo.tickerid, C_P6_TF_M15, f_p6AtomicCapture(P6A_CAPTURE_ALL or P6A_CAPTURE_TF == "M15", "M15"), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m5Rows,  m5First,  m5Last,  m5IH1,  m5IH2 ] = request.security(syminfo.tickerid, C_P6_TF_M5,  f_p6AtomicCapture(P6A_CAPTURE_ALL or P6A_CAPTURE_TF == "M5",  "M5"),  calc_bars_count = C_P6_REQUEST_CALC_BARS)
 
 // -----------------------------------------------------------------------------
 // Surface digests -- folded from the values the DEV projection already returns

@@ -247,6 +247,11 @@ def test_an_unknown_timeframe_is_refused() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _enc(value: int) -> int:
+    """The canonical encoding Pine applies before logging a price."""
+    return 2 * value + 2 if value >= 0 else -2 * value + 1
+
+
 def raw_bars(count: int = 5, *, start: int = 1_000_000_000_000) -> list[dict[str, int]]:
     return [
         {
@@ -280,10 +285,13 @@ def raw_text(
             o=b["ordinal"],
             t0=b["time_ms"],
             t1=b["time_close_ms"],
-            op=b["open_ticks"],
-            hi=b["high_ticks"],
-            lo=b["low_ticks"],
-            cl=b["close_ticks"],
+            # Pine logs prices through its canonical encoder, so the fixture
+            # must too -- otherwise the parser decodes values that were never
+            # encoded and every price silently halves.
+            op=_enc(b["open_ticks"]),
+            hi=_enc(b["high_ticks"]),
+            lo=_enc(b["low_ticks"]),
+            cl=_enc(b["close_ticks"]),
         )
         for b in bars
     ]

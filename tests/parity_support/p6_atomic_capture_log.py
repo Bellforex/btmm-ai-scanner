@@ -79,6 +79,13 @@ def _strip(line: str) -> str:
     return _LOG_PREFIX.sub("", line.strip(), count=1)
 
 
+def _decode(value: int) -> int:
+    """Inverse of the canonical encoding: `2v+2` for v>=0, `-2v+1` for v<0."""
+    if value == 0:
+        raise ValueError("0 encodes `na`, which is not a valid price")
+    return (value - 2) // 2 if value % 2 == 0 else -((value - 1) // 2)
+
+
 def _fields(body: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for part in body.split("|"):
@@ -376,14 +383,23 @@ def parse_raw(text: str, *, require_feed: bool = True) -> RawCapture:
                 raise CaptureError(f"raw capture mixes timeframes: {timeframe} and {tf}")
             try:
                 index = int(ordinal)
+                # The Pine logs prices through its canonical encoder, so the row
+                # carries the ENCODED integer. Both forms are kept: the encoded
+                # one is what the digest folds, the decoded one is what rebuilds
+                # a price. Conflating them silently doubles every price.
+                encoded = (int(o), int(h), int(low), int(c))
                 bar = {
                     "ordinal": index,
                     "time_ms": int(open_time),
                     "time_close_ms": int(close_time),
-                    "open_ticks": int(o),
-                    "high_ticks": int(h),
-                    "low_ticks": int(low),
-                    "close_ticks": int(c),
+                    "open_enc": encoded[0],
+                    "high_enc": encoded[1],
+                    "low_enc": encoded[2],
+                    "close_enc": encoded[3],
+                    "open_ticks": _decode(encoded[0]),
+                    "high_ticks": _decode(encoded[1]),
+                    "low_ticks": _decode(encoded[2]),
+                    "close_ticks": _decode(encoded[3]),
                 }
             except ValueError as exc:
                 raise CaptureError(f"non-integer field in P6RAW: {line[:80]!r}") from exc
@@ -511,3 +527,74 @@ def raw_identity_matches(
         matched=not mismatches,
         mismatches=mismatches,
     )
+
+
+# ---------------------------------------------------------------------------
+# Selecting one coherent emission out of a whole log buffer
+# ---------------------------------------------------------------------------
+
+#: TradingView stamps every log line with the emission time, in two shapes: the
+#: on-screen panel renders `[timestamp]: record`, while the downloaded CSV is
+#: `timestamp,record`. Both are accepted so a capture can be taken either way.
+_TIMESTAMPED = re.compile(r"^(?:\[([\d\-T:.+]+)\]:\s*|([\d\-T:.+]+),)(P6\w*\|.*)$")
+
+
+def group_by_emission(text: str) -> list[tuple[str, list[str]]]:
+    """Split a log buffer into (timestamp, records) groups, in file order.
+
+    A downloaded buffer holds every emission the study made, and the snapshot
+    advances as bars confirm -- so the buffer legitimately contains conflicting
+    records for the same timeframe. Grouping by emission timestamp is what turns
+    that into a series of individually coherent captures, rather than one
+    contradictory pile the parser would rightly refuse.
+    """
+    groups: list[tuple[str, list[str]]] = []
+    for raw in text.splitlines():
+        match = _TIMESTAMPED.match(raw.strip())
+        if not match:
+            continue
+        stamp = match.group(1) or match.group(2)
+        record = match.group(3)
+        if groups and groups[-1][0] == stamp:
+            groups[-1][1].append(record)
+        else:
+            groups.append((stamp, [record]))
+    return groups
+
+
+def latest_complete_snapshot(text: str, *, require_feed: bool = True) -> Snapshot:
+    """Parse the most recent emission carrying a COMPLETE snapshot.
+
+    Deliberately the LATEST rather than the first: the newest emission is the one
+    whose raw captures can still be reproduced, because the sliding window has
+    moved on from the older ones. If no emission is complete the underlying
+    CaptureError is raised, so a truncated buffer is never silently accepted.
+    """
+    last_error: CaptureError | None = None
+    for _stamp, records in reversed(group_by_emission(text)):
+        block = "\n".join(records)
+        if "P6META|" not in block or "P6SNAP_END|" not in block:
+            continue
+        try:
+            return parse_snapshot(block, require_feed=require_feed)
+        except CaptureError as exc:  # keep looking at older emissions
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise CaptureError("no complete snapshot emission in this log buffer")
+
+
+def latest_raw_capture(text: str, *, require_feed: bool = True) -> RawCapture:
+    """Parse the most recent emission carrying a COMPLETE raw capture."""
+    last_error: CaptureError | None = None
+    for _stamp, records in reversed(group_by_emission(text)):
+        block = "\n".join(records)
+        if "P6RAW_SUMMARY|" not in block:
+            continue
+        try:
+            return parse_raw(block, require_feed=require_feed)
+        except CaptureError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise CaptureError("no complete raw capture in this log buffer")
