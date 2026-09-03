@@ -1,0 +1,89 @@
+//@version=6
+
+// =============================================================================
+// P6 ATOMIC CAPTURE PROBE — feasibility only, NOT a parity artefact
+// -----------------------------------------------------------------------------
+// The P6 atomic capture needs the EXACT candle history each request.security
+// context consumed. The chart's own series is not that history: measured on W1,
+// the main series had 300 bars loaded while the P6 requests were simultaneously
+// receiving 1251. So the input has to come out of Pine itself.
+//
+// Two things gate that, and neither is documented anywhere I can rely on:
+//
+//   Q1  Does `log.info` emit at all from INSIDE a request.security expression?
+//       If it does not, requested-context input cannot be exported directly and
+//       the capture has to be restructured.
+//
+//   Q2  How many log lines survive from one bar? The full capture is
+//       6 timeframes x 1251 bars = 7506 rows. If a single bar can only emit a
+//       few hundred, the capture must be chunked across bars, and the chunk
+//       contract has to be designed around the real limit rather than a guess.
+//
+// This script answers both by emitting NUMBERED lines from both sides and
+// letting the Logs panel show which arrive. Nothing here computes P6 semantics;
+// it exists to size the capture architecture and will not be used as evidence.
+//
+// Host is deliberately small (calc_bars_count = 300) so the probe is cheap; the
+// requested context still asks for the real 1251 envelope so the array it fills
+// is representative of the real capture.
+// =============================================================================
+
+indicator("P6 ATOMIC CAPTURE PROBE", overlay = false, calc_bars_count = 300)
+
+int C_PROBE_LINES   = 1251   // full envelope: can one bar emit the whole context?
+int C_REQUEST_BARS  = 1251   // the real P6 request envelope
+
+// -----------------------------------------------------------------------------
+// Requested-context side
+// -----------------------------------------------------------------------------
+// Accumulates the context's own confirmed OHLC exactly as the real capture would
+// have to, then tries to emit a numbered sample of it. The return value carries
+// how many bars it actually accumulated and how many lines it BELIEVES it wrote,
+// so the host can compare that against what the Logs panel really shows.
+f_probeContext() =>
+    var array<int>   cTime  = array.new<int>()
+    var array<float> cOpen  = array.new<float>()
+    var array<float> cHigh  = array.new<float>()
+    var array<float> cLow   = array.new<float>()
+    var array<float> cClose = array.new<float>()
+    var int cBars     = 0
+    var int cAttempted = 0
+
+    if barstate.isconfirmed
+        cBars := cBars + 1
+        array.push(cTime,  time)
+        array.push(cOpen,  open)
+        array.push(cHigh,  high)
+        array.push(cLow,   low)
+        array.push(cClose, close)
+
+    // Emit once, on the last confirmed historical bar of THIS context.
+    if barstate.islastconfirmedhistory
+        int n = array.size(cTime)
+        int emit = math.min(C_PROBE_LINES, n)
+        for i = 0 to emit - 1
+            int idx = n - emit + i
+            log.info("CTX|" + str.tostring(i) + "|" + str.tostring(array.get(cTime, idx)) + "|" + str.tostring(array.get(cOpen, idx)) + "|" + str.tostring(array.get(cHigh, idx)) + "|" + str.tostring(array.get(cLow, idx)) + "|" + str.tostring(array.get(cClose, idx)))
+            cAttempted := cAttempted + 1
+        log.info("CTX_SUMMARY|bars=" + str.tostring(n) + "|attempted=" + str.tostring(cAttempted))
+
+    [cBars, cAttempted, array.size(cTime)]
+
+[w1Bars, w1Attempted, w1Held] = request.security(syminfo.tickerid, "W", f_probeContext(), calc_bars_count = C_REQUEST_BARS)
+
+// -----------------------------------------------------------------------------
+// Host side — the control. Host logging is already proven by the P2/P3/P4
+// captures, so if HOST lines appear and CTX lines do not, that isolates the
+// answer to Q1 rather than leaving it ambiguous.
+// -----------------------------------------------------------------------------
+var int hostAttempted = 0
+if barstate.islastconfirmedhistory
+    for i = 0 to C_PROBE_LINES - 1
+        log.info("HOST|" + str.tostring(i) + "|" + str.tostring(time) + "|" + str.tostring(close))
+        hostAttempted := hostAttempted + 1
+    log.info("HOST_SUMMARY|attempted=" + str.tostring(hostAttempted) + "|w1_context_bars=" + str.tostring(w1Bars) + "|w1_held=" + str.tostring(w1Held) + "|w1_ctx_attempted=" + str.tostring(w1Attempted))
+
+plot(w1Bars,      "PROBE_w1_context_bars", display = display.data_window)
+plot(w1Held,      "PROBE_w1_held",         display = display.data_window)
+plot(w1Attempted, "PROBE_w1_ctx_attempted", display = display.data_window)
+plot(hostAttempted, "PROBE_host_attempted", display = display.data_window)
