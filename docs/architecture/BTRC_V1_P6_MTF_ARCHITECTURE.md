@@ -609,3 +609,72 @@ P6_P2_TRANSPORT                NOT IMPLEMENTED
 P6_SIX_TF_REAL_DATA_PARITY     NOT ESTABLISHED
 P6 CORE                        NOT CLOSED
 ```
+
+---
+
+## 10. Slice 3 — displacement and P2 transported
+
+§3a fixes the per-timeframe payload at five items. Slices 1–2 carried two
+(`confirmed_swings`, `equal_level_clusters`); this slice adds the other three:
+`displacement_observations`, `structure_transitions` and `current_state`.
+
+It is sound for the same reason the P1 reuse was. Every function the two surfaces
+need, audited against the file's 176 globals:
+
+```
+f_latestDisplacement      18 lines   global refs: NONE
+f_medianRange              6 lines   global refs: NONE
+f_p2BuildSwingView         8 lines   global refs: NONE
+f_p2BuildRelationships    13 lines   global refs: NONE
+f_p2OrderRelationships    18 lines   global refs: NONE
+f_p2OrderSwings           18 lines   global refs: NONE
+f_p2StructureWalk        201 lines   global refs: NONE
+```
+
+So the 201-line P2 state machine runs inside a requested context over that
+context's own window, and **no P2 algorithm is re-implemented**. Displacement is
+computed in the host's exact position — after the window is pruned, before
+`absFirst` is derived — and `test_p6_projection_matches_host_maintenance` now
+compares both sides up to that step and checks the argument lists of all six
+calls.
+
+**Compiled, 0 errors. Measured on FX:XAUUSD M15:**
+
+| TF | dataset | confirmed | swings | disp_code | p2_dir |
+|---|---|---|---|---|---|
+| W1 | 1251 | 1250 | 66 | 0 | +1 |
+| D1 | 1251 | 1250 | 57 | 0 | +1 |
+| H4 | 1251 | 1250 | 68 | 0 | **−1** |
+| H1 | 1251 | 1250 | 64 | 0 | +1 |
+| M15 | 1800 | 1799 | 67 | +1 | +1 |
+| M5 | 1251 | 1250 | 64 | +1 | +1 |
+
+The P2 direction is **differentiated** — H4 bearish against five bullish. An
+aliased or shared projection cannot produce that, and it is exactly the
+cross-timeframe disagreement BTRC exists to fuse. Displacement is a computed
+classification everywhere (`C_ST_NA` is −99; all six returned a real code).
+
+Runtime re-run on the slice-3 build: **72/72**, eight operation points × nine
+invariants, every point on FX:XAUUSD and on the candles' price scale.
+
+### 10a. A feed slip, recorded
+
+The first runtime matrix used `setSymbol(symbolInfo().name)` for its
+"same-symbol reset". `name` is the **bare** ticker `XAUUSD`, which TradingView
+resolved to `OANDA:XAUUSD` — so five of those points ran against OANDA, not FXCM.
+The invariants they check are structural and feed-independent, so they remain
+valid runtime evidence, but they are **not** evidence about FXCM data. The matrix
+was re-run entirely on FXCM, and `feed_is_fxcm` is now a checked invariant so the
+same drift cannot pass unnoticed again. Always use the qualified `full_name` /
+`pro_name`.
+
+```
+P6_SLICE3_COMPILE              PASS (0 errors)
+P6_DISPLACEMENT_TRANSPORT      IMPLEMENTED, non-vacuous
+P6_P2_TRANSPORT                IMPLEMENTED, non-vacuous and differentiated
+P6_STALENESS_HOLD              PASS (131 s static host bar, zero fields moved)
+P6_RUNTIME_HARD_PASS           TRUE (72/72 on FXCM)
+P6_SIX_TF_SYNTHETIC_PARITY     NOT ESTABLISHED
+P6_SIX_TF_REAL_DATA_PARITY     NOT ESTABLISHED
+P6 CORE                        NOT CLOSED
+```
