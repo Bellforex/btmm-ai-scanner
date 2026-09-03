@@ -28,9 +28,12 @@ out explicitly rather than derived, because a map that guessed (say, by
 stripping a leading `q`) could silently equate two genuinely different
 variables.
 
-Deliberately NOT asserted here: displacement and the P2 view. The host computes
-both in this block; the current P6 slice transports neither, and its banner says
-so. When that slice lands, the corresponding sub-blocks belong in this file.
+Displacement and the P2 structure walk are covered too, since the projection now
+transports both. Every function they call -- `f_latestDisplacement`,
+`f_p2BuildSwingView`, `f_p2BuildRelationships`, `f_p2OrderRelationships`,
+`f_p2OrderSwings` and the 201-line `f_p2StructureWalk` -- was audited to
+reference ZERO of the file's 176 globals, exactly as the P1 functions were, which
+is what makes handing them a requested context's own window sound.
 """
 
 from __future__ import annotations
@@ -65,6 +68,14 @@ RENAME: dict[str, str] = {
     "qpAtr": "pvAtr",
     "qpTie": "pvTie",
     "qSwings": "swings",
+    "qDispRange": "scDispRange",
+    "qDispCode": "dispCode",
+    "qDispRatio": "dispRatio",
+    "qP2Swings": "p2Swings",
+    "qP2Rels": "p2Rels",
+    "qP2Dir": "p2bDir",
+    "qP2Events": "p2bEvents",
+    "qLastEv": "lastEv",
 }
 
 #: Lines the projection adds for diagnostics only. They touch no P1 input.
@@ -142,7 +153,9 @@ def test_the_atr_period_is_the_shared_constant() -> None:
 
 def _window_ops(text: str, *, projection: bool) -> list[str]:
     marker = "array.push(qHigh, high)" if projection else "array.push(wHigh, high)"
-    end = "int qAbsFirst" if projection else "// ---- displacement"
+    # Both sides end at the displacement step, which each performs in the same
+    # position: after the window is pruned, before `absFirst` is derived.
+    end = "displacement"
     lines = _block(text, marker, end)
     out = []
     for line in lines:
@@ -203,7 +216,14 @@ def test_the_frontier_and_detector_receive_the_same_arguments() -> None:
     from inside a requested context would project host data onto every
     timeframe, and nothing else in the suite would notice."""
     text = _source()
-    for call in ("f_advancePivotFrontier", "f_detectSwings"):
+    for call in (
+        "f_advancePivotFrontier",
+        "f_detectSwings",
+        "f_latestDisplacement",
+        "f_p2BuildSwingView",
+        "f_p2BuildRelationships",
+        "f_p2StructureWalk",
+    ):
         sites = _call_sites(text, call)
         assert len(sites) == 2, f"expected exactly a host and a projection call: {call}"
         host_args, proj_args = sites[0], [_translate(a) for a in sites[1]]
