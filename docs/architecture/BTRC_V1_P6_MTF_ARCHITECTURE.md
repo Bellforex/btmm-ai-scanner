@@ -536,3 +536,76 @@ P6_P2_TRANSPORT                  NOT IMPLEMENTED
 P6_SIX_TF_REAL_DATA_PARITY       NOT ESTABLISHED
 P6 CORE                          NOT CLOSED
 ```
+
+---
+
+## 9. The envelope, resolved live — and the runtime matrix
+
+Author decision (2026-09-03): keep `C_P1_MIN_CALC_BARS = 1250` as the semantic
+minimum; set the request envelope to **1251**. Symmetry with the host's 1800 was
+explicitly declined — the contract is *at least 1250 confirmed bars per context*,
+not identical bar counts across contexts, and 1800 would cost history, arrays and
+runtime six times over for no source-proven semantic gain.
+
+The Pine derives it rather than writing it: `C_P6_REQUEST_CALC_BARS =
+C_P1_MIN_CALC_BARS + 1`, so the two cannot drift apart. Guards fail if anyone
+sets it back to exactly the semantic minimum.
+
+**Measured live, and it lands exactly where predicted** (full evidence in
+`artifacts/p6_lab/P6_LIVE_ENVELOPE_1251.txt`):
+
+| TF | dataset | confirmed | swings | equal levels | warm |
+|---|---|---|---|---|---|
+| W1 | 1251 | **1250** | 66 | 3 | yes |
+| D1 | 1251 | **1250** | 57 | 1 | yes |
+| H4 | 1251 | **1250** | 68 | — | yes |
+| H1 | 1251 | **1250** | 64 | — | yes |
+| M15 | 1800 | 1799 | 67 | — | — |
+| M5 | 1251 | **1250** | 65 | — | — |
+
+`P6_host_bars_max = 1799`, `P6_ALIAS_HITS = 0`. At 1250 the same measurement read
+1249 confirmed with every warm flag at 0; the forming bar is the whole
+difference, and 1251 is minimal.
+
+**Non-vacuity.** Swing counts of 57–68 against 0 everywhere before the
+persistence fix, and the last swing prices differ per timeframe (W1 3941.75, D1
+4696.87) — six genuinely distinct projections, consistent with zero alias hits.
+
+**Runtime matrix: 78/78.** Thirteen operation points — fresh add, host timeframe
+to M5/H1/H4/D1/W1 and back, same-symbol reset, history load, viewport restore,
+remove and re-add, full page reload — each checked against six independent
+invariants. Zero compile errors, zero RE10110, zero runtime exceptions, zero
+request failures, zero alias alarms, zero host-window violations. Every point
+also reported the study on the candles' own price scale, so **P7 stays closed
+through timeframe switches and reload**.
+
+### 9a. Deployment mechanics worth keeping
+
+The redeploy failed twice before succeeding, for two reasons neither of which was
+the source:
+
+* **The editor was showing a historical version** — banner *"This is a historical
+  version of the script"*, tooltip *"This script is read-only"*. Ctrl+C worked, so
+  the buffer looked healthy; Ctrl+V silently did nothing. Recovered by reselecting
+  the script from the dropdown, **not** by "restore this version", which would
+  have overwritten the saved script with the old code.
+* **The verification step defeated itself.** Reading the buffer back with
+  Ctrl+A/Ctrl+C overwrites the clipboard, so the next paste attempt pasted the old
+  content over itself. Verify *after* saving, or reload the clipboard first.
+
+Saving a script does **not** recompile an already-attached instance: the chart
+kept running the old build (53 plots) until the study was removed and re-added
+(59 plots). Any live measurement taken right after a save is otherwise measuring
+the previous version.
+
+```
+P6_REQUEST_ENVELOPE            RESOLVED — 1251 -> 1250 confirmed, measured
+P6_WARM_W1_D1_H4               PASS
+P6_NON_VACUITY                 PASS (swings 57-68, equal levels non-zero)
+P6_ALIAS_HITS                  0
+P6_RUNTIME_HARD_PASS           TRUE (78/78)
+P6_DISPLACEMENT_TRANSPORT      NOT IMPLEMENTED
+P6_P2_TRANSPORT                NOT IMPLEMENTED
+P6_SIX_TF_REAL_DATA_PARITY     NOT ESTABLISHED
+P6 CORE                        NOT CLOSED
+```
