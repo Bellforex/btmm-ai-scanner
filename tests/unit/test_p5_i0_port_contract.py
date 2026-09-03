@@ -20,11 +20,32 @@ implement as if it were authoritative. The author has frozen the decision
 separately: evaluate active / non-terminal POIs, with the final evaluation on the
 terminal-transition bar itself.
 
-The scoring keys are the second trap. The weight table names `liquidity`, not
-`pullback`, and carries **no** `session` key — session participates as a missing
-reason and a gate, never as a weighted score. A port that scored session, or
-that spelled the pullback weight `pullback`, would silently change every final
-number while looking correct.
+THE SCORING MAP IS THE SECOND TRAP, AND IT IS NOT THE OBVIOUS ONE
+-----------------------------------------------------------------
+Reading the weight table alone suggests `liquidity` is simply the key under
+which `assess_pullback` is scored. It is not. Traced through `assess_confluence`:
+
+```
+weight key   weight   where the score actually comes from
+btmm            3     BTMM validity + direction agreement (P4), not an assessment
+poi             3     poi.strength_tier, not an assessment
+trend           2     assess_trend
+regime          1     assess_regime
+momentum        1     assess_momentum, selected at the POI timeframe
+breakout        1     assess_breakout, selected at the POI timeframe
+liquidity       1     `60 if btmm_valid else 40` -- a PROVISIONAL placeholder
+volatility      1     assess_volatility
+```
+
+So of the seven assessments only **five** feed a score. `assess_pullback`
+contributes `pullback_state` as a reported field and is never weighted;
+`assess_session` only appends a missing reason. And the two heaviest components,
+`btmm` and `poi` — six of the thirteen weight units — are not assessments at all.
+
+Because the aggregator looks weights up with `weights.get(k, 0)`, every one of
+these mistakes is silent: a port that wired pullback into `liquidity`, or scored
+session, or omitted btmm/poi, would produce different numbers on every POI while
+looking like a faithful reading of the table.
 """
 
 from __future__ import annotations
@@ -172,19 +193,57 @@ def test_the_scored_components_are_exactly_these_eight() -> None:
     assert tuple(found) == SCORED_COMPONENTS, found
 
 
-def test_the_pullback_component_is_weighted_as_liquidity() -> None:
-    """Not `pullback`. A port using the obvious name would drop the weight to
-    zero via `weights.get(k, 0)` and change every final score."""
-    weights = ConfluenceConfiguration().weights
-    assert "liquidity" in weights
-    assert "pullback" not in weights
+def test_liquidity_is_not_fed_by_the_pullback_assessment() -> None:
+    """The trap, stated correctly.
+
+    An earlier reading of this code assumed `liquidity` was simply the weight key
+    under which `assess_pullback` was scored. It is not. `liquidity_score` is
+    computed from BTMM validity alone -- `60 if btmm_valid else 40` -- and the
+    source marks it provisional. `assess_pullback` contributes `pullback_state`,
+    a REPORTED field, and is never scored.
+
+    A port that wired the pullback assessment into the liquidity weight would
+    produce a different number on every POI while looking like a faithful
+    reading of the weight table.
+    """
+    source = _T5.read_text(encoding="utf-8")
+    assert "liquidity_score = 60 if btmm_valid else 40" in source
+    assert "liquidity_score=liquidity_score" in source
+    # the pullback result reaches the decision as state, not as a score
+    assert "pullback_state=pullback.pullback_state" in source
+    assert "liquidity_score = pullback" not in source
 
 
-def test_session_carries_no_weight() -> None:
-    """Session is a gate and a missing-reason, never a scored component."""
+def test_only_five_of_the_seven_assessments_feed_a_score() -> None:
+    """trend, regime, momentum, breakout and volatility are scored. Pullback and
+    session are not: pullback is reported as state, session only adds a missing
+    reason. Porting either as a scored component would change every result."""
+    source = _T5.read_text(encoding="utf-8")
+    for scored in ("trend_score", "regime_score", "momentum_score",
+                   "breakout_score", "volatility_score"):
+        assert f"{scored}=" in source, scored
+    assert "pullback_score" not in source
+    assert "session_score" not in source
+
+
+def test_session_is_a_missing_reason_not_a_score() -> None:
     weights = ConfluenceConfiguration().weights
     assert "session" not in weights
     assert "session" not in SCORED_COMPONENTS
+    source = _T5.read_text(encoding="utf-8")
+    assert 'missing.append("session")' in source
+
+
+def test_the_two_heaviest_components_are_not_assessments_at_all() -> None:
+    """btmm (3) and poi (3) carry the most weight and come from P4 and the POI
+    itself, not from any of the seven assessments. A port that looked only at the
+    assessment list would omit six of the fourteen weight units."""
+    weights = ConfluenceConfiguration().weights
+    assert weights["btmm"] == 3
+    assert weights["poi"] == 3
+    assert weights["btmm"] + weights["poi"] == 6
+    assert sum(weights.values()) == 13
+    assert {name for name, _ in SEVEN_ASSESSMENTS} & {"btmm", "poi"} == set()
 
 
 def test_every_scored_component_has_a_weight() -> None:
