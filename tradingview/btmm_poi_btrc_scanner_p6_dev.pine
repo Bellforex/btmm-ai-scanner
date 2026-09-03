@@ -4542,32 +4542,40 @@ int C_P5X_TRANS_CAP = 4      // transition window capacity; >= range_window
 int C_P5X_DISP_CAP  = 3      // displacement window capacity; >= momentum_window
 
 type P5TransportExt
+    // Field defaults below spell the absent-integer sentinel as the LITERAL
+    // -99, not as C_ST_NA. Pine requires a `type` field's default value to be a
+    // compile-time literal -- CE10132, "the default value cannot be a function,
+    // variable or calculation" -- and rejects a reference to C_ST_NA even though
+    // it is itself declared as a plain top-level `int`. This is a Pine syntax
+    // constraint on the DECLARATION only: every comparison and assignment in
+    // f_p6TfProjection below still reads and writes C_ST_NA, so the sentinel
+    // stays one number, defined in exactly one place, everywhere but here.
     // --- T1 trend: scalars over this context's FULL confirmed history --------
-    int   stateAvailT      = C_ST_NA
+    int   stateAvailT      = -99
     int   contStreak       = 0
     int   priorOppStreak   = 0
     int   exhaustFlag      = 0
     // --- bounded transition window ------------------------------------------
     int   transWindowCount = 0
-    int   trans1Type       = C_ST_NA
-    int   trans2Type       = C_ST_NA
-    int   trans3Type       = C_ST_NA
-    int   trans4Type       = C_ST_NA
-    int   lastTransAvailT  = C_ST_NA
+    int   trans1Type       = -99
+    int   trans2Type       = -99
+    int   trans3Type       = -99
+    int   trans4Type       = -99
+    int   lastTransAvailT  = -99
     // --- bounded displacement window (shared by T2 regime and T3 momentum) ---
     int   dispWindowCount  = 0
-    int   disp1Dir         = C_ST_NA
-    int   disp1Cls         = C_ST_NA
+    int   disp1Dir         = -99
+    int   disp1Cls         = -99
     float disp1Ratio       = na
-    int   disp2Dir         = C_ST_NA
-    int   disp2Cls         = C_ST_NA
+    int   disp2Dir         = -99
+    int   disp2Cls         = -99
     float disp2Ratio       = na
-    int   disp3Dir         = C_ST_NA
-    int   disp3Cls         = C_ST_NA
+    int   disp3Dir         = -99
+    int   disp3Cls         = -99
     float disp3Ratio       = na
-    int   dispAvailT       = C_ST_NA
+    int   dispAvailT       = -99
     // --- breakout ------------------------------------------------------------
-    int   dispClsAtTrans   = C_ST_NA
+    int   dispClsAtTrans   = -99
     // --- pullback ------------------------------------------------------------
     float pbImpulsePrice   = na
     float pbOriginPrice    = na

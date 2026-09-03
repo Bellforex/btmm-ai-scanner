@@ -226,17 +226,36 @@ def test_every_udt_field_declares_a_default() -> None:
         assert "=" in stripped, stripped
 
 
-def test_integer_codes_default_to_the_sentinel_and_counts_to_zero() -> None:
+def test_integer_codes_default_to_the_sentinel_literal_and_counts_to_zero() -> None:
+    """The default is the LITERAL -99, not a reference to C_ST_NA.
+
+    Pine rejects `int x = C_ST_NA` as a `type` field default (CE10132: "the
+    default value cannot be a function, variable or calculation") even though
+    C_ST_NA is itself just a top-level `int`. Only the DECLARATION site has to
+    spell the literal; every read and write of these fields elsewhere in the
+    projection still goes through C_ST_NA, which a separate test checks, so the
+    sentinel stays defined in exactly one place everywhere but here.
+    """
     source = _source()
     block = source[source.index("type P5TransportExt") :]
     block = block[: block.index("\n\n// ---")]
     for name in ("trans1Type", "disp1Dir", "disp1Cls", "dispClsAtTrans", "stateAvailT"):
-        assert re.search(rf"\b{name}\s*=\s*C_ST_NA", block), name
+        assert re.search(rf"\b{name}\s*=\s*-99\b", block), name
+        assert not re.search(rf"\b{name}\s*=\s*C_ST_NA\b", block), name
     for name in ("transWindowCount", "dispWindowCount", "contStreak"):
         assert re.search(rf"\b{name}\s*=\s*0\b", block), name
     for name in ("disp1Ratio", "pbImpulsePrice", "pbOriginPrice", "pbPullbackPrice"):
         assert re.search(rf"\b{name}\s*=\s*na\b", block), name
     assert re.search(r"\bpbValid\s*=\s*false\b", block)
+
+
+def test_the_type_declaration_reuses_the_named_sentinel_value() -> None:
+    """The declaration spells -99 for Pine syntax reasons; every USE of these
+    fields elsewhere in the projection still goes through the named constant, so
+    a future change to C_ST_NA's value only has to be echoed in the fourteen
+    literal declaration lines above."""
+    source = _source()
+    assert "int C_ST_NA = -99" in source
 
 
 # ---------------------------------------------------------------------------
