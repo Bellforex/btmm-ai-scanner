@@ -1,0 +1,213 @@
+//@version=6
+
+// =============================================================================
+// P6 UDT TRANSPORT PROBE  (experiment only — NOT part of the scanner)
+// -----------------------------------------------------------------------------
+// One question, and nothing else: does the EXACT shape the P5 transport
+// extension needs compile and run across all six P6 contexts?
+//
+// THE SHAPE UNDER TEST
+//   [ 14 scalars , one P5TransportExt object ]   x  6 request.security calls
+//
+// WHY THE SHAPE AND NOT A WIDER TUPLE
+//   Pine caps the COMBINED tuple elements returned by ALL request.* calls in one
+//   script at 127. The measured P6 inventory is 84 (DEV) and 114 (ATOMIC), so a
+//   scalar widening to ~34 fields per context — 204 in DEV alone — cannot
+//   compile. Appending one object per request costs one element instead of
+//   twenty, landing DEV at 90.
+//
+// WHAT THIS PROBE DELIBERATELY DOES NOT DO
+//   It carries no P1/P2 semantics. The fields are filled from trivially derived
+//   values, because the question is representation, not meaning. Proving the
+//   real reductions is the Python oracle's job and then the parity capture's.
+//
+//   It also does not hunt for Pine's absolute UDT field ceiling. It uses 23
+//   fields — at least the ~20 the audit found — so a PASS licenses the
+//   production shape and nothing broader.
+//
+// ACCEPTANCE
+//   1. compiles with 0 errors
+//   2. every context returns an object whose fields are readable on the host
+//   3. the six contexts are DIFFERENTIATED (an aliased or dropped context would
+//      show identical rows, which is the failure this campaign has hit before)
+//   4. int, float and bool all survive the boundary
+//
+// If a mixed tuple+object return turns out to be unsupported, the documented
+// fallback is ONE FULL object per request carrying old 14 and new ~20 together.
+// That variant is included below behind a switch so both can be tried in one
+// deploy rather than two.
+// =============================================================================
+
+indicator("P6 UDT TRANSPORT PROBE", overlay = false, calc_bars_count = 1800)
+
+int C_P1_MIN_CALC_BARS     = 1250
+int C_P6_REQUEST_CALC_BARS = C_P1_MIN_CALC_BARS + 1     // 1251, as in P6 DEV
+
+string C_TF_W1  = "W"
+string C_TF_D1  = "D"
+string C_TF_H4  = "240"
+string C_TF_H1  = "60"
+string C_TF_M15 = "15"
+string C_TF_M5  = "5"
+
+// -----------------------------------------------------------------------------
+// The type under test
+// -----------------------------------------------------------------------------
+// Field-for-field the audited P5 extension: five T1 reductions, the shared
+// last-three displacement window, three breakout reductions and four pullback
+// values. Natural types throughout — no packing — because these carry
+// timestamps, prices and ratios.
+type P5TransportExt
+    // T1 trend
+    int   stateAvailT     = na
+    int   contStreak      = 0
+    int   altCount4       = 0
+    int   priorOppStreak  = 0
+    int   exhaustFlag     = 0
+    // shared displacement window (regime + momentum)
+    int   dispCount       = 0
+    int   disp1Dir        = na
+    int   disp1Cls        = na
+    float disp1Ratio      = na
+    int   disp2Dir        = na
+    int   disp2Cls        = na
+    float disp2Ratio      = na
+    int   disp3Dir        = na
+    int   disp3Cls        = na
+    float disp3Ratio      = na
+    int   dispAvailT      = na
+    // breakout
+    int   lastTransAvailT = na
+    int   prevTransType   = na
+    int   dispClsAtTrans  = na
+    // pullback
+    float pbImpulsePrice  = na
+    float pbOriginPrice   = na
+    float pbPullbackPrice = na
+    bool  pbValid         = false
+
+// The full-UDT fallback: old 14 and new extension in one object.
+type P5FullTransport
+    int             bars   = 0
+    int             swings = 0
+    float           price  = na
+    P5TransportExt  ext    = na
+
+// -----------------------------------------------------------------------------
+// The probe expression
+// -----------------------------------------------------------------------------
+// `var` state so each context accumulates over its OWN bars, which is what makes
+// the six rows differentiate. Values are arbitrary but deterministic functions
+// of the context's own history, so an aliased context is visible immediately.
+f_probeExt() =>
+    var int   seen  = 0
+    var float first = na
+    if barstate.isconfirmed
+        seen += 1
+        if na(first)
+            first := close
+
+    P5TransportExt ext = P5TransportExt.new()
+    ext.stateAvailT     := time
+    ext.contStreak      := seen % 7
+    ext.altCount4       := seen % 4
+    ext.priorOppStreak  := seen % 3
+    ext.exhaustFlag     := seen % 2
+    ext.dispCount       := math.min(seen, 3)
+    ext.disp1Dir        := 1
+    ext.disp1Cls        := seen % 3
+    ext.disp1Ratio      := close / math.max(first, 1.0)
+    ext.disp2Dir        := -1
+    ext.disp2Cls        := (seen + 1) % 3
+    ext.disp2Ratio      := high / math.max(first, 1.0)
+    ext.disp3Dir        := 1
+    ext.disp3Cls        := (seen + 2) % 3
+    ext.disp3Ratio      := low / math.max(first, 1.0)
+    ext.dispAvailT      := time
+    ext.lastTransAvailT := time_close
+    ext.prevTransType   := seen % 5
+    ext.dispClsAtTrans  := seen % 3
+    ext.pbImpulsePrice  := high
+    ext.pbOriginPrice   := low
+    ext.pbPullbackPrice := close
+    ext.pbValid         := seen > 10
+
+    // The production shape: preserved scalars first, one object appended last.
+    // Fourteen scalars, matching the P6 DEV projection width exactly.
+    [seen, seen, 0, close, time, 0, 0.0, last_bar_index + 1, 0, 0.0, 0, 0, 0, first, ext]
+
+// The fallback shape, evaluated in the same run so one deploy answers both.
+f_probeFull() =>
+    var int seen = 0
+    if barstate.isconfirmed
+        seen += 1
+    P5FullTransport.new(bars = seen, swings = seen % 9, price = close, ext = P5TransportExt.new())
+
+// -----------------------------------------------------------------------------
+// Six contexts, the exact production call shape
+// -----------------------------------------------------------------------------
+[w1Bars,  w1A, w1B, w1C, w1D, w1E, w1F, w1G, w1H, w1I, w1J, w1K, w1L, w1M, w1Ext]  = request.security(syminfo.tickerid, C_TF_W1,  f_probeExt(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[d1Bars,  d1A, d1B, d1C, d1D, d1E, d1F, d1G, d1H, d1I, d1J, d1K, d1L, d1M, d1Ext]  = request.security(syminfo.tickerid, C_TF_D1,  f_probeExt(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h4Bars,  h4A, h4B, h4C, h4D, h4E, h4F, h4G, h4H, h4I, h4J, h4K, h4L, h4M, h4Ext]  = request.security(syminfo.tickerid, C_TF_H4,  f_probeExt(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[h1Bars,  h1A, h1B, h1C, h1D, h1E, h1F, h1G, h1H, h1I, h1J, h1K, h1L, h1M, h1Ext]  = request.security(syminfo.tickerid, C_TF_H1,  f_probeExt(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m15Bars, m15A, m15B, m15C, m15D, m15E, m15F, m15G, m15H, m15I, m15J, m15K, m15L, m15M, m15Ext] = request.security(syminfo.tickerid, C_TF_M15, f_probeExt(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[m5Bars,  m5A, m5B, m5C, m5D, m5E, m5F, m5G, m5H, m5I, m5J, m5K, m5L, m5M, m5Ext]  = request.security(syminfo.tickerid, C_TF_M5,  f_probeExt(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+
+// The fallback shape, one object per request, on two contexts only — enough to
+// answer whether a bare object return is accepted at all.
+P5FullTransport w1Full = request.security(syminfo.tickerid, C_TF_W1, f_probeFull(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+P5FullTransport m5Full = request.security(syminfo.tickerid, C_TF_M5, f_probeFull(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+
+// -----------------------------------------------------------------------------
+// Report
+// -----------------------------------------------------------------------------
+f_extLine(string tf, int bars, P5TransportExt e) =>
+    na(e) ? "UDT|" + tf + "|NULL_OBJECT" :
+      "UDT|" + tf +
+      "|bars=" + str.tostring(bars) +
+      "|stateAvailT=" + str.tostring(e.stateAvailT) +
+      "|contStreak=" + str.tostring(e.contStreak) +
+      "|altCount4=" + str.tostring(e.altCount4) +
+      "|priorOppStreak=" + str.tostring(e.priorOppStreak) +
+      "|exhaustFlag=" + str.tostring(e.exhaustFlag) +
+      "|dispCount=" + str.tostring(e.dispCount) +
+      "|d1=" + str.tostring(e.disp1Dir) + "/" + str.tostring(e.disp1Cls) + "/" + str.tostring(e.disp1Ratio) +
+      "|d2=" + str.tostring(e.disp2Dir) + "/" + str.tostring(e.disp2Cls) + "/" + str.tostring(e.disp2Ratio) +
+      "|d3=" + str.tostring(e.disp3Dir) + "/" + str.tostring(e.disp3Cls) + "/" + str.tostring(e.disp3Ratio) +
+      "|dispAvailT=" + str.tostring(e.dispAvailT) +
+      "|lastTransAvailT=" + str.tostring(e.lastTransAvailT) +
+      "|prevTransType=" + str.tostring(e.prevTransType) +
+      "|dispClsAtTrans=" + str.tostring(e.dispClsAtTrans) +
+      "|pbImpulse=" + str.tostring(e.pbImpulsePrice) +
+      "|pbOrigin=" + str.tostring(e.pbOriginPrice) +
+      "|pbPullback=" + str.tostring(e.pbPullbackPrice) +
+      "|pbValid=" + str.tostring(e.pbValid)
+
+var bool reported = false
+if barstate.islast and not reported
+    reported := true
+    log.info("PROBE|feed=" + syminfo.prefix + ":" + syminfo.ticker + "|host_tf=" + timeframe.period + "|host_bars=" + str.tostring(last_bar_index + 1))
+    log.info(f_extLine("W1",  w1Bars,  w1Ext))
+    log.info(f_extLine("D1",  d1Bars,  d1Ext))
+    log.info(f_extLine("H4",  h4Bars,  h4Ext))
+    log.info(f_extLine("H1",  h1Bars,  h1Ext))
+    log.info(f_extLine("M15", m15Bars, m15Ext))
+    log.info(f_extLine("M5",  m5Bars,  m5Ext))
+    log.info("FULL|W1|" + (na(w1Full) ? "NULL_OBJECT" : "bars=" + str.tostring(w1Full.bars) + "|swings=" + str.tostring(w1Full.swings) + "|price=" + str.tostring(w1Full.price) + "|extNull=" + str.tostring(na(w1Full.ext))))
+    log.info("FULL|M5|" + (na(m5Full) ? "NULL_OBJECT" : "bars=" + str.tostring(m5Full.bars) + "|swings=" + str.tostring(m5Full.swings) + "|price=" + str.tostring(m5Full.price) + "|extNull=" + str.tostring(na(m5Full.ext))))
+
+// Data-window mirrors, so a PASS is visible without opening the log.
+plot(w1Bars,  "W1_bars",  display = display.data_window)
+plot(d1Bars,  "D1_bars",  display = display.data_window)
+plot(h4Bars,  "H4_bars",  display = display.data_window)
+plot(h1Bars,  "H1_bars",  display = display.data_window)
+plot(m15Bars, "M15_bars", display = display.data_window)
+plot(m5Bars,  "M5_bars",  display = display.data_window)
+plot(na(w1Ext)  ? -1 : w1Ext.contStreak,  "W1_contStreak",  display = display.data_window)
+plot(na(d1Ext)  ? -1 : d1Ext.contStreak,  "D1_contStreak",  display = display.data_window)
+plot(na(h4Ext)  ? -1 : h4Ext.contStreak,  "H4_contStreak",  display = display.data_window)
+plot(na(h1Ext)  ? -1 : h1Ext.contStreak,  "H1_contStreak",  display = display.data_window)
+plot(na(m15Ext) ? -1 : m15Ext.contStreak, "M15_contStreak", display = display.data_window)
+plot(na(m5Ext)  ? -1 : m5Ext.contStreak,  "M5_contStreak",  display = display.data_window)
+plot(na(w1Full) ? -1 : w1Full.bars, "W1_full_bars", display = display.data_window)
+plot(na(m5Full) ? -1 : m5Full.bars, "M5_full_bars", display = display.data_window)
