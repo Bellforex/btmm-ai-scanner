@@ -263,7 +263,7 @@ def reduce_pine_equivalent(
         last_trans_avail = epoch_ms(last_avail)
     else:
         disp_cls_at_trans = C_ST_NA
-        last_trans_avail = None
+        last_trans_avail = C_ST_NA
 
     impulse, origin, pullback, pb_valid = _pullback_prices(swings, direction)
 
@@ -290,7 +290,7 @@ def reduce_pine_equivalent(
         disp3Dir=disp_dirs[2],
         disp3Cls=disp_clss[2],
         disp3Ratio=disp_ratios[2],
-        dispAvailT=epoch_ms(window[-1].availability_time_utc) if window else None,
+        dispAvailT=epoch_ms(window[-1].availability_time_utc) if window else C_ST_NA,
         dispClsAtTrans=disp_cls_at_trans,
         pbImpulsePrice=impulse,
         pbOriginPrice=origin,

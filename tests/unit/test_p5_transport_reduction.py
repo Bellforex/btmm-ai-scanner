@@ -213,8 +213,10 @@ def test_configuration_fits_the_declared_capacity() -> None:
 
 
 def test_absent_state_yields_absent_availability_and_zero_streaks() -> None:
+    """Absence is C_ST_NA on the wire, not None -- P5TransportRecord models what
+    actually crosses request.security, and Pine has no None to receive."""
     record = observe(both(transitions=[transition(1, BULL_BOS)]))
-    assert record.stateAvailT is None
+    assert record.stateAvailT == C_ST_NA
     assert record.contStreak == 0
     assert record.priorOppStreak == 0
     assert record.exhaustFlag == 0
@@ -684,7 +686,7 @@ def test_no_transition_means_no_displacement_class() -> None:
         )
     )
     assert record.dispClsAtTrans == C_ST_NA
-    assert record.lastTransAvailT is None
+    assert record.lastTransAvailT == C_ST_NA
 
 
 # ===========================================================================

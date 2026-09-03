@@ -204,7 +204,7 @@ def reduce_authoritative(
         disp3Dir=disp_dirs[2],
         disp3Cls=disp_clss[2],
         disp3Ratio=disp_ratios[2],
-        dispAvailT=epoch_ms(window[-1].availability_time_utc) if window else None,
+        dispAvailT=epoch_ms(window[-1].availability_time_utc) if window else C_ST_NA,
         dispClsAtTrans=disp_cls_at_trans,
         pbImpulsePrice=pb_impulse,
         pbOriginPrice=pb_origin,

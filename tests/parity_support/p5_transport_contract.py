@@ -37,14 +37,36 @@ Breakout's ``ordered_transitions[-2]`` is ``trans{count-1}Type``, NOT a fixed
 slot. That is deliberately awkward to write down, because the alternative --
 leaving it to be inferred -- is how a window gets read backwards.
 
-TWO SPELLINGS OF ABSENT
------------------------
+TWO SPELLINGS OF ABSENT -- AND WHERE THE LINE ACTUALLY FALLS
+---------------------------------------------------------------
 Inherited unchanged from the P2/P3/P4/P6 digest contracts, because they encode
 differently and a port that confused them would move the digest rather than
 pass quietly:
 
-* ``C_ST_NA`` (-99) for integer CODES, where 0 is a live value;
-* ``None`` / Pine ``na`` for prices, ratios and timestamps.
+* ``C_ST_NA`` (-99) for every integer field -- CODES and integer TIMES alike,
+  because 0 is a live value for both, and the closed P6 surface already spells
+  an absent integer time this way (``lastConfT``, at position 5 of the original
+  fourteen). ``stateAvailT``, ``lastTransAvailT`` and ``dispAvailT`` are epoch
+  milliseconds, i.e. integers, so they follow the same rule -- NOT the ``na``
+  rule a first draft of this contract mistakenly gave them.
+* ``None`` / Pine ``na`` for prices and ratios only (the fields typed ``float``
+  in ``FIELDS`` below).
+
+THIS IS A TRANSPORT-BOUNDARY DECISION, NOT A CHANGE TO PYTHON SEMANTICS
+--------------------------------------------------------------------------
+The authoritative domain models -- ``CurrentStructureState.availability_time_utc``,
+``StructureTransition.availability_time_utc`` -- are untouched and keep using
+``datetime | None`` exactly as their contracts define them. What changed is only
+``p5_transport_records.epoch_ms``, the WIRE encoder both the oracle and the
+Pine-equivalent model call to turn a ``datetime | None`` into what actually
+crosses ``request.security``: it now maps ``None -> C_ST_NA`` instead of
+``None -> None``, because Pine has no ``None`` to receive. ``P5TransportRecord``
+below therefore models the WIRE record, and its three time fields are plain
+``int``, never ``int | None`` -- matching what the Pine UDT itself declares
+(``int stateAvailT = C_ST_NA``, and likewise for the other two). A semantic
+comparison that needs ``None`` back uses ``decode_epoch_ms`` to invert it; digest
+folding and the oracle/model differential both operate on the encoded ``int``
+directly and never need to.
 
 Counts are ordinary integers: zero means an empty window, not an absent one.
 """
@@ -102,7 +124,7 @@ FIELDS: Final[tuple[TransportField, ...]] = (
         "int",
         "trend",
         "current_state.availability_time_utc, in epoch milliseconds",
-        "None when there is no current structure state",
+        "C_ST_NA when there is no current structure state",
         "the structure walk's own availability time; confirmed bars only",
     ),
     TransportField(
@@ -162,7 +184,7 @@ FIELDS: Final[tuple[TransportField, ...]] = (
         "int",
         "breakout",
         "availability_time_utc of the newest transition, epoch milliseconds",
-        "None when there are no transitions",
+        "C_ST_NA when there are no transitions",
         "confirmed transitions only",
     ),
     TransportField(
@@ -217,7 +239,7 @@ FIELDS: Final[tuple[TransportField, ...]] = (
         "int",
         "regime+momentum",
         "availability_time_utc of the NEWEST retained displacement",
-        "None when the window is empty",
+        "C_ST_NA when the window is empty",
         "confirmed displacements only",
     ),
     TransportField(
@@ -282,7 +304,7 @@ FIELDS_BY_NAME: Final[dict[str, TransportField]] = {f.name: f for f in FIELDS}
 class P5TransportRecord:
     """One timeframe's extension payload: exactly the 26 contract fields."""
 
-    stateAvailT: int | None
+    stateAvailT: int
     contStreak: int
     priorOppStreak: int
     exhaustFlag: int
@@ -291,7 +313,7 @@ class P5TransportRecord:
     trans2Type: int
     trans3Type: int
     trans4Type: int
-    lastTransAvailT: int | None
+    lastTransAvailT: int
     dispWindowCount: int
     disp1Dir: int
     disp1Cls: int
@@ -302,7 +324,7 @@ class P5TransportRecord:
     disp3Dir: int
     disp3Cls: int
     disp3Ratio: float | None
-    dispAvailT: int | None
+    dispAvailT: int
     dispClsAtTrans: int
     pbImpulsePrice: float | None
     pbOriginPrice: float | None

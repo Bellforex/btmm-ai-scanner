@@ -38,20 +38,40 @@ from btmm_ai_scanner.structure.enums import (
     StructureTransitionType,
 )
 
+from .p5_transport_contract import C_ST_NA
+
 __all__ = [
     "DisplacementRec",
     "StateRec",
     "SwingRec",
     "TransitionRec",
+    "decode_epoch_ms",
     "epoch_ms",
 ]
 
 
-def epoch_ms(moment: datetime | None) -> int | None:
-    """UTC datetime -> epoch milliseconds, the wire representation for times."""
+def epoch_ms(moment: datetime | None) -> int:
+    """UTC datetime -> epoch milliseconds, the WIRE representation for times.
+
+    `None` (semantic absence) encodes to `C_ST_NA`. This is a one-way transport
+    encoding, not a claim that `None` and `-99` are the same thing: a decoder
+    inverts it back to `None` wherever a semantic comparison is needed, and nothing
+    compares a raw Python `None` against a raw Pine `-99` directly.
+    """
     if moment is None:
-        return None
+        return C_ST_NA
     return int(moment.timestamp() * 1000)
+
+
+def decode_epoch_ms(value: int) -> int | None:
+    """Inverse of `epoch_ms`: WIRE sentinel -> semantic absence.
+
+    Used only where a comparison must happen in the semantic domain (never
+    needed by the oracle/model differential itself, since both sides already
+    encode through `epoch_ms` and so are wire-comparable as-is; provided for the
+    live real-data decode step, which starts from Pine's raw wire integers).
+    """
+    return None if value == C_ST_NA else value
 
 
 @dataclass(frozen=True)
