@@ -111,11 +111,11 @@ def test_timeframe_digest_golden() -> None:
 
 def test_surface_digests_golden() -> None:
     assert DIG.surface_digests(_values()) == {
-        "SWINGS": 32674709,
-        "EQUAL": 8,
-        "DISP": 6155138,
-        "P2_TRANS": 65869481,
-        "P2_STATE": 3,
+        "SWINGS": (32674709, 350173177),
+        "EQUAL": (8, 8),
+        "DISP": (6155138, 6155258),
+        "P2_TRANS": (65869481, 665860431),
+        "P2_STATE": (3, 3),
     }
 
 

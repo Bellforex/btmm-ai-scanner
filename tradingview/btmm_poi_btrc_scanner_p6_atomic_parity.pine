@@ -4805,7 +4805,16 @@ f_p6AtomicCapture(bool emitRaw, string tfName) =>
             array.push(kL,  low)
             array.push(kC,  close)
 
-    if emitRaw and barstate.islastconfirmedhistory
+    // Anchored at the LIVE EDGE, not the last historical bar. Measured: at
+    // `islastconfirmedhistory` the M5 context had confirmed only 1248 of its
+    // 1250 bars, because the newest few sit in the realtime region and the
+    // context had not processed them yet. That anchor is internally consistent
+    // but it captures a context that is not yet warm, and it would differ from
+    // the snapshot's own anchor. `islast` is where every context has its full
+    // confirmed history. The once-guard keeps it to a single emission.
+    var bool kEmitted = false
+    if emitRaw and barstate.islast and not kEmitted
+        kEmitted := true
         int n = array.size(kT)
         for i = 0 to n - 1
             log.info("P6RAW|" + tfName + "|" + str.tostring(i) + "|" + str.tostring(array.get(kT, i)) + "|" + str.tostring(array.get(kTC, i)) + "|" + str.tostring(f_p6aEncPrice(array.get(kO, i))) + "|" + str.tostring(f_p6aEncPrice(array.get(kH, i))) + "|" + str.tostring(f_p6aEncPrice(array.get(kL, i))) + "|" + str.tostring(f_p6aEncPrice(array.get(kC, i))))
@@ -4871,12 +4880,14 @@ f_p6aTfCombined(int tfCode, int sw, int typ, float price, int conf, int eq, int 
     a
 
 f_p6aTfRow(string tf, int tfCode, int rows, int first, int last, int ih1, int ih2, int sw, int typ, float price, int conf, int eq, int dc, float dr, int tc, int lt, float bl, int dir) =>
-    log.info("P6SNAP|" + tf + "|code=" + str.tostring(tfCode) + "|rows=" + str.tostring(rows) + "|first=" + str.tostring(first) + "|last=" + str.tostring(last) + "|ih1=" + str.tostring(ih1) + "|ih2=" + str.tostring(ih2) + "|swings=" + str.tostring(sw) + "|equal=" + str.tostring(eq) + "|disp=" + str.tostring(dc) + "|trans=" + str.tostring(tc) + "|dir=" + str.tostring(dir) + "|SW=" + str.tostring(f_p6aSwings(sw, typ, price, conf, P6A_BASE1, P6A_MOD1)) + "|EQ=" + str.tostring(f_p6aEqual(eq, P6A_BASE1, P6A_MOD1)) + "|DS=" + str.tostring(f_p6aDisp(dc, dr, P6A_BASE1, P6A_MOD1)) + "|TR=" + str.tostring(f_p6aTrans(tc, lt, bl, P6A_BASE1, P6A_MOD1)) + "|ST=" + str.tostring(f_p6aState(dir, P6A_BASE1, P6A_MOD1)) + "|C1=" + str.tostring(f_p6aTfCombined(tfCode, sw, typ, price, conf, eq, dc, dr, tc, lt, bl, dir, P6A_BASE1, P6A_MOD1)) + "|C2=" + str.tostring(f_p6aTfCombined(tfCode, sw, typ, price, conf, eq, dc, dr, tc, lt, bl, dir, P6A_BASE2, P6A_MOD2)))
+    log.info("P6SNAP|" + tf + "|code=" + str.tostring(tfCode) + "|rows=" + str.tostring(rows) + "|first=" + str.tostring(first) + "|last=" + str.tostring(last) + "|ih1=" + str.tostring(ih1) + "|ih2=" + str.tostring(ih2) + "|swings=" + str.tostring(sw) + "|equal=" + str.tostring(eq) + "|disp=" + str.tostring(dc) + "|trans=" + str.tostring(tc) + "|dir=" + str.tostring(dir) + "|SW1=" + str.tostring(f_p6aSwings(sw, typ, price, conf, P6A_BASE1, P6A_MOD1)) + "|SW2=" + str.tostring(f_p6aSwings(sw, typ, price, conf, P6A_BASE2, P6A_MOD2)) + "|EQ1=" + str.tostring(f_p6aEqual(eq, P6A_BASE1, P6A_MOD1)) + "|EQ2=" + str.tostring(f_p6aEqual(eq, P6A_BASE2, P6A_MOD2)) + "|DS1=" + str.tostring(f_p6aDisp(dc, dr, P6A_BASE1, P6A_MOD1)) + "|DS2=" + str.tostring(f_p6aDisp(dc, dr, P6A_BASE2, P6A_MOD2)) + "|TR1=" + str.tostring(f_p6aTrans(tc, lt, bl, P6A_BASE1, P6A_MOD1)) + "|TR2=" + str.tostring(f_p6aTrans(tc, lt, bl, P6A_BASE2, P6A_MOD2)) + "|ST1=" + str.tostring(f_p6aState(dir, P6A_BASE1, P6A_MOD1)) + "|ST2=" + str.tostring(f_p6aState(dir, P6A_BASE2, P6A_MOD2)) + "|C1=" + str.tostring(f_p6aTfCombined(tfCode, sw, typ, price, conf, eq, dc, dr, tc, lt, bl, dir, P6A_BASE1, P6A_MOD1)) + "|C2=" + str.tostring(f_p6aTfCombined(tfCode, sw, typ, price, conf, eq, dc, dr, tc, lt, bl, dir, P6A_BASE2, P6A_MOD2)))
 
 // -----------------------------------------------------------------------------
 // The atomic snapshot -- one execution, all six timeframes
 // -----------------------------------------------------------------------------
-if barstate.islastconfirmedhistory
+var bool p6aSnapshotDone = false
+if barstate.islast and not p6aSnapshotDone
+    p6aSnapshotDone := true
     log.info("P6META|schema=" + str.tostring(P6A_SCHEMA) + "|provider=" + syminfo.prefix + "|ticker=" + syminfo.ticker + "|mintick=" + str.tostring(syminfo.mintick) + "|hostTf=" + timeframe.period + "|anchorTime=" + str.tostring(time) + "|anchorClose=" + str.tostring(time_close) + "|hostDataset=" + str.tostring(last_bar_index + 1) + "|hostConfirmed=" + str.tostring(confirmedBarCount) + "|semanticMin=" + str.tostring(C_P1_MIN_CALC_BARS) + "|requestEnvelope=" + str.tostring(C_P6_REQUEST_CALC_BARS) + "|hostEnvelope=" + str.tostring(C_P6_HOST_CALC_BARS) + "|captureTf=" + P6A_CAPTURE_TF + "|aliasHits=" + str.tostring(p6AliasHits))
     f_p6aTfRow("W1",  10080, w1Rows,  w1First,  w1Last,  w1IH1,  w1IH2,  w1Sw,  w1Type,  w1Price,  w1Conf,  w1Eq,  w1Dc,  w1Dr,  w1Tc,  w1Lt,  w1Bl,  w1P2d)
     f_p6aTfRow("D1",  1440,  d1Rows,  d1First,  d1Last,  d1IH1,  d1IH2,  d1Sw,  d1Type,  d1Price,  d1Conf,  d1Eq,  d1Dc,  d1Dr,  d1Tc,  d1Lt,  d1Bl,  d1P2d)

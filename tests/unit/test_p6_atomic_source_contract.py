@@ -130,13 +130,20 @@ def test_the_capture_hashes_confirmed_bars_only() -> None:
         i for i, line in enumerate(lines) if line.strip() == "if barstate.isconfirmed"
     )
     gate_indent = len(lines[gate]) - len(lines[gate].lstrip())
+    # The emission block starts here; assignments after it are NOT confirmed-gated
+    # and only the once-guard is permitted among them.
+    emit = next(i for i, line in enumerate(lines) if "if emitRaw and barstate.islast" in line)
     for index, line in enumerate(lines):
         if ":=" not in line or line.strip().startswith("//"):
             continue
         indent = len(line) - len(line.lstrip())
-        inside_confirmed = index > gate and indent > gate_indent
-        # the raw-emission block assigns nothing; every := must be confirmed-gated
-        assert inside_confirmed, line.strip()
+        if index > emit:
+            assert line.strip() == "kEmitted := true", (
+                f"only the emission once-guard may be assigned outside the "
+                f"confirmed gate, found: {line.strip()}"
+            )
+            continue
+        assert index > gate and indent > gate_indent, line.strip()
 
 
 def test_no_strategy_or_order_calls_were_introduced() -> None:
@@ -282,7 +289,10 @@ def test_the_snapshot_covers_all_six_timeframes_in_one_execution() -> None:
     section = _section()
     emitted = re.findall(r'f_p6aTfRow\("(\w+)"', section)
     assert emitted == ["W1", "D1", "H4", "H1", "M15", "M5"], emitted
-    assert section.count("if barstate.islastconfirmedhistory") >= 1
+    # Anchored at the live edge with a once-guard, not at the last historical
+    # bar: measured, the M5 context had confirmed only 1248 of 1250 there.
+    assert "if barstate.islast and not p6aSnapshotDone" in section
+    assert "var bool p6aSnapshotDone = false" in section
 
 
 def test_the_snapshot_records_the_provider() -> None:

@@ -190,15 +190,21 @@ def surface_record(
 
 def surface_digest(
     surface: str, values: dict[str, Any], *, mintick: Decimal | float = MINTICK
-) -> int:
-    """A single surface digest, under MOD1 -- enough to localise a mismatch."""
-    return hash_record(surface_record(surface, values, mintick=mintick), BASE1, MOD1)
+) -> tuple[int, int]:
+    """One surface digest as (H1, H2).
+
+    Dual, not single: the per-surface digests are what the 30-comparison gate
+    actually decides on, so they carry the same collision resistance as the
+    combined one rather than being mere localisation hints.
+    """
+    record = surface_record(surface, values, mintick=mintick)
+    return (hash_record(record, BASE1, MOD1), hash_record(record, BASE2, MOD2))
 
 
 def surface_digests(
     values: dict[str, Any], *, mintick: Decimal | float = MINTICK
-) -> dict[str, int]:
-    """All five surface digests for one timeframe."""
+) -> dict[str, tuple[int, int]]:
+    """All five surface digests for one timeframe, each as (H1, H2)."""
     return {
         surface: surface_digest(surface, values, mintick=mintick)
         for surface in SURFACE_ORDER
