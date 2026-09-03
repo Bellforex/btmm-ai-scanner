@@ -57,53 +57,21 @@ from btmm_ai_scanner.btrc.t3_configuration import (
     MomentumBreakoutPullbackConfiguration,
 )
 from btmm_ai_scanner.btrc.trend_configuration import TrendEngineConfiguration
+from tests.parity_support.p5_transport_contract import (
+    DISPLACEMENT_WINDOW_CAPACITY,
+    FIELDS,
+    TRANSITION_WINDOW_CAPACITY,
+)
 
 _REPO = Path(__file__).resolve().parents[2]
 _BTRC = _REPO / "src" / "btmm_ai_scanner" / "btrc"
 
-#: How many most-recent structure transitions the transport carries.
-TRANSITION_WINDOW_CAPACITY = 4
-
-#: How many most-recent displacement observations the transport carries.
-DISPLACEMENT_WINDOW_CAPACITY = 3
-
-#: The frozen field list: (name, pine type, consumer).
-#:
-#: Order is the wire order. Fields are APPENDED only; nothing here may be
-#: reordered or renamed once the extension ships, for the same reason the old 14
-#: scalar positions are immovable.
-P5_TRANSPORT_EXT_FIELDS: tuple[tuple[str, str, str], ...] = (
-    # --- T1 trend: config-free reductions over the full ordered history ---
-    ("stateAvailT", "int", "trend"),
-    ("contStreak", "int", "trend"),
-    ("priorOppStreak", "int", "trend"),
-    ("exhaustFlag", "int", "trend"),
-    # --- bounded transition window, oldest -> newest ---
-    ("transWindowCount", "int", "trend+breakout"),
-    ("trans1Type", "int", "trend+breakout"),
-    ("trans2Type", "int", "trend+breakout"),
-    ("trans3Type", "int", "trend+breakout"),
-    ("trans4Type", "int", "trend+breakout"),
-    ("lastTransAvailT", "int", "breakout"),
-    # --- bounded displacement window, oldest -> newest ---
-    ("dispWindowCount", "int", "regime+momentum"),
-    ("disp1Dir", "int", "regime+momentum"),
-    ("disp1Cls", "int", "regime+momentum"),
-    ("disp1Ratio", "float", "regime+momentum"),
-    ("disp2Dir", "int", "regime+momentum"),
-    ("disp2Cls", "int", "regime+momentum"),
-    ("disp2Ratio", "float", "regime+momentum"),
-    ("disp3Dir", "int", "regime+momentum"),
-    ("disp3Cls", "int", "regime+momentum"),
-    ("disp3Ratio", "float", "regime+momentum"),
-    ("dispAvailT", "int", "regime+momentum"),
-    # --- breakout ---
-    ("dispClsAtTrans", "int", "breakout"),
-    # --- pullback ---
-    ("pbImpulsePrice", "float", "pullback"),
-    ("pbOriginPrice", "float", "pullback"),
-    ("pbPullbackPrice", "float", "pullback"),
-    ("pbValid", "bool", "pullback"),
+#: The contract is DEFINED in `tests/parity_support/p5_transport_contract.py`
+#: and only restated here in the shape this module's assertions want. Keeping a
+#: second hand-written copy would let the two drift, which is the failure this
+#: whole file exists to prevent.
+P5_TRANSPORT_EXT_FIELDS: tuple[tuple[str, str, str], ...] = tuple(
+    (f.name, f.pine_type, f.consumer) for f in FIELDS
 )
 
 #: Types Pine can carry across `request.security` inside a UDT.
