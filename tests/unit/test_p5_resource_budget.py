@@ -114,7 +114,34 @@ def test_log_output_is_the_channel_p5_will_use() -> None:
     assert "log.info(" in atomic.read_text(encoding="utf-8")
 
 
-def test_no_p5_pine_source_exists_yet() -> None:
-    """This module is the plan, written before the implementation. When a P5 DEV
-    source appears, the budget assertions below must be extended to cover it."""
-    assert not (_REPO / "tradingview" / "btmm_poi_btrc_scanner_p5_dev.pine").exists()
+#: The two P5 scripts that actually exist now (P5 DEV, and its ATOMIC PARITY
+#: twin -- see BTRC_V1_P5_BTRC_CLOSURE.md), both built as P6 DEV plus
+#: additions. This module's plan held: neither adds a single `plot` call.
+P5_SCRIPTS = (
+    _REPO / "tradingview" / "btmm_poi_btrc_scanner_p5_dev.pine",
+    _REPO / "tradingview" / "btmm_poi_btrc_scanner_p5_atomic_parity.pine",
+)
+
+
+def test_p5_pine_sources_exist() -> None:
+    for script in P5_SCRIPTS:
+        assert script.exists(), script
+
+
+def test_p5_adds_zero_new_plot_calls() -> None:
+    """The plan's central claim, verified rather than assumed now that the
+    implementation exists: P5's plot count equals P6 DEV's exactly -- the one
+    spare slot this module reserved was never spent."""
+    p6_calls = _plot_calls(P6_DEV.read_text(encoding="utf-8"))
+    for script in P5_SCRIPTS:
+        assert _plot_calls(script.read_text(encoding="utf-8")) == p6_calls, script
+
+
+def test_p5_output_goes_through_log_info() -> None:
+    """P5EVAL (both scripts) and P5WIRE (the ATOMIC twin only) are the actual
+    channels P5 uses -- confirming the plan's `log.info`-only design landed."""
+    for script in P5_SCRIPTS:
+        source = script.read_text(encoding="utf-8")
+        assert '"P5EVAL|' in source, script
+    atomic = P5_SCRIPTS[1].read_text(encoding="utf-8")
+    assert '"P5WIRE|' in atomic
