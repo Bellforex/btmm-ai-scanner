@@ -96,19 +96,24 @@ most 1, which changes `round(numerator/13)` by at most 1.
 
 ## What this means for P5 closure
 
-Per the explicit governing instruction: **do not proceed to a
-`P5_BTRC_CORE_REAL_DATA_PARITY_ESTABLISHED = TRUE` closure claim while this
-finding stands unaddressed.** The magnitude is small (≈0.135% of an
-adversarially-constructed space, and only ever a single point at an exact
-boundary edge) and every field feeding it is otherwise proven exact — but a
-small, real, quantified probability of a permission-band flip is not the same
-claim as "canonical decision invariance," and this campaign does not round
-that distinction away.
+Per the explicit governing instruction, this was surfaced as a decision point
+rather than resolved unilaterally. **Decision (project owner, 2026-09-04):
+accept and disclose the bounded, quantified residual risk; proceed to Pine
+deployment/closure with this disclosure attached.**
 
-This is a decision point for the project owner, not a decision this campaign
-makes unilaterally: whether to (a) accept and disclose this bounded,
-quantified residual risk and proceed to Pine deployment/closure with that
-disclosure attached, (b) treat P5's weights/bands as even more strictly
-provisional pending a design mitigation, or (c) pursue some other path. No
-Pine code has been written yet, so nothing downstream is blocked by taking
-time on this decision.
+Consequently, any future P5 closure document MUST state both of the
+following separately, and MUST NOT collapse them into one "exact parity"
+claim:
+
+- **Wire-normalized parity: EXACT** — T1/T2/T3-direction/T3-breakout/
+  T3-pullback/T4/T5-aggregator/T5-components/T5-global are all proven exact
+  ports of the source, operating on the same wire values Pine receives.
+- **High-precision-to-wire canonical decision invariance: NOT established** —
+  a bounded, quantified residual risk stands: ≈0.135% of an adversarially
+  constructed 15,552,000-combination space crosses the 45/65 permission
+  boundary by exactly 1 point, driven by momentum's proven ≤1 raw-score wire
+  gap. Disclosed and accepted, not eliminated.
+
+This finding does NOT block Phase 7 onward (active-POI loop, Pine DEV,
+deploy, real parity, closure) — it changes what the eventual closure document
+is permitted to claim.
