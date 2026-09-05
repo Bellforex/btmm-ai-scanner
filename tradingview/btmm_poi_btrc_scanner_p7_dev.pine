@@ -5145,7 +5145,19 @@ int C_LC_LIQUIDITY_VALIDATED    = 7
 f_p5T1(int p2Dir, int swCount, P5TransportExt ext) =>
     int trendState = C_TS_UNKNOWN
     int direction = C_DIR2_NEUTRAL
-    if swCount < 2
+    // RUNTIME-SAFETY GUARD (host-warm-up hazard, not a source semantic): on
+    // an early bar of a host timeframe that must sync a SUB-timeframe
+    // request.security context (e.g. an H1 host requesting M15), `ext` can
+    // itself be `na` for one or more bars before that context's first real
+    // value arrives -- a request.security/UDT warm-up lag, never modeled in
+    // the Python source because P6's own contract only ever promises a
+    // well-formed record once EVERY context is warm. Folded into the SAME
+    // "not enough data yet" branch `swCount < 2` already produces --
+    // UNKNOWN/NEUTRAL is exactly what this timeframe would report if it had
+    // no swing history yet either, so this adds no new classification, no
+    // new threshold, and changes zero already-reachable M15 output (once
+    // warm, `ext` is never na again for that context).
+    if swCount < 2 or na(ext)
         trendState := C_TS_UNKNOWN
         direction := C_DIR2_NEUTRAL
     else if p2Dir == C_ST_DIR_UNDETERMINED
@@ -5200,6 +5212,12 @@ f_p5T2(int trendState, P5TransportExt ext) =>
         regime := C_RG_DECELERATION
     else if trendState == C_TS_RANGE
         regime := C_RG_RANGE
+    else if na(ext)
+        // RUNTIME-SAFETY GUARD -- same host-warm-up hazard as f_p5T1 above.
+        // Treated exactly as the zero-displacement-window case already
+        // below (`ext.dispWindowCount > 0` false) would be: COMPRESSION,
+        // never a new state.
+        regime := C_RG_COMPRESSION
     else
         // FORMING: refine via the shared last-3 displacement window (capacity
         // == recent_displacement_window default exactly, so every populated
@@ -5247,7 +5265,13 @@ f_p5BankersRound(float x) =>
 // momentum_window == DISPLACEMENT_WINDOW_CAPACITY (3) exactly, so the wire
 // window IS the momentum window -- no further trimming needed.
 f_p5T3Mom(P5TransportExt ext) =>
-    int n = ext.dispWindowCount
+    // RUNTIME-SAFETY GUARD -- same host-warm-up hazard as f_p5T1 above:
+    // `ext` can be `na` for one or more bars on a host that must sync a
+    // sub-timeframe request.security context. `n := 0` reaches exactly the
+    // same NEUTRAL/STEADY/0 defaults this function already returns for a
+    // real, warm context whose displacement window happens to be empty --
+    // no new classification, no new threshold.
+    int n = na(ext) ? 0 : ext.dispWindowCount
     int momDir = C_DIR2_NEUTRAL
     int momAccel = C_MA_STEADY
     int momScore = 0
@@ -5323,7 +5347,12 @@ f_p5T3Mom(P5TransportExt ext) =>
 f_p5T3Brk(P5TransportExt ext) =>
     int brkState = C_ST_NA
     int brkScore = 0
-    if ext.transWindowCount > 0
+    // RUNTIME-SAFETY GUARD -- same host-warm-up hazard as f_p5T1 above.
+    // `and` short-circuits, so `ext.transWindowCount` is never dereferenced
+    // when `ext` is na; the result is the same C_ST_NA/0 default this
+    // function already returns for a real, warm context with an empty
+    // transition window.
+    if not na(ext) and ext.transWindowCount > 0
         int count = math.min(ext.transWindowCount, 4)
         int last = count == 1 ? ext.trans1Type : count == 2 ? ext.trans2Type : count == 3 ? ext.trans3Type : ext.trans4Type
         bool failed = false
@@ -5359,7 +5388,11 @@ f_p5T3Brk(P5TransportExt ext) =>
 // formula to use.
 f_p5T3Pb(int p2Dir, P5TransportExt ext) =>
     int pbState = C_ST_NA
-    if p2Dir != C_ST_DIR_UNDETERMINED and ext.pbValid
+    // RUNTIME-SAFETY GUARD -- same host-warm-up hazard as f_p5T1 above.
+    // `and` short-circuits before `ext.pbValid` when `ext` is na; result is
+    // the same C_ST_NA default this function already returns whenever no
+    // pullback applies.
+    if p2Dir != C_ST_DIR_UNDETERMINED and not na(ext) and ext.pbValid
         float depth = (ext.pbImpulsePrice - ext.pbPullbackPrice) / (ext.pbImpulsePrice - ext.pbOriginPrice)
         if depth > 1.0
             pbState := C_PB_STRUCTURAL_FAILURE
