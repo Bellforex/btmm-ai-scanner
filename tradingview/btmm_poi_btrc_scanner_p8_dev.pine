@@ -5709,6 +5709,7 @@ p8EnableBtmmValidated     = input.bool(true, "Alert: BTMM validated at POI", gro
 p8EnableEnteredActionable = input.bool(true, "Alert: permission entered actionable band", group = grpP8)
 p8EnableLostActionable    = input.bool(true, "Alert: permission lost actionable band", group = grpP8)
 p8EnableTerminal          = input.bool(true, "Alert: POI terminal/invalidated", group = grpP8)
+p8DebugLog                = input.bool(false, "P8 event/prime debug log (independent of P1 Debug Mode)", group = grpP8)
 
 // ---- pure label lookups, one per P1-P5 enum family. Each is a straight
 // switch on an already-computed Pine integer code (the SAME codes P5EVAL logs)
@@ -6068,8 +6069,11 @@ if barstate.isconfirmed
                 // record of what WOULD have alerted this bar for this POI,
                 // regardless of the `p8Enable*`/`p8Enable` toggles above, so
                 // a Python parity replay sees the full, untoggled event
-                // stream) -- debug-gated exactly like P5EVAL.
-                if debugMode
+                // stream) -- gated on its OWN `p8DebugLog` toggle, decoupled
+                // from `debugMode`, so a real capture is not drowned out by
+                // the much higher-volume P5EVAL/P7DIAG per-POI-per-bar log
+                // lines when only the sparse P8 event/prime stream is needed.
+                if p8DebugLog
                     if not p8Primed
                         log.info("P8PRIME|bar=" + str.tostring(time_close) + "|poiIdx=" + str.tostring(i) +
                           "|btmmValid=" + str.tostring(btmmValid) + "|permission=" + str.tostring(permission) +
