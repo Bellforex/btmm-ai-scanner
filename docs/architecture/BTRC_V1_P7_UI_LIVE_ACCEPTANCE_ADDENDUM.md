@@ -1,11 +1,15 @@
 # BTRC-V1 P7-A — Live Acceptance Addendum
 
-Status: **P7-A — PARTIAL: M5 + pan/zoom/scale + reload ACCEPTED; H1 BLOCKED by a
-genuine, pre-existing, P5-inherited defect (out of P7 scope); zero-active
-state NOT naturally observed (synthetic proof relied on)**
+Status: **P7-A — FULLY ACCEPTED as of 2026-09-05: M5/M15/H1 + pan/zoom/scale
++ reload + remove/re-add all PASS. H1 was BLOCKED at first observation by a
+genuine, pre-existing, P5-inherited defect (RE10041) — fixed narrowly in P5
+per `BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md` and re-verified live,
+PASS. Zero-active state still NOT naturally observed (synthetic proof
+relied on).**
 Branch: `pine-p4-btmm`
-References: implementation closure `5c53370`
-Addendum recorded: 2026-09-04
+References: implementation closure `5c53370`; H1 fix
+`BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md`
+Addendum recorded: 2026-09-04; updated 2026-09-05 after the H1 fix
 
 ---
 
@@ -122,6 +126,23 @@ session — it is a real defect, not environment noise, and should not be
 waved away by the Section 7-of-the-closure-doc "environment finding"
 narrative.
 
+**Update, 2026-09-05**: fixed. See
+`BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md` for the full root-cause
+analysis (a `request.security`/UDT warm-up lag specific to a host
+timeframe that must sync a sub-timeframe context, e.g. H1 requesting M15)
+and the minimal fix (five `na(ext)` guard clauses across `f_p5T1`/
+`f_p5T2`/`f_p5T3Mom`/`f_p5T3Brk`/`f_p5T3Pb`, each resolving to that same
+function's own pre-existing "insufficient data" output — no new state, no
+threshold/weight/transport change). Re-verified live this session: H1
+attach, reload-while-H1 (the load-bearing case), remove/re-add-on-H1, and
+pan/wheel-zoom-on-H1 all passed clean, with zero `RE10041` occurrences in
+the live chart or the Pine Logs buffer. M15 non-regression reconfirmed
+(digest `351473241`/`335238294` exact, 240,850/240,850 field comparisons).
+
+```
+H1 timeframe requirement: PASS (was FAIL; fixed and re-verified 2026-09-05)
+```
+
 ## 6. Pan / zoom / vertical-scale matrix — PASS (M15)
 
 All four exercised on the M15 baseline, using the chart's own zoom
@@ -204,35 +225,41 @@ Pine sources was needed beyond confirming the SHA256 in Section 1.
 ## 10. Gate
 
 ```
-P7_SOURCE_UNCHANGED_THIS_SESSION          TRUE   (SHA256 identical throughout)
+P7_SOURCE_UNCHANGED_THIS_SESSION          FALSE  (2026-09-05: 5 runtime-safety guards added, see BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md)
 P7_ZERO_ACTIVE_LIVE_OBSERVED              FALSE  (not naturally reachable; synthetic proof relied on, Section 2)
 P7_M5_LIVE_MATRIX                         PASS
 P7_M1_LIVE_MATRIX                         PASS   (bonus: not required, exercised anyway)
-P7_H1_LIVE_MATRIX                         FAIL   (RE10041, real, pre-existing, P5-inherited, out of scope)
-P7_PAN_ZOOM_SCALE_LIVE_MATRIX             PASS
-P7_RELOAD_CONFIRMATION                    PASS
-P7_VISUAL_ANCHOR_DEFECT                   REMAINS CLOSED (no second price scale observed at any point)
-P5_SEMANTICS_UNCHANGED                    TRUE   (digest unchanged; the H1 defect is a PRE-EXISTING P5 defect this
-                                                    session discovered, not a regression -- P5's own closure evidence
-                                                    was never gathered on an H1 host chart)
-P6_SEMANTICS_UNCHANGED                    TRUE   (30/30 unchanged)
+P7_H1_LIVE_MATRIX                         PASS   (was FAIL/RE10041 at first observation; fixed narrowly in P5, re-verified live 2026-09-05)
+P7_PAN_ZOOM_SCALE_LIVE_MATRIX             PASS   (including a dedicated H1 pan/zoom pass post-fix)
+P7_RELOAD_CONFIRMATION                    PASS   (including reload-while-H1, the load-bearing case for this defect)
+P7_REMOVE_READD_H1                        PASS
+P7_VISUAL_ANCHOR_DEFECT                   REMAINS CLOSED (no second price scale observed at any point, incl. on H1)
+P5_SEMANTICS_UNCHANGED                    TRUE   (M15 digest unchanged; H1 fix is additive runtime-safety only --
+                                                    see BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md Section 0 for the
+                                                    scope discipline: core semantics and M15 real parity stay CLOSED)
+P6_SEMANTICS_UNCHANGED                    TRUE   (30/30 unchanged, no P6 file touched)
 ```
 
-**P7 FULLY CLOSED: FALSE.** One of the three disclosed evidence gaps
-(H1) resolved to a genuine, reproducible defect rather than a pass — that
-is a real result, not a process failure, and is recorded honestly rather
-than suppressed to force a clean "fully closed" status. M5 and pan/zoom/
-scale are genuinely closed. Zero-active state remains unverified live
-(fallback proof only, as pre-authorized).
+**P7 FULLY CLOSED: TRUE** (as of 2026-09-05). All three originally
+disclosed evidence gaps are now resolved: M5 and pan/zoom/scale passed
+live in the first pass; H1 initially surfaced a genuine, reproducible
+defect (recorded honestly, not suppressed) that was fixed narrowly in P5
+and re-verified live — reload-while-H1, remove/re-add-on-H1, and
+pan/zoom-on-H1 all pass clean with zero `RE10041` occurrences. Zero-active
+state remains unverified live (fallback proof only, as pre-authorized);
+this does not block closure per the governing brief's own explicit
+fallback rule.
 
-## 11. What should happen next (not performed here — out of this
-addendum's authorized scope)
+## 11. What happened next (was "not performed here" — now done, 2026-09-05)
 
-* A P5-scoped session (explicitly authorized to touch P5, which this one
-  was not) should investigate `RE10041` on non-M15 host timeframes and
-  decide whether P5's closure needs a documented host-timeframe
-  restriction (e.g. "M15 host only, by design") or an actual fix to
-  `f_p5T3Mom`'s `na`-guard. Until then, **P7 DEV / P5 DEV should not be
-  attached to a non-M15 host chart.**
-* If P5 is later fixed or the M15-only restriction is formally documented,
-  re-run Section 5's H1 test to complete this addendum.
+* A P5-scoped narrow reopen investigated `RE10041` on the H1 host
+  timeframe and fixed it: five `na(ext)` guard clauses across
+  `f_p5T1`/`f_p5T2`/`f_p5T3Mom`/`f_p5T3Brk`/`f_p5T3Pb`, each resolving to
+  that function's own pre-existing "insufficient data" output. Full
+  detail, root-cause analysis, static proof (20 new tests), and live
+  re-verification: `BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md`.
+* Section 5's H1 test was re-run against the fixed source and now passes
+  (attach, reload-while-H1, remove/re-add-on-H1, pan/wheel-zoom-on-H1) —
+  see that addendum's Section 8 for the full live evidence.
+* `P5 DEV` / `P7 DEV` may now be attached to an H1 host chart. M5 and M15
+  remain unaffected and unchanged.

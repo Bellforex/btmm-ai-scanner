@@ -189,3 +189,21 @@ readiness of the 3/3/2/1/1/1/1/1 weights or the 45/65 bands. Universal
 decision agreement with the original high-precision Python pipeline (Section
 6). Any live trading, order, or broker-integration capability — none exists
 in either script.
+
+## 9. Addendum — a narrow, later runtime-safety reopen (this closure's own status is unchanged)
+
+`BTRC_V1_P5_HOST_RUNTIME_SAFETY_ADDENDUM.md` (2026-09-05) documents a real,
+reproducible `RE10041` crash found when P5's engine (via P7) is attached to
+a **non-M15 host chart** (H1 specifically) — a `request.security`/UDT
+warm-up timing artifact, not anything wrong with the wire-normalized parity
+proven above (which was, and remains, gathered exclusively on an M15 host).
+Fixed with five minimal `na(ext)` guard clauses across
+`f_p5T1`/`f_p5T2`/`f_p5T3Mom`/`f_p5T3Brk`/`f_p5T3Pb`; every guard resolves
+to that same function's own pre-existing "insufficient data" output, adds
+no new state, and changes zero already-reachable M15 output — reconfirmed
+by re-running this closure's own real-data replay: digest still exactly
+`H1 351473241 / H2 335238294`, all 240,850 field comparisons still exact.
+**`P5 BTRC CONFLUENCE ENGINE: CLOSED (wire-normalized)` above is unchanged
+and unaffected.** This section exists only so a reader following this
+document does not need to separately discover that P5 now also carries a
+documented, verified H1-host safety fix.
