@@ -221,9 +221,10 @@ P7_ZERO_NEW_DRAWING_OBJECTS               TRUE   (label/line/box counts unchange
 P7_OVERFLOW_POLICY_LIVE_CONFIRMED         TRUE   (5 distinct real active counts observed: 87,88,93,97,101)
 P7_TABLE_RENDERS_ON_REAL_FXCM_DATA        TRUE   (screenshot + log evidence, this session)
 P7_REMOVE_READD_RELOAD_VERIFIED           TRUE   (Object Tree confirmed at every step)
-P7_ZERO_ACTIVE_STATE_LIVE_VERIFIED        FALSE  (not naturally observed; code path present, not live-tested)
-P7_M5_H1_MATRIX_LIVE_VERIFIED             FALSE  (not re-run this session; see Section 6)
-P7_PAN_ZOOM_MATRIX_LIVE_VERIFIED          FALSE  (not re-run this session; see Section 6)
+P7_ZERO_ACTIVE_STATE_LIVE_VERIFIED        FALSE  (STILL not naturally observed as of the addendum below; fallback proof relied on)
+P7_M5_MATRIX_LIVE_VERIFIED                TRUE   (superseded by BTRC_V1_P7_UI_LIVE_ACCEPTANCE_ADDENDUM.md Section 4 -- PASS)
+P7_H1_MATRIX_LIVE_VERIFIED                FAIL   (superseded by the addendum Section 5 -- REAL RE10041, pre-existing P5 defect, see Section 9 below)
+P7_PAN_ZOOM_MATRIX_LIVE_VERIFIED          TRUE   (superseded by the addendum Section 6 -- PASS)
 P5_SEMANTICS_UNCHANGED                    TRUE   (real-parity suite green, H1 351473241 / H2 335238294 unchanged)
 P6_SEMANTICS_UNCHANGED                    TRUE   (30/30 real-data parity tests green, unchanged)
 P7 PRESENTATION LAYER                     CLOSED (scope as verified above)
@@ -236,3 +237,46 @@ brief phase — Section 6 lists what remains unverified. P5's weights and
 45/65 bands remain ENGINEERING-PROVISIONAL, unchanged and untouched by this
 phase. No `strategy.*` code exists anywhere in either script; nothing was
 published; nothing was pushed.
+
+## 9. Addendum — live acceptance follow-up (superseding part of Section 6/8)
+
+A later session (`BTRC_V1_P7_UI_LIVE_ACCEPTANCE_ADDENDUM.md`) closed two of
+Section 6's three gaps live, against the identical, unmodified source (SHA256
+`856b6c46…`, confirmed unchanged throughout):
+
+* **M5 timeframe matrix: PASS** (also exercised M1 as a bonus case) — active
+  count and summary panel refreshed correctly on every transition, with no
+  stale cells from the prior host timeframe.
+* **Pan / wheel-zoom / price-scale-zoom / vertical movement: PASS** — both
+  tables stayed screen-anchored throughout; the closed visual-anchor defect
+  remains closed (no second price scale observed at any point).
+* **H1 timeframe: a real, reproducible runtime error was found** —
+  `RE10041` on `f_p5T3Mom` (`P5TransportExt.dispWindowCount` read on a still-
+  `na` `m15Ext` at bar 0 of an H1-hosted chart). This is a **P5-inherited
+  defect**, not a P7 regression: the crash site is byte-identical between
+  `p5_dev.pine` and `p7_dev.pine`, and every P1–P7 closure to date was built
+  and tested exclusively on an **M15 host chart**. **Until a P5-scoped
+  session investigates this, P5 DEV and P7 DEV should not be attached to a
+  non-M15 host chart.** No fix was attempted here — out of this phase's
+  authorized scope (P5 is closed and frozen).
+* **Zero-active-POI state: still NOT naturally observed** — the live
+  registry held 87–134 active POIs across every window checked. The fallback
+  (static source-level proof, Section 6 above) remains the evidence of
+  record for this one gap.
+
+Additional offline hardening (same later session,
+`tests/unit/test_p7_ui_display_model.py`, 35 tests): a pure-Python model of
+the clear/repopulate/overflow/ordering/terminal-boundary behavior, stress-
+tested over 3000+ randomized bar transitions plus explicit mutants (a
+missing `array.clear()`, a capacity-limits-evaluation bug, one-bar-early/
+late terminal removal) — proving the test suite would actually catch each
+of those regressions, not merely that the current code looks right. Also
+covers every `f_p7*Label` function's default arm: an unknown/out-of-range
+code is proven, by direct source inspection, to never produce one of the
+real actionable labels (e.g. `f_p7PermLabel`'s default is `"-"`, never
+`"BUY BIAS"`).
+
+This addendum does **not** change the CLOSED status above — it is additive
+evidence, and the one real finding (H1) was already out of scope for a
+presentation-only phase to fix. See the addendum document for full detail,
+including the exact error text and every other live observation.
