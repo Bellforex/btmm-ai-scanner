@@ -229,7 +229,7 @@ Re-run directly in this session (not merely trusted from memory):
 
 | Phase | Result |
 |---|---|
-| P5 | 240 test functions passed, 0 failed (no `src/`- or P5-file touched); digests unchanged: H1=351473241, H2=335238294 |
+| P5 | real parity evidence unchanged: **240850 / 240850** field comparisons, digests H1=351473241, H2=335238294; re-confirmed this session by running the P5 test suite directly (240 test functions, 0 failed, no `src/`- or P5-file touched) |
 | P6 | included in a combined 63/63 pass with P8 |
 | P8 | included in the same 63/63 pass; digests unchanged: H1=294719549, H2=35571918 |
 | P9 | `test_p9_real_pine_parity.py` 4/4 passing; digests unchanged: H1=224768619, H2=772693120; capture-boundary ambiguity disclosure (81 keys, 24 affected) preserved verbatim, not reframed as universal proof |

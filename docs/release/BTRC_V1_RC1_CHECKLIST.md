@@ -38,7 +38,7 @@ PLATFORM-BLOCKED. No vague statuses.
 | 31 | Provider contract documented (FXCM:XAUUSD evidence authority) | PASS | `BTRC_V1_RC1_MANIFEST.md` §Validated provider / symbol |
 | 32 | Symbol contract: engine-intended vs. release-validated distinguished | PASS | `BTRC_V1_RC1_MANIFEST.md` §Validated provider / symbol |
 | 33 | Optional EURUSD/GBPUSD smoke test | DEFERRED | Explicitly optional per brief; not performed this cycle to avoid delaying closure; documented honestly, not silently skipped |
-| 34 | P5 frozen regression (240850/240850, H1/H2) | PASS | Re-run this session: 240 test functions passed, digest values unchanged (no P5 file touched) |
+| 34 | P5 frozen regression (240850/240850, H1/H2) | PASS | Real parity evidence unchanged: 240850/240850 field comparisons, H1=351473241, H2=335238294; re-confirmed this session by running the P5 test suite directly (240 test functions, 0 failed, no P5 file touched) |
 | 35 | P6 frozen regression (30/30) | PASS | Included in the 63/63 combined P6+P8 rerun this session |
 | 36 | P8 frozen regression (456/456, H1/H2) | PASS | Included in the 63/63 combined rerun this session |
 | 37 | P9 frozen regression (0 mismatches, H1/H2) | PASS | Re-run this session: `test_p9_real_pine_parity.py` 4/4 passing, digests unchanged |

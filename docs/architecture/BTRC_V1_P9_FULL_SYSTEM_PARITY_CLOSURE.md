@@ -233,7 +233,7 @@ aggregate count):
 
 | Phase | Result |
 |---|---|
-| P5 (BTRC confluence) | 240 test functions passed (0 failed) — semantic content unchanged, no `src/`-tree file touched |
+| P5 (BTRC confluence) | real parity evidence unchanged: 240850/240850 field comparisons, digests H1=351473241/H2=335238294; re-confirmed by running the P5 test suite directly (240 test functions passed, 0 failed) — semantic content unchanged, no `src/`-tree file touched |
 | P6 (real-data parity) | included in the 63/63 passed above alongside P8 |
 | P7-Z (zone model + RE10045 guard + semantic equivalence) | 65 tests passed (`test_p7z_zone_model.py` 53 + `test_p8z_semantic_equivalence.py` 12) |
 | P8 (real Pine parity) | included in 63/63 passed above |
