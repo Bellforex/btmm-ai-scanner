@@ -133,6 +133,13 @@ within the `p8`-prefixed namespace.
   pre-existing, unrelated P5 defect (`RE10041` on an H1 host, documented in
   memory as `p5-h1-host-timeframe-runtime-error`) predates P8 and is out of
   this closure's scope; P8 adds no H1-specific code path.
+  **[CORRECTION, see `BTRC_V1_P8_LIVE_ALERT_ACCEPTANCE_ADDENDUM.md`]**: this
+  statement was stale at the time it was written — the `RE10041` defect was
+  already fixed on 2026-09-05 (commits `5b428ab`/`917976a`/`a4a8b91`,
+  before P8 DEV was even created at `88037ff`), and P8 DEV was subsequently
+  live-verified on H1, H1-reload, and H1→M15, all clean. Left as originally
+  written, uncorrected in place, for an honest record; do not rely on this
+  bullet — see the addendum for the actual H1 result.
 - **Page reload**: full browser reload; both `[P6 DEV]` and `[P8 DEV]`
   reattached automatically from the saved chart layout with correct
   default parameters and no error badge.
@@ -243,9 +250,13 @@ project-wide `mypy src tests` module-identity ambiguity (`tests` has no
   the readiness audit's verdict that neither is required for the P8 V1
   alert set stands, unchanged and unchallenged by this implementation
   phase.
-- **H1 host-timeframe live test** — deferred to whenever the pre-existing,
+- ~~**H1 host-timeframe live test** — deferred to whenever the pre-existing,
   unrelated P5 H1 runtime defect (`RE10041`) is separately fixed; P8 adds
-  no H1-specific logic and is not the owner of that defect.
+  no H1-specific logic and is not the owner of that defect.~~
+  **CORRECTED**: this was stale — the defect was already fixed before P8
+  DEV existed. H1 has since been live-tested (attach, reload-on-H1, H1→M15)
+  with zero `RE10041` and zero other runtime errors. See
+  `BTRC_V1_P8_LIVE_ALERT_ACCEPTANCE_ADDENDUM.md`.
 - **A live TradingView Alert object** (the "Add Alert" dialog, an actual
   scheduled alert firing to the Alerts panel) was **not** created this
   session — validation relied on the `p8DebugLog` proxy stream, which logs
