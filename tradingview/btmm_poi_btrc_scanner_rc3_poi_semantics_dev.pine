@@ -5772,6 +5772,11 @@ p7zShowLabels       = input.bool(true, "Show POI labels", group = grpP7Z)
 // How far a fresh zone projects past the last close. Presentation only: the
 // semantic end of a POI's life is its first reaction, never a bar count.
 p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minval = 0, maxval = 200, group = grpP7Z)
+// ENGINEERING ONLY. Replaces the clean zone annotation with the POI's full
+// mechanical identity so a zone on the chart can be traced back to a registry
+// row without reading logs. Release UI keeps the clean name; nothing about
+// selection, geometry or lifecycle changes when this is on.
+p7zDebugIdentity    = input.bool(false, "DEV: show POI identity in zone", group = grpP7Z)
 p7zMaxVisibleZones  = input.int(8, "Max visible zone groups", minval = 1, maxval = 30, group = grpP7Z)
 
 grpP9 = "P9 — Full-System Integration Trace (debug only)"
@@ -6383,7 +6388,7 @@ if barstate.isconfirmed
                         if cN == 0
                             cTop := tp
                             cBot := bt
-                            cLeft := array.get(poiAvailTime, pI)
+                            cLeft := array.get(poiCandTime, pI)
                             cKey := pI
                             cN := 1
                             cTerm := array.get(poiTerminal, pI)
@@ -6391,7 +6396,7 @@ if barstate.isconfirmed
                         else
                             cTop := math.max(cTop, tp)
                             cBot := math.min(cBot, bt)
-                            cLeft := math.min(cLeft, array.get(poiAvailTime, pI))
+                            cLeft := math.min(cLeft, array.get(poiCandTime, pI))
                             cKey := math.min(cKey, pI)
                             cN += 1
                             cTerm := cTerm and array.get(poiTerminal, pI)
@@ -6404,13 +6409,18 @@ if barstate.isconfirmed
             if ty != C_POI_BUY_FAIR_VALUE_GAP and ty != C_POI_SELL_FAIR_VALUE_GAP
                 float tp = array.get(poiZoneTop, pI)
                 float bt = array.get(poiZoneBottom, pI)
+                // `lf` keys the exact-geometry dedup and deliberately stays on
+                // availability, so grouping behaviour is untouched. `cd` is the
+                // DEFINING candle's own opening time and is what gets drawn.
                 int lf = array.get(poiAvailTime, pI)
+                int cd = array.get(poiCandTime, pI)
                 int dr = array.get(poiDirection, pI)
                 string nm = f_p7zTypeLabel(ty)
                 string gk = str.tostring(tp) + "|" + str.tostring(bt) + "|" + str.tostring(lf) + "|" + str.tostring(dr)
                 if map.contains(p7zSlot, gk)
                     int gi = map.get(p7zSlot, gk)
                     array.set(p7zGKey, gi, math.min(array.get(p7zGKey, gi), pI))
+                    array.set(p7zGLeft, gi, math.min(array.get(p7zGLeft, gi), cd))
                     array.set(p7zGTerm, gi, array.get(p7zGTerm, gi) and array.get(poiTerminal, pI))
                     string nmsCur = array.get(p7zGNames, gi)
                     if not str.contains(nmsCur, nm)
@@ -6419,7 +6429,7 @@ if barstate.isconfirmed
                     map.put(p7zSlot, gk, array.size(p7zGTop))
                     array.push(p7zGTop, tp)
                     array.push(p7zGBot, bt)
-                    array.push(p7zGLeft, lf)
+                    array.push(p7zGLeft, cd)
                     array.push(p7zGBull, dr == C_POI_DIR_BULLISH)
                     array.push(p7zGKey, pI)
                     array.push(p7zGNames, nm)
@@ -6535,7 +6545,13 @@ if barstate.isconfirmed
                     //
                     // Tier is deliberately absent from this text: STRONG is
                     // table and debug metadata, not zone identity.
-                    string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + array.get(p7zGNames, p7zG) : ""
+                    string p7zBoxTxt = not p7zShowLabels ? "" : p7zDebugIdentity ?
+                      "ID " + str.tostring(p7zPoiI) + "\n" + p7zTfl + " " + array.get(p7zGNames, p7zG) +
+                      "\nSRC " + str.format_time(array.get(p7zGLeft, p7zG), "yyyy-MM-dd HH:mm", "UTC") +
+                      "\nAVL " + str.format_time(array.get(poiAvailTime, p7zPoiI), "yyyy-MM-dd HH:mm", "UTC") +
+                      "\n" + str.tostring(p7zBottom) + "-" + str.tostring(p7zTop) +
+                      "\n" + f_p8TermReasonLabel(array.get(poiTermReason, p7zPoiI)) :
+                      p7zTfl + " • " + array.get(p7zGNames, p7zG)
                     // The right edge is carried a fixed number of bars past the
                     // last close. `extend.right` alone was not enough: the
                     // centered text is laid out inside `left .. right`, so a
