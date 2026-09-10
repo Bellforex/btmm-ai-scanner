@@ -634,9 +634,16 @@ def fvg_connected_components(
 ) -> list[list[int]]:
     """Transitive overlap-or-touch grouping of same-direction FVGs.
 
-    `members` must already be one direction and one timeframe. Returns
-    components in ascending registry-index order, each internally sorted, so
-    the decomposition is a pure function of geometry."""
+    `members` must already be one direction and one timeframe. Each component
+    is internally sorted, so MEMBERSHIP is a pure function of geometry.
+
+    NOTE: the ORDER of the returned components follows internal union-find
+    root ids and is NOT contracted. A root is not always a component's lowest
+    member: merging b into a sets `parent[find(b)] = find(a)`, so an
+    already-merged smaller root can be re-parented under a larger one.
+    Callers must not depend on this order -- `build_visual_groups` re-sorts
+    every group by (distance, lowest member). `fvg_components_sweep` does
+    guarantee lowest-member order."""
     ordered = sorted(members)
     parent = {i: i for i in ordered}
 
@@ -710,6 +717,160 @@ def build_visual_groups(
     # everything else: exact-geometry duplicates only (no overlap merging).
     non_fvg = [i for i in ids if geometry_by_idx[i].poi_type not in FVG_TYPES]
     groups.extend(group_exact_duplicates(non_fvg, geometry_by_idx))
+
+    out = []
+    for group in groups:
+        top, bottom, left = cluster_geometry(group, geometry_by_idx)
+        dist = min(
+            zone_distance(
+                close, geometry_by_idx[i].zone_top, geometry_by_idx[i].zone_bottom
+            )
+            for i in group
+        )
+        is_fvg = geometry_by_idx[group[0]].poi_type in FVG_TYPES
+        label = (
+            fvg_cluster_label(group, geometry_by_idx, period)
+            if is_fvg
+            else combined_zone_label(group, geometry_by_idx, period)
+        )
+        out.append(
+            {
+                "members": group,
+                "top": top,
+                "bottom": bottom,
+                "left_time_ms": left,
+                "direction": geometry_by_idx[group[0]].direction,
+                "label": label,
+                "distance": dist,
+            }
+        )
+
+    out.sort(key=lambda g: (g["distance"], min(g["members"])))
+    return out[: min(capacity, len(out))]
+
+
+# =========================================================================
+# RC1-POI-V2 HOTFIX — OPTIMIZED PRESENTATION PROJECTION (SORT + SWEEP)
+# =========================================================================
+# WHY: the V2 grouping ran inside `if barstate.isconfirmed`, so it executed on
+# EVERY confirmed bar -- roughly 1800 times per full recalculation, not once.
+# Its envelope-growth closure is O(n^2) in the active-POI count, and on M5
+# (1800 bars spanning ~6.25 days of structure, so a far larger active
+# population than M1's 30 hours) that exceeded TradingView's 20-second
+# execution budget and raised RE10110, leaving the study drawing nothing.
+#
+# The fix must NOT bound the active set before grouping: a seemingly distant
+# FVG can connect transitively through overlapping neighbours, so truncating
+# first can change component membership, geometry, distance and the final
+# top-K selection.
+#
+# Instead: partition -> sort -> sweep. Sorting by lower edge and sweeping with
+# a running maximum upper edge is the classic interval-merge, and it computes
+# exactly the same connected components as union-find over overlap-or-touch,
+# in O(n log n) instead of O(n^2).
+#
+# `OpCount` is diagnostic only. Semantic equality with the frozen oracle is
+# the gate.
+
+
+class OpCount:
+    """Counts the comparisons each implementation actually performs."""
+
+    def __init__(self) -> None:
+        self.compares = 0
+        self.sorts = 0
+
+
+def fvg_components_sweep(
+    members: list[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    ops: OpCount | None = None,
+) -> list[list[int]]:
+    """Sort-and-sweep equivalent of `fvg_connected_components`.
+
+    `members` must already be one direction and one timeframe. Returns
+    components ordered by lowest registry index, each internally sorted, so
+    the result is identical to the union-find oracle's."""
+    if not members:
+        return []
+    ordered = sorted(
+        members,
+        key=lambda i: (
+            geometry_by_idx[i].zone_bottom,
+            geometry_by_idx[i].zone_top,
+            i,
+        ),
+    )
+    if ops is not None:
+        ops.sorts += 1
+
+    comps: list[list[int]] = []
+    current = [ordered[0]]
+    current_top = geometry_by_idx[ordered[0]].zone_top
+    for idx in ordered[1:]:
+        geo = geometry_by_idx[idx]
+        if ops is not None:
+            ops.compares += 1
+        if geo.zone_bottom <= current_top:
+            # overlaps or touches the running component envelope
+            current.append(idx)
+            if geo.zone_top > current_top:
+                current_top = geo.zone_top
+        else:
+            comps.append(sorted(current))
+            current = [idx]
+            current_top = geo.zone_top
+    comps.append(sorted(current))
+    return sorted(comps, key=lambda c: c[0])
+
+
+def group_exact_duplicates_keyed(
+    selected: list[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    ops: OpCount | None = None,
+) -> list[list[int]]:
+    """Hash-keyed equivalent of `group_exact_duplicates` -- O(n), no
+    all-pairs scan. Group order follows first appearance, members keep input
+    order, exactly as the oracle does."""
+    order: list[tuple] = []
+    members: dict[tuple, list[int]] = {}
+    for idx in selected:
+        key = geometry_key(geometry_by_idx[idx])
+        if ops is not None:
+            ops.compares += 1
+        if key not in members:
+            members[key] = []
+            order.append(key)
+        members[key].append(idx)
+    return [members[key] for key in order]
+
+
+def build_visual_groups_fast(
+    active: list[int] | frozenset[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    close: float,
+    capacity: int,
+    period: str,
+    ops: OpCount | None = None,
+) -> list[dict]:
+    """Optimized twin of `build_visual_groups`. Must match it exactly.
+
+    Grouping still runs over the WHOLE active set before capacity is applied;
+    only the algorithm changed, never the contract."""
+    ids = sorted(active)
+    groups: list[list[int]] = []
+
+    for direction in (DIRECTION_BULLISH, DIRECTION_BEARISH):
+        fam = [
+            i
+            for i in ids
+            if geometry_by_idx[i].poi_type in FVG_TYPES
+            and geometry_by_idx[i].direction == direction
+        ]
+        groups.extend(fvg_components_sweep(fam, geometry_by_idx, ops))
+
+    non_fvg = [i for i in ids if geometry_by_idx[i].poi_type not in FVG_TYPES]
+    groups.extend(group_exact_duplicates_keyed(non_fvg, geometry_by_idx, ops))
 
     out = []
     for group in groups:
