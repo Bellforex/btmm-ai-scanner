@@ -55,6 +55,7 @@ from btmm_ai_scanner.poi.lifecycle import (
     _is_reclaim,
     _touches_zone,
     _zone_reference_atr,
+    resolve_terminal,
 )
 
 _TWO = Decimal("2")
@@ -71,6 +72,9 @@ class _WalkInnerResult:
     committed_boundary: int
     committed_status: PoiLifecycleStatus
     committed_transition_count: int
+    #: Availability time of the bar that confirmed genuine invalidation, or None.
+    #: Reported raw; the caller ranks it against first contact.
+    invalidation_time_utc: datetime | None = None
 
 
 def _walk_inner(
@@ -107,6 +111,7 @@ def _walk_inner(
     i = 0
     last_seen_candle: NormalizedCandle | None = None
     terminal = False
+    invalidation_time_utc: datetime | None = None
 
     provisional = False
     committed_boundary = 0
@@ -308,6 +313,7 @@ def _walk_inner(
                     )
                 )
                 terminal = True
+                invalidation_time_utc = final_candle.availability_time_utc
                 i = window_end
                 commit_to(i)
                 continue
@@ -346,6 +352,7 @@ def _walk_inner(
         committed_boundary=committed_boundary,
         committed_status=committed_status,
         committed_transition_count=committed_transition_count,
+        invalidation_time_utc=invalidation_time_utc,
     )
 
 
@@ -382,6 +389,10 @@ class PoiLifecycleCursor:
     # Bounded suffix buffers aligned from resume_i.
     candle_buffer: tuple[NormalizedCandle, ...] = ()
     atr_buffer: tuple[Decimal | None, ...] = ()
+
+    # RC3 terminal inputs, both accumulated forward and never revised.
+    first_touch_time_utc: datetime | None = None
+    invalidation_time_utc: datetime | None = None
 
 
 def create_poi_lifecycle_cursor(
@@ -434,11 +445,14 @@ def advance_poi_cursor(
 
     # 2. Tap / freshness accumulation over candles[start_index:] (maximal runs of
     #    zone-touching candles). Only the newly arrived candle is examined.
+    first_touch_time_utc = cursor.first_touch_time_utc
     if start_index is not None:
         # tap_next_index has already consumed candles before it; consume from
         # tap_next_index..m inclusive (normally just m).
         for _idx in range(tap_next_index, n):
             touching = _touches_zone(candle, cursor.zone_top, cursor.zone_bottom)
+            if touching and first_touch_time_utc is None:
+                first_touch_time_utc = candle.availability_time_utc
             if touching and not in_tap:
                 tap_count += 1
                 in_tap = True
@@ -477,6 +491,11 @@ def advance_poi_cursor(
             terminal_last_seen=cursor.terminal_last_seen,
             candle_buffer=(),
             atr_buffer=(),
+            first_touch_time_utc=first_touch_time_utc,
+            invalidation_time_utc=cursor.invalidation_time_utc,
+        )
+        terminal_reason, terminal_time_utc, mitigation_time_utc = resolve_terminal(
+            first_touch_time_utc, cursor.invalidation_time_utc
         )
         result = LifecycleWalkResult(
             transitions=cursor.committed_transitions,
@@ -486,6 +505,11 @@ def advance_poi_cursor(
             tap_classification=tap_classification,
             age_in_confirmed_bars=age_in_confirmed_bars,
             last_seen_candle=cursor.terminal_last_seen,
+            mitigation_time_utc=mitigation_time_utc,
+            terminal_reason=terminal_reason,
+            terminal_time_utc=terminal_time_utc,
+            fresh_active=terminal_reason is None,
+            invalidation_time_utc=cursor.invalidation_time_utc,
         )
         return new_cursor, result
 
@@ -514,6 +538,8 @@ def advance_poi_cursor(
             terminal_last_seen=None,
             candle_buffer=(),
             atr_buffer=(),
+            first_touch_time_utc=first_touch_time_utc,
+            invalidation_time_utc=cursor.invalidation_time_utc,
         )
         result = LifecycleWalkResult(
             transitions=(),
@@ -556,6 +582,7 @@ def advance_poi_cursor(
 
     full_transitions = cursor.committed_transitions + walk.transitions
 
+    invalidation_time_utc = cursor.invalidation_time_utc or walk.invalidation_time_utc
     terminal = walk.terminal
     if terminal:
         # The walk fully resolved (genuine invalidation is absorbing): everything
@@ -601,8 +628,13 @@ def advance_poi_cursor(
         terminal_last_seen=terminal_last_seen,
         candle_buffer=new_candle_buffer,
         atr_buffer=new_atr_buffer,
+        first_touch_time_utc=first_touch_time_utc,
+        invalidation_time_utc=invalidation_time_utc,
     )
 
+    terminal_reason, terminal_time_utc, mitigation_time_utc = resolve_terminal(
+        first_touch_time_utc, invalidation_time_utc
+    )
     result = LifecycleWalkResult(
         transitions=full_transitions,
         final_status=walk.final_status,
@@ -611,5 +643,10 @@ def advance_poi_cursor(
         tap_classification=tap_classification,
         age_in_confirmed_bars=age_in_confirmed_bars,
         last_seen_candle=walk.last_seen_candle,
+        mitigation_time_utc=mitigation_time_utc,
+        terminal_reason=terminal_reason,
+        terminal_time_utc=terminal_time_utc,
+        fresh_active=terminal_reason is None,
+        invalidation_time_utc=invalidation_time_utc,
     )
     return new_cursor, result

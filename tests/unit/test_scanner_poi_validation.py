@@ -74,6 +74,11 @@ def _current_state(
         freshness_status=PoiFreshnessStatus.FRESH,
         tap_count=0,
         tap_classification=None,
+        # A never-touched, never-invalidated POI: still a fresh opportunity.
+        fresh_active=True,
+        mitigation_time_utc=None,
+        terminal_reason=None,
+        terminal_time_utc=None,
         age_start_time_utc=observation.availability_time_utc,
         age_in_confirmed_bars=0,
         elapsed_time_since_availability=timedelta(0),

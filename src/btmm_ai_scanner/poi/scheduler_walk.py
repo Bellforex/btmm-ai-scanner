@@ -23,7 +23,11 @@ function and by the every-prefix production differential):
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import PoiFreshnessStatus, PoiLifecycleStatus
-from btmm_ai_scanner.poi.lifecycle import LifecycleWalkResult, _classify_tap_count
+from btmm_ai_scanner.poi.lifecycle import (
+    LifecycleWalkResult,
+    _classify_tap_count,
+    resolve_terminal,
+)
 from btmm_ai_scanner.poi.lifecycle_cursor import PoiLifecycleCursor, _walk_inner
 
 
@@ -43,6 +47,18 @@ def cursor_walk_result(
     tap_classification = _classify_tap_count(cursor.tap_count)
     n = cursor.total_count
     age = max(0, n - cursor.start_index) if cursor.start_index is not None else 0
+    # Both terminal inputs live on the cursor, already accumulated forward, so a
+    # dormant POI resolves exactly the way an actively-advanced one does.
+    terminal_reason, terminal_time_utc, mitigation_time_utc = resolve_terminal(
+        cursor.first_touch_time_utc, cursor.invalidation_time_utc
+    )
+    terminal_fields = {
+        "mitigation_time_utc": mitigation_time_utc,
+        "terminal_reason": terminal_reason,
+        "terminal_time_utc": terminal_time_utc,
+        "fresh_active": terminal_reason is None,
+        "invalidation_time_utc": cursor.invalidation_time_utc,
+    }
 
     if cursor.terminal:
         return LifecycleWalkResult(
@@ -53,6 +69,7 @@ def cursor_walk_result(
             tap_classification=tap_classification,
             age_in_confirmed_bars=age,
             last_seen_candle=cursor.terminal_last_seen,
+            **terminal_fields,  # type: ignore[arg-type]
         )
 
     if cursor.start_index is None:
@@ -64,6 +81,7 @@ def cursor_walk_result(
             tap_classification=None,
             age_in_confirmed_bars=0,
             last_seen_candle=None,
+            **terminal_fields,  # type: ignore[arg-type]
         )
 
     if not cursor.candle_buffer:
@@ -77,6 +95,7 @@ def cursor_walk_result(
             tap_classification=tap_classification,
             age_in_confirmed_bars=age,
             last_seen_candle=current_candle,
+            **terminal_fields,  # type: ignore[arg-type]
         )
 
     walk = _walk_inner(
@@ -101,4 +120,5 @@ def cursor_walk_result(
         tap_classification=tap_classification,
         age_in_confirmed_bars=age,
         last_seen_candle=walk.last_seen_candle,
+        **terminal_fields,  # type: ignore[arg-type]
     )

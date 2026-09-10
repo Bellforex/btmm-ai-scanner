@@ -50,6 +50,7 @@ from btmm_ai_scanner.poi.lifecycle import (
     _is_breach,
     _touches_zone,
     _zone_reference_atr,
+    resolve_terminal,
     run_poi_lifecycle,
 )
 from btmm_ai_scanner.poi.lifecycle_scheduler import (
@@ -619,6 +620,10 @@ def analyze_pois(
                 "direction": observation.direction,
                 "poi_lifecycle_status": walk.final_status,
                 "freshness_status": walk.freshness_status,
+                "fresh_active": walk.fresh_active,
+                "mitigation_time_utc": walk.mitigation_time_utc,
+                "terminal_reason": walk.terminal_reason,
+                "terminal_time_utc": walk.terminal_time_utc,
                 "tap_count": walk.tap_count,
                 "tap_classification": walk.tap_classification,
                 "age_start_time_utc": observation.availability_time_utc,
@@ -645,6 +650,10 @@ def analyze_pois(
                 "direction": observation.direction,
                 "poi_lifecycle_status": PoiLifecycleStatus.NOT_APPLICABLE,
                 "freshness_status": PoiFreshnessStatus.FRESH,
+                "fresh_active": True,
+                "mitigation_time_utc": None,
+                "terminal_reason": None,
+                "terminal_time_utc": None,
                 "tap_count": 0,
                 "tap_classification": None,
                 "age_start_time_utc": observation.availability_time_utc,
@@ -842,6 +851,13 @@ class _PoiLifecycleWalkState(NamedTuple):
     cached_transitions: tuple[TransitionCandidate, ...]
     cached_status: PoiLifecycleStatus
     cached_last_seen_candle: NormalizedCandle | None
+    #: First post-availability contact, captured by the same single pass that
+    #: accumulates taps so freshness costs no extra scan.
+    first_touch_time_utc: datetime | None = None
+    #: Genuine-invalidation time, cached once the POI goes terminal. Held raw
+    #: rather than pre-ranked because the sliced walk that produces it starts
+    #: at the first breach and therefore cannot see earlier contacts.
+    cached_invalidation_time_utc: datetime | None = None
 
 
 def _create_poi_lifecycle_walk_state() -> _PoiLifecycleWalkState:
@@ -915,8 +931,11 @@ def _advance_poi_lifecycle(
     # 2. Incremental tap/freshness accumulation over candles[start_index:].
     tap_count = prev.tap_count
     in_tap = prev.in_tap
+    first_touch_time_utc = prev.first_touch_time_utc
     for idx in range(tap_index, n):
         touching = _touches_zone(candles[idx], zone_top, zone_bottom)
+        if touching and first_touch_time_utc is None:
+            first_touch_time_utc = candles[idx].availability_time_utc
         if touching and not in_tap:
             tap_count += 1
             in_tap = True
@@ -937,6 +956,8 @@ def _advance_poi_lifecycle(
     cached_status = prev.cached_status
     cached_last_seen_candle = prev.cached_last_seen_candle
 
+    cached_invalidation_time_utc = prev.cached_invalidation_time_utc
+    invalidation_time_utc = cached_invalidation_time_utc
     if terminal:
         transitions = cached_transitions
         final_status = cached_status
@@ -983,11 +1004,13 @@ def _advance_poi_lifecycle(
             transitions = walk.transitions
             final_status = walk.final_status
             last_seen_candle = walk.last_seen_candle
+            invalidation_time_utc = walk.invalidation_time_utc
             if final_status == PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED:
                 terminal = True
                 cached_transitions = transitions
                 cached_status = final_status
                 cached_last_seen_candle = last_seen_candle
+                cached_invalidation_time_utc = invalidation_time_utc
 
     new_state = _PoiLifecycleWalkState(
         start_index=start_index,
@@ -1001,6 +1024,11 @@ def _advance_poi_lifecycle(
         cached_transitions=cached_transitions,
         cached_status=cached_status,
         cached_last_seen_candle=cached_last_seen_candle,
+        first_touch_time_utc=first_touch_time_utc,
+        cached_invalidation_time_utc=cached_invalidation_time_utc,
+    )
+    terminal_reason, terminal_time_utc, mitigation_time_utc = resolve_terminal(
+        first_touch_time_utc, invalidation_time_utc
     )
     result = LifecycleWalkResult(
         transitions=transitions,
@@ -1010,6 +1038,11 @@ def _advance_poi_lifecycle(
         tap_classification=tap_classification,
         age_in_confirmed_bars=age_in_confirmed_bars,
         last_seen_candle=last_seen_candle,
+        mitigation_time_utc=mitigation_time_utc,
+        terminal_reason=terminal_reason,
+        terminal_time_utc=terminal_time_utc,
+        fresh_active=terminal_reason is None,
+        invalidation_time_utc=invalidation_time_utc,
     )
     return new_state, result
 
@@ -1401,6 +1434,10 @@ def _build_lifecycle_outputs(
                 "direction": observation.direction,
                 "poi_lifecycle_status": walk.final_status,
                 "freshness_status": walk.freshness_status,
+                "fresh_active": walk.fresh_active,
+                "mitigation_time_utc": walk.mitigation_time_utc,
+                "terminal_reason": walk.terminal_reason,
+                "terminal_time_utc": walk.terminal_time_utc,
                 "tap_count": walk.tap_count,
                 "tap_classification": walk.tap_classification,
                 "age_start_time_utc": observation.availability_time_utc,
@@ -1418,6 +1455,10 @@ def _build_lifecycle_outputs(
                 "direction": observation.direction,
                 "poi_lifecycle_status": PoiLifecycleStatus.NOT_APPLICABLE,
                 "freshness_status": PoiFreshnessStatus.FRESH,
+                "fresh_active": True,
+                "mitigation_time_utc": None,
+                "terminal_reason": None,
+                "terminal_time_utc": None,
                 "tap_count": 0,
                 "tap_classification": None,
                 "age_start_time_utc": observation.availability_time_utc,

@@ -21,6 +21,7 @@ from btmm_ai_scanner.poi.enums import (
     PoiLifecycleStatus,
     PoiLifecycleTransitionType,
     PoiTapClassification,
+    PoiTerminalReason,
 )
 
 _TWO = Decimal("2")
@@ -61,6 +62,21 @@ class LifecycleWalkResult(NamedTuple):
     tap_classification: PoiTapClassification | None
     age_in_confirmed_bars: int
     last_seen_candle: NormalizedCandle | None
+    #: When the first post-availability reaction landed, or None if the POI was
+    #: never touched or was invalidated before anything touched it. Not None
+    #: exactly when `terminal_reason` is MITIGATED.
+    mitigation_time_utc: datetime | None = None
+    #: Why this POI left the fresh universe, or None while it is still fresh.
+    #: Fixed by whichever cause came first in bar order and never replaced.
+    terminal_reason: PoiTerminalReason | None = None
+    #: Availability time of the bar that made the POI terminal.
+    terminal_time_utc: datetime | None = None
+    #: Whether the POI is still a future fresh opportunity.
+    fresh_active: bool = True
+    #: When genuine invalidation landed, reported independently of precedence.
+    #: The incremental path needs this raw value because it resolves precedence
+    #: itself, over a different bar range than this walk saw.
+    invalidation_time_utc: datetime | None = None
 
 
 def _zone_reference_atr(
@@ -122,6 +138,51 @@ def _classify_tap_count(tap_count: int) -> PoiTapClassification | None:
     if tap_count == 2:
         return PoiTapClassification.REPEATED_TAP
     return PoiTapClassification.MULTIPLE_REPEATED_TAPS
+
+
+def _first_touch_index(
+    candles: Sequence[NormalizedCandle],
+    start_index: int,
+    zone_top: Decimal,
+    zone_bottom: Decimal,
+) -> int | None:
+    """Index of the first bar at or after `start_index` that touches the zone.
+
+    `start_index` is already the first bar strictly after the POI's own
+    availability, so a POI can never consume itself here. Contact is the same
+    inclusive test the tap counter uses, which is why a wick that stops exactly
+    on a boundary counts as a reaction.
+    """
+    for index in range(start_index, len(candles)):
+        if _touches_zone(candles[index], zone_top, zone_bottom):
+            return index
+    return None
+
+
+def resolve_terminal(
+    mitigation_time_utc: datetime | None,
+    invalidation_time_utc: datetime | None,
+) -> tuple[PoiTerminalReason | None, datetime | None, datetime | None]:
+    """Decide the terminal cause from the two candidate times.
+
+    Returns `(terminal_reason, terminal_time_utc, mitigation_time_utc)`.
+
+    Whichever cause landed first in bar order wins and is never replaced, so a
+    POI that was touched and only later broke down stays MITIGATED. The
+    invalidation transition is still recorded as historical evidence; it just
+    does not overwrite the terminal cause.
+
+    Both the batch walk and the incremental replay path call this, which is
+    what keeps them from drifting apart — they disagree about how to *find*
+    the two times, never about how to rank them.
+    """
+    if invalidation_time_utc is not None and (
+        mitigation_time_utc is None or invalidation_time_utc < mitigation_time_utc
+    ):
+        return PoiTerminalReason.INVALIDATED, invalidation_time_utc, None
+    if mitigation_time_utc is not None:
+        return PoiTerminalReason.MITIGATED, mitigation_time_utc, mitigation_time_utc
+    return None, None, None
 
 
 def _compute_freshness_and_taps(
@@ -189,6 +250,7 @@ def run_poi_lifecycle(
     n = len(candles)
     last_seen_candle: NormalizedCandle | None = None
     terminal = False
+    invalidation_index: int | None = None
 
     while i < n and not terminal:
         candle = candles[i]
@@ -364,6 +426,7 @@ def run_poi_lifecycle(
                     )
                 )
                 terminal = True
+                invalidation_index = window_end - 1
                 i = window_end
                 continue
 
@@ -388,6 +451,21 @@ def run_poi_lifecycle(
 
     age_in_confirmed_bars = max(0, n - start_index)
 
+    mitigation_index = _first_touch_index(candles, start_index, zone_top, zone_bottom)
+    first_touch_time = (
+        candles[mitigation_index].availability_time_utc
+        if mitigation_index is not None
+        else None
+    )
+    invalidation_time_utc = (
+        candles[invalidation_index].availability_time_utc
+        if invalidation_index is not None
+        else None
+    )
+    terminal_reason, terminal_time_utc, mitigation_time_utc = resolve_terminal(
+        first_touch_time, invalidation_time_utc
+    )
+
     return LifecycleWalkResult(
         transitions=tuple(transitions),
         final_status=status,
@@ -396,4 +474,9 @@ def run_poi_lifecycle(
         tap_classification=tap_classification,
         age_in_confirmed_bars=age_in_confirmed_bars,
         last_seen_candle=last_seen_candle,
+        mitigation_time_utc=mitigation_time_utc,
+        terminal_reason=terminal_reason,
+        terminal_time_utc=terminal_time_utc,
+        fresh_active=terminal_reason is None,
+        invalidation_time_utc=invalidation_time_utc,
     )

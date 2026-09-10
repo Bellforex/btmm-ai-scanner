@@ -71,6 +71,8 @@ def fast_forward_poi_cursor(
             terminal_last_seen=cursor.terminal_last_seen,
             candle_buffer=(),
             atr_buffer=(),
+            first_touch_time_utc=cursor.first_touch_time_utc,
+            invalidation_time_utc=cursor.invalidation_time_utc,
         )
 
     if cursor.start_index is None:
@@ -100,6 +102,8 @@ def fast_forward_poi_cursor(
             terminal_last_seen=None,
             candle_buffer=(),
             atr_buffer=(),
+            first_touch_time_utc=cursor.first_touch_time_utc,
+            invalidation_time_utc=cursor.invalidation_time_utc,
         )
 
     # Post-start dormant: committed (empty suffix buffer, resume_i caught up to
@@ -134,4 +138,6 @@ def fast_forward_poi_cursor(
         terminal_last_seen=None,
         candle_buffer=(),
         atr_buffer=(),
+        first_touch_time_utc=cursor.first_touch_time_utc,
+        invalidation_time_utc=cursor.invalidation_time_utc,
     )

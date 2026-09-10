@@ -86,6 +86,50 @@ def _observation_by_id(analysis: ScannerAnalysis) -> dict[UUID, PoiObservation]:
     return {o.record_id: o for o in analysis.poi_analysis.poi_observations}
 
 
+def _resolve_from_terminal_flags(
+    terminal_by_id: dict[UUID, bool],
+    previously_active_ids: frozenset[UUID],
+    known_ids: frozenset[UUID] | None,
+) -> tuple[frozenset[UUID], frozenset[UUID]]:
+    """The set algebra, with terminality already decided by the caller.
+
+    Both the RC2 status-based entry point and the RC3 fresh-active one route
+    through this, so the two can never disagree about the terminal-bar
+    ordering — they only disagree about what makes a POI terminal.
+    """
+    available = known_ids if known_ids is not None else frozenset(terminal_by_id)
+    non_terminal_now = frozenset(
+        poi_id for poi_id, is_terminal in terminal_by_id.items() if not is_terminal
+    )
+    eligible_ids = (previously_active_ids | non_terminal_now) & available
+    next_active = frozenset(
+        poi_id for poi_id in eligible_ids if not terminal_by_id.get(poi_id, False)
+    )
+    return eligible_ids, next_active
+
+
+def resolve_eligible_and_next_rc3(
+    fresh_active_by_id: dict[UUID, bool],
+    previously_active_ids: frozenset[UUID],
+    *,
+    known_ids: frozenset[UUID] | None = None,
+) -> tuple[frozenset[UUID], frozenset[UUID]]:
+    """RC3 eligibility: a POI leaves the active universe when it stops being fresh.
+
+    Identical set algebra to the RC2 entry point below, with one substitution:
+    terminality is `not fresh_active` rather than "the lifecycle status is
+    genuine invalidation". That widens terminality to include first-reaction
+    mitigation, which is the whole point of RC3, and it preserves the
+    terminal-bar rule — a POI that goes terminal ON this bar is still evaluated
+    this bar and only drops out of the next one.
+    """
+    return _resolve_from_terminal_flags(
+        {poi_id: not fresh for poi_id, fresh in fresh_active_by_id.items()},
+        previously_active_ids,
+        known_ids,
+    )
+
+
 def resolve_eligible_and_next(
     status_by_id: dict[UUID, PoiLifecycleStatus],
     previously_active_ids: frozenset[UUID],
@@ -103,15 +147,14 @@ def resolve_eligible_and_next(
 
     Returns `(eligible_ids_this_bar, next_bar_active_ids)`.
     """
-    available = known_ids if known_ids is not None else frozenset(status_by_id)
-    non_terminal_now = frozenset(
-        poi_id for poi_id, status in status_by_id.items() if status is not _TERMINAL_STATUS
+    return _resolve_from_terminal_flags(
+        {
+            poi_id: status is _TERMINAL_STATUS
+            for poi_id, status in status_by_id.items()
+        },
+        previously_active_ids,
+        known_ids,
     )
-    eligible_ids = (previously_active_ids | non_terminal_now) & available
-    next_active = frozenset(
-        poi_id for poi_id in eligible_ids if status_by_id.get(poi_id) is not _TERMINAL_STATUS
-    )
-    return eligible_ids, next_active
 
 
 def _stable_order(ids: frozenset[UUID], obs_by_id: dict[UUID, PoiObservation]) -> tuple[UUID, ...]:
@@ -127,6 +170,7 @@ def run_active_poi_loop(
     candles_by_timeframe: dict[Timeframe, tuple[NormalizedCandle, ...]] | None = None,
     evaluation_time_utc: datetime | None = None,
     configuration: ConfluenceConfiguration | None = None,
+    rc3_freshness: bool = False,
 ) -> ActiveLoopResult:
     """Evaluate every eligible POI for one confirmed bar's `ScannerAnalysis`,
     using `resolve_eligible_and_next` for the set algebra and calling the
@@ -139,11 +183,22 @@ def run_active_poi_loop(
     bar's call: this module holds no state of its own between calls,
     matching the scanner's own pure-function-of-inputs discipline.
     """
-    status_by_id = _current_status_by_id(analysis)
     obs_by_id = _observation_by_id(analysis)
-    eligible_ids, next_active = resolve_eligible_and_next(
-        status_by_id, previously_active_ids, known_ids=frozenset(obs_by_id)
-    )
+    if rc3_freshness:
+        eligible_ids, next_active = resolve_eligible_and_next_rc3(
+            {
+                s.poi_record_id: s.fresh_active
+                for s in analysis.poi_analysis.current_poi_states
+            },
+            previously_active_ids,
+            known_ids=frozenset(obs_by_id),
+        )
+    else:
+        eligible_ids, next_active = resolve_eligible_and_next(
+            _current_status_by_id(analysis),
+            previously_active_ids,
+            known_ids=frozenset(obs_by_id),
+        )
     ordered = _stable_order(eligible_ids, obs_by_id)
 
     decisions: dict[UUID, BtrcDecision] = {}

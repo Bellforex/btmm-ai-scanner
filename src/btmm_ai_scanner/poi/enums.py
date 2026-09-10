@@ -83,6 +83,21 @@ class PoiFreshnessStatus(StrEnum):
     INTERACTED = "INTERACTED"
 
 
+class PoiTerminalReason(StrEnum):
+    """Why a POI stopped being a future fresh opportunity.
+
+    Kept deliberately coarse. `MITIGATED` means price came back and used the
+    zone; `INVALIDATED` means the frozen breach walk reached genuine
+    invalidation. The finer invalidation vocabulary already lives in
+    `PoiLifecycleStatus` and is not duplicated here — this enum exists so a
+    consumer can tell "price traded it" from "the zone failed" without having
+    to interpret nine lifecycle statuses.
+    """
+
+    MITIGATED = "MITIGATED"
+    INVALIDATED = "INVALIDATED"
+
+
 class PoiTapClassification(StrEnum):
     INITIAL_TAP = "INITIAL_TAP"
     REPEATED_TAP = "REPEATED_TAP"

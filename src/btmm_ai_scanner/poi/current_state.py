@@ -13,6 +13,7 @@ from btmm_ai_scanner.poi.enums import (
     PoiFreshnessStatus,
     PoiLifecycleStatus,
     PoiTapClassification,
+    PoiTerminalReason,
     PoiType,
 )
 
@@ -27,6 +28,15 @@ class CurrentPoiState(ContractModel):
     direction: PoiDirection
     poi_lifecycle_status: PoiLifecycleStatus
     freshness_status: PoiFreshnessStatus
+    #: False once price has reacted to the zone or the zone has been
+    #: invalidated. The record itself is never removed — this flag is what
+    #: downstream consumers filter on when they want future opportunities
+    #: rather than history.
+    fresh_active: bool
+    #: Set exactly when `terminal_reason` is MITIGATED.
+    mitigation_time_utc: datetime | None
+    terminal_reason: PoiTerminalReason | None
+    terminal_time_utc: datetime | None
     tap_count: int
     tap_classification: PoiTapClassification | None
     age_start_time_utc: datetime

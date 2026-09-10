@@ -75,6 +75,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from btmm_ai_scanner.poi.enums import PoiTerminalReason
+
 
 class P8EventType(StrEnum):
     POI_ACTIVATED = "POI_ACTIVATED"
@@ -114,6 +116,22 @@ class PoiSnapshot:
     btmm_valid: bool
     permission: int
     lifecycle: int
+    #: RC3: why this POI is terminal. Required whenever `terminal` is True, so
+    #: a consumer never has to guess whether price used the zone or the zone
+    #: failed. `None` is only valid for a POI that is not terminal.
+    terminal_reason: PoiTerminalReason | None = None
+
+    def __post_init__(self) -> None:
+        if not self.terminal and self.terminal_reason is not None:
+            raise ValueError(
+                f"POI {self.poi_idx} carries a terminal_reason while still active"
+            )
+        if self.terminal and self.terminal_reason is None:
+            # RC2 had exactly one way to become terminal, so an unlabelled
+            # terminal POI is unambiguously an invalidation. Defaulting here
+            # keeps every pre-RC3 fixture meaningful instead of silently
+            # reinterpreting it; RC3 callers pass MITIGATED explicitly.
+            object.__setattr__(self, "terminal_reason", PoiTerminalReason.INVALIDATED)
 
 
 @dataclass(frozen=True)
@@ -137,6 +155,8 @@ class AlertEvent:
     btmm_valid: bool
     permission: int
     lifecycle: int
+    #: Set on POI_TERMINAL only; None on every other event type.
+    terminal_reason: PoiTerminalReason | None = None
 
     @property
     def event_key(self) -> tuple[P8EventType, int, int]:
@@ -156,6 +176,9 @@ def _event(event_type: P8EventType, bar_ms: int, poi: PoiSnapshot) -> AlertEvent
         btmm_valid=poi.btmm_valid,
         permission=poi.permission,
         lifecycle=poi.lifecycle,
+        terminal_reason=(
+            poi.terminal_reason if event_type is P8EventType.POI_TERMINAL else None
+        ),
     )
 
 
