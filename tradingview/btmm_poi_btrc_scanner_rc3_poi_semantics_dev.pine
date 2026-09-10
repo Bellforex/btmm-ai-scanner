@@ -5772,11 +5772,12 @@ p7zShowLabels       = input.bool(true, "Show POI labels", group = grpP7Z)
 // How far a fresh zone projects past the last close. Presentation only: the
 // semantic end of a POI's life is its first reaction, never a bar count.
 p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minval = 0, maxval = 200, group = grpP7Z)
-// ENGINEERING ONLY. Replaces the clean zone annotation with the POI's full
-// mechanical identity so a zone on the chart can be traced back to a registry
-// row without reading logs. Release UI keeps the clean name; nothing about
-// selection, geometry or lifecycle changes when this is on.
-p7zDebugIdentity    = input.bool(false, "DEV: show POI identity in zone", group = grpP7Z)
+// The in-box identity annotation is NOT in this build. It compiled, but the
+// annotation collision resolver below is release-blocking and the two together
+// exceeded TradingView's 100256-token limit by 253. Suppressed and selected POI
+// identities remain fully visible in the P7 active-POI table, which is what the
+// no-information-loss requirement actually asks for. A parity/DEV build with
+// reduced presentation can carry it back.
 p7zMaxVisibleZones  = input.int(8, "Max visible zone groups", minval = 1, maxval = 30, group = grpP7Z)
 
 grpP9 = "P9 — Full-System Integration Trace (debug only)"
@@ -5943,27 +5944,24 @@ f_p7zTypeLabel(int code) =>
 // the frozen user-facing vocabulary M1/M5/M15/H1/H4/D1/W1. Ported from
 // `timeframe_label` in `tests/parity_support/p7z_zone_model.py`.
 f_p7zTfLabel(string p) =>
+    // RC3 FIX. The previous body exact-matched "D"/"W"/"M" and then tried to
+    // parse the token as a number. TradingView hands a DAILY chart "1D", which
+    // matches neither branch, so every annotation on a daily host rendered
+    // "TF?" -- the release-blocking defect in the author's D1 screenshot.
+    // Numeric first, calendar suffix second, which covers both the bare and
+    // the counted spellings. Mirrors `timeframe_label` in p7z_zone_model.py.
     string outTf = "TF?"
-    if p == "D"
-        outTf := "D1"
-    else if p == "W"
-        outTf := "W1"
-    else if p == "M"
-        outTf := "MN1"
+    float minsRaw = str.tonumber(p)
+    if not na(minsRaw) and minsRaw > 0
+        int mins = int(minsRaw)
+        outTf := mins < 60 ? "M" + str.tostring(mins) : mins < 1440 and mins % 60 == 0 ? "H" + str.tostring(int(mins / 60)) : mins == 1440 ? "D1" : "M" + str.tostring(mins)
     else
-        // `na` must be tested with na(), never compared with `==` -- the v6
-        // compiler rejects a direct comparison.
-        float minsRaw = str.tonumber(p)
-        int mins = na(minsRaw) ? 0 : int(minsRaw)
-        if mins > 0
-            if mins < 60
-                outTf := "M" + str.tostring(mins)
-            else if mins < 1440 and mins % 60 == 0
-                outTf := "H" + str.tostring(int(mins / 60))
-            else if mins == 1440
-                outTf := "D1"
-            else
-                outTf := "M" + str.tostring(mins)
+        int n = str.length(p)
+        string sfx = n > 0 ? str.substring(p, n - 1) : ""
+        float hdRaw = n > 1 ? str.tonumber(str.substring(p, 0, n - 1)) : 1.0
+        int hd = na(hdRaw) ? 0 : int(hdRaw)
+        if hd > 0
+            outTf := sfx == "D" ? "D" + str.tostring(hd) : sfx == "W" ? "W" + str.tostring(hd) : sfx == "M" ? "MN" + str.tostring(hd) : sfx == "S" ? "S" + str.tostring(hd) : "TF?"
     outTf
 
 f_p7PermColor(int code) =>
@@ -6466,6 +6464,63 @@ if barstate.isconfirmed
                     array.push(p7zSelGrp, bestG)
                     array.push(p7zSelected, array.get(p7zGKey, bestG))
 
+        // ---- ANNOTATION COLLISION RESOLUTION (presentation only) --------
+        // The author's D1 screenshot showed several annotations stacked in one
+        // price region, unreadable. Zones are allowed to overlap; their TEXT is
+        // not. Selected zones whose price intervals intersect form a connected
+        // group and exactly one of them prints its name. Nothing is merged,
+        // nothing is deleted, and every suppressed zone keeps its rectangle,
+        // its geometry and its row in the P7 table.
+        //
+        // Priority is READABILITY only, never trade quality: nearest to price,
+        // then newer source, then lowest registry index. The author's contract
+        // also ranks higher origin timeframe first; that term is constant here
+        // because the P3 registry is single-timeframe by construction (it
+        // carries no per-POI origin timeframe), so every selected zone shares
+        // the host's. `p7z_mtf_presentation.py` holds the full ordering,
+        // including the timeframe term, for the day that stops being true.
+        //
+        // O(k^3) with k bounded by the visual capacity (8), so at most ~512
+        // comparisons per confirmed bar. That is ~50x smaller than the active
+        // set scan that caused RE10110, and it is bounded by an input rather
+        // than by market history.
+        array<int>  p7zComp  = array.new<int>()
+        array<bool> p7zOwner = array.new<bool>()
+        if p7zShown > 0
+            for a = 0 to p7zShown - 1
+                array.push(p7zComp, a)
+            for pass = 1 to p7zShown
+                for a = 0 to p7zShown - 1
+                    int ga = array.get(p7zSelGrp, a)
+                    for b = 0 to p7zShown - 1
+                        if b != a
+                            int gb = array.get(p7zSelGrp, b)
+                            if array.get(p7zGBot, ga) <= array.get(p7zGTop, gb) and array.get(p7zGBot, gb) <= array.get(p7zGTop, ga)
+                                int cb = array.get(p7zComp, b)
+                                if cb < array.get(p7zComp, a)
+                                    array.set(p7zComp, a, cb)
+            for a = 0 to p7zShown - 1
+                int ga = array.get(p7zSelGrp, a)
+                // Distance is recomputed rather than read from the selection
+                // block's scratch array, which is scoped to that block.
+                float topA = array.get(p7zGTop, ga)
+                float botA = array.get(p7zGBot, ga)
+                float da = close < botA ? botA - close : (close > topA ? close - topA : 0.0)
+                int ta = array.get(p7zGLeft, ga)
+                int ia = array.get(p7zSelected, a)
+                bool own = true
+                for b = 0 to p7zShown - 1
+                    if b != a and array.get(p7zComp, b) == array.get(p7zComp, a)
+                        int gb = array.get(p7zSelGrp, b)
+                        float topB = array.get(p7zGTop, gb)
+                        float botB = array.get(p7zGBot, gb)
+                        float db = close < botB ? botB - close : (close > topB ? close - topB : 0.0)
+                        int tb = array.get(p7zGLeft, gb)
+                        int ib = array.get(p7zSelected, b)
+                        if db < da or (db == da and (tb > ta or (tb == ta and ib < ia)))
+                            own := false
+                array.push(p7zOwner, own)
+
         // ---- evict boxes/labels for POIs no longer in this bar's selected
         // window (Phase 17: stale-box prevention). Walked in reverse via a
         // `while` loop -- `array.remove` shifts every later index down by
@@ -6489,6 +6544,7 @@ if barstate.isconfirmed
             for r = 0 to p7zShown - 1
                 int p7zPoiI = array.get(p7zSelected, r)
                 int p7zG = array.get(p7zSelGrp, r)
+                bool p7zTextOwner = array.get(p7zOwner, r)
                 int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
                 // group geometry, not the representative POI's own geometry
                 bool p7zIsTerminal = array.get(p7zGTerm, p7zG)
@@ -6545,12 +6601,7 @@ if barstate.isconfirmed
                     //
                     // Tier is deliberately absent from this text: STRONG is
                     // table and debug metadata, not zone identity.
-                    string p7zBoxTxt = not p7zShowLabels ? "" : p7zDebugIdentity ?
-                      "ID " + str.tostring(p7zPoiI) + "\n" + p7zTfl + " " + array.get(p7zGNames, p7zG) +
-                      "\nSRC " + str.format_time(array.get(p7zGLeft, p7zG), "yyyy-MM-dd HH:mm", "UTC") +
-                      "\nAVL " + str.format_time(array.get(poiAvailTime, p7zPoiI), "yyyy-MM-dd HH:mm", "UTC") +
-                      "\n" + str.tostring(p7zBottom) + "-" + str.tostring(p7zTop) +
-                      "\n" + f_p8TermReasonLabel(array.get(poiTermReason, p7zPoiI)) :
+                    string p7zBoxTxt = not p7zTextOwner or not p7zShowLabels ? "" :
                       p7zTfl + " • " + array.get(p7zGNames, p7zG)
                     // The right edge is carried a fixed number of bars past the
                     // last close. `extend.right` alone was not enough: the
@@ -6587,6 +6638,10 @@ if barstate.isconfirmed
                         // stays centered over that span rather than over a
                         // one-bar sliver.
                         box.set_right(array.get(p7zBoxes, slot), p7zRightEdge)
+                        // Ownership is re-decided every bar as zones enter and
+                        // leave the selection, so the text is re-asserted here
+                        // rather than frozen at creation.
+                        box.set_text(array.get(p7zBoxes, slot), not p7zTextOwner or not p7zShowLabels ? "" : p7zTfl + " • " + array.get(p7zGNames, p7zG))
                         // RC1-POI-V2 (Phase 8): the label is deliberately NOT
                         // repositioned. Frozen RC1 called
                         // `label.set_x(existing, time_close)` here, which dragged
