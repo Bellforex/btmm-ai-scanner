@@ -383,3 +383,360 @@ __all__ = [
     "type_label",
     "zone_label",
 ]
+
+
+# =========================================================================
+# RC1-POI CORRECTIVE — PROXIMITY-TO-CURRENT-PRICE DISPLAY SELECTION
+# =========================================================================
+# PRESENTATION ONLY. This selects which of the ALREADY-ACTIVE POIs get a
+# drawn box; it does not create, retire, re-rank, score, or filter any POI.
+# The engine universe is untouched: the active registry, the P5 evaluation
+# loop and P8 monitoring all continue to see EVERY active POI. Only the
+# bounded set handed to `box.new` changes.
+#
+# WHY THIS EXISTS: the frozen RC1 rule is `sorted(eligible)[:capacity]` --
+# ascending registry index, i.e. the OLDEST surviving POIs. P3 has no
+# expiry, so after ~1800 bars of price drift those oldest POIs sit many ATR
+# away from current price and the trader sees no zones near the market even
+# though ~157 are active. Measured on the frozen FXCM M15 capture
+# (anchor 1788267600000, close 4329.33, ATR14 11.78): the 12 displayed POIs
+# were 199.01-259.06 away (~17-22 ATR) while 4 active POIs CONTAINED price;
+# overlap between the displayed 12 and the nearest 12 was ZERO.
+#
+# This is NOT POI quality scoring, trade ranking, BTRC ranking or signal
+# ranking -- distance to current price carries no directional or quality
+# meaning here, it is purely "is this zone on the trader's screen".
+
+
+def zone_distance(close: float, zone_top: float, zone_bottom: float) -> float:
+    """Author-frozen zone distance: 0 when price is INSIDE the zone,
+    otherwise the gap to the NEAREST boundary.
+
+    Nearest-boundary, deliberately NOT midpoint: a wide zone containing
+    price must rank ahead of a narrow zone price has not reached, and
+    midpoint distance would invert exactly that case."""
+    if close < zone_bottom:
+        return zone_bottom - close
+    if close > zone_top:
+        return close - zone_top
+    return 0.0
+
+
+def select_nearest(
+    eligible: frozenset[int] | set[int] | list[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    close: float,
+    capacity: int,
+) -> list[int]:
+    """The proposed P7-Z display selection: the `capacity` active POIs
+    nearest current price, ascending distance.
+
+    TIEBREAK (frozen): equal distance falls back to ascending registry
+    index -- the SAME canonical stable POI ordering P7 already uses. No
+    tier, BTRC, BTMM or timeframe weighting is introduced."""
+    ordered = sorted(
+        eligible,
+        key=lambda idx: (
+            zone_distance(
+                close,
+                geometry_by_idx[idx].zone_top,
+                geometry_by_idx[idx].zone_bottom,
+            ),
+            idx,
+        ),
+    )
+    return ordered[: min(len(ordered), capacity)]
+
+
+def select_registry_order(
+    eligible: frozenset[int] | set[int] | list[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    close: float,
+    capacity: int,
+) -> list[int]:
+    """The FROZEN RC1 rule, kept verbatim as the differential baseline the
+    corrective is measured against. `close`/`geometry_by_idx` are accepted
+    and ignored -- that ignoring IS the defect."""
+    ordered = sorted(eligible)
+    return ordered[: min(len(ordered), capacity)]
+
+
+# ---- mutants of the NEW rule, used only to prove the new tests bite -------
+
+
+def _select_first_n(eligible, geometry_by_idx, close, capacity):
+    """MUTANT: first N registry entries (this is literally frozen RC1)."""
+    return sorted(eligible)[:capacity]
+
+
+def _select_last_n(eligible, geometry_by_idx, close, capacity):
+    """MUTANT: last N registry entries (newest, not nearest)."""
+    ordered = sorted(eligible)
+    return ordered[-capacity:] if capacity <= len(ordered) else ordered
+
+
+def _select_midpoint_distance(eligible, geometry_by_idx, close, capacity):
+    """MUTANT: rank by distance to zone MIDPOINT instead of nearest
+    boundary -- silently demotes wide zones that already contain price."""
+
+    def mid(idx: int) -> float:
+        g = geometry_by_idx[idx]
+        return abs(close - (g.zone_top + g.zone_bottom) / 2.0)
+
+    return sorted(eligible, key=lambda i: (mid(i), i))[:capacity]
+
+
+# =========================================================================
+# RC1-POI-V2 — TIMEFRAME LABEL CONTRACT
+# =========================================================================
+# Pine's `timeframe.period` is a RAW token: "1", "5", "15", "60", "D", "W".
+# Rendering it directly produced labels like "1 • BUY FVG" on an M1 chart,
+# which reads as a quantity rather than a timeframe. The frozen user-facing
+# vocabulary is M1/M5/M15/H1/H4/D1/W1, so the raw token is formatted here.
+# Presentation only: no POI carries an origin-timeframe field, so this is
+# always the HOST chart timeframe, exactly as `zone_label` already assumed.
+
+UNKNOWN_TF_LABEL = "TF?"
+
+
+def timeframe_label(period: str) -> str:
+    """Pine `timeframe.period` -> frozen user-facing timeframe token.
+
+    Minutes below an hour become M<n>; whole hours below a day become H<n>;
+    the calendar tokens map to D1/W1/MN1; a trailing "S" is seconds."""
+    if period is None:
+        return UNKNOWN_TF_LABEL
+    p = period.strip().upper()
+    if not p:
+        return UNKNOWN_TF_LABEL
+    if p == "D":
+        return "D1"
+    if p == "W":
+        return "W1"
+    if p == "M":
+        return "MN1"
+    if p.endswith("S") and p[:-1].isdigit():
+        return f"S{int(p[:-1])}"
+    if p.endswith("D") and p[:-1].isdigit():
+        return f"D{int(p[:-1])}"
+    if p.endswith("W") and p[:-1].isdigit():
+        return f"W{int(p[:-1])}"
+    if p.endswith("M") and p[:-1].isdigit():
+        return f"MN{int(p[:-1])}"
+    if p.isdigit():
+        minutes = int(p)
+        if minutes <= 0:
+            return UNKNOWN_TF_LABEL
+        if minutes < 60:
+            return f"M{minutes}"
+        if minutes < 1440 and minutes % 60 == 0:
+            return f"H{minutes // 60}"
+        if minutes == 1440:
+            return "D1"
+        return f"M{minutes}"
+    return UNKNOWN_TF_LABEL
+
+
+def zone_label_v2(poi_type: int, tier: int, period: str) -> str:
+    """`zone_label` with the raw Pine period formatted first. This is the
+    label the RC1-POI-V2 corrective renders."""
+    return zone_label(poi_type, tier, timeframe_label(period))
+
+
+# =========================================================================
+# RC1-POI-V2 — EXACT-GEOMETRY VISUAL DEDUPLICATION (presentation only)
+# =========================================================================
+# Measured on the live FX:XAUUSD M1 capture of 2026-09-09 (258 POIs): 28
+# groups of POIs share IDENTICAL top/bottom/availability/direction, covering
+# 56 registry entries. Drawing all 56 stacks two identical rectangles per
+# group for no information gain. Typical pairs are BUY OB + BULL ENGULF (the
+# order block and the engulfing both anchor on the same origin candle) and
+# HAMMER + BULL PRESSURE.
+#
+# Registry identity is NOT merged: P3, P5 and P8 continue to see every POI
+# separately. Only the DRAWN object count collapses, and the label names
+# every contributing type so nothing is hidden from the trader.
+
+
+def geometry_key(geo: PoiGeometry) -> tuple:
+    """Two POIs share a drawn box only when all four match exactly. Type is
+    deliberately excluded -- differing types is the whole point -- and so is
+    tier, which only decorates the label."""
+    return (geo.zone_top, geo.zone_bottom, geo.avail_time_ms, geo.direction)
+
+
+def group_exact_duplicates(
+    selected: list[int], geometry_by_idx: dict[int, PoiGeometry]
+) -> list[list[int]]:
+    """Collapse an ordered selection into groups of exact-geometry twins.
+
+    Group order follows the FIRST appearance of each key in `selected`, and
+    members keep `selected`'s order, so the result is a deterministic
+    function of the proximity ordering that produced it."""
+    order: list[tuple] = []
+    members: dict[tuple, list[int]] = {}
+    for idx in selected:
+        key = geometry_key(geometry_by_idx[idx])
+        if key not in members:
+            members[key] = []
+            order.append(key)
+        members[key].append(idx)
+    return [members[key] for key in order]
+
+
+def combined_zone_label(
+    group: list[int], geometry_by_idx: dict[int, PoiGeometry], period: str
+) -> str:
+    """One label for a merged box: `"M1 • BUY OB + BULL ENGULF"`.
+
+    Type names appear in the group's own order with duplicates removed, so a
+    group is labelled identically however many POIs share the geometry. The
+    STRONG suffix is applied when ANY contributing POI is strong, since the
+    box represents all of them."""
+    names: list[str] = []
+    strong = False
+    for idx in group:
+        geo = geometry_by_idx[idx]
+        name = type_label(geo.poi_type)
+        if name not in names:
+            names.append(name)
+        if geo.tier == TIER_STRONG:
+            strong = True
+    label = f"{timeframe_label(period)} • {' + '.join(names)}"
+    return label + " • STRONG" if strong else label
+
+
+# =========================================================================
+# RC1-POI-V2 — FVG VISUAL CLUSTERING (presentation only, author-authorized)
+# =========================================================================
+# P3 correctly detects several distinct FVGs in one price area. They stay
+# distinct in P3/P5/P8 and in the registry; only the DRAWN objects group.
+#
+# A cluster requires ALL of: FVG family, same direction, same origin
+# timeframe, simultaneously eligible, and price intervals that OVERLAP OR
+# TOUCH. Membership is transitive (connected components), so A-B and B-C
+# put A, B and C in one cluster even when A and C do not themselves touch.
+#
+# Cluster geometry is the ENVELOPE of its members -- min bottom, max top,
+# earliest member origin. Never an average, never a midpoint-derived
+# synthetic zone.
+
+FVG_TYPES = frozenset({3, 4})  # BUY_FAIR_VALUE_GAP, SELL_FAIR_VALUE_GAP
+
+
+def _touches_or_overlaps(a: PoiGeometry, b: PoiGeometry) -> bool:
+    """Closed-interval intersection: touching at a single price counts."""
+    return a.zone_bottom <= b.zone_top and b.zone_bottom <= a.zone_top
+
+
+def fvg_connected_components(
+    members: list[int], geometry_by_idx: dict[int, PoiGeometry]
+) -> list[list[int]]:
+    """Transitive overlap-or-touch grouping of same-direction FVGs.
+
+    `members` must already be one direction and one timeframe. Returns
+    components in ascending registry-index order, each internally sorted, so
+    the decomposition is a pure function of geometry."""
+    ordered = sorted(members)
+    parent = {i: i for i in ordered}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a_pos, a in enumerate(ordered):
+        for b in ordered[a_pos + 1 :]:
+            if _touches_or_overlaps(geometry_by_idx[a], geometry_by_idx[b]):
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[rb] = ra
+
+    buckets: dict[int, list[int]] = {}
+    for i in ordered:
+        buckets.setdefault(find(i), []).append(i)
+    return [sorted(v) for _, v in sorted(buckets.items())]
+
+
+def cluster_geometry(
+    group: list[int], geometry_by_idx: dict[int, PoiGeometry]
+) -> tuple[float, float, int]:
+    """(top, bottom, left_time) envelope of a visual group. No averaging."""
+    tops = [geometry_by_idx[i].zone_top for i in group]
+    bottoms = [geometry_by_idx[i].zone_bottom for i in group]
+    lefts = [geometry_by_idx[i].avail_time_ms for i in group]
+    return (max(tops), min(bottoms), min(lefts))
+
+
+def fvg_cluster_label(
+    group: list[int], geometry_by_idx: dict[int, PoiGeometry], period: str
+) -> str:
+    """`"M1 • BUY FVG"`, or `"M1 • BUY FVG ×3"` for a multi-member cluster.
+    Registry ids are deliberately absent from normal UI text."""
+    name = type_label(geometry_by_idx[group[0]].poi_type)
+    base = f"{timeframe_label(period)} • {name}"
+    return base if len(group) == 1 else f"{base} ×{len(group)}"
+
+
+def build_visual_groups(
+    active: list[int] | frozenset[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    close: float,
+    capacity: int,
+    period: str,
+) -> list[dict]:
+    """The full V2 presentation projection.
+
+    Grouping runs over the WHOLE active set before capacity is applied, so a
+    cluster can never be split by the display cut. Groups are then ordered by
+    their nearest member's distance to `close` (ties by lowest registry
+    index) and the first `capacity` GROUPS are drawn -- capacity counts
+    visual groups, not semantic POIs, so a 4-member FVG cluster costs one
+    slot."""
+    ids = sorted(active)
+    groups: list[list[int]] = []
+
+    # FVG family: connected components, partitioned by direction.
+    for direction in (DIRECTION_BULLISH, DIRECTION_BEARISH):
+        fam = [
+            i
+            for i in ids
+            if geometry_by_idx[i].poi_type in FVG_TYPES
+            and geometry_by_idx[i].direction == direction
+        ]
+        groups.extend(fvg_connected_components(fam, geometry_by_idx))
+
+    # everything else: exact-geometry duplicates only (no overlap merging).
+    non_fvg = [i for i in ids if geometry_by_idx[i].poi_type not in FVG_TYPES]
+    groups.extend(group_exact_duplicates(non_fvg, geometry_by_idx))
+
+    out = []
+    for group in groups:
+        top, bottom, left = cluster_geometry(group, geometry_by_idx)
+        dist = min(
+            zone_distance(
+                close, geometry_by_idx[i].zone_top, geometry_by_idx[i].zone_bottom
+            )
+            for i in group
+        )
+        is_fvg = geometry_by_idx[group[0]].poi_type in FVG_TYPES
+        label = (
+            fvg_cluster_label(group, geometry_by_idx, period)
+            if is_fvg
+            else combined_zone_label(group, geometry_by_idx, period)
+        )
+        out.append(
+            {
+                "members": group,
+                "top": top,
+                "bottom": bottom,
+                "left_time_ms": left,
+                "direction": geometry_by_idx[group[0]].direction,
+                "label": label,
+                "distance": dist,
+            }
+        )
+
+    out.sort(key=lambda g: (g["distance"], min(g["members"])))
+    return out[: min(capacity, len(out))]
