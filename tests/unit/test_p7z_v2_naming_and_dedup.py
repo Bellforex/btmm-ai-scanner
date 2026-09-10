@@ -194,27 +194,46 @@ def test_dedup_does_not_drop_any_registry_identity():
 
 
 def _pine_tf_label(period: str) -> str:
+    """Branch-for-branch transcription of the corrected `f_p7zTfLabel`.
+
+    The original only exact-matched "D"/"W"/"M" and then tried to parse the
+    token as a number. TradingView hands a daily chart "1D", which matches
+    neither, so every annotation on a daily host rendered "TF?". The numeric
+    path is tried first and the calendar suffix second, which covers both the
+    bare and the counted spellings.
+    """
     out = "TF?"
-    if period == "D":
-        out = "D1"
-    elif period == "W":
-        out = "W1"
-    elif period == "M":
-        out = "MN1"
+    try:
+        mins_raw = float(period)
+    except (TypeError, ValueError):
+        mins_raw = None
+    if mins_raw is not None and mins_raw > 0:
+        mins = int(mins_raw)
+        if mins < 60:
+            out = f"M{mins}"
+        elif mins < 1440 and mins % 60 == 0:
+            out = f"H{mins // 60}"
+        elif mins == 1440:
+            out = "D1"
+        else:
+            out = f"M{mins}"
     else:
-        try:
-            mins = int(float(period))
-        except (TypeError, ValueError):
-            mins = 0
-        if mins > 0:
-            if mins < 60:
-                out = f"M{mins}"
-            elif mins < 1440 and mins % 60 == 0:
-                out = f"H{mins // 60}"
-            elif mins == 1440:
-                out = "D1"
-            else:
-                out = f"M{mins}"
+        n = len(period or "")
+        suffix = period[n - 1:] if n else ""
+        if n > 1:
+            try:
+                head = int(float(period[: n - 1]))
+            except (TypeError, ValueError):
+                head = 0
+        else:
+            head = 1 if n == 1 else 0
+        if head > 0:
+            out = {
+                "D": f"D{head}",
+                "W": f"W{head}",
+                "M": f"MN{head}",
+                "S": f"S{head}",
+            }.get(suffix, "TF?")
     return out
 
 
@@ -222,6 +241,9 @@ def _pine_tf_label(period: str) -> str:
     "1", "2", "3", "5", "10", "15", "30", "45", "59",
     "60", "120", "180", "240", "360", "480", "720",
     "1440", "2880", "D", "W", "M", "garbage", "0",
+    # The spellings TradingView actually emits on calendar timeframes. Their
+    # absence here is exactly why the daily host shipped reading "TF?".
+    "1D", "1W", "1M", "2D", "3M", "12M", "1S", "30S",
 ])
 def test_pine_timeframe_formatter_matches_the_model(period):
     assert _pine_tf_label(period) == timeframe_label(period)
