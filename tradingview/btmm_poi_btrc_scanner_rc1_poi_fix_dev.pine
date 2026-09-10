@@ -6234,87 +6234,129 @@ if barstate.isconfirmed
         //
         // Grouping runs over the WHOLE active set BEFORE capacity is applied,
         // so a cluster can never be split by the display cut.
-        array<int>    p7zGrpOf   = array.new<int>(p7zActive, -1)
+        // ---- RE10110 HOTFIX: PARTITION -> SORT -> SWEEP ------------------
+        // This whole block runs inside `if barstate.isconfirmed`, so it
+        // executes on EVERY confirmed bar -- ~1800 times per full
+        // recalculation, not once. The first V2 build grouped by growing each
+        // group against a running envelope until closure, which is O(n^2) in
+        // the active-POI count. On M5, whose 1800 bars span ~6.25 days of
+        // structure against M1's 30 hours, that exceeded TradingView's
+        // 20-second budget and raised RE10110 -- the study then drew NOTHING.
+        //
+        // The active set is deliberately NOT bounded before grouping: a
+        // distant FVG can connect transitively through overlapping
+        // neighbours, so truncating first would change component membership,
+        // geometry, distance and the final top-K selection.
+        //
+        // Instead the FVG family is partitioned by direction, sorted by lower
+        // edge, and swept with a running maximum upper edge -- the classic
+        // interval merge, which yields exactly the same connected components
+        // as the pairwise closure in O(n log n). Non-FVG exact-geometry twins
+        // are grouped through a `map` key instead of an all-pairs scan.
+        //
+        // Sorting by `bottom` alone is sufficient: two intervals sharing a
+        // bottom always overlap (each one's top is >= its own bottom), so they
+        // merge whatever order they land in.
+        //
+        // Ported from `build_visual_groups_fast` in
+        // `tests/parity_support/p7z_zone_model.py`, which is proven identical
+        // to the frozen oracle across randomized and real-capture differentials.
         array<float>  p7zGTop    = array.new<float>()
         array<float>  p7zGBot    = array.new<float>()
         array<int>    p7zGLeft   = array.new<int>()
         array<bool>   p7zGBull   = array.new<bool>()
         array<int>    p7zGKey    = array.new<int>()
-        array<int>    p7zGCount  = array.new<int>()
-        array<string> p7zGLabel  = array.new<string>()
+        array<string> p7zGNames  = array.new<string>()
+        array<bool>   p7zGStrong = array.new<bool>()
         array<bool>   p7zGTerm   = array.new<bool>()
+        string p7zTfl = f_p7zTfLabel(timeframe.period)
 
-        for a = 0 to (p7zActive > 0 ? p7zActive - 1 : na)
-            if array.get(p7zGrpOf, a) == -1
-                int aPoi = array.get(p7PoiIdx, a)
-                int aType = array.get(poiType, aPoi)
-                bool aIsFvg = aType == C_POI_BUY_FAIR_VALUE_GAP or aType == C_POI_SELL_FAIR_VALUE_GAP
-                int aDir = array.get(poiDirection, aPoi)
-                float gTop = array.get(poiZoneTop, aPoi)
-                float gBot = array.get(poiZoneBottom, aPoi)
-                int gLeft = array.get(poiAvailTime, aPoi)
-                int gKey = aPoi
-                int gCount = 1
-                bool gStrong = array.get(poiTier, aPoi) == C_POI_TIER_STRONG
-                bool gTerm = array.get(poiTerminal, aPoi)
-                string gNames = f_p7zTypeLabel(aType)
-                int gi = array.size(p7zGTop)
-                array.set(p7zGrpOf, a, gi)
+        // ---- FVG family, one sort+sweep per direction --------------------
+        for dirPass = 0 to 1
+            int wantDir = dirPass == 0 ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH
+            array<int>   fvgIdx = array.new<int>()
+            array<float> fvgBot = array.new<float>()
+            for r = 0 to (p7zActive > 0 ? p7zActive - 1 : na)
+                int pI = array.get(p7PoiIdx, r)
+                int ty = array.get(poiType, pI)
+                if (ty == C_POI_BUY_FAIR_VALUE_GAP or ty == C_POI_SELL_FAIR_VALUE_GAP) and array.get(poiDirection, pI) == wantDir
+                    array.push(fvgIdx, pI)
+                    array.push(fvgBot, array.get(poiZoneBottom, pI))
 
-                // Grow to closure. For FVGs the union of an overlap-connected
-                // interval set IS its envelope, so testing against the running
-                // envelope is exactly transitive connectivity. Non-FVG groups
-                // only ever absorb EXACT geometry twins -- overlap alone never
-                // merges anything outside the FVG family.
-                bool changed = true
-                while changed
-                    changed := false
-                    for b = 0 to (p7zActive > 0 ? p7zActive - 1 : na)
-                        if array.get(p7zGrpOf, b) == -1
-                            int bPoi = array.get(p7PoiIdx, b)
-                            int bType = array.get(poiType, bPoi)
-                            bool bIsFvg = bType == C_POI_BUY_FAIR_VALUE_GAP or bType == C_POI_SELL_FAIR_VALUE_GAP
-                            float bTop = array.get(poiZoneTop, bPoi)
-                            float bBot = array.get(poiZoneBottom, bPoi)
-                            int bLeft = array.get(poiAvailTime, bPoi)
-                            bool joins = false
-                            if aIsFvg and bIsFvg and array.get(poiDirection, bPoi) == aDir
-                                // closed intervals: touching at one price counts
-                                joins := bBot <= gTop and gBot <= bTop
-                            else if not aIsFvg and not bIsFvg
-                                joins := bTop == gTop and bBot == gBot and bLeft == gLeft and array.get(poiDirection, bPoi) == aDir
-                            if joins
-                                array.set(p7zGrpOf, b, gi)
-                                gTop := math.max(gTop, bTop)
-                                gBot := math.min(gBot, bBot)
-                                gLeft := math.min(gLeft, bLeft)
-                                gKey := math.min(gKey, bPoi)
-                                gCount += 1
-                                gStrong := gStrong or array.get(poiTier, bPoi) == C_POI_TIER_STRONG
-                                gTerm := gTerm and array.get(poiTerminal, bPoi)
-                                string bName = f_p7zTypeLabel(bType)
-                                if not str.contains(gNames, bName)
-                                    gNames := gNames + " + " + bName
-                                changed := true
+            int fn = array.size(fvgIdx)
+            if fn > 0
+                array<int> ord = array.sort_indices(fvgBot, order.ascending)
+                float cTop = na
+                float cBot = na
+                int cLeft = na
+                int cKey = na
+                int cN = 0
+                bool cTerm = true
+                int cType = na
+                // k == fn is a sentinel iteration that flushes the last
+                // component, so there is only ONE flush path.
+                for k = 0 to fn
+                    int pI = k < fn ? array.get(fvgIdx, array.get(ord, k)) : -1
+                    float bt = k < fn ? array.get(poiZoneBottom, pI) : na
+                    float tp = k < fn ? array.get(poiZoneTop, pI) : na
+                    if (k == fn or cN == 0 or bt > cTop) and cN > 0
+                        array.push(p7zGTop, cTop)
+                        array.push(p7zGBot, cBot)
+                        array.push(p7zGLeft, cLeft)
+                        array.push(p7zGBull, wantDir == C_POI_DIR_BULLISH)
+                        array.push(p7zGKey, cKey)
+                        array.push(p7zGNames, f_p7zTypeLabel(cType) + (cN > 1 ? " ×" + str.tostring(cN) : ""))
+                        array.push(p7zGStrong, false)
+                        array.push(p7zGTerm, cTerm)
+                        cN := 0
+                    if k < fn
+                        if cN == 0
+                            cTop := tp
+                            cBot := bt
+                            cLeft := array.get(poiAvailTime, pI)
+                            cKey := pI
+                            cN := 1
+                            cTerm := array.get(poiTerminal, pI)
+                            cType := array.get(poiType, pI)
+                        else
+                            cTop := math.max(cTop, tp)
+                            cBot := math.min(cBot, bt)
+                            cLeft := math.min(cLeft, array.get(poiAvailTime, pI))
+                            cKey := math.min(cKey, pI)
+                            cN += 1
+                            cTerm := cTerm and array.get(poiTerminal, pI)
 
-                // FVG clusters are counted ("×3") and never tier-suffixed --
-                // P3 assigns FVGs TIER_NA, so a STRONG marker there would be
-                // meaningless. Non-FVG groups keep the STRONG suffix when ANY
-                // contributing POI is strong, since the box stands for all.
-                string gLab = f_p7zTfLabel(timeframe.period) + " • " + gNames
-                if aIsFvg
-                    if gCount > 1
-                        gLab := f_p7zTfLabel(timeframe.period) + " • " + f_p7zTypeLabel(aType) + " ×" + str.tostring(gCount)
-                else if gStrong
-                    gLab := gLab + " • STRONG"
-                array.push(p7zGTop, gTop)
-                array.push(p7zGBot, gBot)
-                array.push(p7zGLeft, gLeft)
-                array.push(p7zGBull, aDir == C_POI_DIR_BULLISH)
-                array.push(p7zGKey, gKey)
-                array.push(p7zGCount, gCount)
-                array.push(p7zGLabel, gLab)
-                array.push(p7zGTerm, gTerm)
+        // ---- non-FVG: exact-geometry twins via a map key, no all-pairs ----
+        map<string, int> p7zSlot = map.new<string, int>()
+        for r = 0 to (p7zActive > 0 ? p7zActive - 1 : na)
+            int pI = array.get(p7PoiIdx, r)
+            int ty = array.get(poiType, pI)
+            if ty != C_POI_BUY_FAIR_VALUE_GAP and ty != C_POI_SELL_FAIR_VALUE_GAP
+                float tp = array.get(poiZoneTop, pI)
+                float bt = array.get(poiZoneBottom, pI)
+                int lf = array.get(poiAvailTime, pI)
+                int dr = array.get(poiDirection, pI)
+                bool sg = array.get(poiTier, pI) == C_POI_TIER_STRONG
+                string nm = f_p7zTypeLabel(ty)
+                string gk = str.tostring(tp) + "|" + str.tostring(bt) + "|" + str.tostring(lf) + "|" + str.tostring(dr)
+                if map.contains(p7zSlot, gk)
+                    int gi = map.get(p7zSlot, gk)
+                    array.set(p7zGKey, gi, math.min(array.get(p7zGKey, gi), pI))
+                    array.set(p7zGTerm, gi, array.get(p7zGTerm, gi) and array.get(poiTerminal, pI))
+                    array.set(p7zGStrong, gi, array.get(p7zGStrong, gi) or sg)
+                    string nmsCur = array.get(p7zGNames, gi)
+                    if not str.contains(nmsCur, nm)
+                        array.set(p7zGNames, gi, nmsCur + " + " + nm)
+                else
+                    map.put(p7zSlot, gk, array.size(p7zGTop))
+                    array.push(p7zGTop, tp)
+                    array.push(p7zGBot, bt)
+                    array.push(p7zGLeft, lf)
+                    array.push(p7zGBull, dr == C_POI_DIR_BULLISH)
+                    array.push(p7zGKey, pI)
+                    array.push(p7zGNames, nm)
+                    array.push(p7zGStrong, sg)
+                    array.push(p7zGTerm, array.get(poiTerminal, pI))
 
         // ---- order GROUPS by nearest-member distance, take `capacity` -----
         int p7zNGrp  = array.size(p7zGTop)
@@ -6405,7 +6447,7 @@ if barstate.isconfirmed
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1, extend = extend.none)
                     label p7zNewLabel = na
                     if p7zShowLabels
-                        string p7zLabelTxt = array.get(p7zGLabel, p7zG)
+                        string p7zLabelTxt = p7zTfl + " • " + array.get(p7zGNames, p7zG) + (array.get(p7zGStrong, p7zG) ? " • STRONG" : "")
                         // RC1-POI-V2 (Phase 8): anchor the label at the zone ORIGIN,
                         // not `time_close`. Every visible zone extends to the right
                         // edge, so anchoring there stacked all 12 labels on one x

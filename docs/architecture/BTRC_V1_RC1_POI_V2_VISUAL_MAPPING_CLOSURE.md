@@ -494,6 +494,94 @@ closure request would have been the wrong call.
 
 ---
 
+## 11f. RE10110 HOTFIX — SORT AND SWEEP
+
+### Complexity owner, confirmed not assumed
+
+The P7-Z block sits inside `if barstate.isconfirmed` (line 5979), so the whole
+grouping runs on **every confirmed bar** — roughly 1800 times per full
+recalculation, not once. Frozen RC1's per-bar work there was a first-N slice,
+O(capacity). The first V2 build replaced it with envelope-growth closure, which
+is O(n²) in the active-POI count.
+
+TradingView corroborated this directly: opening the editor showed its own banner,
+*"Heavy script. This script is close to your plan's runtime limit (20s)."*
+
+M5's 1800 bars span ~6.25 days of structure against M1's 30 hours, so its active
+population is far larger — which is why M5 crossed the limit and M1 did not.
+
+### The replacement
+
+Partition by direction, sort by lower edge, sweep with a running maximum upper
+edge. That is the classic interval merge and yields exactly the same connected
+components as the pairwise closure.
+
+| | Old | New |
+| --- | --- | --- |
+| FVG grouping | O(n²) envelope closure | O(n log n) sort + sweep |
+| Non-FVG dedup | pairwise scan | `map` key, O(n) |
+| Selection | repeated-minimum, O(n·K) | unchanged |
+
+Sorting by `bottom` alone is sufficient: two intervals sharing a bottom always
+overlap, since each one's top is at least its own bottom.
+
+**The active set is NOT bounded before grouping.**
+`test_pre_bounding_the_active_set_changes_a_transitive_component` demonstrates
+why: a far interval reachable only through a connector changes both membership
+and geometry when the connector is dropped.
+
+### Equivalence evidence
+
+The frozen oracle `build_visual_groups` is retained as the semantic authority.
+`build_visual_groups_fast` must reproduce it exactly.
+
+| Differential | Result |
+| --- | --- |
+| Adversarial cases (17 shapes: nested, identical, touching, chains, ties) | equal |
+| Randomized, sizes 1 … 1000 | equal |
+| Randomized at the full 1800-bar budget | equal |
+| Real capture: M1 latest-500 (63 active, 49 groups) | equal |
+| Real capture: M1 reference-420 (38 active, 32 groups) | equal |
+| Real capture: M15 live-340 (51 active, 35 groups) | equal |
+| Real capture: M15 atomic ctx 1799 (157 active, 122 groups) | equal |
+| Pine port simulation vs model, 40 seeds and sizes to 900 | equal |
+
+Sweep comparisons on real captures were 36–155 for 38–157 active POIs, i.e.
+about n, against the quadratic path's n².
+
+**One difference found and correctly classified as non-semantic.** The union-find
+oracle returns components ordered by internal root ids, and a root is not always
+a component's lowest member. The sweep orders by lowest member. Membership is
+identical, and `build_visual_groups` re-sorts every group by (distance, lowest
+member), so the ordering cannot reach the output. The oracle's docstring
+overstated its guarantee and was corrected.
+
+### A second hard limit hit on the way
+
+The first compacted attempt failed to compile: *"Compiled code contains too many
+tokens: 100534. The limit is 100256."* Three token reductions fixed it, none
+semantic: one flush path via a sentinel iteration instead of two; type names plus
+a strong flag stored per group with the label assembled at draw time for the ≤ 8
+selected groups, replacing per-merge string surgery; and the timeframe token
+hoisted into one local. It then compiled with only the two pre-existing shadowing
+warnings.
+
+### Live result
+
+On M5, where the pre-optimization build settled into **failed** with RE10110 and
+drew **0 boxes, 0 labels, 0 tables**, the optimized build settles with
+**failed = false, no error code, 8 boxes, 2 tables**.
+
+**But the primary gate was NOT completed.** The brief requires five independent
+M5 cold reloads. The browser would not navigate: TradingView's `beforeunload`
+handler blocked every reload attempt, including the force path and a
+capture-phase listener that stops propagation. The M5 evidence above therefore
+comes from an in-page resolution switch, not a cold reload.
+
+**V2 remains NOT CLEARED FOR RELEASE** until the five cold reloads run.
+
+---
+
 ## 12. OUTSTANDING
 
 Gates 1, 3 and 4 are now closed with live evidence (11c). Two items remain.
