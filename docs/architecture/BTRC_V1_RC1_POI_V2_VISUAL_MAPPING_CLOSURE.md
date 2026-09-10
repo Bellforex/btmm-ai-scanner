@@ -572,13 +572,70 @@ On M5, where the pre-optimization build settled into **failed** with RE10110 and
 drew **0 boxes, 0 labels, 0 tables**, the optimized build settles with
 **failed = false, no error code, 8 boxes, 2 tables**.
 
-**But the primary gate was NOT completed.** The brief requires five independent
-M5 cold reloads. The browser would not navigate: TradingView's `beforeunload`
-handler blocked every reload attempt, including the force path and a
-capture-phase listener that stops propagation. The M5 evidence above therefore
-comes from an in-page resolution switch, not a cold reload.
+### Cold reconstruction gate — Method B, five fresh-tab cold boots
 
-**V2 remains NOT CLEARED FOR RELEASE** until the five cold reloads run.
+Same-tab Ctrl+R stayed blocked: TradingView's `beforeunload` refused every
+reload, including the force path and a capture-phase listener. Method B was used
+instead — five genuinely fresh browser tabs, each opening the saved layout
+directly on M5, reconstructing both studies from saved state and calculating the
+full release history. No timeframe switch, hide/show or same-tab navigation was
+counted. Each cycle was read only after `isFailed() || isCompleted()`, then
+**re-read after a further 32–35 s** to defeat the mid-calculation trap that
+produced a false pass earlier.
+
+| Cycle | Settled | V2 failed | Code | Boxes | Labels | Tables | Studies | RE10110 | RE10041 | RE10045 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2.3 s | false | none | 8 | 3 | 2 | 2 | 0 | 0 | 0 |
+| 2 | 10.7 s | false | none | 8 | 3 | 2 | 2 | 0 | 0 | 0 |
+| 3 | 20.9 s | false | none | 8 | 3 | 2 | 2 | 0 | 0 | 0 |
+| 4 | < 1 s | false | none | 8 | 3 | 2 | 2 | 0 | 0 | 0 |
+| 5 | 16.3 s | false | none | 8 | 3 | 2 | 2 | 0 | 0 | 0 |
+
+**Total RE10110 across five cold boots: 0.** Every cycle held its state on
+re-read. Before the optimization the same host settled into `failed` with
+RE10110 and drew 0 / 0 / 0.
+
+### Short host regression after the gate
+
+| Host | V2 failed | Boxes | Labels | Tables | Studies | RE |
+| --- | --- | --- | --- | --- | --- | --- |
+| M1 | false | 8 | 8 | 2 | 2 | 0 |
+| M15 | false | 8 | 7 | 2 | 2 | 0 |
+| H1 | false | 8 | 7 | 2 | 2 | 0 |
+| M5 | false | 8 | 3 | 2 | 2 | 0 |
+
+Objects stayed bounded at 8 boxes / ≤ 8 labels / 2 tables with exactly 2 studies
+and no duplicate V2 instance. **OBJECT_LEAK = FALSE.**
+
+---
+
+## 11g. THE LABEL-COUNT SHORTFALL, RESOLVED
+
+Several readings showed fewer labels than boxes — 8/7 on M15, 8/3 on M5. The
+brief required this be explained rather than tolerated. It is now closed with
+direct evidence, and it is **not** a desynchronization.
+
+A box's `left` is a bar index. When a zone's origin lies **outside the chart's
+loaded bar window**, that index cannot resolve: the box reports `left = null` and
+no label is placed. The counts line up exactly:
+
+| Host | Bars loaded | Boxes | Null lefts | Labels | Labels == resolvable boxes |
+| --- | --- | --- | --- | --- | --- |
+| M5 | 300 | 8 | 5 | 3 | **yes** |
+| M15 | 301 | 8 | 1 | 7 | **yes** |
+
+In both cases the label anchors are *precisely* the set of non-null box lefts.
+
+The decisive test: on the same M5 tab, loading more history (300 → **902** bars)
+returned **8 boxes, 8 labels, 0 null lefts**, with
+`boxLefts == labelXs` exactly — `[-172, -145, -143, -139, -139, 261, 286, 291]`.
+
+So the shortfall is a chart data-window artifact that resolves as history loads.
+It is independent of `calc_bars_count`, which controls what the study computes,
+not what the chart has fetched for display.
+
+**Label anchoring:** every label sits at its own box's left edge, and none sits
+at the last bar index. **LABEL_MIGRATION = FALSE.**
 
 ---
 
@@ -602,12 +659,13 @@ runtime, reload, host switching, pan, zoom, price scale, vertical move, remove
 and re-add, object lifecycle, registry mapping, table mapping, zone geometry,
 naming, clustering and P8 coexistence.
 
-**V2 overall: NOT CLEARED FOR RELEASE**, because of the RE10110 timeout on M5
-(11e). That is a separate axis from the visual behaviour above: the mapping,
-naming, clustering and lifecycle work is sound and proven, but the grouping
-loop's execution cost is not, and it fails closed by drawing nothing.
+**V2 overall: FULL LIVE ACCEPTANCE VERIFIED.** The RE10110 timeout (11e) is
+resolved by the sort-and-sweep replacement (11f) and confirmed by five
+fresh-tab cold reconstructions with zero RE10110, plus a clean M1/M15/H1/M5
+regression. M5 is **VERIFIED**.
 
-Also still open:
+Two related items remain open, both about the BASE_RALLY type specifically and
+neither about the visual layer's behaviour:
 
 - **Gate 2C** — visual re-trace of the golden Base Rally. Blocked (11c): the POI
   is 2114 M1 bars back against an 1800-bar window.
