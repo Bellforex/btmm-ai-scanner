@@ -233,21 +233,25 @@ no runtime code. `calc_bars_count` remains 1800.
 
 | # | Item | Status |
 | --- | --- | --- |
-| 73–75 | P3 authority | **NOT GENERATED** |
-| 76–78 | P5 authority | **NOT GENERATED** |
+| 73–75 | P3 authority | **NOT CAPTURED** — the `P3LIFE` stream exists in the parity build but its first guard was unreachable and the corrected build was not re-captured |
+| 76–78 | P5 authority | **NOT CAPTURED** — `P5EVAL` is per-POI per-bar and the P8 stream alone filled the log buffer first |
 | 79 | RC2 → RC3 evaluation impact | 8197 → 2505 POI evaluations; 5692 removed |
-| 80–82 | P8 authority | **NOT GENERATED** |
-| 83 | MITIGATED events | 161 |
+| 80–82 | P8 authority | **LIVE CONTRACT EVIDENCE**, not a row-for-row differential — 2200 real events, 945 terminals across 945 distinct POIs, 0 duplicates, 0 missing reasons, 0 terminals before activation |
+| 83 | MITIGATED events | 945 live (161 on the 299-bar Python replay) |
 | 84 | INVALIDATED events | 0 |
-| 85 | Duplicate terminal events | 0 |
-| 86 | P6 changed | **UNPROVEN** — no P6 file changed, but no mechanical proof was run |
-| 87 | P6 authority disposition | cannot be carried forward without that proof |
+| 85 | Duplicate terminal events | **0** |
+| 86 | P6 changed | **PROVEN FALSE** — block byte-identical at sha256 `52ceb8ee…`, zero RC3 symbols inside it, zero P3 arrays inside it |
+| 87 | P6 authority disposition | **carried forward**, pinned by a test |
 
-**This is the campaign's binding gap.** RC2's digests are not RC3 evidence and
-are not claimed as such. Generating the new authorities needs the `P5EVAL` and
-`P9TRACE` transports, which were removed from this build for the token budget,
-so it needs the separate parity build the campaign authorises. That build was
-not made.
+**The parity build now exists** and is saved on TradingView as
+`BTMM + POI + BTRC Scanner [RC3 PARITY DEV]`. It drops the 402-line P7-Z
+drawing block to buy budget, restores `P5EVAL`, and adds a new `P3LIFE` stream.
+Its P3, P4 and P6 spans hash identical to the release DEV; P1 differs only by
+the indicator title.
+
+RC2's digests are still not RC3 evidence and are not claimed as such. See
+`docs/validation/BTRC_V1_RC3_PARITY_STATUS.md` for exactly what was captured,
+what was not, and why.
 
 ---
 
@@ -269,6 +273,7 @@ not made.
 | 92 | Targeted tests | 169 across the three touched files |
 | 93 | Full suite round 1 | **4613 passed** |
 | 94 | Full suite round 2 | **4624 passed in 620 s**, exit code 0 |
+| | Full suite round 3, after the parity work | **4660 passed in 626 s**, exit code 0 |
 | 95 | Failures | **0** |
 | 96 | ruff | clean on every changed file |
 | 97 | mypy `src` | clean, 138 files |
@@ -348,10 +353,12 @@ Local only. Nothing pushed, merged or published.
 
 ## LIMITATIONS
 
-- **No new P3/P5/P8 parity evidence.** The single largest gap, and the reason
-  RC3 is not promotion-ready.
-- **No P6 impact proof.** No P6 file changed, but that is an argument, not a
-  measurement.
+- **No P3 or P5 capture.** The parity build emits both streams; neither was
+  captured. This is the single largest remaining gap and the reason RC3 is not
+  promotion-ready.
+- **The P8 evidence is contract evidence, not a differential.** Registry
+  indices do not align between an 1800-bar Pine run and a 299-bar Python
+  fixture.
 - **H6, H8 and H12 are unreachable on this plan.** Every attempt fell back to
   D1. Classified NOT TESTABLE.
 - **No rendered screenshot.** The chart canvas does not paint in a tab this
