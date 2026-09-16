@@ -123,22 +123,31 @@ def _oscillating_stream(length: int = 160) -> tuple[NormalizedCandle, ...]:
     return tuple(candles)
 
 
-def _p1_zones(candles: tuple[NormalizedCandle, ...]) -> tuple[Any, ...]:
-    analysis = analyze_market_measurements(
+def _p1_analysis(candles: tuple[NormalizedCandle, ...]) -> Any:
+    return analyze_market_measurements(
         candles,
         MarketMeasurementConfiguration(minimum_price_tick=_TICK),
         ContentAddressedIdentityProvider(),
     )
-    return analysis.support_resistance_zones
+
+
+def _p1_zones(candles: tuple[NormalizedCandle, ...]) -> tuple[Any, ...]:
+    return _p1_analysis(candles).support_resistance_zones
+
+
+def _p1_swings(candles: tuple[NormalizedCandle, ...]) -> tuple[Any, ...]:
+    return _p1_analysis(candles).confirmed_swings
 
 
 def _ms(moment: datetime) -> int:
     return int(moment.timestamp() * 1000)
 
 
-def _production_projection(zones: tuple[Any, ...]) -> set[tuple[Any, ...]]:
+def _production_projection(
+    zones: tuple[Any, ...], swings: tuple[Any, ...] = ()
+) -> set[tuple[Any, ...]]:
     projected: set[tuple[Any, ...]] = set()
-    for candidate in detect_reference_zones(zones, ()):
+    for candidate in detect_reference_zones(zones, (), swings):
         projected.add(
             (
                 M.TYPE_SUPPORT_ZONE
@@ -157,9 +166,11 @@ def _production_projection(zones: tuple[Any, ...]) -> set[tuple[Any, ...]]:
     return projected
 
 
-def _model_projection(zones: tuple[Any, ...]) -> set[tuple[Any, ...]]:
+def _model_projection(
+    zones: tuple[Any, ...], swings: tuple[Any, ...] = ()
+) -> set[tuple[Any, ...]]:
     projected: set[tuple[Any, ...]] = set()
-    for poi in M.project_reference_zones(zones):
+    for poi in M.project_reference_zones(zones, swings):
         projected.add(
             (
                 poi.poi_type,
@@ -175,9 +186,53 @@ def _model_projection(zones: tuple[Any, ...]) -> set[tuple[Any, ...]]:
 
 
 def test_reference_zone_projection_matches_production() -> None:
-    zones = _p1_zones(_oscillating_stream())
+    stream = _oscillating_stream()
+    zones = _p1_zones(stream)
+    swings = _p1_swings(stream)
     assert len(zones) > 0, "fixture must actually produce P1 zones"
-    assert _model_projection(zones) == _production_projection(zones)
+    assert _model_projection(zones, swings) == _production_projection(zones, swings)
+
+
+def test_reference_zone_source_time_is_the_origin_swing_pivot_end_not_confirmation() -> (
+    None
+):
+    """RC3 contract lock: an S/R zone's source instant is the origin swing's
+    pivot-end candle, and its availability is the zone's own confirmation.
+    Collapsing the two is the defect this pins against — it would draw the
+    zone's left edge at confirmation and hide the level's real age."""
+    stream = _oscillating_stream()
+    zones = _p1_zones(stream)
+    swings = _p1_swings(stream)
+    pivot_end_by_id = {s.record_id: s.pivot_end_time_utc for s in swings}
+    candidates = detect_reference_zones(zones, (), swings)
+
+    assert len(candidates) > 0, "fixture must actually produce reference zones"
+    strictly_earlier = 0
+    for candidate, zone in zip(candidates, zones, strict=True):
+        expected_source = pivot_end_by_id[zone.origin_swing_record_id]
+        assert candidate.candidate_event_time_utc == expected_source
+        assert candidate.availability_time_utc == zone.availability_time_utc
+        assert candidate.candidate_event_time_utc <= candidate.availability_time_utc
+        if candidate.candidate_event_time_utc < candidate.availability_time_utc:
+            strictly_earlier += 1
+
+    assert strictly_earlier > 0, (
+        "at least one delayed-confirmation zone must have source strictly "
+        "before availability, otherwise the two are still collapsed"
+    )
+
+
+def test_reference_zone_rejects_a_zone_whose_origin_swing_was_not_supplied() -> None:
+    """Never silently fall back to the confirmation time — that is exactly the
+    collapse this contract forbids, and a silent fallback would make the defect
+    invisible again."""
+    import pytest
+
+    from btmm_ai_scanner.poi.reference_zones import UnknownOriginSwingError
+
+    zones = _p1_zones(_oscillating_stream())
+    with pytest.raises(UnknownOriginSwingError):
+        detect_reference_zones(zones, (), ())
 
 
 def test_projection_covers_both_support_and_resistance() -> None:

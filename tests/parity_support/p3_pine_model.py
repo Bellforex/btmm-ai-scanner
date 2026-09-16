@@ -706,19 +706,39 @@ def run_frontier(
     return registry
 
 
-def project_reference_zones(zones: Sequence[Any]) -> list[ModelPoi]:
+def project_reference_zones(
+    zones: Sequence[Any], confirmed_swings: Sequence[Any] = ()
+) -> list[ModelPoi]:
     """Project P1 support/resistance zones, transcribing f_poiDetectReferenceZones.
 
-    Not a candle detector: production copies bounds verbatim and inherits the
-    P1 record's own times, all three of which are the confirmation time.
-    EQH/EQL clusters are lifecycle-ineligible P3 CONTEXT and are not projected.
+    Not a candle detector: production copies bounds verbatim. The SOURCE time
+    is the ORIGIN SWING's pivot-end candle time — the instant the level comes
+    into existence — while confirmation and availability remain the zone's own
+    confirmation time. Source and availability are distinct and must not be
+    collapsed; the drawn left edge anchors to source, freshness starts after
+    availability. EQH/EQL clusters are lifecycle-ineligible P3 CONTEXT and are
+    not projected.
     """
+    pivot_end_by_swing_id = {
+        swing.record_id: swing.pivot_end_time_utc for swing in confirmed_swings
+    }
     out: list[ModelPoi] = []
     for zone in zones:
         is_support = zone.zone_type.value == "SUPPORT"
         poi_type = TYPE_SUPPORT_ZONE if is_support else TYPE_RESISTANCE_ZONE
         direction = DIR_BULLISH if is_support else DIR_BEARISH
         confirm_ms = int(zone.confirmation_time_utc.timestamp() * 1000)
+        origin_pivot_end = pivot_end_by_swing_id.get(zone.origin_swing_record_id)
+        source_ms = (
+            confirm_ms
+            if origin_pivot_end is None
+            else int(origin_pivot_end.timestamp() * 1000)
+        )
+        # NOTE: the (src_first, count, src_last) identity triple deliberately
+        # stays on the confirmation time. It is POI identity, not source time,
+        # and the collision fix documented on ModelPoi.identity depends on it
+        # being exactly what it already was. Only the candidate/source instant
+        # moves to the origin swing's pivot end.
         out.append(
             ModelPoi(
                 poi_type,
@@ -729,7 +749,7 @@ def project_reference_zones(zones: Sequence[Any]) -> list[ModelPoi]:
                 confirm_ms,
                 1,
                 confirm_ms,
-                confirm_ms,
+                source_ms,
                 confirm_ms,
             )
         )

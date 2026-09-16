@@ -518,9 +518,20 @@ def _period_candidates(
 def _reference_signature(
     measurement_analysis: MarketMeasurementAnalysis,
 ) -> tuple[Any, ...]:
+    # Source time for an S/R zone is its ORIGIN SWING's pivot-end time, so the
+    # cached reference candidates must also be invalidated when that swing
+    # changes — not only when the zone itself does.
+    pivot_end_by_swing_id = {
+        swing.record_id: swing.pivot_end_time_utc
+        for swing in measurement_analysis.confirmed_swings
+    }
     return (
         tuple(
-            (zone.record_id, zone.content_fingerprint)
+            (
+                zone.record_id,
+                zone.content_fingerprint,
+                pivot_end_by_swing_id.get(zone.origin_swing_record_id),
+            )
             for zone in measurement_analysis.support_resistance_zones
         ),
         tuple(
@@ -573,6 +584,7 @@ def advance_detector_frontier(
             detect_reference_zones(
                 measurement_analysis.support_resistance_zones,
                 measurement_analysis.equal_level_clusters,
+                measurement_analysis.confirmed_swings,
             )
         )
 

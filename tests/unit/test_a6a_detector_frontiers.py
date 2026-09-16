@@ -371,6 +371,7 @@ def test_reference_zones_track_measurement_and_reuse_when_unchanged() -> None:
         expected = detect_reference_zones(
             measurement.support_resistance_zones,
             measurement.equal_level_clusters,
+            measurement.confirmed_swings,
         )
         assert _sorted_repr(refs) == _sorted_repr(expected)
         if refs:

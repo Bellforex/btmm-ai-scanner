@@ -212,6 +212,7 @@ type SRRec
     float zoneDepth
     int   touchCount
     int   confirmationTime     // availability of first confirming candle
+    int   originPivotEndTime   // RC3: origin swing's pivot-end candle == the zone's SOURCE instant
 
 type SRCand
     int   key                  // pivotEndTime — the stable semantic swing identity
@@ -1671,7 +1672,7 @@ f_walkSR(array<float> highs, array<float> lows, array<float> opens, array<float>
             if foldIdx >= 0 and not isDirty
                 SRFold cached = array.get(folds, foldIdx)
                 if cached.hasZone
-                    array.push(out, SRRec.new(cached.originType, cached.zoneTop, cached.zoneBottom, cached.zoneDepth, cached.touchCount, cached.confirmationTime))
+                    array.push(out, SRRec.new(cached.originType, cached.zoneTop, cached.zoneBottom, cached.zoneDepth, cached.touchCount, cached.confirmationTime, cached.originKey))
                 continue
 
             float zoneDepth = C_SR_ZONE_DEPTH_ATR * origin.referenceAtr
@@ -1714,7 +1715,7 @@ f_walkSR(array<float> highs, array<float> lows, array<float> opens, array<float>
             else
                 array.insert(folds, f_srFoldLowerBound(folds, origin.key), fresh)
             if hasZone
-                array.push(out, SRRec.new(originType, zoneTop, zoneBottom, zoneDepth, touchCount, firstConfTime))
+                array.push(out, SRRec.new(originType, zoneTop, zoneBottom, zoneDepth, touchCount, firstConfTime, origin.key))
 
     // P1-SR-ORDERING: Python closes detect_support_resistance_zones with
     // `results.sort(key=confirmation_time_utc)` (support_resistance.py:303), and
@@ -3118,7 +3119,14 @@ f_poiDetectReferenceZones() =>
             bool isSupport = z.zoneType == SWING_LOW
             int typeCode = isSupport ? C_POI_SUPPORT_ZONE : C_POI_RESISTANCE_ZONE
             int direction = isSupport ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH
-            f_poiEmit(typeCode, direction, z.zoneTop, z.zoneBottom, C_POI_TIER_NA, z.confirmationTime, 1, z.confirmationTime, z.confirmationTime, z.confirmationTime)
+            // RC3 S/R SOURCE CONTRACT: the zone's SOURCE instant is its origin
+            // swing's pivot-end candle (SRCand.key), not its confirmation. The
+            // level exists from the moment the defining swing ends; it only
+            // becomes available once the zone confirms, and freshness starts
+            // strictly after availability. The (srcFirst, count, srcLast)
+            // identity triple deliberately stays on confirmationTime -- that is
+            // POI identity, and the documented collision fix depends on it.
+            f_poiEmit(typeCode, direction, z.zoneTop, z.zoneBottom, C_POI_TIER_NA, z.confirmationTime, 1, z.confirmationTime, z.originPivotEndTime, z.confirmationTime)
 
 // =============================================================================
 // P3-I6 — PERSISTENT POI LIFECYCLE
@@ -6053,7 +6061,8 @@ if barstate.isconfirmed
 
     // ---- bar-level assessments, computed ONCE per bar (independent of which
     // POI is evaluated -- P3 POI is host-only, so every POI shares the SAME
-    // M15 T3/T4 assessment and the same D1/W1/H4-derived T1/T2/T5-global) ----
+    // HOST-timeframe T3/T4 assessment and the same D1/W1/H4-derived
+    // T1/T2/T5-global) ----
     [d1Trend, d1P5Dir] = f_p5T1(d1P2d, d1Sw, d1Ext)
     [w1Trend, w1P5Dir] = f_p5T1(w1P2d, w1Sw, w1Ext)
     [h4Trend, h4P5Dir] = f_p5T1(h4P2d, h4Sw, h4Ext)
@@ -6067,9 +6076,44 @@ if barstate.isconfirmed
     // invite exactly the "T1-order-reuse" mistake the campaign's own
     // adversarial test exists to catch, for no reachable behavior change.
     int p5RegimeGlobal = d1Regime
-    [p5MomDir, p5MomAccel, p5MomScore] = f_p5T3Mom(m15Ext)
-    [p5BrkState, p5BrkScore] = f_p5T3Brk(m15Ext)
-    int p5PbState = f_p5T3Pb(m15P2d, m15Ext)
+    // RC3-T3-TF: T3 is assessed on the POI's OWN timeframe. The frozen MTF
+    // contract (BTRC_V1_P6_MTF_ARCHITECTURE.md: T3 momentum / breakout /
+    // liquidity -> "per POI timeframe") and production Python agree -- the
+    // latter keys its momentum/breakout/pullback assessments by
+    // `poi.effective_timeframe` (btrc/t5_engine.py). P3's POI registry is
+    // host-only, so the POI timeframe IS the host timeframe. Reading `m15Ext`
+    // unconditionally, as earlier builds did, evaluated every non-M15 host
+    // against a foreign M15 context: exact on an M15 chart, wrong on M5/H1/H4.
+    P5TransportExt p5T3Ext = m15Ext
+    int p5T3P2d = m15P2d
+    bool p5T3TfPresent = true
+    if timeframe.period == C_P6_TF_W1
+        p5T3Ext := w1Ext
+        p5T3P2d := w1P2d
+    else if timeframe.period == C_P6_TF_D1
+        p5T3Ext := d1Ext
+        p5T3P2d := d1P2d
+    else if timeframe.period == C_P6_TF_H4
+        p5T3Ext := h4Ext
+        p5T3P2d := h4P2d
+    else if timeframe.period == C_P6_TF_H1
+        p5T3Ext := h1Ext
+        p5T3P2d := h1P2d
+    else if timeframe.period == C_P6_TF_M15
+        p5T3Ext := m15Ext
+        p5T3P2d := m15P2d
+    else if timeframe.period == C_P6_TF_M5
+        p5T3Ext := m5Ext
+        p5T3P2d := m5P2d
+    else
+        // Host outside the P5 authority set {W1,D1,H4,H1,M15,M5}: production
+        // has no assessment for this POI timeframe and records the component
+        // as MISSING (momentum 50, breakout 40, pullback NA -- t5_engine.py).
+        // Mirror that rather than substituting a foreign context.
+        p5T3TfPresent := false
+    [p5MomDir, p5MomAccel, p5MomScore] = f_p5T3Mom(p5T3Ext)
+    [p5BrkState, p5BrkScore] = f_p5T3Brk(p5T3Ext)
+    int p5PbState = p5T3TfPresent ? f_p5T3Pb(p5T3P2d, p5T3Ext) : C_ST_NA
     int p5SessionCtx = f_p5T4Session(time_close)
     [p5VolState, p5VolAbnormal, p5VolSuitability] = f_p5T4Vol()
     int p5GlobalDir = f_p5T5Global(d1P5Dir, w1P5Dir, h4P5Dir)
@@ -6122,8 +6166,10 @@ if barstate.isconfirmed
                 int align = f_p5Alignment(p5GlobalDir, p5OperCtx, poiBullish)
                 int trendScore = f_p5TrendScore(align, p5GlobalDir)
                 int regimeScore = f_p5RegimeScore(p5RegimeGlobal)
-                int momentumScore = f_p5MomentumScoreConfluence(p5MomDir, p5MomScore, poiBullish)
-                int breakoutScore = p5BrkScore
+                // Missing-component defaults mirror t5_engine.py exactly when the
+                // host timeframe is outside the P5 authority set.
+                int momentumScore = p5T3TfPresent ? f_p5MomentumScoreConfluence(p5MomDir, p5MomScore, poiBullish) : 50
+                int breakoutScore = p5T3TfPresent ? p5BrkScore : 40
                 int poiScore = f_p5PoiScoreConfluence(array.get(poiTier, i))
                 int btmmScore = f_p5BtmmScoreConfluence(btmmValid, btmmBullish, poiBullish)
                 int liquidityScore = f_p5LiquidityScoreConfluence(btmmValid)

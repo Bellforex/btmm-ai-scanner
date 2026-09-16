@@ -7,7 +7,9 @@ from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
 from btmm_ai_scanner.contracts.types import SemVer
 from btmm_ai_scanner.domain.enums import EqualLevelType, SupportResistanceType
 from btmm_ai_scanner.domain.equal_levels import EqualLevelCluster
+from btmm_ai_scanner.domain.enums import SwingType
 from btmm_ai_scanner.domain.support_resistance import SupportResistanceZone
+from btmm_ai_scanner.domain.swings import ConfirmedSwing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
@@ -18,6 +20,37 @@ _BASE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 
 def _swing_id(index: int) -> UUID:
     return UUID(f"0193f450-1234-7abc-8def-{index:012x}")
+
+
+def _origin_swing() -> ConfirmedSwing:
+    """The swing every `_support_resistance_zone` below names as its origin
+    (`_swing_id(2)`). Its pivot END is five minutes before the zone confirms,
+    so the corrected contract yields source < availability."""
+    return ConfirmedSwing(
+        record_id=_swing_id(2),
+        content_fingerprint="b" * 64,
+        symbol=InternalSymbol.XAUUSD,
+        timeframe=Timeframe.M1,
+        swing_type=SwingType.SWING_HIGH,
+        pivot_price=Decimal("101"),
+        pivot_bar_index=3,
+        pivot_candle_record_ids=(_swing_id(8),),
+        pivot_start_time_utc=_BASE_TIME + timedelta(minutes=4),
+        pivot_end_time_utc=_BASE_TIME + timedelta(minutes=5),
+        local_confirmation_time_utc=_BASE_TIME + timedelta(minutes=6),
+        meaningful_confirmation_time_utc=_BASE_TIME + timedelta(minutes=6),
+        confirmation_candle_id=_swing_id(9),
+        pivot_reference_atr=Decimal("1.0"),
+        pivot_tie_tolerance=Decimal("0.01"),
+        reversal_threshold=Decimal("0.5"),
+        reversal_excursion=Decimal("0.6"),
+        availability_time_utc=_BASE_TIME + timedelta(minutes=6),
+        rule_version=SemVer.parse("1.0.0"),
+        contract_version=SemVer.parse("0.1.0"),
+        schema_version=SemVer.parse("0.1.0"),
+        evidence_classification=EvidenceClassification.ENGINEERING_PROVISIONAL,
+        provenance_id=_PROVENANCE_ID,
+    )
 
 
 def _support_resistance_zone(
@@ -77,7 +110,7 @@ def _equal_level_cluster(
 def test_support_poi_inherits_zone_boundaries_from_support_resistance_zone() -> None:
     zone = _support_resistance_zone(SupportResistanceType.SUPPORT, "101", "100")
 
-    (candidate,) = detect_reference_zones((zone,), ())
+    (candidate,) = detect_reference_zones((zone,), (), (_origin_swing(),))
 
     assert candidate.poi_type == PoiType.SUPPORT_ZONE
     assert candidate.zone_top == zone.zone_top
@@ -88,7 +121,7 @@ def test_support_poi_inherits_zone_boundaries_from_support_resistance_zone() -> 
 def test_resistance_poi_inherits_zone_boundaries_from_support_resistance_zone() -> None:
     zone = _support_resistance_zone(SupportResistanceType.RESISTANCE, "105", "104")
 
-    (candidate,) = detect_reference_zones((zone,), ())
+    (candidate,) = detect_reference_zones((zone,), (), (_origin_swing(),))
 
     assert candidate.poi_type == PoiType.RESISTANCE_ZONE
     assert candidate.zone_top == zone.zone_top
@@ -101,7 +134,7 @@ def test_support_break_candidate_and_close_breach_candidate_coexist_independentl
 ):
     zone = _support_resistance_zone(SupportResistanceType.SUPPORT, "101", "100")
 
-    (candidate,) = detect_reference_zones((zone,), ())
+    (candidate,) = detect_reference_zones((zone,), (), (_origin_swing(),))
 
     assert "support_break_candidate" not in PoiObservation.model_fields
     assert candidate.source_zone_record_id == zone.record_id
@@ -113,7 +146,7 @@ def test_equal_highs_and_equal_lows_poi_inherit_zone_boundaries_from_equal_level
     equal_high = _equal_level_cluster(EqualLevelType.EQUAL_HIGH, "101", "100.9")
     equal_low = _equal_level_cluster(EqualLevelType.EQUAL_LOW, "99.1", "99")
 
-    high_candidate, low_candidate = detect_reference_zones((), (equal_high, equal_low))
+    high_candidate, low_candidate = detect_reference_zones((), (equal_high, equal_low), ())
 
     assert high_candidate.zone_top == equal_high.zone_top
     assert high_candidate.zone_bottom == equal_high.zone_bottom
@@ -136,8 +169,8 @@ def test_support_and_resistance_map_to_bullish_and_bearish_direction_respectivel
         SupportResistanceType.RESISTANCE, "105", "104"
     )
 
-    (support_candidate,) = detect_reference_zones((support,), ())
-    (resistance_candidate,) = detect_reference_zones((resistance,), ())
+    (support_candidate,) = detect_reference_zones((support,), (), (_origin_swing(),))
+    (resistance_candidate,) = detect_reference_zones((resistance,), (), (_origin_swing(),))
 
     assert support_candidate.direction == PoiDirection.BULLISH
     assert resistance_candidate.direction == PoiDirection.BEARISH
@@ -149,7 +182,7 @@ def test_equal_highs_and_equal_lows_map_to_bearish_and_bullish_direction_respect
     equal_high = _equal_level_cluster(EqualLevelType.EQUAL_HIGH, "101", "100.9")
     equal_low = _equal_level_cluster(EqualLevelType.EQUAL_LOW, "99.1", "99")
 
-    high_candidate, low_candidate = detect_reference_zones((), (equal_high, equal_low))
+    high_candidate, low_candidate = detect_reference_zones((), (equal_high, equal_low), ())
 
     assert high_candidate.direction == PoiDirection.BEARISH
     assert low_candidate.direction == PoiDirection.BULLISH

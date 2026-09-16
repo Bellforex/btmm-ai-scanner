@@ -402,6 +402,7 @@ def _detect_bundle_candidates(
         detect_reference_zones(
             bundle.measurement_analysis.support_resistance_zones,
             bundle.measurement_analysis.equal_level_clusters,
+            bundle.measurement_analysis.confirmed_swings,
         )
     )
     candidates.extend(detect_period_levels(bundle.candles, configuration))
