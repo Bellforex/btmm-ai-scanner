@@ -95,6 +95,9 @@ class ScriptedPoi:
     zone_bottom: str
     zone_top: str
     terminal_from_bar: int | None = None
+    #: From this bar on the POI reports a different effective timeframe (the
+    #: registry legitimately re-labels merged POIs; persistence must follow).
+    retimeframe_from_bar: int | None = None
 
 
 class ScriptedScannerSource:
@@ -134,7 +137,11 @@ class ScriptedScannerSource:
                         direction=p.direction,
                         family="SCRIPTED",
                         source_timeframe="M15",
-                        effective_timeframe="M15",
+                        effective_timeframe=(
+                            "H1"
+                            if p.retimeframe_from_bar is not None and index >= p.retimeframe_from_bar
+                            else "M15"
+                        ),
                         zone_top=Decimal(p.zone_top),
                         zone_bottom=Decimal(p.zone_bottom),
                         source_time_utc=host_series[0].event_time_utc.isoformat(),
@@ -231,7 +238,7 @@ SCRIPT_POIS = (
     ScriptedPoi(3, "BULLISH", "96.00", "97.00", terminal_from_bar=11),
     ScriptedPoi(4, "BULLISH", "99.00", "99.50"),
     ScriptedPoi(5, "BEARISH", "100.20", "100.80"),
-    ScriptedPoi(6, "BULLISH", "95.00", "96.00"),
+    ScriptedPoi(6, "BULLISH", "95.00", "96.00", retimeframe_from_bar=5),
 )
 
 SCRIPT_EVENTS: dict[int, list[tuple[str, int, int]]] = {

@@ -203,3 +203,41 @@ def test_cli_pause_and_restart_in_a_new_process_matches(tmp_path: Path, data, un
     assert health.returncode == 0, health.stdout
     assert json.loads(health.stdout)["digest_verification"]["verified"] is True
     assert deterministic_journals(state) == uninterrupted[1]
+
+
+_FXCM_ROOT = Path("C:/Users/user/Desktop/btmm-ai-scanner/artifacts/v1a_validation")
+
+
+def test_real_fxcm_six_timeframe_restart_equivalence(tmp_path: Path) -> None:
+    """Short genuine-FXCM slice through all six timeframes: pause, rebuild in
+    a new engine, finish; must equal an uninterrupted run byte for byte
+    (the configuration where a registry re-label first showed up)."""
+    if not (_FXCM_ROOT / "v1a_raw_ohlc_M5.csv").is_file():
+        pytest.skip("FXCM artifacts not present")
+    from botdryrun.config import BotConfig
+
+    config = BotConfig.from_mapping(
+        {
+            "window_start_utc": "2026-08-09T22:00:00Z",
+            "window_end_utc": "2026-08-10T03:45:00Z",
+            "dataset_root": str(_FXCM_ROOT),
+            "context_lookback_bars": 40,
+        }
+    )
+    engine = BotEngine(tmp_path / "full", config)
+    try:
+        assert engine.run().processed_bars == 24
+    finally:
+        engine.close()
+    engine = BotEngine(tmp_path / "paused", config)
+    try:
+        engine.run(max_bars=11)
+    finally:
+        engine.close()
+    engine = BotEngine(tmp_path / "paused")
+    try:
+        report = engine.run()
+        assert report.rebuilt_bars == 11 and report.outcome is RunOutcome.COMPLETED
+    finally:
+        engine.close()
+    assert deterministic_journals(tmp_path / "paused") == deterministic_journals(tmp_path / "full")

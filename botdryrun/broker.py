@@ -123,7 +123,7 @@ class PaperBroker:
         self.positions: dict[str, Position] = {p.position_id: p for p in positions}
         self.ledger: list[LedgerEntry] = sorted(ledger, key=lambda e: e.seq)
         self.balance: Decimal = (
-            self.ledger[-1].balance_after if self.ledger else config.initial_balance
+            self.ledger[-1].balance_after if self.ledger else _money(config.initial_balance)
         )
         self.dirty_orders: set[str] = set()
         self.dirty_positions: set[str] = set()

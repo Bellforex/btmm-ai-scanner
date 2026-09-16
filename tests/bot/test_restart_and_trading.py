@@ -168,6 +168,10 @@ def test_cold_start_trades_exactly_as_scripted(baseline) -> None:  # type: ignor
         # the duplicate same-bar delivery was consumed once, and reported
         assert store.scalar("SELECT events_duplicate FROM bar_summary WHERE bar_index=14") == 1
         assert store.scalar("SELECT COUNT(*) FROM events WHERE poi_idx=4") == 1
+        # registry persistence follows every field, including re-labelling
+        assert store.query("SELECT effective_timeframe, last_changed_bar_index FROM pois WHERE poi_idx=6") == [
+            ("H1", 5)
+        ]
     finally:
         store.close()
 

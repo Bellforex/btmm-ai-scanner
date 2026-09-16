@@ -509,7 +509,10 @@ class BotEngine:
                 poi_cache[poi.record_id] = (row, first_seen)
             conn.executemany(
                 "INSERT INTO pois VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(record_id) DO UPDATE SET "
-                "poi_idx=excluded.poi_idx, zone_top=excluded.zone_top, zone_bottom=excluded.zone_bottom, "
+                "poi_idx=excluded.poi_idx, poi_type=excluded.poi_type, direction=excluded.direction, "
+                "family=excluded.family, source_timeframe=excluded.source_timeframe, "
+                "effective_timeframe=excluded.effective_timeframe, "
+                "zone_top=excluded.zone_top, zone_bottom=excluded.zone_bottom, "
                 "source_time_utc=excluded.source_time_utc, availability_time_utc=excluded.availability_time_utc, "
                 "fresh_active=excluded.fresh_active, terminal_reason=excluded.terminal_reason, "
                 "terminal_time_utc=excluded.terminal_time_utc, last_changed_bar_index=excluded.last_changed_bar_index",
