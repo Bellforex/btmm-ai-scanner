@@ -122,6 +122,7 @@ def _load_export(
     path: Path, timeframe: Timeframe, scratch: Path
 ) -> tuple[NormalizedCandle, ...]:
     rows: dict[int, tuple[str, ...]] = {}
+    close_ms: dict[int, int] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         match = _OHLC.search(line)
         if match is None:
@@ -131,13 +132,17 @@ def _load_export(
         if open_ms in rows and rows[open_ms] != row:
             raise AlignmentError(f"{path.name}: conflicting duplicate bar {open_ms}")
         rows[open_ms] = row
+        close_ms[open_ms] = int(match[2])
     scratch.parent.mkdir(parents=True, exist_ok=True)
     with scratch.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(("time", "open", "high", "low", "close", "volume"))
         for open_ms in sorted(rows):
             writer.writerow(rows[open_ms])
-    return load_v1a_csv(scratch, timeframe)
+    # Availability is the broker's REAL bar close (TradingView `time_close`),
+    # not open + a fixed duration: FXCM session-end bars are shorter, and a
+    # fixed duration makes them visible to the engine late.
+    return load_v1a_csv(scratch, timeframe, close_time_ms_by_open_ms=close_ms)
 
 
 def _select(
@@ -223,6 +228,7 @@ def load_aligned_window(capture_path: Path, export_dir: Path) -> AlignedWindow:
             tf.value: v[0].event_time_utc.isoformat() for tf, v in contexts.items()
         },
         "alignment": "RUNMETA first/last/count + OHLC checksum verified per window",
+        "availability": "broker bar close (TradingView time_close) per bar",
     }
     return AlignedWindow(runmeta, host_tf, host, contexts, provenance)
 

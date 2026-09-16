@@ -78,6 +78,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -213,8 +214,17 @@ def load_v1a_csv(
     timeframe: Timeframe,
     *,
     symbol: InternalSymbol = InternalSymbol.XAUUSD,
+    close_time_ms_by_open_ms: Mapping[int, int] | None = None,
 ) -> tuple[NormalizedCandle, ...]:
     """Parse one V1-A raw-OHLC CSV into an ordered tuple of ``NormalizedCandle``.
+
+    ``close_time_ms_by_open_ms`` (optional) supplies the broker's REAL bar
+    close per bar. FXCM bars end at the session close, not after a fixed
+    duration (a D1 bar runs 22:00 -> 21:00 UTC, the last H4 bar of a session
+    is 3h, W1 closes Friday 20:45), so availability derived as
+    ``open + fixed duration`` makes session-end bars visible late. When the
+    mapping is omitted the frozen fixed-duration rule applies unchanged, so
+    every previously published V1-A digest still reproduces.
 
     Every physical data row becomes exactly one candle. Rows must already be
     in strictly increasing, non-duplicated ``time`` order — this loader
@@ -258,6 +268,8 @@ def load_v1a_csv(
             previous_event_time = event_time_utc
 
             availability_time_utc = event_time_utc + duration
+            if close_time_ms_by_open_ms is not None:
+                availability_time_utc = _epoch_ms_to_utc(close_time_ms_by_open_ms[time_ms])
             open_price = Decimal(row["open"])
             high_price = Decimal(row["high"])
             low_price = Decimal(row["low"])

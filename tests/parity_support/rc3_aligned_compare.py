@@ -37,7 +37,7 @@ import re
 from collections import Counter, defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -99,7 +99,7 @@ class Mismatch:
         return {
             "stage": self.stage,
             "bar_ms": self.bar_ms,
-            "bar_utc": datetime.fromtimestamp(self.bar_ms / 1000).isoformat()
+            "bar_utc": datetime.fromtimestamp(self.bar_ms / 1000, tz=UTC).isoformat()
             if self.bar_ms
             else None,
             "poi": self.poi,
@@ -227,7 +227,7 @@ def compare(
     py_identity: dict[str, Identity] = {}
     py_last_p3: dict[str, dict[str, str]] = {}
     out_of_scope: Counter[str] = Counter()
-    promoted: set[str] = set()
+    promoted: dict[str, str] = {}
     for row in _rows(authority_dir / "p3_registry_rows.ndjson.gz", through):
         rid = row["poi_record_id"]
         if row["source_timeframe"] != host_timeframe:
@@ -236,8 +236,11 @@ def compare(
             )
             continue
         if row["effective_timeframe"] != host_timeframe:
-            promoted.add(rid)
-            continue
+            # Cross-timeframe merge (poi/overlap.py resolve_merges) promoted
+            # this host POI's effective timeframe. Pine's single-timeframe
+            # registry cannot do that, so it is matched by identity and the
+            # promotion is reported as a field divergence -- never dropped.
+            promoted[rid] = row["effective_timeframe"]
         type_code = CODE_BY_POI_TYPE.get(_poi_type(row["poi_type"]))
         if type_code is None or type_code > 18:
             out_of_scope[f"type:{row['poi_type']}"] += 0 if rid in py_identity else 1
@@ -292,6 +295,7 @@ def compare(
         pine = pine_p3[idx]
         checks = {
             "tier": (_TIER_CODE[py["strength_tier"]], int(pine["tier"])),
+            "effective_timeframe": (py["effective_timeframe"], host_timeframe),
         }
         py_term_ms = _iso_ms(py["terminal_time_utc"]) if py["terminal_time_utc"] else 0
         if py["terminal"] == "1":
@@ -480,7 +484,9 @@ def compare(
         "host_timeframe": host_timeframe,
         "level_a_in_scope_pois": len(py_identity),
         "level_a_out_of_scope_pois": dict(out_of_scope),
-        "level_a_host_pois_with_promoted_effective_timeframe": len(promoted),
+        "level_a_host_pois_with_promoted_effective_timeframe": dict(
+            Counter(promoted.values())
+        ),
         "pine_registry_pois": len(pine_identity),
         "pine_evaluated_pois_through": len(pine_evaluated),
     }
@@ -502,6 +508,33 @@ def compare(
         "terminal_before_activation": term_before_act,
         "python_events_on_unmatched_pois": unmatched_py_event_pois,
     }
+    promoted_idx = {
+        pine_idx_by_identity[py_identity[rid]]
+        for rid in promoted
+        if py_identity.get(rid) in pine_idx_by_identity
+    }
+    by_class: Counter[str] = Counter()
+    for m in mismatches:
+        idx_s = m.poi.split(":")[1] if m.poi.startswith("pine:") else ""
+        cls = (
+            "promoted"
+            if idx_s.isdigit() and int(idx_s) in promoted_idx
+            else "host_only"
+        )
+        by_class[f"{m.stage}:{cls}"] += 1
+    report.scope["mismatches_by_poi_class"] = dict(by_class)
+    first_by_class: dict[str, dict[str, Any]] = {}
+    for m in mismatches:
+        idx_s = m.poi.split(":")[1] if m.poi.startswith("pine:") else ""
+        cls = (
+            "promoted"
+            if idx_s.isdigit() and int(idx_s) in promoted_idx
+            else "host_only"
+        )
+        key = f"{m.stage}:{cls}"
+        first_by_class.setdefault(key, m.as_dict())
+    report.scope["first_divergence_by_class"] = first_by_class
+    report.scope["all_mismatches"] = [m.as_dict() for m in mismatches]
     report.p5 = {
         "bars_compared": p5_bars_compared,
         "rows_compared": p5_rows_compared,
