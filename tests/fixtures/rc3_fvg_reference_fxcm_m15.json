@@ -1,0 +1,322 @@
+{
+ "provenance": {
+  "feed": "FX:XAUUSD",
+  "timeframe": "M15",
+  "source": "same-session TradingView export verified against PARITY DEV v4 RUNMETA (pine_m15_run1.csv)",
+  "pine_capture_sha256": "ef228c75a28b7b0e29d313d0d3ca5271c70bc029e10558de3accc822ea56e526"
+ },
+ "examples": {
+  "large_buy": {
+   "type": "BUY_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1789129800000,
+     "close_time": 1789130700000,
+     "open": "4340.7",
+     "high": "4362.7",
+     "low": "4291.89",
+     "close": "4353.85"
+    },
+    {
+     "time": 1789130700000,
+     "close_time": 1789131600000,
+     "open": "4353.85",
+     "high": "4390.19",
+     "low": "4352.45",
+     "close": "4388.01"
+    },
+    {
+     "time": 1789131600000,
+     "close_time": 1789132500000,
+     "open": "4388.01",
+     "high": "4394.33",
+     "low": "4380.49",
+     "close": "4389.31"
+    }
+   ],
+   "zone_top": "4380.49",
+   "zone_bottom": "4362.7",
+   "source_ms": 1789129800000,
+   "availability_ms": 1789132500000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1789133400000",
+    "firstTouch": "1789133400000"
+   }
+  },
+  "large_sell": {
+   "type": "SELL_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1788524100000,
+     "close_time": 1788525000000,
+     "open": "4464.7",
+     "high": "4476.04",
+     "low": "4464.32",
+     "close": "4471.94"
+    },
+    {
+     "time": 1788525000000,
+     "close_time": 1788525900000,
+     "open": "4471.94",
+     "high": "4472.63",
+     "low": "4379.18",
+     "close": "4393.8"
+    },
+    {
+     "time": 1788525900000,
+     "close_time": 1788526800000,
+     "open": "4393.8",
+     "high": "4409.84",
+     "low": "4380.06",
+     "close": "4393.83"
+    }
+   ],
+   "zone_top": "4464.32",
+   "zone_bottom": "4409.84",
+   "source_ms": 1788524100000,
+   "availability_ms": 1788526800000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1788528600000",
+    "firstTouch": "1788528600000"
+   }
+  },
+  "minimal_buy": {
+   "type": "BUY_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1787265000000,
+     "close_time": 1787265900000,
+     "open": "4519.47",
+     "high": "4523.55",
+     "low": "4518.29",
+     "close": "4522.55"
+    },
+    {
+     "time": 1787265900000,
+     "close_time": 1787266800000,
+     "open": "4522.55",
+     "high": "4524.39",
+     "low": "4519.56",
+     "close": "4524.14"
+    },
+    {
+     "time": 1787266800000,
+     "close_time": 1787267700000,
+     "open": "4524.14",
+     "high": "4532.94",
+     "low": "4523.56",
+     "close": "4531.72"
+    }
+   ],
+   "zone_top": "4523.56",
+   "zone_bottom": "4523.55",
+   "source_ms": 1787265000000,
+   "availability_ms": 1787267700000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1787268600000",
+    "firstTouch": "1787268600000"
+   }
+  },
+  "minimal_sell": {
+   "type": "SELL_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1788147900000,
+     "close_time": 1788148800000,
+     "open": "4422.73",
+     "high": "4426.9",
+     "low": "4421.46",
+     "close": "4422.51"
+    },
+    {
+     "time": 1788148800000,
+     "close_time": 1788149700000,
+     "open": "4422.51",
+     "high": "4422.85",
+     "low": "4416.67",
+     "close": "4421.1"
+    },
+    {
+     "time": 1788149700000,
+     "close_time": 1788150600000,
+     "open": "4421.1",
+     "high": "4421.42",
+     "low": "4415.84",
+     "close": "4415.97"
+    }
+   ],
+   "zone_top": "4421.46",
+   "zone_bottom": "4421.42",
+   "source_ms": 1788147900000,
+   "availability_ms": 1788150600000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1788151500000",
+    "firstTouch": "1788151500000"
+   }
+  },
+  "overlap_a": {
+   "type": "BUY_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1787237100000,
+     "close_time": 1787238000000,
+     "open": "4499.12",
+     "high": "4516.24",
+     "low": "4498.57",
+     "close": "4515.88"
+    },
+    {
+     "time": 1787238000000,
+     "close_time": 1787238900000,
+     "open": "4515.88",
+     "high": "4537.39",
+     "low": "4514.96",
+     "close": "4535.04"
+    },
+    {
+     "time": 1787238900000,
+     "close_time": 1787239800000,
+     "open": "4535.04",
+     "high": "4540.88",
+     "low": "4523.46",
+     "close": "4532.39"
+    }
+   ],
+   "zone_top": "4523.46",
+   "zone_bottom": "4516.24",
+   "source_ms": 1787237100000,
+   "availability_ms": 1787239800000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1787240700000",
+    "firstTouch": "1787240700000"
+   }
+  },
+  "overlap_b": {
+   "type": "BUY_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1787246100000,
+     "close_time": 1787247000000,
+     "open": "4509.35",
+     "high": "4516.62",
+     "low": "4507.8",
+     "close": "4512.87"
+    },
+    {
+     "time": 1787247000000,
+     "close_time": 1787247900000,
+     "open": "4512.87",
+     "high": "4518.66",
+     "low": "4510.76",
+     "close": "4518.22"
+    },
+    {
+     "time": 1787247900000,
+     "close_time": 1787248800000,
+     "open": "4518.22",
+     "high": "4520.48",
+     "low": "4517.04",
+     "close": "4519.86"
+    }
+   ],
+   "zone_top": "4517.04",
+   "zone_bottom": "4516.62",
+   "source_ms": 1787246100000,
+   "availability_ms": 1787248800000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1787249700000",
+    "firstTouch": "1787249700000"
+   }
+  },
+  "mitigated": {
+   "type": "BUY_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1787169600000,
+     "close_time": 1787170500000,
+     "open": "4511.25",
+     "high": "4512.02",
+     "low": "4505.04",
+     "close": "4506.84"
+    },
+    {
+     "time": 1787170500000,
+     "close_time": 1787171400000,
+     "open": "4506.84",
+     "high": "4521.89",
+     "low": "4506.3",
+     "close": "4518.33"
+    },
+    {
+     "time": 1787171400000,
+     "close_time": 1787172300000,
+     "open": "4518.33",
+     "high": "4523.61",
+     "low": "4517.92",
+     "close": "4519.44"
+    }
+   ],
+   "zone_top": "4517.92",
+   "zone_bottom": "4512.02",
+   "source_ms": 1787169600000,
+   "availability_ms": 1787172300000,
+   "pine_p3life": {
+    "freshActive": "false",
+    "termReason": "1",
+    "termTime": "1787179500000",
+    "firstTouch": "1787179500000"
+   }
+  },
+  "fresh": {
+   "type": "SELL_FAIR_VALUE_GAP",
+   "candles": [
+    {
+     "time": 1787618700000,
+     "close_time": 1787619600000,
+     "open": "4693.78",
+     "high": "4694.77",
+     "low": "4683.99",
+     "close": "4684.21"
+    },
+    {
+     "time": 1787619600000,
+     "close_time": 1787620500000,
+     "open": "4684.21",
+     "high": "4686.73",
+     "low": "4670.71",
+     "close": "4678.21"
+    },
+    {
+     "time": 1787620500000,
+     "close_time": 1787621400000,
+     "open": "4678.21",
+     "high": "4680.28",
+     "low": "4664.12",
+     "close": "4669.57"
+    }
+   ],
+   "zone_top": "4683.99",
+   "zone_bottom": "4680.28",
+   "source_ms": 1787618700000,
+   "availability_ms": 1787621400000,
+   "pine_p3life": {
+    "freshActive": "true",
+    "termReason": "0",
+    "termTime": "-99",
+    "firstTouch": "-99"
+   }
+  }
+ }
+}
