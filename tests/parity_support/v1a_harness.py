@@ -75,41 +75,24 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from btmm_ai_scanner.btmm.configuration import BtmmConfiguration
-from btmm_ai_scanner.btrc.t5_engine import assess_confluence
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
-from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
 from btmm_ai_scanner.domain.displacement import detect_displacement_observations
-from btmm_ai_scanner.historical_backtest.identity import (
-    ContentAddressedIdentityProvider,
-)
 from btmm_ai_scanner.measurements.atr import compute_atr_series
-from btmm_ai_scanner.poi.configuration import PoiConfiguration
-from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
 from btmm_ai_scanner.scanner.configuration import ScannerConfiguration
-from btmm_ai_scanner.scanner.replay import IncrementalReplayKernel
-from btmm_ai_scanner.structure.configuration import StructureConfiguration
-from tests.parity_support.p5_active_poi_loop_model import resolve_eligible_and_next
-from tests.parity_support.p5_wire_normalized_replay import (
-    LIFECYCLE_CODE,
-    PERMISSION_CODE,
-    POI_TIER_BY_CODE,
+from tests.parity_support.level_a_replay import (
+    WarmupFeedPolicy,
+    iter_level_a_bars,
+    merge_context_group,
 )
-from tests.parity_support.p8_alert_oracle import (
-    AlertEngine,
-    BarSnapshot,
-    PoiSnapshot,
+from tests.parity_support.level_a_replay import (
+    build_scanner_configuration as _build_level_a_configuration,
 )
 from tests.parity_support.v1a_csv_loader import (
     DEFAULT_PRE_DEV_LOOKBACK_BARS,
     load_dev_bounded_context_capped,
     load_dev_only_m15,
 )
-
-_TERMINAL_STATUS = PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
-_TIER_CODE_BY_VALUE = {v: k for k, v in POI_TIER_BY_CODE.items() if v is not None}
-_TIER_CODE_BY_VALUE[None] = 0
 
 _CONTEXT_TIMEFRAMES: tuple[Timeframe, ...] = (
     Timeframe.W1,
@@ -119,16 +102,18 @@ _CONTEXT_TIMEFRAMES: tuple[Timeframe, ...] = (
 )
 _TRACKED_TIMEFRAMES: tuple[Timeframe, ...] = (*_CONTEXT_TIMEFRAMES, Timeframe.M15)
 
+#: Kept as a module-level name because the V1-A tests import it directly; it
+#: is now a thin alias for the shared core's own group merger, so the two
+#: drivers can never drift apart on how context candles are consumed.
+_merge_context_group = merge_context_group
+
 
 def build_scanner_configuration() -> ScannerConfiguration:
-    tick = Decimal("0.01")
-    return ScannerConfiguration(
-        measurement_configuration=MarketMeasurementConfiguration(minimum_price_tick=tick),
-        structure_configuration=StructureConfiguration(),
-        poi_configuration=PoiConfiguration(minimum_price_tick=tick),
-        btmm_configuration=BtmmConfiguration(minimum_price_tick=tick),
+    """The frozen V1-A configuration: M15 host, W1/D1/H4/H1 context."""
+    return _build_level_a_configuration(
         required_timeframes=frozenset({Timeframe.M15}),
         optional_timeframes=frozenset(_CONTEXT_TIMEFRAMES),
+        minimum_price_tick=Decimal("0.01"),
     )
 
 
@@ -198,24 +183,6 @@ def _score_band(score: int) -> str:
     return ">=65"
 
 
-def _merge_context_group(
-    context_candles: dict[Timeframe, list[NormalizedCandle]],
-    pointers: dict[Timeframe, int],
-    bound_availability_utc: datetime,
-) -> dict[Timeframe, tuple[NormalizedCandle, ...]]:
-    group: dict[Timeframe, tuple[NormalizedCandle, ...]] = {}
-    for timeframe, seq in context_candles.items():
-        pointer = pointers[timeframe]
-        collected: list[NormalizedCandle] = []
-        while pointer < len(seq) and seq[pointer].availability_time_utc <= bound_availability_utc:
-            collected.append(seq[pointer])
-            pointer += 1
-        pointers[timeframe] = pointer
-        if collected:
-            group[timeframe] = tuple(collected)
-    return group
-
-
 def run_dev_replay(
     *,
     dataset_root: Path,
@@ -243,7 +210,6 @@ def run_dev_replay(
     context_full = load_dev_bounded_context_capped(
         dataset_root, pre_dev_lookback_bars=pre_dev_lookback_bars
     )
-    dev_start = dev_m15[0].event_time_utc
     dev_end_availability = dev_m15[-1].availability_time_utc
 
     context_candles: dict[Timeframe, list[NormalizedCandle]] = {}
@@ -251,132 +217,56 @@ def run_dev_replay(
         bounded = [c for c in candles if c.availability_time_utc <= dev_end_availability]
         bounded.sort(key=lambda c: c.availability_time_utc)
         context_candles[timeframe] = bounded
-    context_pointers = {tf: 0 for tf in _CONTEXT_TIMEFRAMES}
 
     config = build_scanner_configuration()
-    kernel = IncrementalReplayKernel(
-        _TRACKED_TIMEFRAMES, config, ContentAddressedIdentityProvider(), ()
-    )
-
-    # Bulk-feed the pre-DEV warm-up context (all of it precedes DEV's first
-    # bar's availability, so no per-bar interleaving is needed here — this
-    # is a straight availability-ordered walk of the context-only prefix).
-    pre_dev_flat: list[tuple[datetime, Timeframe, NormalizedCandle]] = []
-    for timeframe, candles in context_candles.items():
-        for candle in candles:
-            if candle.event_time_utc < dev_start:
-                pre_dev_flat.append((candle.availability_time_utc, timeframe, candle))
-    pre_dev_flat.sort(key=lambda row: row[0])
-    index = 0
-    while index < len(pre_dev_flat):
-        group_time = pre_dev_flat[index][0]
-        group: dict[Timeframe, list[NormalizedCandle]] = {}
-        while index < len(pre_dev_flat) and pre_dev_flat[index][0] == group_time:
-            group.setdefault(pre_dev_flat[index][1], []).append(pre_dev_flat[index][2])
-            index += 1
-        kernel.advance_group({tf: tuple(v) for tf, v in group.items()})
-    for timeframe in _CONTEXT_TIMEFRAMES:
-        seq = context_candles[timeframe]
-        pointer = 0
-        while pointer < len(seq) and seq[pointer].event_time_utc < dev_start:
-            pointer += 1
-        context_pointers[timeframe] = pointer
-
-    # Running "visible so far" candle accumulator for assess_confluence's
-    # own candles_by_timeframe parameter (volatility assessment) -- point
-    # -in-time correct by construction: only ever appended to, in step
-    # with the kernel's own advance, never containing a future candle.
-    visible: dict[Timeframe, list[NormalizedCandle]] = {tf: [] for tf in _TRACKED_TIMEFRAMES}
-    for timeframe in _CONTEXT_TIMEFRAMES:
-        pre = [c for c in context_candles[timeframe] if c.event_time_utc < dev_start]
-        visible[timeframe].extend(pre)
 
     poi_registry: dict[UUID, PoiRegistryEntry] = {}
-    poi_idx_by_id: dict[UUID, int] = {}
-    next_poi_idx = 0
-    previously_active_ids: frozenset[UUID] = frozenset()
-    alert_engine = AlertEngine()
     events: list[EventRecord] = []
     availability_to_bar_index: dict[datetime, int] = {}
 
-    for bar_index, candle in enumerate(dev_m15):
-        bound = candle.availability_time_utc
-        group = _merge_context_group(context_candles, context_pointers, bound)
-        group[Timeframe.M15] = (candle,)
-        kernel.advance_group(group)
-        for timeframe, new_candles in group.items():
-            visible[timeframe].extend(new_candles)
+    # The per-bar walk itself lives in the shared Level-A core; this driver
+    # only projects each bar into the frozen V1-A record shapes. The legacy
+    # EVENT_TIME warm-up policy is pinned here on purpose: it is what the
+    # already-published V1-A digests were produced under (see
+    # ``level_a_replay`` "THE TWO PARAMETERISED POLICIES").
+    for bar in iter_level_a_bars(
+        host_timeframe=Timeframe.M15,
+        host_series=dev_m15,
+        context_series=context_candles,
+        configuration=config,
+        rc3_freshness=False,
+        warmup_feed_policy=WarmupFeedPolicy.EVENT_TIME,
+    ):
+        bar_index = bar.bar_index
+        availability_to_bar_index[bar.availability_time_utc] = bar_index
 
-        snapshot = kernel.finalize()
-        availability_to_bar_index[snapshot.availability_time_utc] = bar_index
+        for poi_id in bar.evaluated_order:
+            if poi_id in poi_registry:
+                continue
+            poi = bar.observation_by_id[poi_id]
+            poi_registry[poi_id] = PoiRegistryEntry(
+                record_id=poi_id,
+                poi_idx=bar.poi_idx_by_id[poi_id],
+                poi_type=poi.poi_type.value,
+                poi_direction=poi.direction.value,
+                origin_timeframe=poi.source_timeframe.value,
+                effective_timeframe=poi.effective_timeframe.value,
+                zone_top=poi.zone_top,
+                zone_bottom=poi.zone_bottom,
+                strength_tier=poi.strength_tier.value if poi.strength_tier else None,
+                availability_time_utc=poi.availability_time_utc,
+                first_seen_bar_index=bar_index,
+            )
 
-        status_by_id = {
-            s.poi_record_id: s.poi_lifecycle_status
-            for s in snapshot.poi_analysis.current_poi_states
+        poi_id_by_idx_this_bar = {
+            bar.poi_idx_by_id[pid]: pid for pid in bar.evaluated_order
         }
-        obs_by_id = {o.record_id: o for o in snapshot.poi_analysis.poi_observations}
-        eligible_ids, next_active = resolve_eligible_and_next(
-            status_by_id, previously_active_ids, known_ids=frozenset(obs_by_id)
-        )
-        ordered = tuple(
-            sorted(eligible_ids, key=lambda pid: (obs_by_id[pid].availability_time_utc, str(pid)))
-        )
-
-        poi_snapshots: list[PoiSnapshot] = []
-        decisions_this_bar: dict[UUID, object] = {}
-        for poi_id in ordered:
-            poi = obs_by_id[poi_id]
-            if poi_id not in poi_idx_by_id:
-                poi_idx_by_id[poi_id] = next_poi_idx
-                poi_registry[poi_id] = PoiRegistryEntry(
-                    record_id=poi_id,
-                    poi_idx=next_poi_idx,
-                    poi_type=poi.poi_type.value,
-                    poi_direction=poi.direction.value,
-                    origin_timeframe=poi.source_timeframe.value,
-                    effective_timeframe=poi.effective_timeframe.value,
-                    zone_top=poi.zone_top,
-                    zone_bottom=poi.zone_bottom,
-                    strength_tier=poi.strength_tier.value if poi.strength_tier else None,
-                    availability_time_utc=poi.availability_time_utc,
-                    first_seen_bar_index=bar_index,
-                )
-                next_poi_idx += 1
-
-            decision = assess_confluence(
-                snapshot,
-                poi,
-                candles_by_timeframe=visible,
-                evaluation_time_utc=snapshot.availability_time_utc,
-            )
-            decisions_this_bar[poi_id] = decision
-            status = status_by_id.get(poi_id)
-            poi_snapshots.append(
-                PoiSnapshot(
-                    poi_idx=poi_idx_by_id[poi_id],
-                    poi_bullish=poi.direction.value == "BULLISH",
-                    tier=_TIER_CODE_BY_VALUE[poi.strength_tier],
-                    terminal=status is _TERMINAL_STATUS,
-                    btmm_valid=decision.btmm_valid,
-                    permission=PERMISSION_CODE[decision.analytical_permission],
-                    lifecycle=LIFECYCLE_CODE[decision.lifecycle_state],
-                )
-            )
-
-        bar_ms = int(snapshot.availability_time_utc.timestamp() * 1000)
-        bar_snapshot = BarSnapshot(bar_ms=bar_ms, pois=tuple(poi_snapshots))
-        if not alert_engine.primed:
-            alert_engine.prime(bar_snapshot)
-            fired = []
-        else:
-            fired = alert_engine.process(bar_snapshot)
-
-        poi_id_by_idx_this_bar = {poi_idx_by_id[pid]: pid for pid in ordered}
-        for alert_event in fired:
+        for alert_event in bar.events:
             poi_id = poi_id_by_idx_this_bar[alert_event.poi_idx]
-            decision = decisions_this_bar[poi_id]
-            poi = obs_by_id[poi_id]
-            event_dt = snapshot.availability_time_utc
+            decision = bar.decision_by_id[poi_id]
+            poi = bar.observation_by_id[poi_id]
+            event_dt = bar.availability_time_utc
+            bar_ms = bar.bar_ms
             events.append(
                 EventRecord(
                     event_type=alert_event.event_type.value,
@@ -408,8 +298,6 @@ def run_dev_replay(
                     iso_week=f"{event_dt.isocalendar().year}-W{event_dt.isocalendar().week:02d}",
                 )
             )
-
-        previously_active_ids = next_active
 
         if progress_callback is not None and (
             (bar_index + 1) % progress_every == 0 or bar_index + 1 == len(dev_m15)

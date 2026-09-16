@@ -129,6 +129,10 @@ MANIFEST_FILES: dict[str, tuple[Timeframe, str, int]] = {
 }
 
 _DURATION: dict[Timeframe, timedelta] = {
+    # M5 was acquired after the V1-A manifest was frozen (for the RC3
+    # six-timeframe authority), so it has no MANIFEST_FILES entry; the same
+    # "a fixed-duration bar is fully known at its own close" rule applies.
+    Timeframe.M5: timedelta(minutes=5),
     Timeframe.M15: timedelta(minutes=15),
     Timeframe.H1: timedelta(hours=1),
     Timeframe.H4: timedelta(hours=4),
