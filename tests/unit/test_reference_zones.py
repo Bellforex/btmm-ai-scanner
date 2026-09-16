@@ -5,9 +5,12 @@ from uuid import UUID
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
 from btmm_ai_scanner.contracts.types import SemVer
-from btmm_ai_scanner.domain.enums import EqualLevelType, SupportResistanceType
+from btmm_ai_scanner.domain.enums import (
+    EqualLevelType,
+    SupportResistanceType,
+    SwingType,
+)
 from btmm_ai_scanner.domain.equal_levels import EqualLevelCluster
-from btmm_ai_scanner.domain.enums import SwingType
 from btmm_ai_scanner.domain.support_resistance import SupportResistanceZone
 from btmm_ai_scanner.domain.swings import ConfirmedSwing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiType

@@ -150,6 +150,94 @@ This needs either measured, provably semantics-neutral compaction, or an
 author decision about what the USER build drops. It must **not** be resolved
 by reverting a semantic correction to fit the budget.
 
+### 5a. Resolved — semantics-neutral compaction (commit `8010e63`)
+
+Author-authorized. Every batch was measured on TradingView itself, because
+the compiled-token count is not predictable from the source text:
+
+| batch | change | measured effect |
+|---|---|---|
+| 1 | `color.new(color.X, 0)` → `color.X`; one hoisted `p1Dbg` for 15 identical debug-plot conjunctions | 100464 → **100403** (−61) |
+| 2 | remove 5 unused functions + 25 unused constants | 100403 → **100403** (0) — **reverted** |
+| 3 | P7 summary / active-POI table writes folded into loops; P7-Z hue and box text built once | **−1084** |
+
+Batch 2 is the lesson: TradingView strips dead declarations before it
+counts, so dead code costs nothing and removing it buys nothing. Batch 3 was
+measured by a padded differential — the same 100-line `log.info` pad appended
+to the Batch-1 and Batch-3 sources compiled to 114522 and 113438 — because a
+build under the limit reports no count at all.
+
+**Result: USER build = 99319 tokens, 937 below the limit.** Batch 1 was
+proven mechanically (every changed line is exactly one of the two rewrites);
+Batch 3 touches presentation only (`text.align_center` is `table.cell`'s
+default, so cell alignment is unchanged). T3 dispatch, S/R provenance,
+lifecycle, P5/P8 code and the P6 block are untouched; the P6 hash test and
+1171 Pine-source tests pass.
+
+Deployment note: the cloud script named *RC3 POI SEMANTICS DEV* held the
+PARITY source as its version 9 (v8 was the USER source), and the separate
+*RC3 PARITY DEV* script was a stale v2. Both are now correct: USER DEV v15,
+PARITY DEV v3, each pasted from the committed file with a line-count check.
+
+### 5b. Live acceptance on FXCM:XAUUSD (USER DEV v15)
+
+- Compiles; study status ready, never failed, on M15, H1, H4, D1 and W1.
+- H4: 8 POI boxes drawn with centred text; each box's left edge lands on a
+  candle whose high/low equals the zone's own top/bottom.
+- **`TF?` count = 0** on every host above (M15, H1, H4, D1, W1 labels).
+- **S/R left edge = origin swing.** No fresh S/R zone exists on H4 or H1
+  today (all nine H4 S/R zones are mitigated), so it was verified on D1: a
+  live `D1 • SUPPORT ZONE` box starts at 2025-11-20, the candle whose low
+  (4021.93) *is* the zone bottom — the swing pivot, not a later confirmation
+  bar.
+- PARITY DEV v3 compiles (one pre-existing shadowing warning inside the
+  unchanged P6 block).
+
+### 5c. P5 / P8 re-captures from the corrected PARITY build (H4)
+
+**P8** — `artifacts/rc3_parity/rc3_p8event_h4_corrected.csv`, sha256
+`9438e1b7…2f1c`, only `p8DebugLog` enabled, complete (no truncation):
+3943 events — 978 `POI_ACTIVATED` (equal to the 978 P3LIFE registry POIs),
+1018 `PERMISSION_ENTERED_ACTIONABLE`, 1010 `PERMISSION_LOST_ACTIONABLE`,
+937 `POI_TERMINAL`. Contract invariants: 937 distinct terminal POIs, zero
+duplicates, zero terminals missing a reason, zero terminal-before-activation,
+reasons 937/937 `MITIGATED`. This supersedes the pre-correction capture.
+
+**P5** — `artifacts/rc3_parity/rc3_p5eval_h4_corrected.csv`, sha256
+`66a27e26…4a27`, only `debugMode` enabled. **Truncated by TradingView's
+~10k-row log cap**: 9993 `P5EVAL` rows covering only the last 233 H4 bars.
+
+Disclosure: an H4 study necessarily executes over its whole 1800-bar window,
+which includes the sealed out-of-sample range, so both captures contain rows
+from it. Only whole-stream contract invariants were computed; no row from
+that range was analysed or characterised.
+
+### 5d. BLOCKER — Level A == Level B is not constructible as currently set up
+
+The continuous Level-A authority (`rc3_daily_authority.py`) is an **M15-host**
+replay over the acquired window 2026-08-09 22:00 → 2026-09-04 20:30, with
+250-bar pre-window context. A live Pine capture differs from it on every axis
+an exact differential depends on:
+
+1. **Host** — authority M15; P3LIFE/P8/P5 captures H4 (the host the T3
+   correction matters on).
+2. **Execution window and initial state** — Pine runs the last 1800 bars of
+   *today's* feed from an empty registry; poi_idx assignment therefore starts
+   at a different bar.
+3. **Context depth** — Pine's six contexts are bounded at 1251 bars each
+   (M5 ≈ 4.3 days), the authority's are not.
+4. **Feed snapshot** — the authority reads files acquired earlier; FXCM has
+   revised this history before.
+5. **P5 capture volume** — P5EVAL over 1800 bars exceeds the log cap.
+
+And independently, the P5 closure already accepted and disclosed that
+high-precision Python ↔ Pine P5 decision parity does **not** hold universally
+(the float64 momentum boundary), so "exact" P5 parity needs its standard
+re-stated before it can be closed.
+
+**P3, P5 and P8 parity are therefore not closed.** This needs an author
+decision on the comparison design (see the report).
+
 ## 6. Verification state
 
 - Baseline before any change: **4660 passed / 0 failed** (11m25s).
@@ -161,10 +249,11 @@ by reverting a semantic correction to fit the budget.
 
 ## 7. Not done / still open
 
-P5 and P8 live captures from the corrected build; the field-by-field
-comparison of those against the independent Level-A authority; USER-build
-token compaction and visual acceptance; RC3 semantic freeze. **RC3 is not
-promotion-ready and has not been promoted.**
+Compaction, visual acceptance and the P5/P8 re-captures are done (§5a–5c).
+Still open: the Level A == Level B differential and closure of P3/P5/P8
+parity, blocked on the comparison-design decision in §5d; hence RC3 semantic
+freeze; hence the dry-run bot, which must not start before freeze. **RC3 is
+not promotion-ready and has not been promoted.**
 
 The sealed V1-A characterization summary, the OOS window, and the untracked
 V1-A M5-materiality files remain unopened and unmodified.
