@@ -5789,6 +5789,12 @@ p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minva
 // no-information-loss requirement actually asks for. A parity/DEV build with
 // reduced presentation can carry it back.
 p7zMaxVisibleZones  = input.int(8, "Max visible zone groups", minval = 1, maxval = 30, group = grpP7Z)
+// RC3 presentation-only. 0 = live: zones are built on the last confirmed bars
+// only (the visible result is the final state; building it on all ~1800
+// history bars only to evict it again was pure load time). A time = review
+// mode: the zones that were FRESH at that time, frozen there; terminal zones
+// never come back to life.
+p7zAsOf             = input.time(0, "Review zones as of (0 = live)", group = grpP7Z)
 
 grpP9 = "P9 — Full-System Integration Trace (debug only)"
 p9DebugLog = input.bool(false, "P9 integrated trace log (identity/geometry/visibility, independent of P1/P8 debug)", group = grpP9)
@@ -6317,7 +6323,7 @@ if barstate.isconfirmed
     // full geometry/lifecycle/retention contract this ports line-for-line
     // from `tests/parity_support/p7z_zone_model.py`.
     // =========================================================================
-    if p7zShowZones
+    if p7zShowZones and (p7zAsOf == 0 ? bar_index >= p1DatasetBars - 2 : time_close <= p7zAsOf)
         // ---- RC3: ONLY FRESH POIs REACH THE VISUAL LAYER -----------------
         // `p7PoiIdx` is the engine's eligible set and still holds every POI
         // P5 evaluated this bar, including the one getting its final
@@ -6408,44 +6414,46 @@ if barstate.isconfirmed
             int fn = array.size(fvgIdx)
             if fn > 0
                 array<int> ord = array.sort_indices(fvgBot, order.ascending)
-                float cTop = na
-                float cBot = na
-                int cLeft = na
-                int cKey = na
-                int cN = 0
-                bool cTerm = true
-                int cType = na
+                // Cluster state is held in arrays, not scalars: the live
+                // M15 probe showed scalar `:=` updates made inside this loop
+                // (cN := 1) read back as their initial value on the next
+                // `for k` pass, so no FVG cluster was ever flushed and no FVG
+                // was ever drawn. Array element writes do persist.
+                //   cF = [top, bottom]   cI = [left, key, count, type]
+                array<float> cF = array.new<float>(2, na)
+                array<int>   cI = array.new<int>(4, 0)
+                array<bool>  cT = array.new<bool>(1, true)
                 // k == fn is a sentinel iteration that flushes the last
                 // component, so there is only ONE flush path.
                 for k = 0 to fn
                     int pI = k < fn ? array.get(fvgIdx, array.get(ord, k)) : -1
                     float bt = k < fn ? array.get(poiZoneBottom, pI) : na
                     float tp = k < fn ? array.get(poiZoneTop, pI) : na
-                    if (k == fn or cN == 0 or bt > cTop) and cN > 0
-                        array.push(p7zGTop, cTop)
-                        array.push(p7zGBot, cBot)
-                        array.push(p7zGLeft, cLeft)
+                    int cN = array.get(cI, 2)
+                    if cN > 0 and (k == fn or bt > array.get(cF, 0))
+                        array.push(p7zGTop, array.get(cF, 0))
+                        array.push(p7zGBot, array.get(cF, 1))
+                        array.push(p7zGLeft, array.get(cI, 0))
                         array.push(p7zGBull, wantDir == C_POI_DIR_BULLISH)
-                        array.push(p7zGKey, cKey)
-                        array.push(p7zGNames, f_p7zTypeLabel(cType) + (cN > 1 ? " ×" + str.tostring(cN) : ""))
-                        array.push(p7zGTerm, cTerm)
+                        array.push(p7zGKey, array.get(cI, 1))
+                        array.push(p7zGNames, f_p7zTypeLabel(array.get(cI, 3)) + (cN > 1 ? " ×" + str.tostring(cN) : ""))
+                        array.push(p7zGTerm, array.get(cT, 0))
                         cN := 0
                     if k < fn
                         if cN == 0
-                            cTop := tp
-                            cBot := bt
-                            cLeft := array.get(poiCandTime, pI)
-                            cKey := pI
-                            cN := 1
-                            cTerm := array.get(poiTerminal, pI)
-                            cType := array.get(poiType, pI)
+                            array.set(cF, 0, tp)
+                            array.set(cF, 1, bt)
+                            array.set(cI, 0, array.get(poiCandTime, pI))
+                            array.set(cI, 1, pI)
+                            array.set(cI, 3, array.get(poiType, pI))
+                            array.set(cT, 0, array.get(poiTerminal, pI))
                         else
-                            cTop := math.max(cTop, tp)
-                            cBot := math.min(cBot, bt)
-                            cLeft := math.min(cLeft, array.get(poiCandTime, pI))
-                            cKey := math.min(cKey, pI)
-                            cN += 1
-                            cTerm := cTerm and array.get(poiTerminal, pI)
+                            array.set(cF, 0, math.max(array.get(cF, 0), tp))
+                            array.set(cF, 1, math.min(array.get(cF, 1), bt))
+                            array.set(cI, 0, math.min(array.get(cI, 0), array.get(poiCandTime, pI)))
+                            array.set(cI, 1, math.min(array.get(cI, 1), pI))
+                            array.set(cT, 0, array.get(cT, 0) and array.get(poiTerminal, pI))
+                        array.set(cI, 2, cN + 1)
 
         // ---- non-FVG: exact-geometry twins via a map key, no all-pairs ----
         map<string, int> p7zSlot = map.new<string, int>()
@@ -6469,7 +6477,17 @@ if barstate.isconfirmed
                     array.set(p7zGLeft, gi, math.min(array.get(p7zGLeft, gi), cd))
                     array.set(p7zGTerm, gi, array.get(p7zGTerm, gi) and array.get(poiTerminal, pI))
                     string nmsCur = array.get(p7zGNames, gi)
-                    if not str.contains(nmsCur, nm)
+                    // PRIMARY DISPLAY NAME (author decision, presentation only):
+                    // an engulfing that shares this group with an order block
+                    // IS that order block's formation -- both detectors emit
+                    // the same two source candles, the first candle's range as
+                    // the zone, and the second candle's close as availability,
+                    // and the group key is exactly (top, bottom, availability,
+                    // direction). Show "ORDER BLOCK" only. The OB is always the
+                    // first name: f_poiDetectOrderBlocks registers before
+                    // f_poiDetectEngulfing on the same bar and this walk is in
+                    // registry order. Both registry records are untouched.
+                    if not str.contains(nmsCur, nm) and not (str.contains(nm, "ENGULFING") and str.contains(nmsCur, "ORDER BLOCK"))
                         array.set(p7zGNames, gi, nmsCur + " + " + nm)
                 else
                     map.put(p7zSlot, gk, array.size(p7zGTop))
@@ -6486,8 +6504,8 @@ if barstate.isconfirmed
         int p7zShown = math.min(p7zNGrp, p7zMaxVisibleZones)
         array<int> p7zSelected = array.new<int>()
         array<int> p7zSelGrp   = array.new<int>()
+        array<float> p7zGDist = array.new<float>()
         if p7zShown > 0
-            array<float> p7zGDist = array.new<float>()
             for g = 0 to p7zNGrp - 1
                 float gt = array.get(p7zGTop, g)
                 float gb = array.get(p7zGBot, g)
@@ -6549,20 +6567,15 @@ if barstate.isconfirmed
                                     array.set(p7zComp, a, cb)
             for a = 0 to p7zShown - 1
                 int ga = array.get(p7zSelGrp, a)
-                // Distance is recomputed rather than read from the selection
-                // block's scratch array, which is scoped to that block.
-                float topA = array.get(p7zGTop, ga)
-                float botA = array.get(p7zGBot, ga)
-                float da = close < botA ? botA - close : (close > topA ? close - topA : 0.0)
+                // Same per-group distance the selection pass computed.
+                float da = array.get(p7zGDist, ga)
                 int ta = array.get(p7zGLeft, ga)
                 int ia = array.get(p7zSelected, a)
                 bool own = true
                 for b = 0 to p7zShown - 1
                     if b != a and array.get(p7zComp, b) == array.get(p7zComp, a)
                         int gb = array.get(p7zSelGrp, b)
-                        float topB = array.get(p7zGTop, gb)
-                        float botB = array.get(p7zGBot, gb)
-                        float db = close < botB ? botB - close : (close > topB ? close - topB : 0.0)
+                        float db = array.get(p7zGDist, gb)
                         int tb = array.get(p7zGLeft, gb)
                         int ib = array.get(p7zSelected, b)
                         if db < da or (db == da and (tb > ta or (tb == ta and ib < ia)))
@@ -6666,7 +6679,10 @@ if barstate.isconfirmed
                     box p7zNewBox = box.new(left = p7zAvailTime, top = p7zTop, right = p7zRightEdge, bottom = p7zBottom,
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
                       extend = extend.right, text = p7zBoxTxt, text_halign = text.align_center,
-                      text_valign = text.align_center, text_color = p7zTextColor, text_size = size.small)
+                      text_valign = text.align_center, text_color = p7zTextColor, text_size = size.auto)
+                    // size.auto: TradingView fits the name inside the box at every
+                    // zoom. A fixed size overflowed the zone when the chart was
+                    // compressed horizontally or vertically (live zoom test).
                     // RC3 creates no label object at all: the annotation is
                     // the box's own centered text. One drawing object per zone
                     // instead of two, and the text can no longer drift away

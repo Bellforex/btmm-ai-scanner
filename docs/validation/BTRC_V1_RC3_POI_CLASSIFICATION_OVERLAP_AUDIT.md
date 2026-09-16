@@ -174,3 +174,25 @@ an FVG zone. RC2 is a promoted release; it is left untouched.
 
 H4 is not audited to the same depth: its executable 1 800-bar window reaches
 the sealed out-of-sample range, which may not be replayed or inspected.
+
+## 5. Author decisions applied for the RC3 event/release build (2026-09-16)
+
+| # | decision | implementation |
+|---|---|---|
+| 1 | OB / engulfing: no semantic change tonight; primary DISPLAY name only | `dcc888d`. In a P7-Z exact-geometry group (key = top, bottom, availability, direction — formation identity for the two-candle OB and engulfing detectors, which share both source candles, zone and availability) the engulfing name is not appended when the group already carries ORDER BLOCK. Both registry records stay. Different-origin OB + engulfing, OB + FVG, OB + S/R and other patterns keep their names. Locked by `test_rc3_primary_display_label.py`; everything outside the P7-Z block hash-pinned unchanged. Live v18 vs v21 at cap 30, all 7 hosts: composite labels 12 → 0, every box's geometry/colour/extend/alignment identical. |
+| 2 | RC1 / RC2 FVG draw bug: do not modify; document | RC1 `143c0f88…`, RC2 `381f2fc2…` unchanged and hash-tested. KNOWN HISTORICAL DISPLAY DEFECT recorded in §4 and the event README; RC3 carries the fix (`ec83d1f`). |
+| 3 | canonical P3 identity keeps the source timeframe | Python never mutates `source_timeframe`; `resolve_merges` sets `effective_timeframe`, now treated as derived `higher_tf_context` by the aligned comparator (`8e5804d`). P3 field divergences on the M15 capture 196 → 2. |
+| 4 | P8 native order (poiIdx, event priority) is authoritative | Comparator checks Pine's native order and associates Python events by canonical identity; incidental Level-A numbering no longer compared. Ordering-divergent bars 37 → 0; native-order violations 0. |
+| 5 | FVG §35J: no semantic change tonight | Not touched. Any future change must first show the frozen §35J text, current Python and Pine behaviour, tests and the expected delta. |
+| 6 | accept `size.auto` box text | Kept. Text is box-native, centred and auto-sized on every host (verified by box properties on all 7 hosts; containment verified in the zoom test). |
+
+PARITY DEV has no P7-Z drawing code (inputs only), so the FVG sweep fix had
+nothing to mirror there; PARITY v4 (`d49f0624…`) was recompiled on the chart
+with no token or runtime error on all 7 hosts, and its P6 block is
+byte-identical to RC2's (now also a test).
+
+**Remaining P3/P5/P8 parity blocker (author decision needed, not tooling):**
+`btrc/t5_engine.py` evaluates each POI on `poi.effective_timeframe`
+(momentum / breakout / pullback / volatility of the higher timeframe) while
+single-timeframe Pine evaluates on the host. All 10 961 P5 field and 901 P8
+differences on the M15 capture are in that class; host-only POIs are exact.

@@ -468,7 +468,11 @@ def _pine_sweep_groups(active, geo, close, capacity, period):
             g_count[gi] += 1
             g_key[gi] = min(g_key[gi], i)
             g_strong[gi] = g_strong[gi] or is_strong
-            if nm not in g_names[gi]:
+            # Mirrors the Pine primary-name rule: an engulfing joining a
+            # group that already names an ORDER BLOCK is not appended.
+            if nm not in g_names[gi] and not (
+                gd.poi_type in (11, 12) and " OB" in g_names[gi]
+            ):
                 g_names[gi] = f"{g_names[gi]} + {nm}"
         else:
             slot[gk] = len(g_top)
