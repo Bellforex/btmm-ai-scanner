@@ -44,6 +44,9 @@ def test_poi_name_is_box_native_and_centred_on_both_axes() -> None:
     assert "text_halign = text.align_center" in call
     assert "text_valign = text.align_center" in call
     assert "xloc = xloc.bar_time" in call
+    # Text must scale with the box so it cannot overflow the zone when the
+    # chart is compressed (a fixed size overflowed in the live zoom test).
+    assert "text_size = size.auto" in call
     # The extend path re-asserts the same text on the same box object.
     assert "box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)" in block
 
@@ -92,3 +95,15 @@ def test_tf_marker_is_only_the_formatter_fallback() -> None:
     assert code.count('"TF?"') == formatter.count('"TF?"')
     # Daily/weekly/monthly counted tokens are handled (the RC3 "1D" defect).
     assert 'sfx == "D" ? "D"' in formatter and 'sfx == "W" ? "W"' in formatter
+
+
+def test_zone_build_is_live_last_bars_or_frozen_review_time_only() -> None:
+    assert (
+        "if p7zShowZones and (p7zAsOf == 0 ? bar_index >= p1DatasetBars - 2 : "
+        "time_close <= p7zAsOf)"
+    ) in _SOURCE
+    assert 'p7zAsOf             = input.time(0, "Review zones as of (0 = live)"' in _SOURCE
+    # Review mode reads the same fresh-only eligible set; it cannot revive a
+    # terminal zone because freshness is read at that bar, not recomputed.
+    block = _p7z_block()
+    assert "if array.get(poiFreshActive, pI)" in block

@@ -5789,6 +5789,12 @@ p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minva
 // no-information-loss requirement actually asks for. A parity/DEV build with
 // reduced presentation can carry it back.
 p7zMaxVisibleZones  = input.int(8, "Max visible zone groups", minval = 1, maxval = 30, group = grpP7Z)
+// RC3 presentation-only. 0 = live: zones are built on the last confirmed bars
+// only (the visible result is the final state; building it on all ~1800
+// history bars only to evict it again was pure load time). A time = review
+// mode: the zones that were FRESH at that time, frozen there; terminal zones
+// never come back to life.
+p7zAsOf             = input.time(0, "Review zones as of (0 = live)", group = grpP7Z)
 
 grpP9 = "P9 — Full-System Integration Trace (debug only)"
 p9DebugLog = input.bool(false, "P9 integrated trace log (identity/geometry/visibility, independent of P1/P8 debug)", group = grpP9)
@@ -6317,7 +6323,7 @@ if barstate.isconfirmed
     // full geometry/lifecycle/retention contract this ports line-for-line
     // from `tests/parity_support/p7z_zone_model.py`.
     // =========================================================================
-    if p7zShowZones
+    if p7zShowZones and (p7zAsOf == 0 ? bar_index >= p1DatasetBars - 2 : time_close <= p7zAsOf)
         // ---- RC3: ONLY FRESH POIs REACH THE VISUAL LAYER -----------------
         // `p7PoiIdx` is the engine's eligible set and still holds every POI
         // P5 evaluated this bar, including the one getting its final
@@ -6666,7 +6672,10 @@ if barstate.isconfirmed
                     box p7zNewBox = box.new(left = p7zAvailTime, top = p7zTop, right = p7zRightEdge, bottom = p7zBottom,
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
                       extend = extend.right, text = p7zBoxTxt, text_halign = text.align_center,
-                      text_valign = text.align_center, text_color = p7zTextColor, text_size = size.small)
+                      text_valign = text.align_center, text_color = p7zTextColor, text_size = size.auto)
+                    // size.auto: TradingView fits the name inside the box at every
+                    // zoom. A fixed size overflowed the zone when the chart was
+                    // compressed horizontally or vertically (live zoom test).
                     // RC3 creates no label object at all: the annotation is
                     // the box's own centered text. One drawing object per zone
                     // instead of two, and the text can no longer drift away
