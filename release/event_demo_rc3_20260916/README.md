@@ -1,7 +1,9 @@
 # BTMM + POI + BTRC Scanner — RC3 EVENT DEMO (2026-09-16)
 
-**Demonstration build. NOT production-approved. NOT an autotrading product.
-No profitability claim of any kind.**
+**STATUS: EVENT/DEMO READY.** Machine-readable record: `EVENT_MANIFEST.json`.
+
+**NOT production-approved. NOT profitability-approved. NOT live-autotrading-
+approved. No live broker. No profitability claim of any kind.**
 
 ## Build identity
 
@@ -13,7 +15,7 @@ No profitability claim of any kind.**
 | last source change | commit `dcc888d` (single primary OB display name) on `rc3-highram-continuation` |
 | TradingView script | "BTMM + POI + BTRC Scanner [RC3 POI SEMANTICS DEV]", saved version 21 |
 | compiled tokens | under the 100 256 limit (compiles; exact count is only printed when over) |
-| provider | **FXCM XAUUSD only** — TradingView ticker `FX:XAUUSD` |
+| provider | **FXCM**, symbol **XAUUSD** — TradingView ticker `FX:XAUUSD` (live symbol info: exchange `FXCM`, provider_id `fxcm`, source `FXCM`; TradingView lists FXCM under the `FX:` prefix) |
 | demo chart | FX:XAUUSD **H4**, `Max visible zone groups` = 8 (default) |
 
 The script title still reads `[RC3 POI SEMANTICS DEV]`; the build is the same
@@ -28,6 +30,8 @@ Live on FX:XAUUSD, 2026-09-16, both USER v21 and PARITY v4 on the chart:
 zones green / bearish red, FVG zones visible on every host, no
 "ORDER BLOCK + … ENGULFING" composite text, box text native and auto-sized.
 
+H6 / H8 / H12 were not live-tested and are not claimed.
+
 The P5 authority timeframes are W1 / D1 / H4 / H1 / M15 / M5. On M1 (outside
 that set) the momentum and breakout components take production's
 missing-component scores (50 / 40) by design.
@@ -39,7 +43,9 @@ missing-component scores (50 / 40) by design.
   once price reacts to it (RC3 freshness).
 - Fresh FVGs, grouped per direction when they overlap or touch
   (`SELL FVG ×2`).
-- One name per formation: an order block that is also a same-candle engulfing
+- One name per formation (composite OB + engulfing labels: 13 on the v19
+  standalone snapshot / 12 in the v18-vs-v21 side-by-side, **0 after**; 0
+  semantic records deleted): an order block that is also a same-candle engulfing
   reads `BUY ORDER BLOCK` / `SELL ORDER BLOCK`. Independent POIs on other
   candles (FVG, S/R, other patterns) keep their own names.
 - A support/resistance zone's left edge is its origin swing candle.
@@ -74,16 +80,21 @@ count + OHLC checksum). M15 run 1, 300 bars compared:
 
 | stage | host-only POIs | POIs with higher-TF context |
 |---|---|---|
-| P3 identity (canonical = source timeframe) | 228 / 228 matched, 0 Python-only, 0 Pine-only | same set; 2 terminal-time differences |
+| P3 identity (canonical = source timeframe) | 228 / 228 matched, 0 Python-only, 0 Pine-only; field mismatches 196 → **2** (both terminal-time, in the higher-TF class) | |
 | P5 rows | 104 rows, **0** field mismatches | 2 715 rows, 10 961 field mismatches |
 | P8 events | 111 events, **0** differences | 1 301 Pine events, 901 differences |
-| P8 order (Pine native `poiIdx`, priority) | 0 violations | 0 violations |
+| P8 order (Pine native `poiIdx`, priority) | 0 violations (was 37 bars) | 0 violations |
 
 **P3/P5/P8 parity is NOT closed.** The exact remaining blocker is
 limitation 1: `t5_engine.py` evaluates a POI on `poi.effective_timeframe`
 while Pine evaluates on the host. Closing it needs an author decision on P5
 semantics, not a tooling fix. P6 (cross-timeframe substrate) remains CLOSED
 and byte-locked (P6 block sha256 `52ceb8ee…` identical in RC2, USER, PARITY).
+
+## FVG display fix (verified M15 audit)
+
+7 fresh SELL FVGs: drawn before 0, after 7. DETECTOR_MISS 0, QUALITY_REJECT 0,
+GROUPED 0, DISPLAY_CAP 0; DRAW_FAILURE 7 → 0 (commit `ec83d1f`). Not backported.
 
 ## Known historical display defect (RC1-FIX / RC2)
 

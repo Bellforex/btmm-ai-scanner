@@ -1,0 +1,103 @@
+{
+  "status": "EVENT/DEMO READY",
+  "production_approved": false,
+  "profitability_approved": false,
+  "live_autotrading_approved": false,
+  "live_broker_enabled": false,
+  "scanner": {
+    "branch": "rc3-highram-continuation",
+    "validated_source_commit": "c3487f827836ff18e622accfab8f5abe0fc94d18",
+    "note": "validated_source_commit is the last commit before this manifest; the manifest commit itself adds only release metadata",
+    "main_merged": false
+  },
+  "tradingview": {
+    "provider": "FXCM",
+    "symbol": "XAUUSD",
+    "ticker": "FX:XAUUSD",
+    "ticker_note": "TradingView lists the FXCM feed under the FX: prefix; live symbolInfo: exchange=FXCM, provider_id=fxcm, source_id=FXCM, listed_exchange=FX",
+    "demo_host": "H4",
+    "demo_max_visible_zone_groups": 8,
+    "user_dev": {
+      "script": "BTMM + POI + BTRC Scanner [RC3 POI SEMANTICS DEV]",
+      "version": 21,
+      "sha256": "f0aa2254ea3664f1138d072ba0993b5f595efc8a1cd239fd270b586ad34fa144",
+      "repo_path": "tradingview/btmm_poi_btrc_scanner_rc3_poi_semantics_dev.pine",
+      "pinned_copy": "release/event_demo_rc3_20260916/btmm_poi_btrc_scanner_rc3_event_demo.pine",
+      "compile": "PASS"
+    },
+    "parity_dev": {
+      "script": "BTMM + POI + BTRC Scanner [RC3 PARITY DEV]",
+      "version": 4,
+      "sha256": "d49f06244782d79c6b077fc5ac2fe1fdac66c22f5be80e8b819a15e6c3e03f57",
+      "repo_path": "tradingview/btmm_poi_btrc_scanner_rc3_parity_dev.pine",
+      "compile": "PASS"
+    },
+    "supported_hosts": {
+      "M1": "PASS",
+      "M5": "PASS",
+      "M15": "PASS",
+      "H1": "PASS",
+      "H4": "PASS",
+      "D1": "PASS",
+      "W1": "PASS"
+    },
+    "not_live_tested_hosts": ["H6", "H8", "H12"],
+    "host_pass_criteria": "USER v21 and PARITY v4 both loaded, status ready, not failed; FVG zones present; no ORDER BLOCK + ENGULFING composite text; bullish green / bearish red; TF? = 0; box text native, centred, size.auto"
+  },
+  "primary_display_label": {
+    "rule": "same originating OB/engulfing formation shows only BUY ORDER BLOCK / SELL ORDER BLOCK (presentation only)",
+    "composite_labels_before_v19_standalone_snapshot": 13,
+    "composite_labels_before_v18_vs_v21_side_by_side": 12,
+    "composite_labels_after": 0,
+    "semantic_records_deleted": 0,
+    "independent_pois_kept": ["OB + FVG", "OB + S/R", "different-origin OB + engulfing", "OB + other pattern on the same formation"]
+  },
+  "fvg_draw_fix": {
+    "commit": "ec83d1f",
+    "audit": "FX:XAUUSD M15, 2026-09-16",
+    "fresh_sell_fvgs": 7,
+    "drawn_before": 0,
+    "drawn_after": 7,
+    "DETECTOR_MISS": 0,
+    "QUALITY_REJECT": 0,
+    "GROUPED": 0,
+    "DISPLAY_CAP": 0,
+    "DRAW_FAILURE_before": 7,
+    "DRAW_FAILURE_after": 0,
+    "rc1_rc2_backported": false
+  },
+  "parity": {
+    "formally_closed": false,
+    "capture": "M15 run1, 300 bars",
+    "p3": "228 matched, 0 python_only, 0 pine_only; field mismatches 196 -> 2 after source-timeframe identity (both terminal-time, higher_tf_context class)",
+    "p5": "host_only 104 rows, 0 mismatches; higher_tf_context 2715 rows, 10961 field mismatches",
+    "p8": "host_only 111 Pine events, 0 differences; higher_tf_context 901 differences; ordering violations 37 bars -> 0, Pine native order violations 0",
+    "p6": "CLOSED; 292-line block sha256 52ceb8eed5a679b49b4e507cdb377301cb43204972fbc5431366792ba0ed21a3 identical in RC2, USER and PARITY",
+    "remaining_blocker": "btrc/t5_engine.py:150 evaluates each POI on poi.effective_timeframe (higher-TF context) while single-timeframe Pine evaluates on the host; needs a P5 author decision"
+  },
+  "frozen_integrity": {
+    "rc1_sha256": "143c0f8817c78bf45e6842e16112cedf67ca36dc694c288808b7748096664c54",
+    "rc2_sha256": "381f2fc2463c4eaa9dc2eb88943f5bc16a83b55a6d4307c390cce5f87f36cc3f",
+    "rc1_unchanged": true,
+    "rc2_unchanged": true,
+    "t3_correction_retained": true,
+    "sr_correction_retained": true,
+    "engulfing_ratio_2_0_retained": true
+  },
+  "quality_gates": {
+    "pytest": {"passed": 4740, "failed": 0, "skipped": 0, "commit": "824cb28"},
+    "sealed_test_excluded": "--ignore=tests/unit/test_v1a_m5_materiality.py",
+    "ruff_src": 0,
+    "ruff_changed_files": 0,
+    "ruff_tests_preexisting": 71,
+    "mypy_src": 0,
+    "git_diff_check": "clean"
+  },
+  "bot": {
+    "branch": "bot-dryrun-v1",
+    "head": "231cf73b63825febbe0fea1e2cf808fbd8f3181a",
+    "pushed": true,
+    "mode": "paper / dry-run only",
+    "consumes": "semantic POI / P5 / P8 records, never chart labels"
+  }
+}
