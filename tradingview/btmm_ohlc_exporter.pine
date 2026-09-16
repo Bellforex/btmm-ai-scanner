@@ -1,0 +1,19 @@
+//@version=6
+// =============================================================================
+// BTMM OHLC Exporter — capture tooling, NOT a scanner build.
+// -----------------------------------------------------------------------------
+// Logs every confirmed bar of the chart it is attached to, so the Level-A
+// Python replay can be fed the SAME-SESSION FXCM history the RC3 PARITY run
+// executed on. The parity run's RUNMETA line pins which of these bars each
+// window used and an OHLC checksum proves the selection.
+//
+// calc_bars_count is deliberately larger than any window the parity build
+// uses (host 1800, contexts 1251) so the exported set is a superset.
+// =============================================================================
+indicator("BTMM OHLC Exporter [capture tooling]", overlay = true, calc_bars_count = 2000)
+
+if barstate.isconfirmed
+    log.info("OHLC|tf=" + timeframe.period + "|t=" + str.tostring(time) + "|tc=" + str.tostring(time_close) +
+      "|o=" + str.tostring(open, "#.#####") + "|h=" + str.tostring(high, "#.#####") +
+      "|l=" + str.tostring(low, "#.#####") + "|c=" + str.tostring(close, "#.#####") +
+      "|v=" + str.tostring(volume, "#.#####"))

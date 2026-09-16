@@ -5793,6 +5793,57 @@ p7zMaxVisibleZones  = input.int(8, "Max visible zone groups", minval = 1, maxval
 grpP9 = "P9 — Full-System Integration Trace (debug only)"
 p9DebugLog = input.bool(false, "P9 integrated trace log (identity/geometry/visibility, independent of P1/P8 debug)", group = grpP9)
 
+// ---- RC3 capture instrumentation (PARITY build only, LOG-ONLY) --------------
+// Nothing in this group changes a computed value; every input defaults off.
+// It exists so a single live run can be replayed exactly by an independent
+// Level-A Python replay:
+//   RUNMETA pins the executed host window and every context window (first bar,
+//           aligned last bar, bar count, OHLC checksum), so the replay can
+//           select the identical bars from a same-session export and prove it.
+//   P5C     carries the P5 stream compactly for a bounded range of run-bar
+//           ordinals, so a slice fits TradingView's log buffer in the SAME
+//           run as P3LIFE and P8EVENT (separate runs slide the window).
+grpCap = "RC3 capture (parity build, log-only)"
+capRunMeta   = input.bool(false, "RUNMETA: executed window + OHLC checksums", group = grpCap)
+capP5Compact = input.bool(false, "P5C: compact P5 stream", group = grpCap)
+capP5FromK   = input.int(0, "P5C first run-bar ordinal (inclusive)", minval = 0, group = grpCap)
+capP5ToK     = input.int(300, "P5C last run-bar ordinal (exclusive)", minval = 0, group = grpCap)
+
+f_capProbe() =>
+    var int capFirst = time
+    var int capN = 0
+    var float capCk = 0.0
+    capN += 1
+    capCk += open + high + low + close
+    [capFirst, time, capN, capCk]
+
+[capW1F,  capW1L,  capW1N,  capW1C]  = request.security(syminfo.tickerid, C_P6_TF_W1,  f_capProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[capD1F,  capD1L,  capD1N,  capD1C]  = request.security(syminfo.tickerid, C_P6_TF_D1,  f_capProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[capH4F,  capH4L,  capH4N,  capH4C]  = request.security(syminfo.tickerid, C_P6_TF_H4,  f_capProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[capH1F,  capH1L,  capH1N,  capH1C]  = request.security(syminfo.tickerid, C_P6_TF_H1,  f_capProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[capM15F, capM15L, capM15N, capM15C] = request.security(syminfo.tickerid, C_P6_TF_M15, f_capProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+[capM5F,  capM5L,  capM5N,  capM5C]  = request.security(syminfo.tickerid, C_P6_TF_M5,  f_capProbe(), calc_bars_count = C_P6_REQUEST_CALC_BARS)
+
+f_capCtx(string tf, int f, int l, int n, float c) =>
+    "|" + tf + "=" + str.tostring(f) + "," + str.tostring(l) + "," + str.tostring(n) + "," + str.tostring(c, "#.########")
+
+var int capHostFirst = na
+var int capHostN = 0
+var float capHostCk = 0.0
+var int capBarK = -1
+if barstate.isconfirmed
+    capBarK += 1
+    if na(capHostFirst)
+        capHostFirst := time
+    capHostN += 1
+    capHostCk += open + high + low + close
+if capRunMeta and barstate.islastconfirmedhistory
+    log.info("RUNMETA|feed=" + syminfo.prefix + ":" + syminfo.ticker + "|tf=" + timeframe.period +
+      "|host=" + str.tostring(capHostFirst) + "," + str.tostring(time) + "," + str.tostring(capHostN) + "," + str.tostring(capHostCk, "#.########") +
+      f_capCtx("W1", capW1F, capW1L, capW1N, capW1C) + f_capCtx("D1", capD1F, capD1L, capD1N, capD1C) +
+      f_capCtx("H4", capH4F, capH4L, capH4N, capH4C) + f_capCtx("H1", capH1F, capH1L, capH1N, capH1C) +
+      f_capCtx("M15", capM15F, capM15L, capM15N, capM15C) + f_capCtx("M5", capM5F, capM5L, capM5N, capM5C))
+
 // ---- pure label lookups, one per P1-P5 enum family. Each is a straight
 // switch on an already-computed Pine integer code (the SAME codes P5EVAL logs)
 // -- no branch here decides anything a P1-P5 function did not already decide.
@@ -6144,6 +6195,9 @@ if barstate.isconfirmed
     array.clear(p7PoiPerm)
     array.clear(p7PoiLc)
 
+    // RC3 capture (log-only): compact P5 buffer for this bar.
+    bool p5cOn = capP5Compact and capBarK >= capP5FromK and capBarK < capP5ToK
+    string p5cBuf = ""
     if p5N > 0
         for i = 0 to p5N - 1
             // RC3: "terminal" for downstream purposes now means "no longer a
@@ -6211,6 +6265,16 @@ if barstate.isconfirmed
                       "|final=" + str.tostring(finalScore) +
                       "|permission=" + str.tostring(permission) +
                       "|lifecycle=" + str.tostring(lifecycle))
+                if p5cOn
+                    p5cBuf += (str.length(p5cBuf) > 0 ? ";" : "") + str.tostring(i) + "," + (poiBullish ? "1" : "0") + "," +
+                      str.tostring(array.get(poiTier, i)) + "," + str.tostring(array.get(poiStatus, i)) + "," + (isTerminal ? "1" : "0") + "," +
+                      (btmmValid ? "1" : "0") + "," + (btmmBullish ? "1" : "0") + "," + str.tostring(align) + "," +
+                      str.tostring(btmmScore) + "," + str.tostring(poiScore) + "," + str.tostring(trendScore) + "," + str.tostring(regimeScore) + "," +
+                      str.tostring(momentumScore) + "," + str.tostring(breakoutScore) + "," + str.tostring(liquidityScore) + "," + str.tostring(volatilityScore) + "," +
+                      str.tostring(finalScore) + "," + str.tostring(permission) + "," + str.tostring(lifecycle)
+                    if str.length(p5cBuf) > 2600
+                        log.info("P5C|bar=" + str.tostring(time_close) + "|k=" + str.tostring(capBarK) + "|rows=" + p5cBuf)
+                        p5cBuf := ""
 
                 // ---- P7: copy this POI's already-computed decision for the
                 // active-POI table. Same values `debugMode`'s P5EVAL line
@@ -6310,6 +6374,14 @@ if barstate.isconfirmed
 
                 if isTerminal
                     array.set(poiP5FinalDone, i, true)
+
+    if p5cOn
+        log.info("P5C|bar=" + str.tostring(time_close) + "|k=" + str.tostring(capBarK) + "|n=" + str.tostring(p5N) +
+          "|hdr=" + str.tostring(d1Trend) + "," + str.tostring(w1Trend) + "," + str.tostring(h4Trend) + "," + str.tostring(p5GlobalDir) + "," +
+          str.tostring(p5OperCtx) + "," + str.tostring(p5RegimeGlobal) + "," + str.tostring(p5MomDir) + "," + str.tostring(p5MomAccel) + "," +
+          str.tostring(p5MomScore) + "," + str.tostring(p5BrkState) + "," + str.tostring(p5BrkScore) + "," + str.tostring(p5PbState) + "," +
+          str.tostring(p5SessionCtx) + "," + str.tostring(p5VolState) + "," + (p5VolAbnormal ? "1" : "0") + "," + str.tostring(p5VolSuitability) +
+          "|end=1|rows=" + p5cBuf)
 
     if not p8Primed
         p8Primed := true
