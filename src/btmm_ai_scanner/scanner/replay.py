@@ -43,6 +43,7 @@ from btmm_ai_scanner.poi.analyzer import (
     _advance_poi_replay_state,
     _combine_poi_replay_states,
     _create_initial_poi_replay_state,
+    _poi_replay_state_to_analysis,
     _PoiReplayState,
 )
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
@@ -541,6 +542,15 @@ class IncrementalReplayKernel:
             visible_candles=dict.fromkeys(tracked_timeframes, ()),
         )
         self._processed_group_count = 0
+        # Finalize-time materialization memo: (kind, timeframe) -> (state, value).
+        # The per-timeframe replay states are immutable (their advance functions
+        # never mutate an existing instance) and advance_group keeps a
+        # timeframe's state object untouched when that timeframe received no
+        # candle. A materialization is a pure function of its state, so it is
+        # reused exactly when the state object is the SAME object (``is``).
+        # The memo keeps a strong reference to the state, so a recycled id()
+        # can never alias a different state.
+        self._materialized: dict[tuple[str, Timeframe], tuple[object, Any]] = {}
         # A6-F6A lazy materialization: the event ledger is built on demand from
         # the current domain states and cached; the cache is invalidated on every
         # successful advance. Non-None only after event_ledger() is called.
@@ -662,6 +672,20 @@ class IncrementalReplayKernel:
     def _ordered_active_timeframes(self) -> tuple[Timeframe, ...]:
         return self._ordered
 
+    def _materialize_once(
+        self,
+        kind: str,
+        timeframe: Timeframe,
+        state: object,
+        build: Callable[[Any], Any],
+    ) -> Any:
+        cached = self._materialized.get((kind, timeframe))
+        if cached is not None and cached[0] is state:
+            return cached[1]
+        value = build(state)
+        self._materialized[(kind, timeframe)] = (state, value)
+        return value
+
     def finalize(self) -> ScannerAnalysis:
         """Materialize exactly one ScannerAnalysis from the final incremental
         measurement/structure states and the current combined POI/BTMM analyses
@@ -674,11 +698,21 @@ class IncrementalReplayKernel:
 
         ordered = self._ordered
         measurement_analyses = tuple(
-            _measurement_replay_state_to_analysis(state.measurement_states[tf])
+            self._materialize_once(
+                "measurement",
+                tf,
+                state.measurement_states[tf],
+                _measurement_replay_state_to_analysis,
+            )
             for tf in ordered
         )
         structure_analyses = tuple(
-            _structure_replay_state_to_analysis(state.structure_states[tf])
+            self._materialize_once(
+                "structure",
+                tf,
+                state.structure_states[tf],
+                _structure_replay_state_to_analysis,
+            )
             for tf in ordered
         )
         # Materialize the cross-timeframe overlap AND the POI lifecycle
@@ -691,6 +725,17 @@ class IncrementalReplayKernel:
             state.poi_states,
             ordered,
             with_overlap=True,
+            materialize_timeframe=lambda tf, poi_state: self._materialize_once(
+                "poi_final",
+                tf,
+                poi_state,
+                lambda s: _poi_replay_state_to_analysis(
+                    s,
+                    with_overlap=False,
+                    with_current_states=True,
+                    with_lifecycle_transitions=True,
+                ),
+            ),
         )
         # A3-B: rebuild the combined BTMM analysis here so its CurrentBtmmState
         # objects (deferred out of the per-group hot path) are materialized once.

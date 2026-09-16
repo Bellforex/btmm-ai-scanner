@@ -1692,6 +1692,8 @@ def _combine_poi_replay_states(
     with_lifecycle: bool = True,
     validated: bool = True,
     merge_cache: _PoiMergeCache | None = None,
+    materialize_timeframe: Callable[[Timeframe, _PoiReplayState], PoiAnalysis]
+    | None = None,
 ) -> tuple[PoiAnalysis, _PoiMergeCache | None]:
     """Combine the per-timeframe incremental POI states (subsystem 2d) into the
     multi-timeframe PoiAnalysis, reproducing analyze_pois's cross-timeframe
@@ -1737,15 +1739,23 @@ def _combine_poi_replay_states(
     # it (with_overlap=True, i.e. finalization). The per-group ledger path
     # (with_overlap=False) never reads current_poi_states, so their construction
     # is deferred out of the per-group hot path entirely.
-    per_timeframe = {
-        tf: _poi_replay_state_to_analysis(
-            poi_states[tf],
-            with_overlap=False,
-            with_current_states=with_overlap,
-            with_lifecycle_transitions=with_lifecycle,
-        )
-        for tf in ordered_timeframes
-    }
+    # ``materialize_timeframe`` lets a caller supply the per-timeframe analysis
+    # (e.g. an identity memo over the immutable replay state); it must return
+    # exactly what the default call below returns for these flags.
+    if materialize_timeframe is not None:
+        per_timeframe = {
+            tf: materialize_timeframe(tf, poi_states[tf]) for tf in ordered_timeframes
+        }
+    else:
+        per_timeframe = {
+            tf: _poi_replay_state_to_analysis(
+                poi_states[tf],
+                with_overlap=False,
+                with_current_states=with_overlap,
+                with_lifecycle_transitions=with_lifecycle,
+            )
+            for tf in ordered_timeframes
+        }
 
     # A6-D/F6A: the persistent ``observations_ordered`` map is carried by
     # reference (structural sharing) and only re-created when this timeframe's
