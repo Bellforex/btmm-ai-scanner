@@ -85,10 +85,14 @@ def test_python_selects_t3_assessments_by_the_pois_own_timeframe() -> None:
         encoding="utf-8"
     )
     assert "poi_tf = poi.effective_timeframe" in engine
-    for component in ("assess_momentum", "assess_breakout", "assess_pullback"):
-        assert f"{{m.timeframe: m for m in {component}(analysis)}}.get(poi_tf)" in engine or (
-            f"{component}(analysis)" in engine and ".get(poi_tf)" in engine
-        )
+    # Computed once per bar in ConfluenceBarContext, selected per POI timeframe.
+    for component, table in (
+        ("assess_momentum", "momentum_by_timeframe"),
+        ("assess_breakout", "breakout_by_timeframe"),
+        ("assess_pullback", "pullback_by_timeframe"),
+    ):
+        assert f"{component}(self.analysis)" in engine
+        assert f"bar_context.{table}.get(poi_tf)" in engine
 
 
 # --------------------------------------------------------------------------
