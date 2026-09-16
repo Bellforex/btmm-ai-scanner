@@ -77,6 +77,18 @@ instant, so M5 has ZERO pre-window history. That is the real depth limit of
 the acquired feed, not a choice, and it is recorded in the run provenance
 (``pre_window_bars`` / ``pre_window_bars_available`` per series).
 
+COST, AND WHY ARTIFACTS ARE FLUSHED PER DAY
+---------------------------------------------
+Each bar calls ``IncrementalReplayKernel.finalize()`` (which re-materializes
+the whole cumulative POI registry, including cross-timeframe overlap) and
+then ``assess_confluence`` once per eligible POI (each call re-derives
+trend / regime / T3 over the full analysis). Both grow with the registry, so
+per-bar cost grows superlinearly over the period — the same property this
+project already recorded for the FINAL_ONLY kernel. A full-period run is
+therefore long, and every closed trading day flushes a complete,
+self-consistent artifact set (``complete: false``) so an interrupted run
+still leaves exact evidence for every day it finished.
+
 The host M15 series is sliced strictly to the requested window and is
 asserted to be disjoint from the sealed out-of-sample range, so no
 out-of-sample bar is ever replayed, recorded, digested or reported.
@@ -535,6 +547,9 @@ class AuthorityResult:
     period_p8_digest: str
     bars_processed: int
     distinct_pois: int
+    #: False on a per-day flush taken mid-replay: every day present is
+    #: complete and its digests are final, but later days are still missing.
+    complete: bool
     p3_rows: int
     p5_rows_total: int
     p8_events_total: int
@@ -550,6 +565,7 @@ class AuthorityResult:
     def summary(self) -> dict[str, Any]:
         return {
             "authority_version": AUTHORITY_VERSION,
+            "complete": self.complete,
             "trading_days": len(self.days),
             "first_trading_day": self.days[0].trading_day if self.days else None,
             "last_trading_day": self.days[-1].trading_day if self.days else None,
@@ -695,6 +711,10 @@ class _StreamWriter:
         self._day_hash = hashlib.sha256()
         return digest
 
+    def flush(self) -> None:
+        if self._handle is not None:
+            self._handle.flush()
+
     def close(self) -> None:
         if self._handle is not None:
             self._handle.close()
@@ -737,6 +757,13 @@ def run_daily_authority(
     primed_poi_count = 0
     bars_processed = 0
     started = datetime.now(tz=UTC)
+    #: Cumulative counters frozen at the last day close, so a partial flush
+    #: describes whole trading days and never a half-processed one.
+    at_close: dict[str, Any] = {
+        "distinct_pois": 0,
+        "events_by_type": dict(events_by_type),
+        "terminal_reasons": {},
+    }
 
     def _close_day(day: DayManifest, bar: LevelABar) -> None:
         # Registry counts at the day's CLOSE are taken over the WHOLE registry,
@@ -758,6 +785,39 @@ def run_daily_authority(
         day.p3_digest = p3.close_day()
         day.p5_digest = p5.close_day()
         day.p8_digest = p8.close_day()
+        # `_close_day` runs BEFORE any of the next day's rows are written, so
+        # these cumulative counters are exactly "all completed days" — which
+        # is what a mid-replay flush must report.
+        at_close["distinct_pois"] = len(distinct_evaluated)
+        at_close["events_by_type"] = dict(events_by_type)
+        at_close["terminal_reasons"] = dict(terminal_reasons)
+
+    def _snapshot(*, complete: bool) -> AuthorityResult:
+        pairs_p3 = [(d.trading_day, d.p3_digest) for d in days]
+        pairs_p5 = [(d.trading_day, d.p5_digest) for d in days]
+        pairs_p8 = [(d.trading_day, d.p8_digest) for d in days]
+        return AuthorityResult(
+            provenance=dict(provenance) if provenance else {},
+            days=list(days),
+            period_p3_digest=fold_period_digest("P3", pairs_p3),
+            period_p5_digest=fold_period_digest("P5", pairs_p5),
+            period_p8_digest=fold_period_digest("P8", pairs_p8),
+            bars_processed=sum(d.bars_processed for d in days),
+            distinct_pois=at_close["distinct_pois"],
+            complete=complete,
+            # One P3 row and one P5 row per eligible POI per bar, by
+            # construction, so the manifest's own per-day P5 count is the
+            # single source for both.
+            p3_rows=sum(d.p5_rows for d in days),
+            p5_rows_total=sum(d.p5_rows for d in days),
+            p8_events_total=sum(d.p8_events for d in days),
+            p8_events_by_type=dict(at_close["events_by_type"]),
+            terminal_reason_counts=dict(at_close["terminal_reasons"]),
+            primed_poi_count=primed_poi_count,
+            retained_p3=retained_p3,
+            retained_p5=retained_p5,
+            retained_p8=retained_p8,
+        )
 
     previous_bar: LevelABar | None = None
     try:
@@ -774,6 +834,16 @@ def run_daily_authority(
                 if current is not None and previous_bar is not None:
                     _close_day(current, previous_bar)
                     days.append(current)
+                    # Flush a COMPLETE artifact set for every trading day
+                    # closed so far. The replay is superlinear in registry
+                    # size (see the module docstring), so a long run must
+                    # leave usable, self-consistent evidence behind at every
+                    # day boundary rather than only at the very end.
+                    if output_dir is not None:
+                        p3.flush()
+                        p5.flush()
+                        p8.flush()
+                        write_artifacts(_snapshot(complete=False), output_dir)
                 current = DayManifest(
                     trading_day=day_key,
                     first_bar_ms=bar.bar_ms,
@@ -867,28 +937,15 @@ def run_daily_authority(
         p5.close()
         p8.close()
 
-    pairs_p3 = [(d.trading_day, d.p3_digest) for d in days]
-    pairs_p5 = [(d.trading_day, d.p5_digest) for d in days]
-    pairs_p8 = [(d.trading_day, d.p8_digest) for d in days]
-
-    return AuthorityResult(
-        provenance=dict(provenance) if provenance else {},
-        days=days,
-        period_p3_digest=fold_period_digest("P3", pairs_p3),
-        period_p5_digest=fold_period_digest("P5", pairs_p5),
-        period_p8_digest=fold_period_digest("P8", pairs_p8),
-        bars_processed=bars_processed,
-        distinct_pois=len(distinct_evaluated),
-        p3_rows=p3.count,
-        p5_rows_total=p5.count,
-        p8_events_total=p8.count,
-        p8_events_by_type=events_by_type,
-        terminal_reason_counts=terminal_reasons,
-        primed_poi_count=primed_poi_count,
-        retained_p3=retained_p3,
-        retained_p5=retained_p5,
-        retained_p8=retained_p8,
-    )
+    result = _snapshot(complete=True)
+    # Every bar handed in ended up inside exactly one closed trading day.
+    assert result.bars_processed == bars_processed
+    assert result.p3_rows == p3.count
+    assert result.p5_rows_total == p5.count
+    assert result.p8_events_total == p8.count
+    if output_dir is not None:
+        write_artifacts(result, output_dir)
+    return result
 
 
 def write_artifacts(result: AuthorityResult, output_dir: Path) -> dict[str, Path]:
@@ -969,10 +1026,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         progress_every=args.progress_every,
         progress_path=progress_path,
     )
-    paths = write_artifacts(result, args.output_dir)
+    # run_daily_authority already wrote the final (complete) artifact set.
     print(json.dumps(result.summary(), indent=2))
-    for label, path in paths.items():
-        print(f"{label}: {path}")
+    print(f"artifacts: {args.output_dir}")
     return 0
 
 

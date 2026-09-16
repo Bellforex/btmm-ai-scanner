@@ -38,7 +38,9 @@ exercises the same ingestion path the authority itself uses.
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -756,6 +758,92 @@ def test_period_digest_is_a_reproducible_fold_of_the_daily_digests(
                 f"{acc}|{row['trading_day']}|{row[column]}".encode()
             ).hexdigest()
         assert acc == expected
+
+
+def test_written_artifacts_match_the_streams_and_the_in_memory_result(
+    synthetic_series: tuple[NormalizedCandle, ...], tmp_path: Path
+) -> None:
+    """End-to-end check of the artifact writer, including the per-trading-day
+    flush: the NDJSON streams, the manifest and the summary must agree."""
+    result = run_daily_authority(
+        host_timeframe=Timeframe.M15,
+        host_series=synthetic_series,
+        context_series={},
+        configuration=_synthetic_configuration(),
+        output_dir=tmp_path,
+        retain_rows=True,
+    )
+    assert result.complete is True
+
+    counts = {}
+    for name, expected in (
+        ("p3_registry_rows.ndjson.gz", result.p3_rows),
+        ("p5_assessment_rows.ndjson.gz", result.p5_rows_total),
+        ("p8_event_rows.ndjson.gz", result.p8_events_total),
+    ):
+        with gzip.open(tmp_path / name, "rt", encoding="utf-8") as handle:
+            counts[name] = sum(1 for _ in handle)
+        assert counts[name] == expected, name
+
+    summary = json.loads((tmp_path / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["complete"] is True
+    assert summary["bars_processed"] == len(synthetic_series)
+    assert summary["p5_rows"] == len(result.retained_p5)
+    assert summary["p8_events"] == len(result.retained_p8)
+
+    manifest = json.loads(
+        (tmp_path / "daily_authority_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["days"] == [day.as_row() for day in result.days]
+    assert manifest["period_digests"]["p3"] == result.period_p3_digest
+
+
+def test_a_partial_flush_only_reports_closed_trading_days(
+    synthetic_series: tuple[NormalizedCandle, ...],
+    synthetic_result: AuthorityResult,
+    tmp_path: Path,
+) -> None:
+    """A mid-replay flush must describe whole trading days that will never
+    change again, not a half-processed one — otherwise a long run that is
+    stopped early leaves evidence that silently disagrees with a full run."""
+    class _StopsPartWayThrough(list[NormalizedCandle]):
+        """Behaves exactly like the real host series until the replay is
+        part-way into the third trading day, then dies — the crash / kill /
+        session-timeout case the flush exists for."""
+
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            for index, candle in enumerate(list.__iter__(self)):
+                if index == _SYNTH_BARS_PER_DAY * 2 + 5:
+                    raise KeyboardInterrupt("simulated interruption")
+                yield candle
+
+    output_dir = tmp_path / "interrupted"
+    with pytest.raises(KeyboardInterrupt):
+        run_daily_authority(
+            host_timeframe=Timeframe.M15,
+            host_series=_StopsPartWayThrough(synthetic_series),
+            context_series={},
+            configuration=_synthetic_configuration(),
+            output_dir=output_dir,
+        )
+
+    manifest = json.loads(
+        (output_dir / "daily_authority_manifest.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads((output_dir / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["complete"] is False
+    assert len(manifest["days"]) == 2, "only the two CLOSED days may be reported"
+
+    # Every reported day must be byte-identical to the same day in the full
+    # run, digests included — a partial artifact is a prefix, never a
+    # different answer.
+    full_by_day = {day.trading_day: day.as_row() for day in synthetic_result.days}
+    for row in manifest["days"]:
+        assert full_by_day[row["trading_day"]] == row
+    assert summary["bars_processed"] == sum(
+        row["bars_processed"] for row in manifest["days"]
+    )
+    assert summary["p5_rows"] == sum(row["p5_rows"] for row in manifest["days"])
 
 
 def test_period_digest_reacts_to_day_order_and_content() -> None:
