@@ -1,0 +1,94 @@
+"""Phase 30 visual mutation locks on the real RC3 USER Pine source.
+
+The Python P7-Z model tests prove the presentation algorithm; these prove the
+deployed Pine build still implements the RC3 visual contract, so a regression
+cannot reappear silently in the script itself.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+_USER = (
+    Path(__file__).resolve().parents[2]
+    / "tradingview"
+    / "btmm_poi_btrc_scanner_rc3_poi_semantics_dev.pine"
+)
+_SOURCE = _USER.read_text(encoding="utf-8")
+
+
+def _code_only(text: str) -> str:
+    return "\n".join(line.split("//")[0] for line in text.splitlines())
+
+
+def _p7z_block() -> str:
+    start = _SOURCE.index("P7-Z — POI zone visualization")
+    end = _SOURCE.index("P9 — full-system integration trace")
+    return _code_only(_SOURCE[start:end])
+
+
+def test_no_independent_poi_label_object_exists_in_the_zone_block() -> None:
+    block = _p7z_block()
+    assert "label.new" not in block
+    assert "label.set_" not in block
+    assert "array<label>" not in block
+
+
+def test_poi_name_is_box_native_and_centred_on_both_axes() -> None:
+    block = _p7z_block()
+    creates = re.findall(r"box\.new\((.*?)\)\n", block, flags=re.S)
+    assert len(creates) == 1
+    call = creates[0]
+    assert "text = p7zBoxTxt" in call
+    assert "text_halign = text.align_center" in call
+    assert "text_valign = text.align_center" in call
+    assert "xloc = xloc.bar_time" in call
+    # The extend path re-asserts the same text on the same box object.
+    assert "box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)" in block
+
+
+def test_box_text_is_empty_only_for_a_non_owner_or_when_labels_are_off() -> None:
+    block = _p7z_block()
+    assert (
+        'string p7zBoxTxt = not p7zTextOwner or not p7zShowLabels ? "" : '
+        'p7zTfl + " • " + array.get(p7zGNames, p7zG)'
+    ) in block
+
+
+def test_direction_colour_cannot_invert() -> None:
+    block = _p7z_block()
+    assert "color p7zHue = p7zBullish ? color.green : color.red" in block
+    assert "bool p7zBullish = array.get(p7zGBull, p7zG)" in block
+    for tint in ("p7zFillColor", "p7zBorderColor", "p7zTextColor"):
+        assert re.search(rf"color {tint} = color\.new\(p7zHue, \d+\)", block), tint
+    # Group direction comes from the POI direction code, never from type text.
+    assert "array.push(p7zGBull, dr == C_POI_DIR_BULLISH)" in block
+    assert "array.push(p7zGBull, wantDir == C_POI_DIR_BULLISH)" in block
+
+
+def test_one_text_owner_per_collision_group() -> None:
+    block = _p7z_block()
+    assert "array.push(p7zOwner, own)" in block
+    assert "bool p7zTextOwner = array.get(p7zOwner, r)" in block
+
+
+def test_objects_are_bounded_and_evicted() -> None:
+    block = _p7z_block()
+    assert "box.delete(array.get(p7zBoxes, k))" in block
+    assert "array.indexof(p7zSelected, existingPoi) == -1" in block
+    cap = re.search(
+        r'p7zMaxVisibleZones\s*=\s*input\.int\(\d+, "[^"]*", minval = 1, maxval = (\d+)',
+        _SOURCE,
+    )
+    boxes = re.search(r"max_boxes_count = (\d+)", _SOURCE)
+    assert cap and boxes and int(cap.group(1)) <= int(boxes.group(1))
+
+
+def test_tf_marker_is_only_the_formatter_fallback() -> None:
+    code = _code_only(_SOURCE)
+    formatter = code[code.index("f_p7zTfLabel(string p) =>") :]
+    formatter = formatter[: formatter.index("f_p7PermColor")]
+    assert code.count('"TF?"') == formatter.count('"TF?"')
+    # Daily/weekly/monthly counted tokens are handled (the RC3 "1D" defect).
+    assert 'sfx == "D" ? "D"' in formatter and 'sfx == "W" ? "W"' in formatter
