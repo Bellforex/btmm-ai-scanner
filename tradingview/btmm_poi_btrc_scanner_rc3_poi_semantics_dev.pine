@@ -2207,13 +2207,15 @@ int  p1DatasetBars = last_bar_index + 1
 bool p1CapacityOk  = p1DatasetBars >= C_P1_CALC_BARS
 bool p1WarmupOk    = confirmedBarCount >= C_P1_MIN_CALC_BARS
 bool p1HistoryOk   = p1CapacityOk and p1WarmupOk
+// Compaction (RC3): hoisted once; each debug plot below read the identical conjunction.
+bool p1Dbg = debugMode and p1HistoryOk
 
 // -----------------------------------------------------------------------------
 // DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
 // -----------------------------------------------------------------------------
 bool dispFastNow = p1HistoryOk and barstate.isconfirmed and debugMode and showDisplacement and not na(latestDispCode) and math.abs(latestDispCode) >= 1
-plotshape(dispFastNow and latestDispCode > 0, title = "Displacement up", style = shape.triangleup, location = location.belowbar, color = color.new(color.lime, 0), size = size.tiny)
-plotshape(dispFastNow and latestDispCode < 0, title = "Displacement down", style = shape.triangledown, location = location.abovebar, color = color.new(color.red, 0), size = size.tiny)
+plotshape(dispFastNow and latestDispCode > 0, title = "Displacement up", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
+plotshape(dispFastNow and latestDispCode < 0, title = "Displacement down", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny)
 
 // =============================================================================
 // PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
@@ -2237,7 +2239,7 @@ plot(p1HistoryOk ? latestTLNormSlope    : na, "P1_tl_norm_slope",    color = col
 // These describe the LAST adapted swing; there is no P2 behaviour to show yet.
 // Times are epoch seconds (ms/1000) so a 2dp readout keeps full precision.
 // =============================================================================
-plot(debugMode and p1HistoryOk ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.new(color.gray, 0),  display = display.data_window)
+plot(p1Dbg ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.gray,  display = display.data_window)
 // P2_last_swing_type retired at P2-I5 to fund the BOS slots: swing type is
 // contract-tested on the adapter and is already implied by the relationship
 // codes, which are partitioned into high-side and low-side values.
@@ -2245,20 +2247,20 @@ plot(debugMode and p1HistoryOk ? p2SwingCount   : na, "P2_adapted_swing_count", 
 // slots. Both were pure echoes of the I2 adapter, which is contract-tested; the
 // analytically meaningful derivations (relationship codes, direction,
 // protected/weak keys) all remain exposed below.
-plot(debugMode and p1HistoryOk ? p2LastStartAbs : na, "P2_last_pivot_start_abs", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and not na(p2LastConfTime) ? p2LastConfTime / 1000 : na, "P2_last_conf_time", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2RelCount    : na, "P2_relationship_count", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2LastHighRel : na, "P2_last_high_relationship", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2LastLowRel  : na, "P2_last_low_relationship", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2Direction != C_ST_NA ? p2Direction : na, "P2_direction", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2ProtHighKey != C_ST_NA ? p2ProtHighKey / 1000 : na, "P2_protected_high", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2ProtLowKey  != C_ST_NA ? p2ProtLowKey  / 1000 : na, "P2_protected_low",  color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2WeakHighKey != C_ST_NA ? p2WeakHighKey / 1000 : na, "P2_weak_high", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2WeakLowKey  != C_ST_NA ? p2WeakLowKey  / 1000 : na, "P2_weak_low",  color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2TransCount    != C_ST_NA ? p2TransCount : na, "P2_transition_count", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2LastTransCode != C_ST_NA ? p2LastTransCode : na, "P2_last_transition_code", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk and p2LastBrokenKey != C_ST_NA ? p2LastBrokenKey / 1000 : na, "P2_last_broken_key", color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode and p1HistoryOk ? p2LastBrokenLvl : na, "P2_last_broken_level", color = color.new(color.gray, 0), display = display.data_window)
+plot(p1Dbg ? p2LastStartAbs : na, "P2_last_pivot_start_abs", color = color.gray, display = display.data_window)
+plot(p1Dbg and not na(p2LastConfTime) ? p2LastConfTime / 1000 : na, "P2_last_conf_time", color = color.gray, display = display.data_window)
+plot(p1Dbg ? p2RelCount    : na, "P2_relationship_count", color = color.gray, display = display.data_window)
+plot(p1Dbg ? p2LastHighRel : na, "P2_last_high_relationship", color = color.gray, display = display.data_window)
+plot(p1Dbg ? p2LastLowRel  : na, "P2_last_low_relationship", color = color.gray, display = display.data_window)
+plot(p1Dbg and p2Direction != C_ST_NA ? p2Direction : na, "P2_direction", color = color.gray, display = display.data_window)
+plot(p1Dbg and p2ProtHighKey != C_ST_NA ? p2ProtHighKey / 1000 : na, "P2_protected_high", color = color.gray, display = display.data_window)
+plot(p1Dbg and p2ProtLowKey  != C_ST_NA ? p2ProtLowKey  / 1000 : na, "P2_protected_low",  color = color.gray, display = display.data_window)
+plot(p1Dbg and p2WeakHighKey != C_ST_NA ? p2WeakHighKey / 1000 : na, "P2_weak_high", color = color.gray, display = display.data_window)
+plot(p1Dbg and p2WeakLowKey  != C_ST_NA ? p2WeakLowKey  / 1000 : na, "P2_weak_low",  color = color.gray, display = display.data_window)
+plot(p1Dbg and p2TransCount    != C_ST_NA ? p2TransCount : na, "P2_transition_count", color = color.gray, display = display.data_window)
+plot(p1Dbg and p2LastTransCode != C_ST_NA ? p2LastTransCode : na, "P2_last_transition_code", color = color.gray, display = display.data_window)
+plot(p1Dbg and p2LastBrokenKey != C_ST_NA ? p2LastBrokenKey / 1000 : na, "P2_last_broken_key", color = color.gray, display = display.data_window)
+plot(p1Dbg ? p2LastBrokenLvl : na, "P2_last_broken_level", color = color.gray, display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)
@@ -4485,11 +4487,11 @@ if barstate.isconfirmed
         f_btmmReportCounts()
 
 // ---- P4 diagnostics in the data window (no drawing, no alerts, no orders) ---
-plot(debugMode ? array.get(p4Counts, C_P4_N_REGISTRY)   : na, "P4_setup_registry",  color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_CANDIDATE)  : na, "P4_candidate",       color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_FORMING)    : na, "P4_forming",         color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_CANCELLED)  : na, "P4_cancelled",       color = color.new(color.gray, 0), display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_FINAL_GATE) : na, "P4_at_final_gate",   color = color.new(color.gray, 0), display = display.data_window)
+plot(debugMode ? array.get(p4Counts, C_P4_N_REGISTRY)   : na, "P4_setup_registry",  color = color.gray, display = display.data_window)
+plot(debugMode ? array.get(p4Counts, C_P4_N_CANDIDATE)  : na, "P4_candidate",       color = color.gray, display = display.data_window)
+plot(debugMode ? array.get(p4Counts, C_P4_N_FORMING)    : na, "P4_forming",         color = color.gray, display = display.data_window)
+plot(debugMode ? array.get(p4Counts, C_P4_N_CANCELLED)  : na, "P4_cancelled",       color = color.gray, display = display.data_window)
+plot(debugMode ? array.get(p4Counts, C_P4_N_FINAL_GATE) : na, "P4_at_final_gate",   color = color.gray, display = display.data_window)
 
 // =============================================================================
 // P6 — CROSS-TIMEFRAME SUBSTRATE  (SLICE 2: minimal P1 projection)
@@ -5974,12 +5976,12 @@ f_p7zTfLabel(string p) =>
 
 f_p7PermColor(int code) =>
     switch code
-        C_PERM_BUY_BIAS           => color.new(color.lime, 0)
-        C_PERM_SELL_BIAS          => color.new(color.red, 0)
-        C_PERM_ALLOW_BOTH_CONTEXT => color.new(color.aqua, 0)
-        C_PERM_COUNTER_TREND      => color.new(color.orange, 0)
-        C_PERM_WATCH_ONLY         => color.new(color.yellow, 0)
-        => color.new(color.gray, 0)
+        C_PERM_BUY_BIAS           => color.lime
+        C_PERM_SELL_BIAS          => color.red
+        C_PERM_ALLOW_BOTH_CONTEXT => color.aqua
+        C_PERM_COUNTER_TREND      => color.orange
+        C_PERM_WATCH_ONLY         => color.yellow
+        => color.gray
 
 // -----------------------------------------------------------------------------
 // Active-POI evaluation loop — additive to the P3 registry, per the project's
@@ -6612,9 +6614,15 @@ if barstate.isconfirmed
                 // colour itself; freshness filtering now also means far fewer
                 // zones overlap, so 90% green/red keeps candles legible while
                 // direction reads at a glance.
-                color p7zFillColor = p7zBullish ? color.new(color.green, 90) : color.new(color.red, 90)
-                color p7zBorderColor = p7zBullish ? color.new(color.green, 25) : color.new(color.red, 25)
-                color p7zTextColor = p7zBullish ? color.new(color.green, 10) : color.new(color.red, 10)
+                // Compaction (RC3): the hue is chosen once; the three tints are
+                // the same colour values as before.
+                color p7zHue = p7zBullish ? color.green : color.red
+                color p7zFillColor = color.new(p7zHue, 90)
+                color p7zBorderColor = color.new(p7zHue, 25)
+                color p7zTextColor = color.new(p7zHue, 10)
+                // Compaction (RC3): the annotation text is built once and shared
+                // by the create and the extend paths, which built it identically.
+                string p7zBoxTxt = not p7zTextOwner or not p7zShowLabels ? "" : p7zTfl + " • " + array.get(p7zGNames, p7zG)
 
                 if slot == -1
                     // ---- new box: left edge = availability time (Phase 23)
@@ -6647,8 +6655,6 @@ if barstate.isconfirmed
                     //
                     // Tier is deliberately absent from this text: STRONG is
                     // table and debug metadata, not zone identity.
-                    string p7zBoxTxt = not p7zTextOwner or not p7zShowLabels ? "" :
-                      p7zTfl + " • " + array.get(p7zGNames, p7zG)
                     // The right edge is carried a fixed number of bars past the
                     // last close. `extend.right` alone was not enough: the
                     // centered text is laid out inside `left .. right`, so a
@@ -6687,7 +6693,7 @@ if barstate.isconfirmed
                         // Ownership is re-decided every bar as zones enter and
                         // leave the selection, so the text is re-asserted here
                         // rather than frozen at creation.
-                        box.set_text(array.get(p7zBoxes, slot), not p7zTextOwner or not p7zShowLabels ? "" : p7zTfl + " • " + array.get(p7zGNames, p7zG))
+                        box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)
                         // RC1-POI-V2 (Phase 8): the label is deliberately NOT
                         // repositioned. Frozen RC1 called
                         // `label.set_x(existing, time_close)` here, which dragged
@@ -6750,34 +6756,24 @@ if barstate.islast and p7ShowUi
     f_row(p7Summary, 0, "P7 — BTRC Scanner", "")
     f_row(p7Summary, 1, "Feed", syminfo.prefix + ":" + syminfo.ticker)
     f_row(p7Summary, 2, "Host TF", timeframe.period)
-    if p7HasData
-        f_row(p7Summary, 3,  "Global direction", f_p7DirLabel(p7LastGlobalDir))
-        f_row(p7Summary, 4,  "Regime",           f_p7RegimeLabel(p7LastRegime))
-        f_row(p7Summary, 5,  "Momentum",         f_p7DirLabel(p7LastMomDir))
-        f_row(p7Summary, 6,  "Momentum accel.",  f_p7MomAccelLabel(p7LastMomAccel))
-        f_row(p7Summary, 7,  "Breakout",         f_p7BrkLabel(p7LastBrk))
-        f_row(p7Summary, 8,  "Pullback",         f_p7PbLabel(p7LastPb))
-        f_row(p7Summary, 9,  "Session",          f_p7SessionLabel(p7LastSession))
-        f_row(p7Summary, 10, "Volatility",       f_p7VolLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""))
-        f_row(p7Summary, 11, "Active POIs",      str.tostring(array.size(p7PoiIdx)))
-    else
-        // Phase 14 zero-state: no confirmed bar processed yet -- every row
-        // reads "-", never a stale or fabricated value.
-        for r = 3 to 11
-            f_row(p7Summary, r, "-", "-")
+    // Compaction (RC3): rows 3-11 written by one loop over parallel key/value
+    // arrays instead of nine separate writes; cell content is unchanged.
+    array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Momentum accel.|Breakout|Pullback|Session|Volatility|Active POIs", "|")
+    array<string> p7SumVals = array.from(f_p7DirLabel(p7LastGlobalDir), f_p7RegimeLabel(p7LastRegime), f_p7DirLabel(p7LastMomDir), f_p7MomAccelLabel(p7LastMomAccel), f_p7BrkLabel(p7LastBrk), f_p7PbLabel(p7LastPb), f_p7SessionLabel(p7LastSession), f_p7VolLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)))
+    // Phase 14 zero-state: no confirmed bar processed yet -- every row
+    // reads "-", never a stale or fabricated value.
+    for r = 3 to 11
+        f_row(p7Summary, r, p7HasData ? array.get(p7SumKeys, r - 3) : "-", p7HasData ? array.get(p7SumVals, r - 3) : "-")
 
     if p7ShowActivePois
         int p7Active = array.size(p7PoiIdx)
         int p7Shown  = math.min(p7Active, p7MaxVisiblePois)
         var table p7Pois = table.new(position.bottom_right, 8, p7MaxVisiblePois + 2, border_width = 1, bgcolor = color.new(color.black, 15))
-        table.cell(p7Pois, 0, 0, "#",     text_size = size.tiny, text_color = color.gray, text_halign = text.align_left)
-        table.cell(p7Pois, 1, 0, "Dir",   text_size = size.tiny, text_color = color.gray)
-        table.cell(p7Pois, 2, 0, "Tier",  text_size = size.tiny, text_color = color.gray)
-        table.cell(p7Pois, 3, 0, "BTMM",  text_size = size.tiny, text_color = color.gray)
-        table.cell(p7Pois, 4, 0, "Align", text_size = size.tiny, text_color = color.gray)
-        table.cell(p7Pois, 5, 0, "Score", text_size = size.tiny, text_color = color.gray)
-        table.cell(p7Pois, 6, 0, "Permission", text_size = size.tiny, text_color = color.gray)
-        table.cell(p7Pois, 7, 0, "State", text_size = size.tiny, text_color = color.gray)
+        // Compaction (RC3): header written by one loop; `text.align_center` is
+        // table.cell's default, so columns 1-7 render exactly as before.
+        array<string> p7Hdr = str.split("#|Dir|Tier|BTMM|Align|Score|Permission|State", "|")
+        for c = 0 to 7
+            table.cell(p7Pois, c, 0, array.get(p7Hdr, c), text_size = size.tiny, text_color = color.gray, text_halign = c == 0 ? text.align_left : text.align_center)
         // ---- RC1-POI CORRECTIVE (presentation only): order the table rows by
         // the SAME proximity-to-current-close projection the P7-Z boxes use, so
         // the table describes the zones the trader can actually see. The frozen
@@ -6836,14 +6832,11 @@ if barstate.islast and p7ShowUi
                 int fin       = array.get(p7PoiFinal, srcRow)
                 int perm      = array.get(p7PoiPerm, srcRow)
                 int lc        = array.get(p7PoiLc, srcRow)
-                table.cell(p7Pois, 0, r, str.tostring(poiI), text_size = size.tiny, text_color = color.white, text_halign = text.align_left)
-                table.cell(p7Pois, 1, r, bull ? "BULL" : "BEAR", text_size = size.tiny, text_color = bull ? color.new(color.lime, 0) : color.new(color.red, 0))
-                table.cell(p7Pois, 2, r, f_p7TierLabel(tier), text_size = size.tiny, text_color = color.white)
-                table.cell(p7Pois, 3, r, btmmOk ? "YES" : "NO", text_size = size.tiny, text_color = color.white)
-                table.cell(p7Pois, 4, r, f_p7AlignLabel(align), text_size = size.tiny, text_color = color.white)
-                table.cell(p7Pois, 5, r, str.tostring(fin), text_size = size.tiny, text_color = color.white)
-                table.cell(p7Pois, 6, r, f_p7PermLabel(perm), text_size = size.tiny, text_color = f_p7PermColor(perm))
-                table.cell(p7Pois, 7, r, f_p7LifecycleLabel(lc), text_size = size.tiny, text_color = color.white)
+                // Compaction (RC3): one loop over the row's eight cells; text,
+                // colour and alignment per column are exactly the former writes.
+                array<string> p7Cells = array.from(str.tostring(poiI), bull ? "BULL" : "BEAR", f_p7TierLabel(tier), btmmOk ? "YES" : "NO", f_p7AlignLabel(align), str.tostring(fin), f_p7PermLabel(perm), f_p7LifecycleLabel(lc))
+                for c = 0 to 7
+                    table.cell(p7Pois, c, r, array.get(p7Cells, c), text_size = size.tiny, text_color = c == 1 ? (bull ? color.lime : color.red) : c == 6 ? f_p7PermColor(perm) : color.white, text_halign = c == 0 ? text.align_left : text.align_center)
             else
                 // Blank out any row not currently occupied -- the table is a
                 // fixed `p7MaxVisiblePois` size (Pine tables cannot resize in
