@@ -14,8 +14,19 @@ SCOPE, STATED EXPLICITLY
   comparison is therefore over Level-A POIs whose ``source_timeframe`` AND
   ``effective_timeframe`` are the host and whose type is one of the 18 core
   types. Level-A POIs outside that scope are COUNTED and reported, never
-  silently dropped; an M15 core POI whose effective timeframe was promoted is
-  reported as its own divergence class.
+  silently dropped.
+* CANONICAL IDENTITY KEEPS THE SOURCE TIMEFRAME (author decision 3). A host
+  POI whose ``effective_timeframe`` was raised by the cross-timeframe merge
+  (``poi/overlap.py resolve_merges``) is still a host POI: it is matched on
+  ``source_timeframe`` and the raised timeframe is reported as DERIVED
+  higher-timeframe context (``higher_tf_context``), never as a P3 identity or
+  field divergence. Its downstream P5/P8 rows are still compared field by
+  field and classed ``higher_tf_context`` so their divergence stays visible.
+* P8 ORDER (author decision 4). Pine's native order -- registry index, then
+  event priority ACTIVATED < BTMM_VALIDATED < ENTERED/LOST_ACTIONABLE <
+  TERMINAL -- is authoritative. Python events are associated to Pine POIs by
+  canonical identity and checked against that order; Level A's own record
+  numbering is incidental and is never compared to Pine's.
 * POIs are matched by identity ``(type, direction, source_ms, availability_ms,
   top, bottom)`` — never by index, because Level A numbers every timeframe's
   POIs in one sequence while Pine numbers only the host's.
@@ -236,10 +247,9 @@ def compare(
             )
             continue
         if row["effective_timeframe"] != host_timeframe:
-            # Cross-timeframe merge (poi/overlap.py resolve_merges) promoted
-            # this host POI's effective timeframe. Pine's single-timeframe
-            # registry cannot do that, so it is matched by identity and the
-            # promotion is reported as a field divergence -- never dropped.
+            # Cross-timeframe merge (poi/overlap.py resolve_merges) raised
+            # this host POI's effective timeframe. That is derived
+            # higher-timeframe context; identity stays on source_timeframe.
             promoted[rid] = row["effective_timeframe"]
         type_code = CODE_BY_POI_TYPE.get(_poi_type(row["poi_type"]))
         if type_code is None or type_code > 18:
@@ -295,7 +305,6 @@ def compare(
         pine = pine_p3[idx]
         checks = {
             "tier": (_TIER_CODE[py["strength_tier"]], int(pine["tier"])),
-            "effective_timeframe": (py["effective_timeframe"], host_timeframe),
         }
         py_term_ms = _iso_ms(py["terminal_time_utc"]) if py["terminal_time_utc"] else 0
         if py["terminal"] == "1":
@@ -363,20 +372,42 @@ def compare(
             if x != y:
                 payload_mismatches += 1
                 mismatches.append(Mismatch("P8", k[2], f"pine:{k[1]}", name, x, y))
-    # native ordering within a bar: Pine log order vs Python sequence order
+    # native ordering within a bar (author decision 4): Pine's own log order
+    # must be its native (poiIdx, event priority) order, and Python's events,
+    # associated to Pine POIs by canonical identity, must realise that same
+    # order. Level A's own record numbering is incidental and never compared.
     ordering_mismatches = 0
+    pine_native_order_violations = 0
+    pine_order: dict[int, list[tuple[str, int]]] = defaultdict(list)
+    for e in pine_events:
+        if int(e["bar"]) <= through:
+            pine_order[int(e["bar"])].append((e["type"], int(e["poiIdx"])))
+    for bar, seq in pine_order.items():
+        if seq != sorted(seq, key=_native_key):
+            pine_native_order_violations += 1
+            mismatches.append(
+                Mismatch("P8", bar, "-", "pine_native_order", seq[:6], None)
+            )
     py_order: dict[int, list[tuple[str, int]]] = defaultdict(list)
     for e in sorted(
         py_events_mapped, key=lambda e: (int(e["bar_ms"]), int(e["sequence_in_bar"]))
     ):
         py_order[int(e["bar_ms"])].append((e["event_type"], e["pine_idx"]))
-    pine_order: dict[int, list[tuple[str, int]]] = defaultdict(list)
-    for e in pine_events:
-        if int(e["bar"]) <= through:
-            pine_order[int(e["bar"])].append((e["type"], int(e["poiIdx"])))
+    # Within one POI Python must emit in the same priority order Pine does;
+    # that part of the order is semantic, not incidental numbering.
+    python_priority_violations = 0
+    for bar, seq in py_order.items():
+        by_poi: dict[int, list[int]] = defaultdict(list)
+        for etype, idx in seq:
+            by_poi[idx].append(P8_EVENT_PRIORITY[etype])
+        if any(v != sorted(v) for v in by_poi.values()):
+            python_priority_violations += 1
+            mismatches.append(
+                Mismatch("P8", bar, "-", "python_event_priority", seq[:6], None)
+            )
     for bar in sorted(set(py_order) & set(pine_order)):
         common = set(py_order[bar]) & set(pine_order[bar])
-        a = [x for x in py_order[bar] if x in common]
+        a = sorted((x for x in py_order[bar] if x in common), key=_native_key)
         b = [x for x in pine_order[bar] if x in common]
         if a != b:
             ordering_mismatches += 1
@@ -439,7 +470,9 @@ def compare(
         for idx in sorted(set(py_rows) & set(pine_rows)):
             p5_rows_compared += 1
             p5_rows_by_class[
-                "promoted" if py_rows[idx]["poi_record_id"] in promoted else "host_only"
+                "higher_tf_context"
+                if py_rows[idx]["poi_record_id"] in promoted
+                else "host_only"
             ] += 1
             a = py_rows[idx]
             c = pine_rows[idx]
@@ -488,9 +521,8 @@ def compare(
         "host_timeframe": host_timeframe,
         "level_a_in_scope_pois": len(py_identity),
         "level_a_out_of_scope_pois": dict(out_of_scope),
-        "level_a_host_pois_with_promoted_effective_timeframe": dict(
-            Counter(promoted.values())
-        ),
+        "canonical_identity_timeframe": "source_timeframe",
+        "level_a_host_pois_with_higher_tf_context": dict(Counter(promoted.values())),
         "pine_registry_pois": len(pine_identity),
         "pine_evaluated_pois_through": len(pine_evaluated),
     }
@@ -508,7 +540,7 @@ def compare(
     report.p8 = {
         "pine_events_by_poi_class": dict(
             Counter(
-                "promoted" if k[1] in promoted_pine_idx else "host_only"
+                "higher_tf_context" if k[1] in promoted_pine_idx else "host_only"
                 for k in pine_key
             )
         ),
@@ -518,6 +550,8 @@ def compare(
         "extra_in_python": len(extra),
         "payload_mismatches": payload_mismatches,
         "ordering_mismatch_bars": ordering_mismatches,
+        "pine_native_order_violation_bars": pine_native_order_violations,
+        "python_event_priority_violation_bars": python_priority_violations,
         "duplicate_terminal": dup_terminal,
         "missing_terminal_reason": missing_reason,
         "terminal_before_activation": term_before_act,
@@ -532,7 +566,7 @@ def compare(
     for m in mismatches:
         idx_s = m.poi.split(":")[1] if m.poi.startswith("pine:") else ""
         cls = (
-            "promoted"
+            "higher_tf_context"
             if idx_s.isdigit() and int(idx_s) in promoted_idx
             else "host_only"
         )
@@ -542,7 +576,7 @@ def compare(
     for m in mismatches:
         idx_s = m.poi.split(":")[1] if m.poi.startswith("pine:") else ""
         cls = (
-            "promoted"
+            "higher_tf_context"
             if idx_s.isdigit() and int(idx_s) in promoted_idx
             else "host_only"
         )
@@ -562,6 +596,20 @@ def compare(
     report.first_divergence = mismatches[0].as_dict() if mismatches else None
     report.scope["first_mismatches"] = [m.as_dict() for m in mismatches[:15]]
     return report
+
+
+#: Pine P8 emission order within one POI on one bar (see the P8EVENT block).
+P8_EVENT_PRIORITY = {
+    "POI_ACTIVATED": 0,
+    "BTMM_VALIDATED": 1,
+    "PERMISSION_ENTERED_ACTIONABLE": 2,
+    "PERMISSION_LOST_ACTIONABLE": 2,
+    "POI_TERMINAL": 3,
+}
+
+
+def _native_key(event: tuple[str, int]) -> tuple[int, int]:
+    return (event[1], P8_EVENT_PRIORITY[event[0]])
 
 
 def _poi_type(name: str) -> Any:
