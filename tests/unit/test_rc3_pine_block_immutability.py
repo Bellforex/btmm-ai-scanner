@@ -20,6 +20,7 @@ _TV = Path(__file__).resolve().parents[2] / "tradingview"
 RC1 = _TV / "btmm_poi_btrc_scanner_rc1.pine"
 RC2 = _TV / "btmm_poi_btrc_scanner_rc2.pine"
 RC3_DEV = _TV / "btmm_poi_btrc_scanner_rc3_poi_semantics_dev.pine"
+RC3_PARITY = _TV / "btmm_poi_btrc_scanner_rc3_parity_dev.pine"
 
 RC1_SHA = "143c0f8817c78bf45e6842e16112cedf67ca36dc694c288808b7748096664c54"
 RC2_SHA = "381f2fc2463c4eaa9dc2eb88943f5bc16a83b55a6d4307c390cce5f87f36cc3f"
@@ -93,6 +94,13 @@ def test_the_p6_block_is_byte_identical_between_rc2_and_rc3_dev() -> None:
     )
 
 
+def test_the_p6_block_is_byte_identical_between_rc2_and_rc3_parity_dev() -> None:
+    assert _p6_block(RC2) == _p6_block(RC3_PARITY)
+    assert hashlib.sha256(_p6_block(RC3_PARITY).encode()).hexdigest() == (
+        "52ceb8eed5a679b49b4e507cdb377301cb43204972fbc5431366792ba0ed21a3"
+    )
+
+
 @pytest.mark.parametrize("symbol", _RC3_SYMBOLS)
 def test_no_rc3_symbol_reaches_the_p6_block(symbol: str) -> None:
     assert symbol not in _p6_block(RC3_DEV)
@@ -113,7 +121,7 @@ def test_the_timeframe_formatter_handles_the_calendar_spellings() -> None:
     start = source.index("f_p7zTfLabel(string p) =>")
     end = source.index("\n\n", start)
     body = source[start:end]
-    assert 'str.substring(p, n - 1)' in body, "needs a suffix branch"
+    assert "str.substring(p, n - 1)" in body, "needs a suffix branch"
     assert '"D" ?' in body or 'sfx == "D"' in body
 
 

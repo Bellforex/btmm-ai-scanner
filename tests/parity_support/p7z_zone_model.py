@@ -584,6 +584,20 @@ def group_exact_duplicates(
     return [members[key] for key in order]
 
 
+ORDER_BLOCK_TYPES = frozenset({1, 2})  # BUY_ORDER_BLOCK, SELL_ORDER_BLOCK
+ENGULFING_TYPES = frozenset({11, 12})  # BULLISH_ENGULFING, BEARISH_ENGULFING
+
+
+def same_formation(a: PoiGeometry, b: PoiGeometry) -> bool:
+    """An OB and an engulfing describe ONE formation exactly when they share
+    the geometry key: both detectors take the same two consecutive source
+    candles, the first candle's high/low as the zone and the second candle's
+    close as availability. Equal availability therefore fixes both source
+    candles; different availability means different formations, whatever the
+    price overlap."""
+    return geometry_key(a) == geometry_key(b)
+
+
 def combined_zone_label(
     group: list[int], geometry_by_idx: dict[int, PoiGeometry], period: str
 ) -> str:
@@ -595,8 +609,17 @@ def combined_zone_label(
     box represents all of them."""
     names: list[str] = []
     strong = False
+    has_order_block = any(
+        geometry_by_idx[i].poi_type in ORDER_BLOCK_TYPES for i in group
+    )
     for idx in group:
         geo = geometry_by_idx[idx]
+        if has_order_block and geo.poi_type in ENGULFING_TYPES:
+            # Primary display name: this engulfing is the OB's own formation
+            # (see same_formation). The record still counts toward STRONG.
+            if geo.tier == TIER_STRONG:
+                strong = True
+            continue
         name = type_label(geo.poi_type)
         if name not in names:
             names.append(name)

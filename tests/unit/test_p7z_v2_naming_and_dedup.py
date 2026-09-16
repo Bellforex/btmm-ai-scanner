@@ -118,7 +118,7 @@ def test_identical_geometry_different_types_collapse_to_one_group():
     }
     groups = group_exact_duplicates([0, 1], geo)
     assert groups == [[0, 1]]
-    assert combined_zone_label(groups[0], geo, "15") == "M15 • BUY OB + BULL ENGULF"
+    assert combined_zone_label(groups[0], geo, "15") == "M15 • BUY OB"
 
 
 @pytest.mark.parametrize("field", ["top", "bottom", "avail", "direction"])

@@ -6477,7 +6477,17 @@ if barstate.isconfirmed
                     array.set(p7zGLeft, gi, math.min(array.get(p7zGLeft, gi), cd))
                     array.set(p7zGTerm, gi, array.get(p7zGTerm, gi) and array.get(poiTerminal, pI))
                     string nmsCur = array.get(p7zGNames, gi)
-                    if not str.contains(nmsCur, nm)
+                    // PRIMARY DISPLAY NAME (author decision, presentation only):
+                    // an engulfing that shares this group with an order block
+                    // IS that order block's formation -- both detectors emit
+                    // the same two source candles, the first candle's range as
+                    // the zone, and the second candle's close as availability,
+                    // and the group key is exactly (top, bottom, availability,
+                    // direction). Show "ORDER BLOCK" only. The OB is always the
+                    // first name: f_poiDetectOrderBlocks registers before
+                    // f_poiDetectEngulfing on the same bar and this walk is in
+                    // registry order. Both registry records are untouched.
+                    if not str.contains(nmsCur, nm) and not (str.contains(nm, "ENGULFING") and str.contains(nmsCur, "ORDER BLOCK"))
                         array.set(p7zGNames, gi, nmsCur + " + " + nm)
                 else
                     map.put(p7zSlot, gk, array.size(p7zGTop))
@@ -6494,8 +6504,8 @@ if barstate.isconfirmed
         int p7zShown = math.min(p7zNGrp, p7zMaxVisibleZones)
         array<int> p7zSelected = array.new<int>()
         array<int> p7zSelGrp   = array.new<int>()
+        array<float> p7zGDist = array.new<float>()
         if p7zShown > 0
-            array<float> p7zGDist = array.new<float>()
             for g = 0 to p7zNGrp - 1
                 float gt = array.get(p7zGTop, g)
                 float gb = array.get(p7zGBot, g)
@@ -6557,20 +6567,15 @@ if barstate.isconfirmed
                                     array.set(p7zComp, a, cb)
             for a = 0 to p7zShown - 1
                 int ga = array.get(p7zSelGrp, a)
-                // Distance is recomputed rather than read from the selection
-                // block's scratch array, which is scoped to that block.
-                float topA = array.get(p7zGTop, ga)
-                float botA = array.get(p7zGBot, ga)
-                float da = close < botA ? botA - close : (close > topA ? close - topA : 0.0)
+                // Same per-group distance the selection pass computed.
+                float da = array.get(p7zGDist, ga)
                 int ta = array.get(p7zGLeft, ga)
                 int ia = array.get(p7zSelected, a)
                 bool own = true
                 for b = 0 to p7zShown - 1
                     if b != a and array.get(p7zComp, b) == array.get(p7zComp, a)
                         int gb = array.get(p7zSelGrp, b)
-                        float topB = array.get(p7zGTop, gb)
-                        float botB = array.get(p7zGBot, gb)
-                        float db = close < botB ? botB - close : (close > topB ? close - topB : 0.0)
+                        float db = array.get(p7zGDist, gb)
                         int tb = array.get(p7zGLeft, gb)
                         int ib = array.get(p7zSelected, b)
                         if db < da or (db == da and (tb > ta or (tb == ta and ib < ia)))
