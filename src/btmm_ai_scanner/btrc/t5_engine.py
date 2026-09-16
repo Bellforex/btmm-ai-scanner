@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from functools import cached_property
 
 from btmm_ai_scanner.btrc.enums import (
     AnalyticalPermission,
@@ -25,15 +26,23 @@ from btmm_ai_scanner.btrc.enums import (
     TrendAlignment,
     VolatilityState,
 )
+from btmm_ai_scanner.btrc.regime_assessment import RegimeAssessment
 from btmm_ai_scanner.btrc.regime_engine import assess_regime
+from btmm_ai_scanner.btrc.t3_assessment import (
+    TimeframeBreakoutAssessment,
+    TimeframeMomentumAssessment,
+    TimeframePullbackAssessment,
+)
 from btmm_ai_scanner.btrc.t3_engine import (
     assess_breakout,
     assess_momentum,
     assess_pullback,
 )
+from btmm_ai_scanner.btrc.t4_assessment import SessionAssessment, VolatilityAssessment
 from btmm_ai_scanner.btrc.t4_engine import assess_session, assess_volatility
 from btmm_ai_scanner.btrc.t5_configuration import ConfluenceConfiguration
 from btmm_ai_scanner.btrc.t5_decision import BtrcDecision, ComponentScores
+from btmm_ai_scanner.btrc.trend_assessment import TrendAssessment
 from btmm_ai_scanner.btrc.trend_engine import assess_trend
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
@@ -66,6 +75,68 @@ def latest_poi(analysis: ScannerAnalysis) -> PoiObservation | None:
     )
 
 
+class ConfluenceBarContext:
+    """The POI-independent inputs of ``assess_confluence`` for ONE bar.
+
+    T1 trend, T2 regime, T3 momentum/breakout/pullback, T4 volatility (per
+    timeframe) and session are pure functions of the bar's ``analysis``, the
+    visible candles and the evaluation time -- they do not depend on which POI
+    is being scored. When every active POI of a bar is evaluated, computing
+    them once per bar instead of once per POI gives bit-identical decisions at
+    a fraction of the cost. Each value is computed lazily, on first use, by
+    exactly the same call ``assess_confluence`` makes without a context.
+    """
+
+    def __init__(
+        self,
+        analysis: ScannerAnalysis,
+        *,
+        candles_by_timeframe: Mapping[Timeframe, Sequence[NormalizedCandle]]
+        | None = None,
+        evaluation_time_utc: datetime | None = None,
+    ) -> None:
+        self.analysis = analysis
+        self.candles_by_timeframe = candles_by_timeframe
+        self.evaluation_time_utc = evaluation_time_utc
+        self._volatility: dict[Timeframe, VolatilityAssessment | None] = {}
+
+    @cached_property
+    def trend(self) -> TrendAssessment:
+        return assess_trend(self.analysis)
+
+    @cached_property
+    def regime(self) -> RegimeAssessment:
+        return assess_regime(self.analysis)
+
+    @cached_property
+    def momentum_by_timeframe(self) -> dict[Timeframe, TimeframeMomentumAssessment]:
+        return {m.timeframe: m for m in assess_momentum(self.analysis)}
+
+    @cached_property
+    def breakout_by_timeframe(self) -> dict[Timeframe, TimeframeBreakoutAssessment]:
+        return {b.timeframe: b for b in assess_breakout(self.analysis)}
+
+    @cached_property
+    def pullback_by_timeframe(self) -> dict[Timeframe, TimeframePullbackAssessment]:
+        return {p.timeframe: p for p in assess_pullback(self.analysis)}
+
+    @cached_property
+    def session(self) -> SessionAssessment | None:
+        if self.evaluation_time_utc is None:
+            return None
+        return assess_session(self.evaluation_time_utc)
+
+    def volatility(self, timeframe: Timeframe) -> VolatilityAssessment | None:
+        if timeframe not in self._volatility:
+            candles = self.candles_by_timeframe
+            self._volatility[timeframe] = (
+                assess_volatility(list(candles[timeframe]))
+                if candles is not None and timeframe in candles
+                else None
+            )
+        return self._volatility[timeframe]
+
+
 def assess_confluence(
     analysis: ScannerAnalysis,
     poi: PoiObservation,
@@ -73,16 +144,30 @@ def assess_confluence(
     candles_by_timeframe: Mapping[Timeframe, Sequence[NormalizedCandle]] | None = None,
     evaluation_time_utc: datetime | None = None,
     configuration: ConfluenceConfiguration | None = None,
+    bar_context: ConfluenceBarContext | None = None,
 ) -> BtrcDecision:
     config = configuration or ConfluenceConfiguration()
     poi_tf = poi.effective_timeframe
     poi_bullish = poi.direction is PoiDirection.BULLISH
 
-    trend = assess_trend(analysis)
-    regime = assess_regime(analysis)
-    momentum = {m.timeframe: m for m in assess_momentum(analysis)}.get(poi_tf)
-    breakout = {b.timeframe: b for b in assess_breakout(analysis)}.get(poi_tf)
-    pullback = {p.timeframe: p for p in assess_pullback(analysis)}.get(poi_tf)
+    if bar_context is None:
+        bar_context = ConfluenceBarContext(
+            analysis,
+            candles_by_timeframe=candles_by_timeframe,
+            evaluation_time_utc=evaluation_time_utc,
+        )
+    elif (
+        bar_context.analysis is not analysis
+        or bar_context.candles_by_timeframe is not candles_by_timeframe
+        or bar_context.evaluation_time_utc != evaluation_time_utc
+    ):
+        raise ValueError("bar_context was built for a different bar or inputs")
+
+    trend = bar_context.trend
+    regime = bar_context.regime
+    momentum = bar_context.momentum_by_timeframe.get(poi_tf)
+    breakout = bar_context.breakout_by_timeframe.get(poi_tf)
+    pullback = bar_context.pullback_by_timeframe.get(poi_tf)
 
     supporting: list[str] = []
     opposing: list[str] = []
@@ -184,17 +269,14 @@ def assess_confluence(
 
     liquidity_score = 60 if btmm_valid else 40  # provisional; refined in a later phase
 
-    volatility = None
-    if candles_by_timeframe is not None and poi_tf in candles_by_timeframe:
-        volatility = assess_volatility(list(candles_by_timeframe[poi_tf]))
+    volatility = bar_context.volatility(poi_tf)
+    if volatility is not None:
         volatility_score = volatility.suitability_score
     else:
         volatility_score = 50
         missing.append("volatility")
 
-    session = (
-        assess_session(evaluation_time_utc) if evaluation_time_utc is not None else None
-    )
+    session = bar_context.session
     if session is None:
         missing.append("session")
 

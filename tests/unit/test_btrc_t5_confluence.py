@@ -355,3 +355,42 @@ def test_integrated_stack_no_lookahead_prefix() -> None:
         if bp is None or ip is None:
             continue
         assert assess_confluence(b, bp) == assess_confluence(i, ip)
+
+
+def test_shared_bar_context_gives_identical_decisions_for_every_poi() -> None:
+    from btmm_ai_scanner.btrc.t5_engine import ConfluenceBarContext
+
+    candles = _m15(150, 42)
+    analysis = _batch(candles)
+    visible = {_M15: candles}
+    when = analysis.availability_time_utc
+    pois = analysis.poi_analysis.poi_observations
+    assert len(pois) > 3
+    context = ConfluenceBarContext(
+        analysis, candles_by_timeframe=visible, evaluation_time_utc=when
+    )
+    for poi in pois:
+        alone = assess_confluence(
+            analysis, poi, candles_by_timeframe=visible, evaluation_time_utc=when
+        )
+        shared = assess_confluence(
+            analysis,
+            poi,
+            candles_by_timeframe=visible,
+            evaluation_time_utc=when,
+            bar_context=context,
+        )
+        assert shared == alone
+
+
+def test_a_bar_context_from_another_bar_is_refused() -> None:
+    import pytest
+
+    from btmm_ai_scanner.btrc.t5_engine import ConfluenceBarContext
+
+    earlier = _batch(_m15(140, 42))
+    later = _batch(_m15(150, 42))
+    poi = latest_poi(later)
+    assert poi is not None
+    with pytest.raises(ValueError):
+        assess_confluence(later, poi, bar_context=ConfluenceBarContext(earlier))

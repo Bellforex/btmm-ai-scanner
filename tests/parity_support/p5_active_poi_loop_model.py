@@ -55,6 +55,7 @@ from uuid import UUID
 from btmm_ai_scanner.btrc import assess_confluence
 from btmm_ai_scanner.btrc.t5_configuration import ConfluenceConfiguration
 from btmm_ai_scanner.btrc.t5_decision import BtrcDecision
+from btmm_ai_scanner.btrc.t5_engine import ConfluenceBarContext
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
@@ -202,6 +203,14 @@ def run_active_poi_loop(
     ordered = _stable_order(eligible_ids, obs_by_id)
 
     decisions: dict[UUID, BtrcDecision] = {}
+    # One POI-independent T1-T4 context per bar, shared by every POI: the
+    # decisions are bit-identical to per-POI recomputation (see
+    # ConfluenceBarContext).
+    bar_context = ConfluenceBarContext(
+        analysis,
+        candles_by_timeframe=candles_by_timeframe,
+        evaluation_time_utc=evaluation_time_utc,
+    )
     for poi_id in ordered:
         poi = obs_by_id[poi_id]
         decisions[poi_id] = assess_confluence(
@@ -210,6 +219,7 @@ def run_active_poi_loop(
             candles_by_timeframe=candles_by_timeframe,
             evaluation_time_utc=evaluation_time_utc,
             configuration=configuration,
+            bar_context=bar_context,
         )
 
     return ActiveLoopResult(

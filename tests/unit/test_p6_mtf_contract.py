@@ -418,7 +418,13 @@ def test_t3_pullback_is_the_only_consumer_of_poi_lifecycle() -> None:
 def test_t5_orchestrates_every_component() -> None:
     """So T5 cannot be sliced before the others, and the DAG order T1 -> T2
     holds transitively through it."""
-    source = inspect.getsource(t5_engine.assess_confluence)
+    # The POI-independent component calls live in T5's own per-bar
+    # ConfluenceBarContext (computed once per bar, shared by every POI);
+    # assess_confluence still orchestrates all of them through it.
+    source = inspect.getsource(t5_engine.assess_confluence) + inspect.getsource(
+        t5_engine.ConfluenceBarContext
+    )
+    assert "ConfluenceBarContext(" in inspect.getsource(t5_engine.assess_confluence)
     for call in (
         "assess_trend(",
         "assess_regime(",
