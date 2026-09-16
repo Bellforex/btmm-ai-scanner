@@ -6414,44 +6414,46 @@ if barstate.isconfirmed
             int fn = array.size(fvgIdx)
             if fn > 0
                 array<int> ord = array.sort_indices(fvgBot, order.ascending)
-                float cTop = na
-                float cBot = na
-                int cLeft = na
-                int cKey = na
-                int cN = 0
-                bool cTerm = true
-                int cType = na
+                // Cluster state is held in arrays, not scalars: the live
+                // M15 probe showed scalar `:=` updates made inside this loop
+                // (cN := 1) read back as their initial value on the next
+                // `for k` pass, so no FVG cluster was ever flushed and no FVG
+                // was ever drawn. Array element writes do persist.
+                //   cF = [top, bottom]   cI = [left, key, count, type]
+                array<float> cF = array.new<float>(2, na)
+                array<int>   cI = array.new<int>(4, 0)
+                array<bool>  cT = array.new<bool>(1, true)
                 // k == fn is a sentinel iteration that flushes the last
                 // component, so there is only ONE flush path.
                 for k = 0 to fn
                     int pI = k < fn ? array.get(fvgIdx, array.get(ord, k)) : -1
                     float bt = k < fn ? array.get(poiZoneBottom, pI) : na
                     float tp = k < fn ? array.get(poiZoneTop, pI) : na
-                    if (k == fn or cN == 0 or bt > cTop) and cN > 0
-                        array.push(p7zGTop, cTop)
-                        array.push(p7zGBot, cBot)
-                        array.push(p7zGLeft, cLeft)
+                    int cN = array.get(cI, 2)
+                    if cN > 0 and (k == fn or bt > array.get(cF, 0))
+                        array.push(p7zGTop, array.get(cF, 0))
+                        array.push(p7zGBot, array.get(cF, 1))
+                        array.push(p7zGLeft, array.get(cI, 0))
                         array.push(p7zGBull, wantDir == C_POI_DIR_BULLISH)
-                        array.push(p7zGKey, cKey)
-                        array.push(p7zGNames, f_p7zTypeLabel(cType) + (cN > 1 ? " ×" + str.tostring(cN) : ""))
-                        array.push(p7zGTerm, cTerm)
+                        array.push(p7zGKey, array.get(cI, 1))
+                        array.push(p7zGNames, f_p7zTypeLabel(array.get(cI, 3)) + (cN > 1 ? " ×" + str.tostring(cN) : ""))
+                        array.push(p7zGTerm, array.get(cT, 0))
                         cN := 0
                     if k < fn
                         if cN == 0
-                            cTop := tp
-                            cBot := bt
-                            cLeft := array.get(poiCandTime, pI)
-                            cKey := pI
-                            cN := 1
-                            cTerm := array.get(poiTerminal, pI)
-                            cType := array.get(poiType, pI)
+                            array.set(cF, 0, tp)
+                            array.set(cF, 1, bt)
+                            array.set(cI, 0, array.get(poiCandTime, pI))
+                            array.set(cI, 1, pI)
+                            array.set(cI, 3, array.get(poiType, pI))
+                            array.set(cT, 0, array.get(poiTerminal, pI))
                         else
-                            cTop := math.max(cTop, tp)
-                            cBot := math.min(cBot, bt)
-                            cLeft := math.min(cLeft, array.get(poiCandTime, pI))
-                            cKey := math.min(cKey, pI)
-                            cN += 1
-                            cTerm := cTerm and array.get(poiTerminal, pI)
+                            array.set(cF, 0, math.max(array.get(cF, 0), tp))
+                            array.set(cF, 1, math.min(array.get(cF, 1), bt))
+                            array.set(cI, 0, math.min(array.get(cI, 0), array.get(poiCandTime, pI)))
+                            array.set(cI, 1, math.min(array.get(cI, 1), pI))
+                            array.set(cT, 0, array.get(cT, 0) and array.get(poiTerminal, pI))
+                        array.set(cI, 2, cN + 1)
 
         // ---- non-FVG: exact-geometry twins via a map key, no all-pairs ----
         map<string, int> p7zSlot = map.new<string, int>()

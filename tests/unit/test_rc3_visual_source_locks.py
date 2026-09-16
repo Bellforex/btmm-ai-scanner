@@ -102,8 +102,34 @@ def test_zone_build_is_live_last_bars_or_frozen_review_time_only() -> None:
         "if p7zShowZones and (p7zAsOf == 0 ? bar_index >= p1DatasetBars - 2 : "
         "time_close <= p7zAsOf)"
     ) in _SOURCE
-    assert 'p7zAsOf             = input.time(0, "Review zones as of (0 = live)"' in _SOURCE
+    assert (
+        'p7zAsOf             = input.time(0, "Review zones as of (0 = live)"' in _SOURCE
+    )
     # Review mode reads the same fresh-only eligible set; it cannot revive a
     # terminal zone because freshness is read at that bar, not recomputed.
     block = _p7z_block()
     assert "if array.get(poiFreshActive, pI)" in block
+
+
+def test_fvg_sweep_state_is_array_held_not_loop_scalars() -> None:
+    # Live M15 probe: scalar `:=` updates inside the FVG `for k` sweep read
+    # back as their initial value on the next pass, so no FVG cluster was ever
+    # flushed and no FVG was ever drawn. The cluster state must live in arrays.
+    block = _p7z_block()
+    sweep = block[
+        block.index("for dirPass = 0 to 1") : block.index("map<string, int> p7zSlot")
+    ]
+    assert "array<float> cF = array.new<float>(2, na)" in sweep
+    assert "array<int>   cI = array.new<int>(4, 0)" in sweep
+    assert "int cN = array.get(cI, 2)" in sweep
+    assert "array.set(cI, 2, cN + 1)" in sweep
+    assert "if cN > 0 and (k == fn or bt > array.get(cF, 0))" in sweep
+    for scalar in (
+        "float cTop",
+        "float cBot",
+        "int cLeft",
+        "int cKey",
+        "bool cTerm",
+        "int cType",
+    ):
+        assert scalar not in sweep, scalar
