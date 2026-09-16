@@ -407,6 +407,7 @@ def compare(
 
     # ---------------- P5 ----------------
     p5_rows_compared = 0
+    p5_rows_by_class: Counter[str] = Counter()
     p5_field_mismatches = 0
     p5_python_only = 0
     p5_pine_only = 0
@@ -437,6 +438,9 @@ def compare(
             )
         for idx in sorted(set(py_rows) & set(pine_rows)):
             p5_rows_compared += 1
+            p5_rows_by_class[
+                "promoted" if py_rows[idx]["poi_record_id"] in promoted else "host_only"
+            ] += 1
             a = py_rows[idx]
             c = pine_rows[idx]
             pairs = {
@@ -496,7 +500,18 @@ def compare(
         "field_mismatches": p3_field_mismatches,
         "matched": len(py_identity) - len(python_only),
     }
+    promoted_pine_idx = {
+        pine_idx_by_identity[py_identity[rid]]
+        for rid in promoted
+        if py_identity.get(rid) in pine_idx_by_identity
+    }
     report.p8 = {
+        "pine_events_by_poi_class": dict(
+            Counter(
+                "promoted" if k[1] in promoted_pine_idx else "host_only"
+                for k in pine_key
+            )
+        ),
         "pine_events": len(pine_key),
         "python_events": len(py_key),
         "missing_in_python": len(missing),
@@ -538,6 +553,7 @@ def compare(
     report.p5 = {
         "bars_compared": p5_bars_compared,
         "rows_compared": p5_rows_compared,
+        "rows_compared_by_poi_class": dict(p5_rows_by_class),
         "python_only_rows": p5_python_only,
         "pine_only_rows": p5_pine_only,
         "field_mismatches": p5_field_mismatches,
