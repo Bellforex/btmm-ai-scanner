@@ -68,6 +68,32 @@ def classify_zone_relationship(
     return PoiOverlapRelationshipType.OVERLAPPING, overlap_top, overlap_bottom
 
 
+def _intersecting_index_pairs(
+    ordered: list[PoiObservation],
+) -> list[tuple[int, int]]:
+    """Every ``(index_a, index_b)``, ``index_a < index_b``, whose closed zones
+    intersect (``max(bottoms) <= min(tops)``), in ascending ``(index_a,
+    index_b)`` order.
+
+    ``classify_zone_relationship`` returns ``None`` exactly when the closed
+    intervals are disjoint (point zones included), so these are precisely the
+    pairs the all-pairs scan could keep, visited in the all-pairs scan's own
+    order. A bottom-sorted sweep finds them in O(n log n + k) instead of
+    O(n^2) classifications.
+    """
+    by_bottom = sorted(range(len(ordered)), key=lambda i: ordered[i].zone_bottom)
+    active: list[int] = []
+    pairs: list[tuple[int, int]] = []
+    for index in by_bottom:
+        bottom = ordered[index].zone_bottom
+        active = [j for j in active if ordered[j].zone_top >= bottom]
+        for j in active:
+            pairs.append((j, index) if j < index else (index, j))
+        active.append(index)
+    pairs.sort()
+    return pairs
+
+
 def compute_overlap_relationships(
     observations: tuple[PoiObservation, ...],
     evaluated_at_time_utc: datetime,
@@ -83,30 +109,29 @@ def compute_overlap_relationships(
     results: list[PoiOverlapRelationship] = []
     for (symbol, direction), group in by_symbol_direction.items():
         ordered = sorted(group, key=lambda o: str(o.record_id))
-        for index_a in range(len(ordered)):
-            for index_b in range(index_a + 1, len(ordered)):
-                obs_a = ordered[index_a]
-                obs_b = ordered[index_b]
-                classification = classify_zone_relationship(
-                    obs_a.zone_top, obs_a.zone_bottom, obs_b.zone_top, obs_b.zone_bottom
+        for index_a, index_b in _intersecting_index_pairs(ordered):
+            obs_a = ordered[index_a]
+            obs_b = ordered[index_b]
+            classification = classify_zone_relationship(
+                obs_a.zone_top, obs_a.zone_bottom, obs_b.zone_top, obs_b.zone_bottom
+            )
+            if classification is None:
+                continue
+            relationship_type, overlap_top, overlap_bottom = classification
+            if relationship_type == PoiOverlapRelationshipType.BOUNDARY_TOUCHING:
+                continue
+            results.append(
+                PoiOverlapRelationship(
+                    symbol=symbol,
+                    direction=direction,
+                    poi_a_record_id=obs_a.record_id,
+                    poi_b_record_id=obs_b.record_id,
+                    relationship_type=relationship_type,
+                    overlap_top=overlap_top,
+                    overlap_bottom=overlap_bottom,
+                    evaluated_at_time_utc=evaluated_at_time_utc,
                 )
-                if classification is None:
-                    continue
-                relationship_type, overlap_top, overlap_bottom = classification
-                if relationship_type == PoiOverlapRelationshipType.BOUNDARY_TOUCHING:
-                    continue
-                results.append(
-                    PoiOverlapRelationship(
-                        symbol=symbol,
-                        direction=direction,
-                        poi_a_record_id=obs_a.record_id,
-                        poi_b_record_id=obs_b.record_id,
-                        relationship_type=relationship_type,
-                        overlap_top=overlap_top,
-                        overlap_bottom=overlap_bottom,
-                        evaluated_at_time_utc=evaluated_at_time_utc,
-                    )
-                )
+            )
 
     return tuple(results)
 

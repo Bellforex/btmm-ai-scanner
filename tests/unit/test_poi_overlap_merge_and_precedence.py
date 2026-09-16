@@ -248,3 +248,63 @@ def test_overlap_relationships_are_not_transitively_inferred() -> None:
     assert frozenset({str(a.record_id), str(b.record_id)}) in pairs
     assert frozenset({str(b.record_id), str(c.record_id)}) in pairs
     assert frozenset({str(a.record_id), str(c.record_id)}) not in pairs
+
+
+def _all_pairs_reference(observations, evaluated_at):
+    """The original O(n^2) scan, kept verbatim as the equivalence oracle."""
+    from collections import defaultdict
+
+    from btmm_ai_scanner.poi.overlap import PoiOverlapRelationship
+
+    groups = defaultdict(list)
+    for o in observations:
+        groups[(o.symbol, o.direction)].append(o)
+    out = []
+    for (symbol, direction), group in groups.items():
+        ordered = sorted(group, key=lambda o: str(o.record_id))
+        for ia in range(len(ordered)):
+            for ib in range(ia + 1, len(ordered)):
+                a, b = ordered[ia], ordered[ib]
+                c = classify_zone_relationship(
+                    a.zone_top, a.zone_bottom, b.zone_top, b.zone_bottom
+                )
+                if c is None or c[0] == PoiOverlapRelationshipType.BOUNDARY_TOUCHING:
+                    continue
+                out.append(
+                    PoiOverlapRelationship(
+                        symbol=symbol,
+                        direction=direction,
+                        poi_a_record_id=a.record_id,
+                        poi_b_record_id=b.record_id,
+                        relationship_type=c[0],
+                        overlap_top=c[1],
+                        overlap_bottom=c[2],
+                        evaluated_at_time_utc=evaluated_at,
+                    )
+                )
+    return tuple(out)
+
+
+def test_sweep_overlap_is_identical_to_the_all_pairs_scan_on_random_zones() -> None:
+    import random
+
+    for seed in range(40):
+        rng = random.Random(seed)
+        observations = []
+        for i in range(rng.randint(0, 60)):
+            bottom = rng.randint(0, 40)
+            height = rng.choice((0, 0, 1, 2, 3, 5, 8))  # point zones and ties
+            direction = rng.choice((PoiDirection.BULLISH, PoiDirection.BEARISH))
+            observations.append(
+                _observation(
+                    rng.randint(1, 10**9) * 1000 + i,
+                    PoiType.BUY_FAIR_VALUE_GAP,
+                    direction,
+                    str(bottom + height),
+                    str(bottom),
+                )
+            )
+        observations = tuple(observations)
+        assert compute_overlap_relationships(
+            observations, _BASE_TIME
+        ) == _all_pairs_reference(observations, _BASE_TIME), seed
