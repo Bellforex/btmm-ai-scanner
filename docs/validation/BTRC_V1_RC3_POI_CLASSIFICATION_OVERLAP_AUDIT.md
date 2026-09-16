@@ -106,7 +106,7 @@ Window: 2026-08-19 19:15 → 2026-09-16 09:45 UTC (1 799 bars), final close
 | D lost in grouping | **0** (10 fresh FVGs → 10 groups) |
 | E omitted by display cap | 5 groups, ranks 9, 13, 14, 15, 18 by distance (69.7 – 342.2 points away, 145–536 h old) |
 | E selected | 5 of 8 visual slots are FVG groups; nearest FVG group ranks 2nd |
-| F/G drawing / geometry | live boxes match selection; geometry locked by fixtures |
+| F/G drawing / geometry | **superseded — see §4: Pine drew no FVG at all** (the model selection was right, the Pine sweep was not); geometry locked by fixtures |
 
 **Conclusion:** FVGs are detected completely and exactly. Grouping does not
 lose them and selection does not starve them. An FVG "missing" from the
@@ -123,3 +123,54 @@ and a fresh example), locked by `tests/unit/test_rc3_fvg_reference_fixtures.py`
 together with the FVG mutation tests: 2-candle gap, wrong orientation, wrong
 boundaries, source/availability collapse, and a fresh FVG dropped before
 selection.
+
+## 4. Live FVG draw audit (acceptance gate item 8), FX:XAUUSD M15, 2026-09-16
+
+§3 row F/G was wrong. It compared live boxes with the *Python model's*
+selection on a chart where the model and Pine happened to agree on non-FVG
+boxes; nobody checked that a single FVG box existed. None did.
+
+Evidence chain (PARITY DEV v4 registry capture, then temporary log-only
+probes in a throw-away copy of USER, removed from the chart afterwards):
+
+| stage | result |
+|---|---|
+| registered FVGs in the executed window | 394 |
+| TERMINAL (mitigated / invalidated) | 387 |
+| fresh at run end | **7**, all SELL FVG (tops 4683.99, 4551.27, 4534.18, 4501.58, 4408.87, 4387.09, 4342.53) |
+| in USER `p7PoiIdx` / `p7zFreshIdx` with type 4, direction −1 | 7 / 7 |
+| groups emitted by the per-direction FVG sort+sweep | **0** |
+| GROUPED (lost by merging) | 0 |
+| DISPLAY_CAP (cap 30, 6 non-FVG groups) | 0 |
+| **DRAW_FAILURE** | **7** |
+| DETECTOR_MISS / QUALITY_REJECT | 0 / 0 |
+
+**Failure stage:** the P7-Z FVG sweep. A probe inside the loop showed
+`cN := 1` taking effect within one `for k` pass and reading back as `0` on
+the next, so the "flush a finished cluster" branch (`cN > 0`) never ran. The
+scalar cluster state did not survive loop iterations in TradingView's
+runtime, although the same code is correct as written and correct in the
+Python model.
+
+**Fix (presentation only, commit ec83d1f):** cluster state lives in arrays
+(`cF`, `cI`, `cT`), whose element writes persist. The detector, P3 lifecycle,
+selection order, collision ownership and every non-FVG path are unchanged.
+Source lock: `test_fvg_sweep_state_is_array_held_not_loop_scalars`.
+
+**Live verification (same chart, same bars, profiler off):** fixed build 13
+boxes vs v17 6 boxes. All 6 v17 geometries/colours/extend/alignment/size are
+identical; the 7 added boxes are exactly the 7 fresh SELL FVGs, red. One
+intended text change follows the existing owner rule: FVG 4324–4342.53
+touches the SELL OB 4342.53–4364.07 at one price, is nearer to price, and
+therefore owns the text of that collision group (the OB box stays, with
+empty text). USER DEV saved as **v19** (sha256 `ee6d8df3…`); after the save
+its 14 boxes equal the verified diagnostic build box for box (a new bar had
+closed in between).
+
+**Not changed, flagged for the author:** the identical sweep is in the
+frozen `btmm_poi_btrc_scanner_rc2.pine` and
+`btmm_poi_btrc_scanner_rc1_poi_fix_dev.pine`, so RC1-FIX/RC2 also never drew
+an FVG zone. RC2 is a promoted release; it is left untouched.
+
+H4 is not audited to the same depth: its executable 1 800-bar window reaches
+the sealed out-of-sample range, which may not be replayed or inspected.
