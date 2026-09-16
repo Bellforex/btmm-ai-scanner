@@ -9,9 +9,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from btmm_ai_scanner.config.enums import Timeframe
-from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
-
 from botdryrun.config import BotConfig, DataSourceKind
 from botdryrun.domain import (
     DecisionView,
@@ -22,6 +19,8 @@ from botdryrun.domain import (
     trading_day_of,
 )
 from botdryrun.market_data import FeedItem, FeedKind, FxcmSessionCalendar, interleave
+from btmm_ai_scanner.config.enums import Timeframe
+from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from tests.parity_support.v1a_csv_loader import load_v1a_csv
 
 Bar = tuple[float, float, float, float]
