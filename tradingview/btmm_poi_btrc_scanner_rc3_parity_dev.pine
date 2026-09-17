@@ -6269,7 +6269,7 @@ if barstate.isconfirmed
                       "|poiIdx=" + str.tostring(i) +
                       "|poiDir=" + (poiBullish ? "BULL" : "BEAR") +
                       "|poiTier=" + str.tostring(array.get(poiTier, i)) +
-                      "|poiStatus=" + str.tostring(array.get(poiStatus, i)) +
+                      "|poiStatus=" + str.tostring(array.get(poiReported, i)) +
                       "|poiTerminal=" + str.tostring(isTerminal) +
                       "|d1Trend=" + str.tostring(d1Trend) + "|w1Trend=" + str.tostring(w1Trend) + "|h4Trend=" + str.tostring(h4Trend) +
                       "|globalDir=" + str.tostring(p5GlobalDir) + "|operCtx=" + str.tostring(p5OperCtx) +
@@ -6286,9 +6286,11 @@ if barstate.isconfirmed
                       "|final=" + str.tostring(finalScore) +
                       "|permission=" + str.tostring(permission) +
                       "|lifecycle=" + str.tostring(lifecycle))
+                // P5 wire status = the REPORTED lifecycle status (committed + pending
+                // breach tail), which is what Python's CurrentPoiState carries.
                 if p5cOn
                     p5cBuf += (str.length(p5cBuf) > 0 ? ";" : "") + str.tostring(i) + "," + (poiBullish ? "1" : "0") + "," +
-                      str.tostring(array.get(poiTier, i)) + "," + str.tostring(array.get(poiStatus, i)) + "," + (isTerminal ? "1" : "0") + "," +
+                      str.tostring(array.get(poiTier, i)) + "," + str.tostring(array.get(poiReported, i)) + "," + (isTerminal ? "1" : "0") + "," +
                       (btmmValid ? "1" : "0") + "," + (btmmBullish ? "1" : "0") + "," + str.tostring(align) + "," +
                       str.tostring(btmmScore) + "," + str.tostring(poiScore) + "," + str.tostring(trendScore) + "," + str.tostring(regimeScore) + "," +
                       str.tostring(momentumScore) + "," + str.tostring(breakoutScore) + "," + str.tostring(liquidityScore) + "," + str.tostring(volatilityScore) + "," +

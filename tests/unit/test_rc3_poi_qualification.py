@@ -371,3 +371,17 @@ def test_pine_build_gates_fvg_quality_and_same_origin(build) -> None:
     assert _PCONFIG.fvg_min_gap_atr_ratio == Decimal(
         "0.35"
     )  # Python master value the Pine constant mirrors
+
+
+def test_parity_p5_wire_reports_the_reported_lifecycle_status() -> None:
+    # Python's P5 row carries CurrentPoiState.poi_lifecycle_status, which includes
+    # a pending breach window; Pine's committed `poiStatus` lags it on the first
+    # touch bar. The capture wire must log `poiReported`.
+    code = (_TV / "btmm_poi_btrc_scanner_rc3_parity_dev.pine").read_text(
+        encoding="utf-8"
+    )
+    assert '"|poiStatus=" + str.tostring(array.get(poiReported, i))' in code
+    assert (
+        'str.tostring(array.get(poiTier, i)) + "," + '
+        'str.tostring(array.get(poiReported, i)) + ","'
+    ) in code
