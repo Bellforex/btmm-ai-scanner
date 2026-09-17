@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -50,6 +50,7 @@ from btmm_ai_scanner.poi.lifecycle import (
     _is_breach,
     _touches_zone,
     _zone_reference_atr,
+    apply_order_block_promotion,
     resolve_terminal,
     run_poi_lifecycle,
 )
@@ -60,7 +61,10 @@ from btmm_ai_scanner.poi.lifecycle_scheduler import (
     create_scheduler,
 )
 from btmm_ai_scanner.poi.observation import PoiObservation
-from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
+from btmm_ai_scanner.poi.order_blocks import (
+    apply_movement_origin_gate,
+    detect_order_blocks,
+)
 from btmm_ai_scanner.poi.overlap import (
     PoiOverlapRelationship,
     compute_overlap_relationships,
@@ -390,7 +394,12 @@ def _detect_bundle_candidates(
     bundle: PoiTimeframeInput, configuration: PoiConfiguration
 ) -> list[Any]:
     candidates: list[Any] = []
-    candidates.extend(detect_order_blocks(bundle.candles, configuration))
+    candidates.extend(
+        apply_movement_origin_gate(
+            detect_order_blocks(bundle.candles, configuration),
+            bundle.measurement_analysis.confirmed_swings,
+        )
+    )
     candidates.extend(detect_fair_value_gaps(bundle.candles, configuration))
     candidates.extend(detect_reversal_candles(bundle.candles, configuration))
     candidates.extend(detect_bases(bundle.candles, configuration))
@@ -484,6 +493,41 @@ def _normalize_candidate_fields(candidate: Any) -> dict[str, object]:
         "confirmation_time_utc": candidate.confirmation_time_utc,
         "availability_time_utc": candidate.availability_time_utc,
     }
+
+
+_PROMOTION_TARGET = {
+    PoiType.BULLISH_ENGULFING: PoiType.BUY_ORDER_BLOCK,
+    PoiType.BEARISH_ENGULFING: PoiType.SELL_ORDER_BLOCK,
+}
+
+
+def _order_block_promotion_times(
+    observations: Iterable[PoiObservation],
+) -> dict[UUID, datetime]:
+    """Engulfing record id -> availability of the ORDER BLOCK record of the
+    same formation (same timeframe and source candles, matching direction).
+    Only formations confirmed as a leg origin have such an OB record."""
+    observations = tuple(observations)
+    order_block_availability: dict[
+        tuple[Timeframe, PoiType, tuple[UUID, ...]], datetime
+    ] = {
+        (o.source_timeframe, o.poi_type, o.source_candle_record_ids): (
+            o.availability_time_utc
+        )
+        for o in observations
+        if o.poi_type in (PoiType.BUY_ORDER_BLOCK, PoiType.SELL_ORDER_BLOCK)
+    }
+    promotions: dict[UUID, datetime] = {}
+    for o in observations:
+        target = _PROMOTION_TARGET.get(o.poi_type)
+        if target is None:
+            continue
+        available = order_block_availability.get(
+            (o.source_timeframe, target, o.source_candle_record_ids)
+        )
+        if available is not None:
+            promotions[o.record_id] = available
+    return promotions
 
 
 def analyze_pois(
@@ -582,6 +626,7 @@ def analyze_pois(
     all_transitions: list[TransitionCandidate] = []
     current_state_fields_by_poi: dict[UUID, dict[str, object]] = {}
 
+    promotion_times = _order_block_promotion_times(observations)
     for observation in observations:
         bundle_candles = candles_by_timeframe.get(observation.source_timeframe, ())
         bundle_atr = atr_by_timeframe.get(observation.source_timeframe, ())
@@ -603,6 +648,12 @@ def analyze_pois(
                 configuration,
             )
             all_transitions.extend(walk.transitions)
+            promoted = apply_order_block_promotion(
+                walk.terminal_reason,
+                walk.terminal_time_utc,
+                walk.mitigation_time_utc,
+                promotion_times.get(observation.record_id),
+            )
             if walk.last_seen_candle is not None:
                 elapsed = (
                     walk.last_seen_candle.availability_time_utc
@@ -621,10 +672,10 @@ def analyze_pois(
                 "direction": observation.direction,
                 "poi_lifecycle_status": walk.final_status,
                 "freshness_status": walk.freshness_status,
-                "fresh_active": walk.fresh_active,
-                "mitigation_time_utc": walk.mitigation_time_utc,
-                "terminal_reason": walk.terminal_reason,
-                "terminal_time_utc": walk.terminal_time_utc,
+                "fresh_active": promoted[0] is None,
+                "mitigation_time_utc": promoted[2],
+                "terminal_reason": promoted[0],
+                "terminal_time_utc": promoted[1],
                 "tap_count": walk.tap_count,
                 "tap_classification": walk.tap_classification,
                 "age_start_time_utc": observation.availability_time_utc,
@@ -1127,6 +1178,11 @@ class _PoiReplayState:
     # + fingerprint only the *new* append-only suffix and the bounded reference/
     # period sets, instead of re-resolving the entire cumulative candidate
     # universe every candle (the O(history)-per-candle -> O(N^2) advance cost).
+    # RC3 OB movement origin: the gated ORDER BLOCK observations (mutable,
+    # swing-dependent), carried by reference while the frontier reuses its tuple.
+    origin_ob_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
+        default_factory=dict
+    )
     append_only_by_id: PersistentMap[tuple[dict[str, object], PoiObservation]] = field(
         default_factory=PersistentMap
     )
@@ -1286,6 +1342,38 @@ def _advance_poi_replay_state(
         if removed_record_id not in new_bounded:
             new_ordered = new_ordered.delete(_observation_sort_key(prior_entry[1]))
 
+    # RC3 movement-origin ORDER BLOCKs: same bounded-mutable treatment, skipped
+    # entirely while the frontier carries the identical gated tuple.
+    prior_origin = state.origin_ob_cache
+    if (
+        new_detector_frontier.origin_order_blocks
+        is state.detector_frontier.origin_order_blocks
+    ):
+        new_origin_cache = prior_origin
+        for record_id, entry in prior_origin.items():
+            touched_by_id[record_id] = entry[1]
+    else:
+        new_origin_cache = {}
+        for candidate in new_detector_frontier.origin_order_blocks:
+            if candidate.poi_type not in enabled:
+                continue
+            record_id, fields, observation, reused = _resolve_observation(
+                candidate, prior_origin
+            )
+            new_origin_cache[record_id] = (fields, observation)
+            touched_by_id[record_id] = observation
+            prior_entry = prior_origin.get(record_id)
+            if reused and prior_entry is not None and prior_entry[1] is observation:
+                continue
+            if prior_entry is not None:
+                new_ordered = new_ordered.delete(_observation_sort_key(prior_entry[1]))
+            new_ordered = new_ordered.insert(
+                _observation_sort_key(observation), record_id.int, observation
+            )
+        for removed_record_id, prior_entry in prior_origin.items():
+            if removed_record_id not in new_origin_cache:
+                new_ordered = new_ordered.delete(_observation_sort_key(prior_entry[1]))
+
     # A3-A/A3-D: resolve_merges only ever pairs a child POI with a STRONGER-
     # timeframe parent, and _advance_poi_replay_state always processes exactly one
     # timeframe's bundle, so the merge is a proven no-op here (identical to the
@@ -1336,6 +1424,21 @@ def _advance_poi_replay_state(
         # Only reference SR zones (identity tag "R") are lifecycle-eligible mutable
         # POIs that can be removed; append-only families are never removed and
         # period/EL families are NOT_APPLICABLE.
+        if identity[0] in LIFECYCLE_ELIGIBLE_POI_TYPES and identity[1] == "A":
+            # A movement-origin ORDER BLOCK whose anchoring swing disappeared.
+            removed_ids.append(
+                resolver.resolve(
+                    DerivedOutputType.POI_OBSERVATION,
+                    (
+                        symbol_value_text,
+                        timeframe_value_text,
+                        identity[0].value,
+                        *(str(cid) for cid in identity[2]),
+                        rule_version_text,
+                    ),
+                )
+            )
+            continue
         if identity[0] in LIFECYCLE_ELIGIBLE_POI_TYPES and identity[1] == "R":
             removed_key = (
                 symbol_value_text,
@@ -1378,6 +1481,7 @@ def _advance_poi_replay_state(
         scheduler=new_scheduler,
         observations_ordered=new_ordered,
         bounded_cache=new_bounded,
+        origin_ob_cache=new_origin_cache,
         detector_frontier=new_detector_frontier,
         new_pois_for_btmm=new_pois_for_btmm,
         changed_pois_for_btmm=changed_pois_for_btmm,
@@ -1409,6 +1513,9 @@ def _build_lifecycle_outputs(
     all_transitions: list[TransitionCandidate] = []
     current_state_fields_by_poi: dict[UUID, dict[str, object]] = {}
 
+    promotion_times = _order_block_promotion_times(
+        state.observations_ordered.ordered_values()
+    )
     for observation in state.observations_ordered.ordered_values():
         if observation.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
             walk = scheduler.last_walks.get(observation.record_id)
@@ -1417,6 +1524,12 @@ def _build_lifecycle_outputs(
                 assert cursor is not None
                 walk = cursor_walk_result(cursor, candle, configuration)
             all_transitions.extend(walk.transitions)
+            promoted = apply_order_block_promotion(
+                walk.terminal_reason,
+                walk.terminal_time_utc,
+                walk.mitigation_time_utc,
+                promotion_times.get(observation.record_id),
+            )
             if walk.last_seen_candle is not None:
                 elapsed = (
                     walk.last_seen_candle.availability_time_utc
@@ -1435,10 +1548,10 @@ def _build_lifecycle_outputs(
                 "direction": observation.direction,
                 "poi_lifecycle_status": walk.final_status,
                 "freshness_status": walk.freshness_status,
-                "fresh_active": walk.fresh_active,
-                "mitigation_time_utc": walk.mitigation_time_utc,
-                "terminal_reason": walk.terminal_reason,
-                "terminal_time_utc": walk.terminal_time_utc,
+                "fresh_active": promoted[0] is None,
+                "mitigation_time_utc": promoted[2],
+                "terminal_reason": promoted[0],
+                "terminal_time_utc": promoted[1],
                 "tap_count": walk.tap_count,
                 "tap_classification": walk.tap_classification,
                 "age_start_time_utc": observation.availability_time_utc,

@@ -73,7 +73,7 @@ _EVENT = re.compile(r"P8EVENT\|type=([A-Z_]+)\|([^\"\n]*)")
 _P3 = re.compile(r"P3LIFE\|([^\"\n]*)")
 _P5C = re.compile(r"P5C\|([^\"\n]*)")
 _TIER_CODE = {"": 0, "STANDARD": 1, "STRONG": 2}
-_TERM_CODE = {"": 0, "MITIGATED": 1, "INVALIDATED": 2}
+_TERM_CODE = {"": 0, "MITIGATED": 1, "INVALIDATED": 2, "PROMOTED_TO_ORDER_BLOCK": 3}
 _STAGE_ORDER = {"P3": 0, "P5": 1, "P8": 2}
 
 

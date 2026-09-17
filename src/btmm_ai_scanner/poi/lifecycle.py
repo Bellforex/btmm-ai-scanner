@@ -185,6 +185,26 @@ def resolve_terminal(
     return None, None, None
 
 
+def apply_order_block_promotion(
+    terminal_reason: PoiTerminalReason | None,
+    terminal_time_utc: datetime | None,
+    mitigation_time_utc: datetime | None,
+    promotion_time_utc: datetime | None,
+) -> tuple[PoiTerminalReason | None, datetime | None, datetime | None]:
+    """Apply an engulfing's promotion to ORDER BLOCK after `resolve_terminal`.
+
+    Same ranking rule as `resolve_terminal`: the earliest cause wins and is
+    never replaced. A cause already recorded on the promotion bar or earlier
+    (a first touch or a genuine invalidation) keeps priority, so a zone that
+    price already used stays MITIGATED. Returns the same triple.
+    """
+    if promotion_time_utc is None:
+        return terminal_reason, terminal_time_utc, mitigation_time_utc
+    if terminal_time_utc is not None and terminal_time_utc <= promotion_time_utc:
+        return terminal_reason, terminal_time_utc, mitigation_time_utc
+    return PoiTerminalReason.PROMOTED_TO_ORDER_BLOCK, promotion_time_utc, None
+
+
 def _compute_freshness_and_taps(
     candles: Sequence[NormalizedCandle],
     start_index: int,

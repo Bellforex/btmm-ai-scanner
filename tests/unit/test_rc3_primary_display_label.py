@@ -24,7 +24,7 @@ from tests.parity_support.p7z_zone_model import (
     combined_zone_label,
     same_formation,
 )
-from tests.parity_support.pine_semantic_core import semantic_core_sha256
+from tests.parity_support.pine_semantic_core import capture_neutral_core
 from tests.parity_support.v1a_csv_loader import load_v1a_csv
 
 _USER = (
@@ -34,9 +34,6 @@ _USER = (
 )
 
 BUY_OB, SELL_OB, BUY_FVG = 1, 2, 3
-SEMANTIC_CORE_SHA256 = (
-    "5c8ea88f13b1750c912cba85278e63650e3dbcb770fb58da6ce29039a39ccf2c"
-)
 BULL_ENG, BEAR_ENG, EVENING_STAR, RESISTANCE = 11, 12, 16, 18
 
 
@@ -195,10 +192,13 @@ def test_pine_registers_order_blocks_before_engulfing_on_the_same_bar() -> None:
     assert ob < eng
 
 
-def test_presentation_change_leaves_the_semantic_core_untouched() -> None:
-    # P3 detection/lifecycle, P4, P5 and the P8 alert conditions all sit in
-    # the semantic core (every executable line outside the presentation
-    # layer). Same hash from 39c0640 (the performance gate) through this rule
-    # and the RC3 display layers.
-    assert semantic_core_sha256(_pine()) == SEMANTIC_CORE_SHA256
+def test_user_and_parity_builds_share_one_semantic_core() -> None:
+    # The primary display name lives in the P7-Z presentation block. Every
+    # semantic line (P1-P6, P3 registry/lifecycle incl. the RC3 ORDER BLOCK
+    # movement-origin gate, P4, P5, P8 alert conditions) is byte-identical
+    # between the USER build and the PARITY capture build once the capture
+    # instrumentation and debug logs are set aside.
+    parity = _USER.with_name("btmm_poi_btrc_scanner_rc3_parity_dev.pine")
+    user_core = capture_neutral_core(_pine())
+    assert user_core == capture_neutral_core(parity.read_text(encoding="utf-8"))
     assert re.search(r"f_poiEmit\(typeCode", _pine())

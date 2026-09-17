@@ -49,7 +49,10 @@ from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
-from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
+from btmm_ai_scanner.poi.order_blocks import (
+    apply_movement_origin_gate,
+    detect_order_blocks,
+)
 from btmm_ai_scanner.poi.period_levels import (
     _GRANULARITIES,
     PeriodLevelCandidate,
@@ -161,6 +164,14 @@ class _DetectorFrontierState:
     # produced this state (transient per-advance output, consumed by the caller).
     period_candidates: tuple[Any, ...] = ()
     last_delta: PoiFrontierDelta = _EMPTY_DELTA
+    # RC3 OB movement origin: raw two-candle OB formations (append-only, NOT in
+    # the universe) and the gated ORDER BLOCK candidates, which depend on the
+    # measurement's confirmed swings and are therefore a mutable family. They
+    # are rebuilt only when the (formation count, swing signature) changes;
+    # otherwise the identical tuple is carried forward.
+    raw_order_blocks: tuple[Any, ...] = ()
+    origin_signature: tuple[Any, ...] = ()
+    origin_order_blocks: tuple[Any, ...] = ()
 
 
 def create_initial_detector_frontier_state() -> _DetectorFrontierState:
@@ -317,7 +328,8 @@ def _new_local_candidates(
     candidates: list[Any] = []
 
     if len(ring) >= 2:
-        candidates.extend(detect_order_blocks(ring[-2:], configuration))
+        # Raw OB formations are gated separately (movement origin); only the
+        # engulfing is append-only here.
         candidates.extend(detect_engulfing(ring[-2:], configuration))
     if len(ring) >= 3:
         candidates.extend(detect_fair_value_gaps(ring[-3:], configuration))
@@ -561,6 +573,11 @@ def advance_detector_frontier(
     # Append-only frontiers (local + reversal + bases). Bases use atr[m-1].
     reference_atr_prev = new_atr_series[-2] if len(new_atr_series) >= 2 else None
     step_candidates: list[Any] = _new_local_candidates(new_ring, configuration)
+    new_raw_order_blocks = state.raw_order_blocks
+    if len(new_ring) >= 2:
+        step_formations = detect_order_blocks(new_ring[-2:], configuration)
+        if step_formations:
+            new_raw_order_blocks = (*state.raw_order_blocks, *step_formations)
     step_candidates.extend(
         _evaluate_new_bases(new_ring, reference_atr_prev, configuration)
     )
@@ -588,6 +605,22 @@ def advance_detector_frontier(
             )
         )
 
+    # Movement-origin ORDER BLOCKs: rebuild only when a formation was added or
+    # the confirmed-swing set changed; otherwise reuse the tuple verbatim.
+    new_origin_signature = (
+        len(new_raw_order_blocks),
+        tuple(
+            (swing.record_id, swing.content_fingerprint)
+            for swing in measurement_analysis.confirmed_swings
+        ),
+    )
+    if new_origin_signature == state.origin_signature:
+        new_origin_order_blocks = state.origin_order_blocks
+    else:
+        new_origin_order_blocks = apply_movement_origin_gate(
+            new_raw_order_blocks, measurement_analysis.confirmed_swings
+        )
+
     # A6-AΔ: exact bounded delta. Append-only families contribute this candle's
     # step_candidates as NEW (no history scan). Reference and period levels are
     # the only mutable families; diff their BOUNDED current sets. When the
@@ -603,6 +636,13 @@ def advance_detector_frontier(
     period_new, period_changed, period_removed = _diff_bounded(
         state.period_candidates, tuple(period_candidates)
     )
+    origin_new: list[Any] = []
+    origin_changed: list[Any] = []
+    origin_removed: list[Any] = []
+    if new_origin_order_blocks is not state.origin_order_blocks:
+        origin_new, origin_changed, origin_removed = _diff_bounded(
+            state.origin_order_blocks, new_origin_order_blocks
+        )
 
     def _en(cands: list[Any]) -> tuple[Any, ...]:
         return tuple(c for c in cands if c.poi_type in enabled)
@@ -611,9 +651,22 @@ def advance_detector_frontier(
         return tuple(i for i in idents if i[0] in enabled)
 
     delta = PoiFrontierDelta(
-        new_candidates=(*_en(step_candidates), *_en(ref_new), *_en(period_new)),
-        changed_candidates=(*_en(ref_changed), *_en(period_changed)),
-        removed_identities=(*_en_ident(ref_removed), *_en_ident(period_removed)),
+        new_candidates=(
+            *_en(step_candidates),
+            *_en(ref_new),
+            *_en(period_new),
+            *_en(origin_new),
+        ),
+        changed_candidates=(
+            *_en(ref_changed),
+            *_en(period_changed),
+            *_en(origin_changed),
+        ),
+        removed_identities=(
+            *_en_ident(ref_removed),
+            *_en_ident(period_removed),
+            *_en_ident(origin_removed),
+        ),
     )
 
     new_state = _DetectorFrontierState(
@@ -626,12 +679,16 @@ def advance_detector_frontier(
         reference_candidates=new_reference_candidates,
         period_candidates=tuple(period_candidates),
         last_delta=delta,
+        raw_order_blocks=new_raw_order_blocks,
+        origin_signature=new_origin_signature,
+        origin_order_blocks=new_origin_order_blocks,
     )
 
     universe: list[Any] = [
         *new_append_only,
         *new_reference_candidates,
         *period_candidates,
+        *new_origin_order_blocks,
     ]
     filtered = [c for c in universe if c.poi_type in enabled]
     return new_state, filtered, new_atr_series

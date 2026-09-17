@@ -168,12 +168,12 @@ def test_unchanged_poi_observations_retain_the_same_record_id_across_growing_pre
     short_ob = next(
         o
         for o in short_result.poi_observations
-        if o.poi_type == PoiType.BUY_ORDER_BLOCK
+        if o.poi_type == PoiType.BULLISH_ENGULFING
     )
     grown_ob = next(
         o
         for o in grown_result.poi_observations
-        if o.poi_type == PoiType.BUY_ORDER_BLOCK
+        if o.poi_type == PoiType.BULLISH_ENGULFING
     )
 
     assert short_ob.record_id == grown_ob.record_id
@@ -206,12 +206,12 @@ def test_current_poi_state_fingerprint_changes_only_when_public_content_changes(
     state_untouched = next(
         s
         for s in result_untouched.current_poi_states
-        if s.poi_type == PoiType.BUY_ORDER_BLOCK
+        if s.poi_type == PoiType.BULLISH_ENGULFING
     )
     state_touched = next(
         s
         for s in result_touched.current_poi_states
-        if s.poi_type == PoiType.BUY_ORDER_BLOCK
+        if s.poi_type == PoiType.BULLISH_ENGULFING
     )
 
     assert state_untouched.record_id == state_touched.record_id
@@ -248,12 +248,12 @@ def test_merge_decisions_are_stable_across_growing_prefixes() -> None:
     short_parent = next(
         o
         for o in short_result.poi_observations
-        if o.poi_type == PoiType.BUY_ORDER_BLOCK and o.source_timeframe == Timeframe.H4
+        if o.poi_type == PoiType.BULLISH_ENGULFING and o.source_timeframe == Timeframe.H4
     )
     grown_parent = next(
         o
         for o in grown_result.poi_observations
-        if o.poi_type == PoiType.BUY_ORDER_BLOCK and o.source_timeframe == Timeframe.H4
+        if o.poi_type == PoiType.BULLISH_ENGULFING and o.source_timeframe == Timeframe.H4
     )
 
     assert (

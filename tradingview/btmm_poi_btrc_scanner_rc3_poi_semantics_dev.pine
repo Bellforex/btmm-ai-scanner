@@ -47,13 +47,11 @@ indicator("BTMM + POI + BTRC Scanner [RC3 POI SEMANTICS DEV]", overlay = true, m
 // INPUTS — debug/visual controls (client defaults: conservative & clean).
 // -----------------------------------------------------------------------------
 grpDev = "P1 Development / Parity"
-debugMode        = input.bool(false, "P1 Debug Mode (visuals + parity table)", group = grpDev)
-showSwings       = input.bool(true,  "  Show confirmed swings",         group = grpDev)
-showDisplacement = input.bool(true,  "  Show displacement markers",     group = grpDev)
-showEqualLevels  = input.bool(true,  "  Show equal-high/low lines",     group = grpDev)
-showSR           = input.bool(false, "  Show support/resistance zones", group = grpDev)
-showTrendlines   = input.bool(false, "  Show trendline debug",          group = grpDev)
-maxDrawPerFamily = input.int(20, "  Max drawings per family", minval = 1, maxval = 200, group = grpDev)
+// RC3 USER: the P1/P2/P4 debug drawings, debug table and debug data-window
+// plots were developer instrumentation behind Debug Mode (default off). They
+// computed nothing, and their tokens now carry the ORDER BLOCK movement-origin
+// gate. The capture build (btmm_poi_btrc_scanner_rc3_parity_dev.pine) keeps
+// every capture stream.
 
 // ENGINEERING-PROVISIONAL: rolling analytical window. This is a Pine practical
 // retention bound (Python retains full history). Larger = more faithful to the
@@ -66,6 +64,7 @@ dspFvg   = input.bool(true,  "Show FVG", group = grpView)
 dspSR    = input.bool(true,  "Show Support / Resistance", group = grpView)
 dspMs    = input.bool(false, "Show Market Structure (BOS / CHOCH / swings)", group = grpView)
 dspBtmm  = input.bool(false, "Show BTMM Lifecycle (markers)", tooltip = "Small diamond under the bar on which a BTMM setup changes state. Orange = a setup reached the final gate. Yellow = a setup started forming. Existing P4 states only; nothing is painted before the bar that confirmed it.", group = grpView)
+maxDrawPerFamily = input.int(20, "Market structure: events and swings drawn", minval = 1, maxval = 200, group = grpView)
 
 // -----------------------------------------------------------------------------
 // CONFIGURATION — EXACT defaults from MarketMeasurementConfiguration.
@@ -488,12 +487,9 @@ var int lastSwingFingerprint = na
 var int lastSRFingerprint    = na
 
 // Persistent draw-object handles (bounded, redrawn on change).
-var array<label> swingLabelObjs = array.new<label>()
+var array<SwingRec> p3Swings = array.new<SwingRec>()   // this bar's P1 confirmed swings, for the OB origin gate
 var array<line>  msLines  = array.new<line>()
 var array<label> msLabels = array.new<label>()
-var array<line>  eqLineObjs     = array.new<line>()
-var array<box>   srBoxObjs      = array.new<box>()
-var array<line>  tlLineObjs     = array.new<line>()
 
 f_clearLabels(array<label> a) =>
     if array.size(a) > 0
@@ -1927,6 +1923,7 @@ if barstate.isconfirmed
 
     // ---- swing pipeline (every confirmed bar, from the maintained frontier) ----
     array<SwingRec> swings = f_detectSwings(wHigh, wLow, wOpenT, wAvailT, wAtr, pvAbs, pvType, pvPrice, pvAtr, pvTie, absFirst)
+    p3Swings := swings
 
     // ---- P2-I2: canonical swing view. Built from CONFIRMED P1 state only, so a
     // forming bar cannot move it; no P1 value reads it back.
@@ -2158,48 +2155,9 @@ if barstate.isconfirmed
             latestTLOrient := tl.orientation
 
         // ---- bounded debug drawings (only on change; each family capped) ----
-        if debugMode and showSwings
-            f_clearLabels(swingLabelObjs)
-            int startK = math.max(0, array.size(swings) - maxDrawPerFamily)
-            for [k, _u849] in swings
-                if k < startK
-                    continue
-                SwingRec s = array.get(swings, k)
-                bool isHigh = s.swingType == SWING_HIGH
-                label lb = label.new(x = s.pivotEndTime, y = s.price, xloc = xloc.bar_time, style = isHigh ? label.style_label_down : label.style_label_up, color = isHigh ? color.new(color.teal, 20) : color.new(color.maroon, 20), textcolor = color.white, size = size.tiny, text = isHigh ? "SH" : "SL")
-                array.push(swingLabelObjs, lb)
-        if debugMode and showEqualLevels
-            f_clearLines(eqLineObjs)
-            int startK = math.max(0, array.size(eqs) - maxDrawPerFamily)
-            for [k, _u857] in eqs
-                if k < startK
-                    continue
-                EqualLevelRec e = array.get(eqs, k)
-                line ln = line.new(x1 = e.firstTime, y1 = e.representativePrice, x2 = e.confirmationTime, y2 = e.representativePrice, xloc = xloc.bar_time, color = e.clusterType == SWING_HIGH ? color.orange : color.blue, style = line.style_dotted, width = 1)
-                array.push(eqLineObjs, ln)
-        if debugMode and showTrendlines
-            f_clearLines(tlLineObjs)
-            int startK = math.max(0, array.size(tls) - maxDrawPerFamily)
-            for [k, _u871] in tls
-                if k < startK
-                    continue
-                TrendlineRec tl = array.get(tls, k)
-                line ln = line.new(x1 = tl.anchor1Time, y1 = tl.anchor1Price, x2 = tl.anchor2Time, y2 = tl.anchor2Price, xloc = xloc.bar_time, color = tl.orientation == SWING_LOW ? color.green : color.red, style = line.style_solid, width = 1)
-                array.push(tlLineObjs, ln)
-
     // S/R drawings sit OUTSIDE the swing-change gate because the zone set now
     // advances on candle growth alone; they are redrawn only when that set
     // actually changed, and stay capped per family.
-    if debugMode and showSR and srChanged
-        f_clearBoxes(srBoxObjs)
-        int startSR = math.max(0, array.size(srs) - maxDrawPerFamily)
-        for [k, _u1030] in srs
-            if k < startSR
-                continue
-            SRRec srd = array.get(srs, k)
-            box bx = box.new(left = srd.confirmationTime, top = srd.zoneTop, right = time_close, bottom = srd.zoneBottom, xloc = xloc.bar_time, border_color = srd.zoneType == SWING_LOW ? color.green : color.red, bgcolor = color.new(srd.zoneType == SWING_LOW ? color.green : color.red, 88))
-            array.push(srBoxObjs, bx)
-
 // P1-PERF-4A — HISTORY GUARD: CAPACITY *and* WARM-UP.
 //
 // These are two different questions and PERF-4 answered only the second:
@@ -2235,14 +2193,10 @@ bool p1CapacityOk  = p1DatasetBars >= C_P1_CALC_BARS
 bool p1WarmupOk    = confirmedBarCount >= C_P1_MIN_CALC_BARS
 bool p1HistoryOk   = p1CapacityOk and p1WarmupOk
 // Compaction (RC3): hoisted once; each debug plot below read the identical conjunction.
-bool p1Dbg = debugMode and p1HistoryOk
 
 // -----------------------------------------------------------------------------
 // DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
 // -----------------------------------------------------------------------------
-bool dispFastNow = p1HistoryOk and barstate.isconfirmed and debugMode and showDisplacement and not na(latestDispCode) and math.abs(latestDispCode) >= 1
-plotshape(dispFastNow and latestDispCode > 0, title = "Displacement up", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
-plotshape(dispFastNow and latestDispCode < 0, title = "Displacement down", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny)
 
 // =============================================================================
 // PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
@@ -2266,7 +2220,6 @@ plot(p1HistoryOk ? latestTLNormSlope    : na, "P1_tl_norm_slope",    color = col
 // These describe the LAST adapted swing; there is no P2 behaviour to show yet.
 // Times are epoch seconds (ms/1000) so a 2dp readout keeps full precision.
 // =============================================================================
-plot(p1Dbg ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.gray,  display = display.data_window)
 // P2_last_swing_type retired at P2-I5 to fund the BOS slots: swing type is
 // contract-tested on the adapter and is already implied by the relationship
 // codes, which are partitioned into high-side and low-side values.
@@ -2274,20 +2227,6 @@ plot(p1Dbg ? p2SwingCount   : na, "P2_adapted_swing_count", color = color.gray, 
 // slots. Both were pure echoes of the I2 adapter, which is contract-tested; the
 // analytically meaningful derivations (relationship codes, direction,
 // protected/weak keys) all remain exposed below.
-plot(p1Dbg ? p2LastStartAbs : na, "P2_last_pivot_start_abs", color = color.gray, display = display.data_window)
-plot(p1Dbg and not na(p2LastConfTime) ? p2LastConfTime / 1000 : na, "P2_last_conf_time", color = color.gray, display = display.data_window)
-plot(p1Dbg ? p2RelCount    : na, "P2_relationship_count", color = color.gray, display = display.data_window)
-plot(p1Dbg ? p2LastHighRel : na, "P2_last_high_relationship", color = color.gray, display = display.data_window)
-plot(p1Dbg ? p2LastLowRel  : na, "P2_last_low_relationship", color = color.gray, display = display.data_window)
-plot(p1Dbg and p2Direction != C_ST_NA ? p2Direction : na, "P2_direction", color = color.gray, display = display.data_window)
-plot(p1Dbg and p2ProtHighKey != C_ST_NA ? p2ProtHighKey / 1000 : na, "P2_protected_high", color = color.gray, display = display.data_window)
-plot(p1Dbg and p2ProtLowKey  != C_ST_NA ? p2ProtLowKey  / 1000 : na, "P2_protected_low",  color = color.gray, display = display.data_window)
-plot(p1Dbg and p2WeakHighKey != C_ST_NA ? p2WeakHighKey / 1000 : na, "P2_weak_high", color = color.gray, display = display.data_window)
-plot(p1Dbg and p2WeakLowKey  != C_ST_NA ? p2WeakLowKey  / 1000 : na, "P2_weak_low",  color = color.gray, display = display.data_window)
-plot(p1Dbg and p2TransCount    != C_ST_NA ? p2TransCount : na, "P2_transition_count", color = color.gray, display = display.data_window)
-plot(p1Dbg and p2LastTransCode != C_ST_NA ? p2LastTransCode : na, "P2_last_transition_code", color = color.gray, display = display.data_window)
-plot(p1Dbg and p2LastBrokenKey != C_ST_NA ? p2LastBrokenKey / 1000 : na, "P2_last_broken_key", color = color.gray, display = display.data_window)
-plot(p1Dbg ? p2LastBrokenLvl : na, "P2_last_broken_level", color = color.gray, display = display.data_window)
 
 f_row(table t, int r, string k, string v) =>
     table.cell(t, 0, r, k, text_size = size.tiny, text_halign = text.align_left, text_color = color.gray)
@@ -2296,20 +2235,6 @@ f_row(table t, int r, string k, string v) =>
 // P1-PERF-1: the parity table is development instrumentation. Declaring it here
 // (inside the guarded branch) means no table object is created at all in normal
 // client-style mode.
-if barstate.islast and debugMode
-    var table dbg = table.new(position.top_right, 2, 11, border_width = 1)
-    f_row(dbg, 0, "P1 DEV — latest confirmed", "")
-    f_row(dbg, 1, "Swing High", na(latestSwingHighPrice) ? "-" : str.tostring(latestSwingHighPrice, format.mintick))
-    f_row(dbg, 2, "Swing Low",  na(latestSwingLowPrice)  ? "-" : str.tostring(latestSwingLowPrice, format.mintick))
-    f_row(dbg, 3, "Disp code",  na(latestDispCode)  ? "-" : str.tostring(latestDispCode))
-    f_row(dbg, 4, "Disp ratio", na(latestDispRatio) ? "-" : str.tostring(latestDispRatio, "#.###"))
-    f_row(dbg, 5, "Equal High", na(latestEqualHigh) ? "-" : str.tostring(latestEqualHigh, format.mintick))
-    f_row(dbg, 6, "Equal Low",  na(latestEqualLow)  ? "-" : str.tostring(latestEqualLow, format.mintick))
-    f_row(dbg, 7, "SR top",     na(latestSRTop)     ? "-" : str.tostring(latestSRTop, format.mintick))
-    f_row(dbg, 8, "SR bottom",  na(latestSRBottom)  ? "-" : str.tostring(latestSRBottom, format.mintick))
-    f_row(dbg, 9, "TL n-slope", na(latestTLNormSlope) ? "-" : str.tostring(latestTLNormSlope, "#.###"))
-    f_row(dbg, 10, "Calc history", p1HistoryOk ? str.tostring(p1DatasetBars) + " bars, warm " + str.tostring(confirmedBarCount) + " OK" : "INSUFFICIENT CALCULATED HISTORY (dataset " + str.tostring(p1DatasetBars) + "/" + str.tostring(C_P1_CALC_BARS) + ", warm " + str.tostring(confirmedBarCount) + "/" + str.tostring(C_P1_MIN_CALC_BARS) + ")")
-
 // =============================================================================
 // P3 — POI SEMANTIC FOUNDATION  (P3-I1)
 // -----------------------------------------------------------------------------
@@ -2396,6 +2321,7 @@ int C_POI_DIR_BEARISH = -1
 int C_POI_TERM_NONE        = 0
 int C_POI_TERM_MITIGATED   = 1
 int C_POI_TERM_INVALIDATED = 2
+int C_POI_TERM_PROMOTED    = 3   // RC3: engulfing whose formation became an ORDER BLOCK
 
 int C_POI_TIER_NA       = 0
 int C_POI_TIER_STANDARD = 1
@@ -2569,6 +2495,9 @@ var array<int>  poiFirstTouchT  = array.new<int>()   // first post-availability 
 var array<int>  poiInvalT       = array.new<int>()   // genuine-invalidation time
 var array<int>  poiTermReason   = array.new<int>()   // C_POI_TERM_*
 var array<int>  poiTermTime     = array.new<int>()   // availability time of the terminal bar
+var array<PoiRec> obPending = array.new<PoiRec>()   // OB formations awaiting a movement-origin swing
+var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promoted this bar
+var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
 
 // Provisional (reported) status, kept distinct from the committed status:
@@ -2800,7 +2729,9 @@ f_poiDetectOrderBlocks(int wn) =>
                     direction := C_POI_DIR_BEARISH
                 if typeCode != 0
                     int tier = ratio >= C_POI_OB_RATIO_STRONG ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD
-                    f_poiEmit(typeCode, direction, array.get(wHigh, oi), array.get(wLow, oi), tier, array.get(wOpenT, oi), 2, array.get(wOpenT, di), array.get(wOpenT, oi), array.get(wAvailT, di))
+                    // RC3 movement origin: a formation only; it becomes an ORDER BLOCK in
+                    // f_poiGateOrderBlocks once a confirmed opposite swing proves it started a leg.
+                    array.push(obPending, PoiRec.new(typeCode, direction, array.get(wHigh, oi), array.get(wLow, oi), array.get(wOpenT, oi), array.get(wAvailT, di), array.get(wAvailT, di), tier, array.get(wOpenT, oi), 2, array.get(wOpenT, di)))
 
 // ---- FAIR VALUE GAPS (fair_value_gaps.py:25) --------------------------------
 // STRICT inequality, NO minimum gap size, middle candle unconstrained, and no
@@ -3139,6 +3070,50 @@ f_poiDetectBases(int wn) =>
 // are lifecycle-INELIGIBLE and therefore P3 CONTEXT (AD-6); they are
 // deliberately not emitted here.
 // =============================================================================
+
+// ---- RC3 ORDER BLOCK = MOVEMENT ORIGIN (author semantic revision) ----------
+// Mirrors poi/order_blocks.apply_movement_origin_gate exactly. A frozen OB
+// formation (2.0 size rule, colours, close beyond the origin extreme) is an
+// ORDER BLOCK only when a meaningfully confirmed opposite swing (P1, including
+// alternation) pivots on its origin or displacement candle. Source stays the
+// origin formation; availability = the later of the displacement close and the
+// swing's meaningful confirmation. A formation whose origin has left the
+// analytical window can no longer be anchored by a P1 swing and is dropped.
+f_poiGateOrderBlocks() =>
+    int k = array.size(obPending) - 1
+    while k >= 0
+        PoiRec r = array.get(obPending, k)
+        int want = r.direction == C_POI_DIR_BULLISH ? SWING_LOW : SWING_HIGH
+        int conf = C_ST_NA
+        for [_gi, s] in p3Swings
+            if s.swingType == want and r.srcFirstTime <= s.pivotEndTime and r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx) and (conf == C_ST_NA or s.meaningfulConfTime < conf)
+                conf := s.meaningfulConfTime
+        if conf != C_ST_NA
+            // conf is always after the displacement close: meaningful confirmation of a
+            // pivot on the origin/displacement candle is at pivot end + 3 at the earliest,
+            // so Python's max(displacement close, confirmation) is conf itself.
+            f_poiEmit(r.poiType, r.direction, r.zoneTop, r.zoneBottom, r.strengthTier, r.srcFirstTime, 2, r.srcLastTime, r.candidateTime, conf)
+            // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
+            array.push(obPromoEng, f_poiFind(r.poiType + 10, r.srcFirstTime, 2, r.srcLastTime, f_poiTicks(r.zoneBottom), f_poiTicks(r.zoneTop)))
+            array.push(obPromoT, conf)
+            array.remove(obPending, k)
+        else if r.srcFirstTime < array.get(wOpenT, 0)
+            array.remove(obPending, k)
+        k -= 1
+
+// The same formation's engulfing ends when its ORDER BLOCK becomes available,
+// unless an earlier cause already ended it (poi/lifecycle.apply_order_block_
+// promotion). Runs after this bar's lifecycle advance, so a same-bar touch
+// keeps priority exactly as in Python.
+f_poiApplyPromotions() =>
+    for [pk, e] in obPromoEng
+        int t = array.get(obPromoT, pk)
+        if e >= 0 and (array.get(poiTermReason, e) == C_POI_TERM_NONE or array.get(poiTermTime, e) > t)
+            array.set(poiTermReason, e, C_POI_TERM_PROMOTED)
+            array.set(poiTermTime, e, t)
+            array.set(poiFreshActive, e, false)
+    array.clear(obPromoEng)
+    array.clear(obPromoT)
 
 f_poiDetectReferenceZones() =>
     int m = array.size(srCached)
@@ -4498,7 +4473,9 @@ if barstate.isconfirmed
         f_poiDetectReversalCandles(p3Wn)
         f_poiDetectBases(p3Wn)
         f_poiDetectReferenceZones()
+        f_poiGateOrderBlocks()
         f_poiAdvanceAllLifecycles(confirmedBarCount - p3Wn, confirmedBarCount)
+        f_poiApplyPromotions()
 
         // ---- P4: BTMM setups, after P3 has advanced this bar ---------------
         // Order matters: the setup registry mirrors the POI registry, and the
@@ -4524,11 +4501,6 @@ float p4dForm = ta.change(array.get(p4Counts, C_P4_N_FORMING))
 plotshape(dspBtmm and barstate.isconfirmed and (p4dGate > 0 or p4dForm > 0), "BTMM: orange = final gate, yellow = forming", shape.diamond, location.bottom, p4dGate > 0 ? color.orange : color.yellow, size = size.tiny)
 
 // ---- P4 diagnostics in the data window (no drawing, no alerts, no orders) ---
-plot(debugMode ? array.get(p4Counts, C_P4_N_REGISTRY)   : na, "P4_setup_registry",  color = color.gray, display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_CANDIDATE)  : na, "P4_candidate",       color = color.gray, display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_FORMING)    : na, "P4_forming",         color = color.gray, display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_CANCELLED)  : na, "P4_cancelled",       color = color.gray, display = display.data_window)
-plot(debugMode ? array.get(p4Counts, C_P4_N_FINAL_GATE) : na, "P4_at_final_gate",   color = color.gray, display = display.data_window)
 
 // =============================================================================
 // P6 — CROSS-TIMEFRAME SUBSTRATE  (SLICE 2: minimal P1 projection)
@@ -5954,6 +5926,7 @@ f_p8TermReasonLabel(int code) =>
     switch code
         C_POI_TERM_MITIGATED   => "MITIGATED"
         C_POI_TERM_INVALIDATED => "INVALIDATED"
+        C_POI_TERM_PROMOTED    => "PROMOTED_TO_ORDER_BLOCK"
         => "NONE"
 
 // ---- P7-Z: POI type -> display label, one deterministic total mapping for

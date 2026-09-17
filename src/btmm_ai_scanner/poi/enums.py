@@ -96,6 +96,10 @@ class PoiTerminalReason(StrEnum):
 
     MITIGATED = "MITIGATED"
     INVALIDATED = "INVALIDATED"
+    # RC3 OB movement-origin revision: the engulfing record of a formation
+    # that was confirmed as a leg origin ends when its ORDER BLOCK record
+    # becomes available, so one formation never has two live records.
+    PROMOTED_TO_ORDER_BLOCK = "PROMOTED_TO_ORDER_BLOCK"
 
 
 class PoiTapClassification(StrEnum):

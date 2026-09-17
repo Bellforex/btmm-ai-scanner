@@ -51,12 +51,14 @@ def _indent(line: str) -> int:
 
 def semantic_core(source: str) -> str:
     text = source.replace("\r\n", "\n")
-    start = text.index(_P7Z_START)
-    start = text.rindex("\n", 0, start) + 1
-    end = text.index(_P7Z_END)
-    end = text.rindex("\n", 0, end) + 1
-    text = text[:start] + text[end:]
-    text = text[: text.rindex("\n", 0, text.index(_P7_RENDER)) + 1]
+    if _P7Z_START in text and _P7Z_END in text:
+        start = text.index(_P7Z_START)
+        start = text.rindex("\n", 0, start) + 1
+        end = text.index(_P7Z_END)
+        end = text.rindex("\n", 0, end) + 1
+        text = text[:start] + text[end:]
+    if _P7_RENDER in text:
+        text = text[: text.rindex("\n", 0, text.index(_P7_RENDER)) + 1]
 
     out: list[str] = []
     skip_indent: int | None = None
@@ -84,3 +86,87 @@ def semantic_core(source: str) -> str:
 
 def semantic_core_sha256(source: str) -> str:
     return hashlib.sha256(semantic_core(source).encode("utf-8")).hexdigest()
+
+
+#: PARITY-build capture instrumentation (log-only by construction) and the
+#: USER-only review-time presentation input. Removing these from both builds
+#: must leave byte-identical cores.
+_CAPTURE_BLOCK_HEADS = (
+    "if capRunMeta",
+    "if p5cOn",
+    "if p9DebugLog and barstate.islastconfirmedhistory",
+    "f_capProbe() =>",
+    "f_capCtx(",
+    # P1/P2/P4 developer instrumentation behind Debug Mode (drawings, debug
+    # table, debug data-window plots). The USER build no longer carries it.
+    "if debugMode and show",
+    "if barstate.islast and debugMode",
+)
+_CAPTURE_TOKENS = (
+    "capBarK",
+    "capHostFirst",
+    "capHostN",
+    "capHostCk",
+    "capRunMeta",
+    "capP5Compact",
+    "capP5FromK",
+    "capP5ToK",
+    "grpCap",
+    "f_capProbe",
+    "p5cOn",
+    "p5cBuf",
+    "p7zAsOf",
+    "log.info(",
+    "debugMode",
+    "p1Dbg",
+    "showSwings",
+    "showDisplacement",
+    "showEqualLevels",
+    "showSR ",
+    "showTrendlines",
+    "swingLabelObjs",
+    "eqLineObjs",
+    "srBoxObjs",
+    "tlLineObjs",
+    "dispFastNow",
+    "maxDrawPerFamily = input.int(",
+    "grpDev = ",
+)
+
+
+def capture_neutral_core(source: str) -> str:
+    """The semantic core minus the script title, capture instrumentation and
+    debug log statements. Equal for USER and PARITY exactly when the two
+    builds compute the same semantics."""
+    lines = [
+        ln
+        for ln in semantic_core(source).split("\n")
+        if not ln.startswith("indicator(")
+    ]
+    kept: list[str] = []
+    skip_indent: int | None = None
+    for ln in lines:
+        if skip_indent is not None:
+            if _indent(ln) > skip_indent:
+                continue
+            skip_indent = None
+        stripped = ln.strip()
+        if stripped.startswith(_CAPTURE_BLOCK_HEADS) or (
+            stripped.startswith("log.info(")
+        ):
+            skip_indent = _indent(ln)
+            continue
+        if any(token in ln for token in _CAPTURE_TOKENS):
+            continue
+        kept.append(ln)
+    # Drop block heads left without a body (their whole body was capture code).
+    out: list[str] = []
+    for i, ln in enumerate(kept):
+        nxt = kept[i + 1] if i + 1 < len(kept) else ""
+        head = ln.rstrip().endswith("=>") or ln.strip().startswith(
+            ("if ", "for ", "else")
+        )
+        if head and _indent(nxt) <= _indent(ln):
+            continue
+        out.append(ln)
+    return "\n".join(out)

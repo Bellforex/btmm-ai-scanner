@@ -248,10 +248,13 @@ def test_public_poi_observation_exists_only_after_confirmation() -> None:
 
     result = analyze_pois((bundle,), _CONFIG, _HashIdentityProvider())
 
-    order_block_observations = [
-        o for o in result.poi_observations if o.poi_type == PoiType.BUY_ORDER_BLOCK
+    engulfing_observations = [
+        o for o in result.poi_observations if o.poi_type == PoiType.BULLISH_ENGULFING
     ]
-    assert len(order_block_observations) == 1
+    assert len(engulfing_observations) == 1
+    # RC3 movement origin: with no confirmed swing low on the pair, the frozen
+    # OB formation is not (yet) an ORDER BLOCK.
+    assert all(o.poi_type != PoiType.BUY_ORDER_BLOCK for o in result.poi_observations)
 
 
 def test_poi_outputs_use_engineering_provisional_evidence() -> None:
@@ -280,13 +283,13 @@ def test_analyze_pois_disabled_poi_type_is_never_detected() -> None:
     restricted_config = PoiConfiguration(
         minimum_price_tick=Decimal("0.01"),
         enabled_poi_types=frozenset(
-            _CONFIG.enabled_poi_types - {PoiType.BUY_ORDER_BLOCK}
+            _CONFIG.enabled_poi_types - {PoiType.BULLISH_ENGULFING}
         ),
     )
 
     result = analyze_pois((bundle,), restricted_config, _HashIdentityProvider())
 
-    assert all(o.poi_type != PoiType.BUY_ORDER_BLOCK for o in result.poi_observations)
+    assert all(o.poi_type != PoiType.BULLISH_ENGULFING for o in result.poi_observations)
 
 
 def test_analyze_pois_is_deterministic_across_repeated_calls() -> None:
