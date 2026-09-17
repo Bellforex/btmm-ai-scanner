@@ -51,11 +51,13 @@ def test_poi_name_is_box_native_and_centred_on_both_axes() -> None:
     assert "box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)" in block
 
 
-def test_box_text_is_empty_only_for_a_non_owner_or_when_labels_are_off() -> None:
+def test_every_displayed_box_carries_its_own_name() -> None:
+    # Text is empty only when POI Text is switched off; no overlap/collision
+    # rule may blank a displayed box (annotation integrity).
     block = _p7z_block()
     assert (
-        'string p7zBoxTxt = not p7zTextOwner or not p7zShowLabels ? "" : '
-        'p7zTfl + " • " + array.get(p7zGNames, p7zG)'
+        'string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + '
+        'array.get(p7zGNames, p7zG) : ""'
     ) in block
 
 
@@ -70,10 +72,11 @@ def test_direction_colour_cannot_invert() -> None:
     assert "array.push(p7zGBull, wantDir == C_POI_DIR_BULLISH)" in block
 
 
-def test_one_text_owner_per_collision_group() -> None:
+def test_no_text_owner_collision_rule_remains() -> None:
     block = _p7z_block()
-    assert "array.push(p7zOwner, own)" in block
-    assert "bool p7zTextOwner = array.get(p7zOwner, r)" in block
+    assert "p7zOwner" not in block
+    assert "p7zTextOwner" not in block
+    assert "p7zComp" not in block
 
 
 def test_objects_are_bounded_and_evicted() -> None:

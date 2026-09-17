@@ -2546,6 +2546,7 @@ var array<int>  poiInvalT       = array.new<int>()   // genuine-invalidation tim
 var array<int>  poiTermReason   = array.new<int>()   // C_POI_TERM_*
 var array<int>  poiTermTime     = array.new<int>()   // availability time of the terminal bar
 var array<PoiRec> obPending = array.new<PoiRec>()   // OB formations awaiting a movement-origin swing
+var map<int, bool> obSwingUsed = map.new<int, bool>()   // swings that already anchor an ORDER BLOCK
 var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promoted this bar
 var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
@@ -2768,7 +2769,8 @@ f_poiDetectOrderBlocks(int wn) =>
         float originRange = f_poiRange(oi)
         if originRange > 0
             float ratio = f_poiRange(di) / originRange
-            if ratio >= C_POI_OB_RATIO_STANDARD
+            // RC3: a Doji (frozen star threshold) is never either candle of this formation.
+            if ratio >= C_POI_OB_RATIO_STANDARD and f_poiBodyEff(oi) > C_POI_DOJI_BODY_EFF_STANDARD and f_poiBodyEff(di) > C_POI_DOJI_BODY_EFF_STANDARD
                 int typeCode = 0
                 int direction = 0
                 if f_poiIsBearCandle(oi) and f_poiIsBullCandle(di) and array.get(wClose, di) > array.get(wHigh, oi)
@@ -2819,7 +2821,8 @@ f_poiDetectEngulfing(int wn) =>
         float engulfedRange = f_poiRange(ei)
         if engulfedRange > 0
             float ratio = f_poiRange(gi) / engulfedRange
-            if ratio >= C_POI_OB_RATIO_STANDARD
+            // RC3: a Doji (frozen star threshold) is never either candle of this formation.
+            if ratio >= C_POI_OB_RATIO_STANDARD and f_poiBodyEff(ei) > C_POI_DOJI_BODY_EFF_STANDARD and f_poiBodyEff(gi) > C_POI_DOJI_BODY_EFF_STANDARD
                 int typeCode = 0
                 int direction = 0
                 if f_poiIsBearCandle(ei) and f_poiIsBullCandle(gi)
@@ -3130,15 +3133,23 @@ f_poiDetectBases(int wn) =>
 // swing's meaningful confirmation. A formation whose origin has left the
 // analytical window can no longer be anchored by a P1 swing and is dropped.
 f_poiGateOrderBlocks() =>
-    int k = array.size(obPending) - 1
-    while k >= 0
+    // Oldest formation first: a confirmed swing starts ONE leg, so when two
+    // formations share an anchoring swing (a plateau pivot) only the earliest
+    // becomes its ORDER BLOCK (obSwingUsed), exactly as in Python.
+    int k = 0
+    while k < array.size(obPending)
         PoiRec r = array.get(obPending, k)
         int want = r.direction == C_POI_DIR_BULLISH ? SWING_LOW : SWING_HIGH
         int conf = C_ST_NA
+        int key = 0
         for [_gi, s] in p3Swings
             if s.swingType == want and r.srcFirstTime <= s.pivotEndTime and r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx) and (conf == C_ST_NA or s.meaningfulConfTime < conf)
                 conf := s.meaningfulConfTime
-        if conf != C_ST_NA
+                key := s.pivotEndTime + want
+        if conf != C_ST_NA and map.contains(obSwingUsed, key)
+            array.remove(obPending, k)
+        else if conf != C_ST_NA
+            map.put(obSwingUsed, key, true)
             // conf is always after the displacement close: meaningful confirmation of a
             // pivot on the origin/displacement candle is at pivot end + 3 at the earliest,
             // so Python's max(displacement close, confirmation) is conf itself.
@@ -3149,7 +3160,8 @@ f_poiGateOrderBlocks() =>
             array.remove(obPending, k)
         else if r.srcFirstTime < array.get(wOpenT, 0)
             array.remove(obPending, k)
-        k -= 1
+        else
+            k += 1
 
 // The same formation's engulfing ends when its ORDER BLOCK becomes available,
 // unless an earlier cause already ended it (poi/lifecycle.apply_order_block_

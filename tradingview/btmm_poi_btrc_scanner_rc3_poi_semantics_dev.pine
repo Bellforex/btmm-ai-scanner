@@ -60,11 +60,37 @@ lookbackWindow = input.int(300, "Analytical window (bars, provisional)", minval 
 
 // ---- RC3 display layers (presentation only; no semantic value reads these) --
 grpView = "Display layers"
-dspFvg   = input.bool(true,  "Show FVG", group = grpView)
-dspSR    = input.bool(true,  "Show Support / Resistance", group = grpView)
 dspMs    = input.bool(false, "Show Market Structure (BOS / CHOCH / swings)", group = grpView)
 dspBtmm  = input.bool(false, "Show BTMM Lifecycle (markers)", tooltip = "Small diamond under the bar on which a BTMM setup changes state. Orange = a setup reached the final gate. Yellow = a setup started forming. Existing P4 states only; nothing is painted before the bar that confirmed it.", group = grpView)
 maxDrawPerFamily = input.int(20, "Market structure: events and swings drawn", minval = 1, maxval = 200, group = grpView)
+
+// ---- RC3 POI TYPE FILTERS (presentation only) ------------------------------
+// One checkbox per P3 core type, all ON by default, in type-code order
+// (C_POI_* 1..18), so p7zTypeOn[code - 1] is that type's switch. They only
+// decide which fresh POIs are DRAWN and LISTED in the POI table; the registry,
+// freshness, terminal state, P5 rows/scores/permission and P8 events never
+// read them. There is no DOJI type: a Doji is only the star middle-candle test,
+// and a Doji candle is never part of an engulfing / order-block formation.
+grpTypes = "POI type filters"
+tBuyOb = input.bool(true, "BUY ORDER BLOCK", group = grpTypes)
+tSellOb = input.bool(true, "SELL ORDER BLOCK", group = grpTypes)
+tBuyFvg = input.bool(true, "BUY FVG", group = grpTypes)
+tSellFvg = input.bool(true, "SELL FVG", group = grpTypes)
+tB2S = input.bool(true, "BUY TO SELL CANDLE (B2S)", group = grpTypes)
+tS2B = input.bool(true, "SELL TO BUY CANDLE (S2B)", group = grpTypes)
+tBaseRally = input.bool(true, "BASE RALLY", group = grpTypes)
+tBaseDrop = input.bool(true, "BASE DROP", group = grpTypes)
+tBullPw = input.bool(true, "BULLISH PRESSURE WICK", group = grpTypes)
+tBearPw = input.bool(true, "BEARISH PRESSURE WICK", group = grpTypes)
+tBullEng = input.bool(true, "BULLISH ENGULFING", group = grpTypes)
+tBearEng = input.bool(true, "BEARISH ENGULFING", group = grpTypes)
+tHammer = input.bool(true, "HAMMER", group = grpTypes)
+tShootStar = input.bool(true, "SHOOTING STAR", group = grpTypes)
+tMorning = input.bool(true, "MORNING STAR", group = grpTypes)
+tEvening = input.bool(true, "EVENING STAR", group = grpTypes)
+tSupport = input.bool(true, "SUPPORT ZONE", group = grpTypes)
+tResist = input.bool(true, "RESISTANCE ZONE", group = grpTypes)
+p7zTypeOn = array.from(tBuyOb, tSellOb, tBuyFvg, tSellFvg, tB2S, tS2B, tBaseRally, tBaseDrop, tBullPw, tBearPw, tBullEng, tBearEng, tHammer, tShootStar, tMorning, tEvening, tSupport, tResist)
 
 // -----------------------------------------------------------------------------
 // CONFIGURATION — EXACT defaults from MarketMeasurementConfiguration.
@@ -2496,6 +2522,7 @@ var array<int>  poiInvalT       = array.new<int>()   // genuine-invalidation tim
 var array<int>  poiTermReason   = array.new<int>()   // C_POI_TERM_*
 var array<int>  poiTermTime     = array.new<int>()   // availability time of the terminal bar
 var array<PoiRec> obPending = array.new<PoiRec>()   // OB formations awaiting a movement-origin swing
+var map<int, bool> obSwingUsed = map.new<int, bool>()   // swings that already anchor an ORDER BLOCK
 var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promoted this bar
 var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
@@ -2718,7 +2745,8 @@ f_poiDetectOrderBlocks(int wn) =>
         float originRange = f_poiRange(oi)
         if originRange > 0
             float ratio = f_poiRange(di) / originRange
-            if ratio >= C_POI_OB_RATIO_STANDARD
+            // RC3: a Doji (frozen star threshold) is never either candle of this formation.
+            if ratio >= C_POI_OB_RATIO_STANDARD and f_poiBodyEff(oi) > C_POI_DOJI_BODY_EFF_STANDARD and f_poiBodyEff(di) > C_POI_DOJI_BODY_EFF_STANDARD
                 int typeCode = 0
                 int direction = 0
                 if f_poiIsBearCandle(oi) and f_poiIsBullCandle(di) and array.get(wClose, di) > array.get(wHigh, oi)
@@ -2769,7 +2797,8 @@ f_poiDetectEngulfing(int wn) =>
         float engulfedRange = f_poiRange(ei)
         if engulfedRange > 0
             float ratio = f_poiRange(gi) / engulfedRange
-            if ratio >= C_POI_OB_RATIO_STANDARD
+            // RC3: a Doji (frozen star threshold) is never either candle of this formation.
+            if ratio >= C_POI_OB_RATIO_STANDARD and f_poiBodyEff(ei) > C_POI_DOJI_BODY_EFF_STANDARD and f_poiBodyEff(gi) > C_POI_DOJI_BODY_EFF_STANDARD
                 int typeCode = 0
                 int direction = 0
                 if f_poiIsBearCandle(ei) and f_poiIsBullCandle(gi)
@@ -3080,15 +3109,23 @@ f_poiDetectBases(int wn) =>
 // swing's meaningful confirmation. A formation whose origin has left the
 // analytical window can no longer be anchored by a P1 swing and is dropped.
 f_poiGateOrderBlocks() =>
-    int k = array.size(obPending) - 1
-    while k >= 0
+    // Oldest formation first: a confirmed swing starts ONE leg, so when two
+    // formations share an anchoring swing (a plateau pivot) only the earliest
+    // becomes its ORDER BLOCK (obSwingUsed), exactly as in Python.
+    int k = 0
+    while k < array.size(obPending)
         PoiRec r = array.get(obPending, k)
         int want = r.direction == C_POI_DIR_BULLISH ? SWING_LOW : SWING_HIGH
         int conf = C_ST_NA
+        int key = 0
         for [_gi, s] in p3Swings
             if s.swingType == want and r.srcFirstTime <= s.pivotEndTime and r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx) and (conf == C_ST_NA or s.meaningfulConfTime < conf)
                 conf := s.meaningfulConfTime
-        if conf != C_ST_NA
+                key := s.pivotEndTime + want
+        if conf != C_ST_NA and map.contains(obSwingUsed, key)
+            array.remove(obPending, k)
+        else if conf != C_ST_NA
+            map.put(obSwingUsed, key, true)
             // conf is always after the displacement close: meaningful confirmation of a
             // pivot on the origin/displacement candle is at pivot end + 3 at the earliest,
             // so Python's max(displacement close, confirmation) is conf itself.
@@ -3099,7 +3136,8 @@ f_poiGateOrderBlocks() =>
             array.remove(obPending, k)
         else if r.srcFirstTime < array.get(wOpenT, 0)
             array.remove(obPending, k)
-        k -= 1
+        else
+            k += 1
 
 // The same formation's engulfing ends when its ORDER BLOCK becomes available,
 // unless an earlier cause already ended it (poi/lifecycle.apply_order_block_
@@ -6328,13 +6366,13 @@ if barstate.isconfirmed
         for r = 0 to (p7zEligible > 0 ? p7zEligible - 1 : na)
             int pI = array.get(p7PoiIdx, r)
             int ty = array.get(poiType, pI)
-            if array.get(poiFreshActive, pI) and (ty <= C_POI_SELL_ORDER_BLOCK or ty == C_POI_BULLISH_ENGULFING or ty == C_POI_BEARISH_ENGULFING)
+            if array.get(poiFreshActive, pI) and array.get(p7zTypeOn, ty - 1) and (ty <= C_POI_SELL_ORDER_BLOCK or ty == C_POI_BULLISH_ENGULFING or ty == C_POI_BEARISH_ENGULFING)
                 map.put(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI), true)
         for r = 0 to (p7zEligible > 0 ? p7zEligible - 1 : na)
             int pI = array.get(p7PoiIdx, r)
             int ty = array.get(poiType, pI)
             bool isFvg = ty == C_POI_BUY_FAIR_VALUE_GAP or ty == C_POI_SELL_FAIR_VALUE_GAP
-            if array.get(poiFreshActive, pI) and not (isFvg and (not dspFvg or map.contains(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI)))) and (dspSR or ty < C_POI_SUPPORT_ZONE)
+            if array.get(poiFreshActive, pI) and array.get(p7zTypeOn, ty - 1) and not (isFvg and map.contains(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI)))
                 array.push(p7zFreshIdx, pI)
         int p7zActive = array.size(p7zFreshIdx)
 
@@ -6548,37 +6586,11 @@ if barstate.isconfirmed
         // comparisons per confirmed bar. That is ~50x smaller than the active
         // set scan that caused RE10110, and it is bounded by an input rather
         // than by market history.
-        array<int>  p7zComp  = array.new<int>()
-        array<bool> p7zOwner = array.new<bool>()
-        if p7zShown > 0
-            for a = 0 to p7zShown - 1
-                array.push(p7zComp, a)
-            for pass = 1 to p7zShown
-                for a = 0 to p7zShown - 1
-                    int ga = array.get(p7zSelGrp, a)
-                    for b = 0 to p7zShown - 1
-                        if b != a
-                            int gb = array.get(p7zSelGrp, b)
-                            if array.get(p7zGBot, ga) <= array.get(p7zGTop, gb) and array.get(p7zGBot, gb) <= array.get(p7zGTop, ga)
-                                int cb = array.get(p7zComp, b)
-                                if cb < array.get(p7zComp, a)
-                                    array.set(p7zComp, a, cb)
-            for a = 0 to p7zShown - 1
-                int ga = array.get(p7zSelGrp, a)
-                // Same per-group distance the selection pass computed.
-                float da = array.get(p7zGDist, ga)
-                int ta = array.get(p7zGLeft, ga)
-                int ia = array.get(p7zSelected, a)
-                bool own = true
-                for b = 0 to p7zShown - 1
-                    if b != a and array.get(p7zComp, b) == array.get(p7zComp, a)
-                        int gb = array.get(p7zSelGrp, b)
-                        float db = array.get(p7zGDist, gb)
-                        int tb = array.get(p7zGLeft, gb)
-                        int ib = array.get(p7zSelected, b)
-                        if db < da or (db == da and (tb > ta or (tb == ta and ib < ia)))
-                            own := false
-                array.push(p7zOwner, own)
+        // RC3 annotation integrity: every displayed box carries its OWN name.
+        // The former one-text-owner-per-collision rule blanked distinct
+        // formations (an H4 MORNING STAR lost its name to a touching, unrelated
+        // BUY FVG). Same-formation duplicates are already removed above
+        // (primary name, FVG dominance), so no box needs to give up its name.
 
         // ---- evict boxes/labels for POIs no longer in this bar's selected
         // window (Phase 17: stale-box prevention). Walked in reverse via a
@@ -6603,7 +6615,6 @@ if barstate.isconfirmed
             for r = 0 to p7zShown - 1
                 int p7zPoiI = array.get(p7zSelected, r)
                 int p7zG = array.get(p7zSelGrp, r)
-                bool p7zTextOwner = array.get(p7zOwner, r)
                 int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
                 // group geometry, not the representative POI's own geometry
                 bool p7zIsTerminal = array.get(p7zGTerm, p7zG)
@@ -6633,7 +6644,7 @@ if barstate.isconfirmed
                 color p7zTextColor = color.new(p7zHue, 10)
                 // Compaction (RC3): the annotation text is built once and shared
                 // by the create and the extend paths, which built it identically.
-                string p7zBoxTxt = not p7zTextOwner or not p7zShowLabels ? "" : p7zTfl + " • " + array.get(p7zGNames, p7zG)
+                string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + array.get(p7zGNames, p7zG) : ""
 
                 if slot == -1
                     // ---- new box: left edge = availability time (Phase 23)
@@ -6809,15 +6820,18 @@ if barstate.islast
         array<int> p7RowOrder = array.new<int>()
         if p7Shown > 0
             array<float> p7RowDist = array.new<float>()
+            // Rows of a filtered-out POI type start "taken": hidden from the table
+            // only (the POI stays in p7PoiIdx, P5 and P8).
+            array<bool> p7RowTaken = array.new<bool>(p7Active, false)
             for r = 0 to p7Active - 1
                 int p7RowPoi = array.get(p7PoiIdx, r)
+                array.set(p7RowTaken, r, not array.get(p7zTypeOn, array.get(poiType, p7RowPoi) - 1))
                 float p7RowTop = array.get(poiZoneTop, p7RowPoi)
                 float p7RowBot = array.get(poiZoneBottom, p7RowPoi)
                 array.push(p7RowDist, close < p7RowBot ? p7RowBot - close : (close > p7RowTop ? close - p7RowTop : 0.0))
 
             // repeated-minimum over ROWS; ties fall back to ascending POI-registry
             // index, the same canonical stable ordering P7-Z uses.
-            array<bool> p7RowTaken = array.new<bool>(p7Active, false)
             for s = 0 to p7Shown - 1
                 int p7RowBest = -1
                 float p7RowBestD = 0.0
@@ -6836,7 +6850,7 @@ if barstate.islast
 
         for r = 1 to p7MaxVisiblePois
             int rowIdx = r - 1
-            if rowIdx < p7Shown
+            if rowIdx < array.size(p7RowOrder)
                 // Proximity order (see the corrective note above): `p7RowOrder`
                 // maps a printed row to its ROW position in the active arrays.
                 int srcRow    = array.get(p7RowOrder, rowIdx)
@@ -6863,6 +6877,6 @@ if barstate.islast
         // Phase 7 overflow policy: presentation is bounded, evaluation is not
         // -- the loop above evaluated all `p7Active` eligible POIs regardless
         // of how many rows are visible here.
-        table.cell(p7Pois, 0, p7MaxVisiblePois + 1, str.tostring(p7Shown) + " shown / " + str.tostring(p7Active) + " active", text_size = size.tiny, text_color = color.gray, text_halign = text.align_left)
+        table.cell(p7Pois, 0, p7MaxVisiblePois + 1, str.tostring(array.size(p7RowOrder)) + " shown / " + str.tostring(p7Active) + " active", text_size = size.tiny, text_color = color.gray, text_halign = text.align_left)
         for c = 1 to 7
             table.cell(p7Pois, c, p7MaxVisiblePois + 1, "", text_size = size.tiny)

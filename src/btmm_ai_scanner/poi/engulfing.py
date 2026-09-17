@@ -5,7 +5,7 @@ from uuid import UUID
 
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
-from btmm_ai_scanner.measurements.candle_metrics import total_range
+from btmm_ai_scanner.measurements.candle_metrics import body_efficiency, total_range
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
 
@@ -41,6 +41,13 @@ def detect_engulfing(
             continue
         ratio = total_range(engulfing) / engulfed_range
         if ratio < configuration.order_block_size_ratio_standard:
+            continue
+        # RC3 author decision (2026-09-17): a Doji candle (frozen star
+        # threshold, body / range <= doji_body_efficiency_standard) is never
+        # either candle of an engulfing formation. No Doji POI type exists;
+        # the pair is simply not an engulfing.
+        doji = configuration.doji_body_efficiency_standard
+        if body_efficiency(engulfed) <= doji or body_efficiency(engulfing) <= doji:
             continue
 
         engulfed_bearish = engulfed.close < engulfed.open

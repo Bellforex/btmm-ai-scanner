@@ -8,7 +8,7 @@ from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.domain.enums import SwingType
 from btmm_ai_scanner.domain.swings import ConfirmedSwing
-from btmm_ai_scanner.measurements.candle_metrics import total_range
+from btmm_ai_scanner.measurements.candle_metrics import body_efficiency, total_range
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
 
@@ -44,6 +44,13 @@ def detect_order_blocks(
             continue
         ratio = total_range(displacement) / origin_range
         if ratio < configuration.order_block_size_ratio_standard:
+            continue
+        # RC3 author decision (2026-09-17): a Doji candle (frozen star
+        # threshold, body / range <= doji_body_efficiency_standard) is never
+        # either candle of an order-block formation. No Doji POI type exists;
+        # the pair is simply not an order-block.
+        doji = configuration.doji_body_efficiency_standard
+        if body_efficiency(origin) <= doji or body_efficiency(displacement) <= doji:
             continue
 
         origin_bearish = origin.close < origin.open
@@ -125,7 +132,17 @@ def apply_movement_origin_gate(
                 earliest[key] = swing
 
     gated: list[OrderBlockCandidate] = []
-    for formation in formations:
+    # One ORDER BLOCK per leg origin: a confirmed swing is the start of exactly
+    # one leg, so when several formations share an anchoring swing (possible on
+    # a multi-candle plateau pivot) only the earliest formation is its origin.
+    anchored: set[object] = set()
+    for formation in sorted(
+        formations,
+        key=lambda f: (
+            f.candidate_event_time_utc,
+            tuple(map(str, f.source_candle_record_ids)),
+        ),
+    ):
         want = (
             SwingType.SWING_LOW
             if formation.direction == PoiDirection.BULLISH
@@ -142,6 +159,9 @@ def apply_movement_origin_gate(
             matches,
             key=lambda s: (s.meaningful_confirmation_time_utc, str(s.record_id)),
         )
+        if anchor.record_id in anchored:
+            continue
+        anchored.add(anchor.record_id)
         available = max(
             formation.availability_time_utc, anchor.meaningful_confirmation_time_utc
         )

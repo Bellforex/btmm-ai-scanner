@@ -389,9 +389,10 @@ def test_engulfing_qualifies_without_textbook_body_engulfment() -> None:
     "fix" this toward the textbook rule.
     """
     engulfed = _candle(0, "99.9", "100", "99", "99.1")  # bearish body 0.80
-    # bullish, range 2.00 (ratio 2.0), body only 0.20 — far smaller than the
-    # engulfed body, and it does not span it.
-    engulfing = _candle(1, "99.4", "101", "99", "99.6")
+    # bullish, range 2.00 (ratio 2.0), body only 0.30 — far smaller than the
+    # engulfed body, and it does not span it. (0.30 / 2.00 = 0.15 keeps it above
+    # the RC3 Doji threshold: a Doji candle is never part of an engulfing.)
+    engulfing = _candle(1, "99.4", "101", "99", "99.7")
     got = detect_engulfing((engulfed, engulfing), _CONFIG)
     assert len(got) == 1
     assert got[0].poi_type == PoiType.BULLISH_ENGULFING

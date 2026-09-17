@@ -259,7 +259,8 @@ def test_fair_value_gap_both_directions_and_exact_touch() -> None:
 
 def test_engulfing_both_directions_including_the_no_body_rule_case() -> None:
     engulfed = _candle(0, "99.9", "100", "99", "99.1")
-    engulfing = _candle(1, "99.4", "101", "99", "99.6")  # body does not span
+    # body does not span; 0.30 / 2.00 stays above the RC3 Doji threshold
+    engulfing = _candle(1, "99.4", "101", "99", "99.7")
     found = _assert_parity((engulfed, engulfing))
     assert any(t[0] == M.TYPE_BULLISH_ENGULFING for t in found)
 

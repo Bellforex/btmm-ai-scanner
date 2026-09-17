@@ -54,11 +54,11 @@ def _series() -> list[Row]:
     rows += [(106.0, 106.3, 104.5, 105.0)]  # 26 origin: end of bearish leg
     rows += [(105.0, 109.5, 104.8, 109.0)]  # 27 displacement: new bullish leg
     rows += trend(109, 1.0, 7)  # 28-34 leg continues
-    rows += [(116.0, 116.8, 115.9, 115.95)]  # 35 mid-leg bearish candle
-    rows += [(115.95, 118.2, 115.93, 118.0)]  # 36 mid-leg bullish engulfing
-    rows += trend(118, 1.0, 2)  # 37-38
-    rows += [(120.0, 120.6, 119.9, 119.95)]  # 39 second mid-leg bearish
-    rows += [(119.95, 122.3, 119.92, 122.1)]  # 40 second mid-leg engulfing
+    rows += [(116.0, 116.8, 115.5, 115.6)]  # 35 mid-leg bearish candle (not a Doji)
+    rows += [(115.6, 118.4, 115.55, 118.2)]  # 36 mid-leg bullish engulfing
+    rows += trend(118.2, 0.9, 2)  # 37-38
+    rows += [(120.0, 120.6, 119.5, 119.6)]  # 39 second mid-leg bearish
+    rows += [(119.6, 122.3, 119.55, 122.1)]  # 40 second mid-leg engulfing
     rows += trend(122.1, 1.0, 2)  # 41-42
     rows += trend(124.1, -1.0, 4)  # 43-46 pullback
     rows += [(120.1, 120.4, 118.7, 119.1)]  # 47 origin: end of pullback
@@ -92,6 +92,13 @@ def case(request, tmp_path_factory):
     tmp = tmp_path_factory.mktemp(request.param)
     pois, candles, _measurement = analyze_rows(rows, tmp, request.param)
     ob, eng = BUY if request.param == "BUY" else SELL
+    index = {c.record_id: i for i, c in enumerate(candles)}
+    raw = {
+        tuple(index[c] for c in f.source_candle_record_ids)
+        for f in detect_order_blocks(candles, _POI_CONFIG)
+    }
+    # every formation the tests reason about meets every frozen OB condition
+    assert {(26, 27), (35, 36), (39, 40), (47, 48)} <= raw
     return _formations(pois, candles), ob, eng
 
 
@@ -251,3 +258,53 @@ def test_replay_kernel_matches_batch_at_every_prefix(
             for o in incremental.poi_observations
         )
     assert order_blocks_seen == 2  # the reversal and the pullback origin
+
+
+# ---- one ORDER BLOCK per leg origin ----------------------------------------
+
+
+def test_two_formations_on_one_plateau_swing_give_one_order_block() -> None:
+    """A two-candle plateau pivot (p, p+1) can carry formations (p-1, p) and
+    (p+1, p+2). A confirmed swing starts exactly one leg, so only the earliest
+    formation is its ORDER BLOCK."""
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from btmm_ai_scanner.config.enums import InternalSymbol
+    from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier
+    from btmm_ai_scanner.poi.order_blocks import (
+        OrderBlockCandidate,
+        apply_movement_origin_gate,
+    )
+
+    t0 = datetime(2026, 8, 10, tzinfo=UTC)
+    ids = [uuid4() for _ in range(5)]  # candles p-1 .. p+3
+
+    def formation(first: int) -> OrderBlockCandidate:
+        return OrderBlockCandidate(
+            symbol=InternalSymbol.XAUUSD,
+            timeframe=Timeframe.M15,
+            poi_type=PoiType.BUY_ORDER_BLOCK,
+            direction=PoiDirection.BULLISH,
+            zone_top=Decimal("101"),
+            zone_bottom=Decimal("100"),
+            strength_tier=PoiStrengthTier.STANDARD,
+            source_candle_record_ids=(ids[first], ids[first + 1]),
+            candidate_event_time_utc=t0 + timedelta(minutes=15 * first),
+            confirmation_time_utc=t0 + timedelta(minutes=15 * (first + 2)),
+            availability_time_utc=t0 + timedelta(minutes=15 * (first + 2)),
+        )
+
+    plateau = SimpleNamespace(
+        record_id=uuid4(),
+        swing_type=SwingType.SWING_LOW,
+        pivot_candle_record_ids=(ids[1], ids[2]),
+        meaningful_confirmation_time_utc=t0 + timedelta(minutes=15 * 6),
+    )
+    later, earlier = formation(2), formation(0)
+    gated = apply_movement_origin_gate([later, earlier], [plateau])
+    assert [g.source_candle_record_ids for g in gated] == [
+        earlier.source_candle_record_ids
+    ]
+    assert gated[0].availability_time_utc == plateau.meaningful_confirmation_time_utc

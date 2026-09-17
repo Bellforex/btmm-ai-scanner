@@ -201,6 +201,9 @@ def _detect_order_blocks(
     ratio = _range(displacement) / origin_range
     if ratio < cfg.order_block_size_ratio_standard:
         return []
+    doji = cfg.doji_body_efficiency_standard
+    if _body_eff(origin) <= doji or _body_eff(displacement) <= doji:
+        return []
     if _is_bear(origin) and _is_bull(displacement) and displacement.close > origin.high:
         poi_type, direction = TYPE_BUY_ORDER_BLOCK, DIR_BULLISH
     elif (
@@ -268,6 +271,9 @@ def _detect_engulfing(
         return []
     ratio = _range(engulfing) / engulfed_range
     if ratio < cfg.order_block_size_ratio_standard:
+        return []
+    doji = cfg.doji_body_efficiency_standard
+    if _body_eff(engulfed) <= doji or _body_eff(engulfing) <= doji:
         return []
     if _is_bear(engulfed) and _is_bull(engulfing):
         poi_type, direction = TYPE_BULLISH_ENGULFING, DIR_BULLISH

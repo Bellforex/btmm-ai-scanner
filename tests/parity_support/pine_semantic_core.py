@@ -42,6 +42,27 @@ _LINE_PREFIXES = (
     "p7zShowZones ",
     "p7zShowLabels ",
     "p8DebugLog ",
+    # RC3 POI type filters (presentation only)
+    "grpTypes",
+    "tBuyOb ",
+    "tSellOb ",
+    "tBuyFvg ",
+    "tSellFvg ",
+    "tB2S ",
+    "tS2B ",
+    "tBaseRally ",
+    "tBaseDrop ",
+    "tBullPw ",
+    "tBearPw ",
+    "tBullEng ",
+    "tBearEng ",
+    "tHammer ",
+    "tShootStar ",
+    "tMorning ",
+    "tEvening ",
+    "tSupport ",
+    "tResist ",
+    "p7zTypeOn = ",
 )
 
 

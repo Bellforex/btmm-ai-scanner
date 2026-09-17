@@ -125,10 +125,14 @@ def test_the_timeframe_formatter_handles_the_calendar_spellings() -> None:
     assert '"D" ?' in body or 'sfx == "D"' in body
 
 
-def test_the_annotation_collision_resolver_is_present() -> None:
+def test_no_collision_rule_can_blank_a_distinct_formation() -> None:
+    # RC3 annotation integrity replaced the one-text-owner-per-collision rule:
+    # an H4 MORNING STAR had lost its name to a touching, unrelated BUY FVG.
     source = RC3_DEV.read_text(encoding="utf-8")
-    assert "ANNOTATION COLLISION RESOLUTION" in source
-    assert "p7zOwner" in source
+    code = "\n".join(
+        ln for ln in source.splitlines() if not ln.strip().startswith("//")
+    )
+    assert "p7zOwner" not in code and "p7zTextOwner" not in code
 
 
 def test_the_drawn_origin_uses_the_source_candle_not_availability() -> None:
