@@ -47,13 +47,11 @@ indicator("BTMM + POI + BTRC Scanner [RC3 PARITY DEV]", overlay = true, max_line
 // INPUTS — debug/visual controls (client defaults: conservative & clean).
 // -----------------------------------------------------------------------------
 grpDev = "P1 Development / Parity"
+// RC3 PARITY: the Debug-Mode P1 drawings (swings, equal levels, trendlines,
+// S/R boxes, displacement markers) and the P1 debug table were visual only;
+// they were removed to fund the Doji / one-OB-per-leg semantics. Every capture
+// stream (RUNMETA, P5C, P5EVAL, P3LIFE, P8EVENT / P8PRIME) is unchanged.
 debugMode        = input.bool(false, "P1 Debug Mode (visuals + parity table)", group = grpDev)
-showSwings       = input.bool(true,  "  Show confirmed swings",         group = grpDev)
-showDisplacement = input.bool(true,  "  Show displacement markers",     group = grpDev)
-showEqualLevels  = input.bool(true,  "  Show equal-high/low lines",     group = grpDev)
-showSR           = input.bool(false, "  Show support/resistance zones", group = grpDev)
-showTrendlines   = input.bool(false, "  Show trendline debug",          group = grpDev)
-maxDrawPerFamily = input.int(20, "  Max drawings per family", minval = 1, maxval = 200, group = grpDev)
 
 // ENGINEERING-PROVISIONAL: rolling analytical window. This is a Pine practical
 // retention bound (Python retains full history). Larger = more faithful to the
@@ -481,11 +479,7 @@ var int lastSwingFingerprint = na
 var int lastSRFingerprint    = na
 
 // Persistent draw-object handles (bounded, redrawn on change).
-var array<label> swingLabelObjs = array.new<label>()
 var array<SwingRec> p3Swings = array.new<SwingRec>()   // this bar's P1 confirmed swings, for the OB origin gate
-var array<line>  eqLineObjs     = array.new<line>()
-var array<box>   srBoxObjs      = array.new<box>()
-var array<line>  tlLineObjs     = array.new<line>()
 
 f_clearLabels(array<label> a) =>
     if array.size(a) > 0
@@ -2133,48 +2127,9 @@ if barstate.isconfirmed
             latestTLOrient := tl.orientation
 
         // ---- bounded debug drawings (only on change; each family capped) ----
-        if debugMode and showSwings
-            f_clearLabels(swingLabelObjs)
-            int startK = math.max(0, array.size(swings) - maxDrawPerFamily)
-            for [k, _u849] in swings
-                if k < startK
-                    continue
-                SwingRec s = array.get(swings, k)
-                bool isHigh = s.swingType == SWING_HIGH
-                label lb = label.new(x = s.pivotEndTime, y = s.price, xloc = xloc.bar_time, style = isHigh ? label.style_label_down : label.style_label_up, color = isHigh ? color.new(color.teal, 20) : color.new(color.maroon, 20), textcolor = color.white, size = size.tiny, text = isHigh ? "SH" : "SL")
-                array.push(swingLabelObjs, lb)
-        if debugMode and showEqualLevels
-            f_clearLines(eqLineObjs)
-            int startK = math.max(0, array.size(eqs) - maxDrawPerFamily)
-            for [k, _u857] in eqs
-                if k < startK
-                    continue
-                EqualLevelRec e = array.get(eqs, k)
-                line ln = line.new(x1 = e.firstTime, y1 = e.representativePrice, x2 = e.confirmationTime, y2 = e.representativePrice, xloc = xloc.bar_time, color = e.clusterType == SWING_HIGH ? color.orange : color.blue, style = line.style_dotted, width = 1)
-                array.push(eqLineObjs, ln)
-        if debugMode and showTrendlines
-            f_clearLines(tlLineObjs)
-            int startK = math.max(0, array.size(tls) - maxDrawPerFamily)
-            for [k, _u871] in tls
-                if k < startK
-                    continue
-                TrendlineRec tl = array.get(tls, k)
-                line ln = line.new(x1 = tl.anchor1Time, y1 = tl.anchor1Price, x2 = tl.anchor2Time, y2 = tl.anchor2Price, xloc = xloc.bar_time, color = tl.orientation == SWING_LOW ? color.green : color.red, style = line.style_solid, width = 1)
-                array.push(tlLineObjs, ln)
-
     // S/R drawings sit OUTSIDE the swing-change gate because the zone set now
     // advances on candle growth alone; they are redrawn only when that set
     // actually changed, and stay capped per family.
-    if debugMode and showSR and srChanged
-        f_clearBoxes(srBoxObjs)
-        int startSR = math.max(0, array.size(srs) - maxDrawPerFamily)
-        for [k, _u1030] in srs
-            if k < startSR
-                continue
-            SRRec srd = array.get(srs, k)
-            box bx = box.new(left = srd.confirmationTime, top = srd.zoneTop, right = time_close, bottom = srd.zoneBottom, xloc = xloc.bar_time, border_color = srd.zoneType == SWING_LOW ? color.green : color.red, bgcolor = color.new(srd.zoneType == SWING_LOW ? color.green : color.red, 88))
-            array.push(srBoxObjs, bx)
-
 // P1-PERF-4A — HISTORY GUARD: CAPACITY *and* WARM-UP.
 //
 // These are two different questions and PERF-4 answered only the second:
@@ -2215,9 +2170,6 @@ bool p1Dbg = debugMode and p1HistoryOk
 // -----------------------------------------------------------------------------
 // DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
 // -----------------------------------------------------------------------------
-bool dispFastNow = p1HistoryOk and barstate.isconfirmed and debugMode and showDisplacement and not na(latestDispCode) and math.abs(latestDispCode) >= 1
-plotshape(dispFastNow and latestDispCode > 0, title = "Displacement up", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
-plotshape(dispFastNow and latestDispCode < 0, title = "Displacement down", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny)
 
 // =============================================================================
 // PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
@@ -2271,20 +2223,6 @@ f_row(table t, int r, string k, string v) =>
 // P1-PERF-1: the parity table is development instrumentation. Declaring it here
 // (inside the guarded branch) means no table object is created at all in normal
 // client-style mode.
-if barstate.islast and debugMode
-    var table dbg = table.new(position.top_right, 2, 11, border_width = 1)
-    f_row(dbg, 0, "P1 DEV — latest confirmed", "")
-    f_row(dbg, 1, "Swing High", na(latestSwingHighPrice) ? "-" : str.tostring(latestSwingHighPrice, format.mintick))
-    f_row(dbg, 2, "Swing Low",  na(latestSwingLowPrice)  ? "-" : str.tostring(latestSwingLowPrice, format.mintick))
-    f_row(dbg, 3, "Disp code",  na(latestDispCode)  ? "-" : str.tostring(latestDispCode))
-    f_row(dbg, 4, "Disp ratio", na(latestDispRatio) ? "-" : str.tostring(latestDispRatio, "#.###"))
-    f_row(dbg, 5, "Equal High", na(latestEqualHigh) ? "-" : str.tostring(latestEqualHigh, format.mintick))
-    f_row(dbg, 6, "Equal Low",  na(latestEqualLow)  ? "-" : str.tostring(latestEqualLow, format.mintick))
-    f_row(dbg, 7, "SR top",     na(latestSRTop)     ? "-" : str.tostring(latestSRTop, format.mintick))
-    f_row(dbg, 8, "SR bottom",  na(latestSRBottom)  ? "-" : str.tostring(latestSRBottom, format.mintick))
-    f_row(dbg, 9, "TL n-slope", na(latestTLNormSlope) ? "-" : str.tostring(latestTLNormSlope, "#.###"))
-    f_row(dbg, 10, "Calc history", p1HistoryOk ? str.tostring(p1DatasetBars) + " bars, warm " + str.tostring(confirmedBarCount) + " OK" : "INSUFFICIENT CALCULATED HISTORY (dataset " + str.tostring(p1DatasetBars) + "/" + str.tostring(C_P1_CALC_BARS) + ", warm " + str.tostring(confirmedBarCount) + "/" + str.tostring(C_P1_MIN_CALC_BARS) + ")")
-
 // =============================================================================
 // P3 — POI SEMANTIC FOUNDATION  (P3-I1)
 // -----------------------------------------------------------------------------
@@ -3146,8 +3084,11 @@ f_poiGateOrderBlocks() =>
             if s.swingType == want and r.srcFirstTime <= s.pivotEndTime and r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx) and (conf == C_ST_NA or s.meaningfulConfTime < conf)
                 conf := s.meaningfulConfTime
                 key := s.pivotEndTime + want
+        // Branches only set `drop`; the array edit happens below, because Pine
+        // requires every branch of one if/else chain to end in the same type.
+        bool drop = r.srcFirstTime < array.get(wOpenT, 0)
         if conf != C_ST_NA and map.contains(obSwingUsed, key)
-            array.remove(obPending, k)
+            drop := true
         else if conf != C_ST_NA
             map.put(obSwingUsed, key, true)
             // conf is always after the displacement close: meaningful confirmation of a
@@ -3157,10 +3098,10 @@ f_poiGateOrderBlocks() =>
             // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
             array.push(obPromoEng, f_poiFind(r.poiType + 10, r.srcFirstTime, 2, r.srcLastTime, f_poiTicks(r.zoneBottom), f_poiTicks(r.zoneTop)))
             array.push(obPromoT, conf)
+            drop := true
+        if drop
             array.remove(obPending, k)
-        else if r.srcFirstTime < array.get(wOpenT, 0)
-            array.remove(obPending, k)
-        else
+        if not drop
             k += 1
 
 // The same formation's engulfing ends when its ORDER BLOCK becomes available,

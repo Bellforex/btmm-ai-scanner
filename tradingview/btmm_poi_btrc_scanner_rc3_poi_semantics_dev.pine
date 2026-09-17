@@ -3122,8 +3122,11 @@ f_poiGateOrderBlocks() =>
             if s.swingType == want and r.srcFirstTime <= s.pivotEndTime and r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx) and (conf == C_ST_NA or s.meaningfulConfTime < conf)
                 conf := s.meaningfulConfTime
                 key := s.pivotEndTime + want
+        // Branches only set `drop`; the array edit happens below, because Pine
+        // requires every branch of one if/else chain to end in the same type.
+        bool drop = r.srcFirstTime < array.get(wOpenT, 0)
         if conf != C_ST_NA and map.contains(obSwingUsed, key)
-            array.remove(obPending, k)
+            drop := true
         else if conf != C_ST_NA
             map.put(obSwingUsed, key, true)
             // conf is always after the displacement close: meaningful confirmation of a
@@ -3133,10 +3136,10 @@ f_poiGateOrderBlocks() =>
             // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
             array.push(obPromoEng, f_poiFind(r.poiType + 10, r.srcFirstTime, 2, r.srcLastTime, f_poiTicks(r.zoneBottom), f_poiTicks(r.zoneTop)))
             array.push(obPromoT, conf)
+            drop := true
+        if drop
             array.remove(obPending, k)
-        else if r.srcFirstTime < array.get(wOpenT, 0)
-            array.remove(obPending, k)
-        else
+        if not drop
             k += 1
 
 // The same formation's engulfing ends when its ORDER BLOCK becomes available,
