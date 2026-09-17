@@ -12,6 +12,11 @@ from btmm_ai_scanner.domain.analyzer import _canonicalize as domain_canonicalize
 from btmm_ai_scanner.domain.analyzer import (
     _compute_content_fingerprint as domain_fingerprint,
 )
+from btmm_ai_scanner.domain.analyzer import analyze_market_measurements
+from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
+from btmm_ai_scanner.historical_backtest.identity import (
+    ContentAddressedIdentityProvider,
+)
 from btmm_ai_scanner.poi.analyzer import PoiTimeframeInput, analyze_pois
 from btmm_ai_scanner.poi.analyzer import _canonicalize as poi_canonicalize
 from btmm_ai_scanner.poi.analyzer import _compute_content_fingerprint as poi_fingerprint
@@ -21,6 +26,7 @@ from btmm_ai_scanner.structure.analyzer import _canonicalize as structure_canoni
 from btmm_ai_scanner.structure.analyzer import (
     _compute_content_fingerprint as structure_fingerprint,
 )
+from tests.parity_support.structured_context import bullish_structure_prefix
 
 _RAW_CANDLE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdaa")
 _PROVENANCE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdff")
@@ -102,6 +108,23 @@ def _measurement_analysis(
     )
 
 
+def _structured_bundle(
+    tail: tuple[tuple[str, str, str, str], ...], timeframe: Timeframe = Timeframe.M1
+) -> PoiTimeframeInput:
+    """``tail`` after a confirmed bullish structure, with its real measurements:
+    the RC3 context gate maps no candle pattern without structure."""
+    rows = [*bullish_structure_prefix(), *tail]
+    candles = tuple(_candle(i, *row, timeframe=timeframe) for i, row in enumerate(rows))
+    measurement = analyze_market_measurements(
+        candles,
+        MarketMeasurementConfiguration(minimum_price_tick=Decimal("0.01")),
+        ContentAddressedIdentityProvider(),
+    )
+    return PoiTimeframeInput(
+        timeframe=timeframe, candles=candles, measurement_analysis=measurement
+    )
+
+
 def test_batch_and_replay_produce_identical_poi_observations_for_the_same_prefix() -> (
     None
 ):
@@ -147,19 +170,15 @@ def test_unchanged_poi_observations_retain_the_same_record_id_across_growing_pre
     None
 ):
     provider = _HashIdentityProvider()
-    origin = _candle(0, "100", "100", "99", "99")
-    displacement = _candle(1, "99", "101", "99", "101")
-    extra = _candle(2, "101", "101.5", "100.8", "101.2")
-
-    short_bundle = PoiTimeframeInput(
-        timeframe=Timeframe.M1,
-        candles=(origin, displacement),
-        measurement_analysis=_measurement_analysis(2),
+    short_bundle = _structured_bundle(
+        (("100", "100", "99", "99"), ("99", "101", "99", "101"))
     )
-    grown_bundle = PoiTimeframeInput(
-        timeframe=Timeframe.M1,
-        candles=(origin, displacement, extra),
-        measurement_analysis=_measurement_analysis(3),
+    grown_bundle = _structured_bundle(
+        (
+            ("100", "100", "99", "99"),
+            ("99", "101", "99", "101"),
+            ("101", "101.5", "100.8", "101.2"),
+        )
     )
 
     short_result = analyze_pois((short_bundle,), _CONFIG, provider)
@@ -184,20 +203,19 @@ def test_current_poi_state_fingerprint_changes_only_when_public_content_changes(
     None
 ):
     provider = _HashIdentityProvider()
-    origin = _candle(0, "100", "100", "99", "99")
-    displacement = _candle(1, "99", "101", "99", "101")
-    untouched_tail = _candle(2, "102", "102.5", "101.8", "102")
-    touching_tail = _candle(2, "99.6", "99.8", "99.3", "99.6")
-
-    bundle_untouched = PoiTimeframeInput(
-        timeframe=Timeframe.M1,
-        candles=(origin, displacement, untouched_tail),
-        measurement_analysis=_measurement_analysis(3),
+    bundle_untouched = _structured_bundle(
+        (
+            ("100", "100", "99", "99"),
+            ("99", "101", "99", "101"),
+            ("102", "102.5", "101.8", "102"),
+        )
     )
-    bundle_touched = PoiTimeframeInput(
-        timeframe=Timeframe.M1,
-        candles=(origin, displacement, touching_tail),
-        measurement_analysis=_measurement_analysis(3),
+    bundle_touched = _structured_bundle(
+        (
+            ("100", "100", "99", "99"),
+            ("99", "101", "99", "101"),
+            ("99.6", "99.8", "99.3", "99.6"),
+        )
     )
 
     result_untouched = analyze_pois((bundle_untouched,), _CONFIG, provider)
@@ -220,26 +238,18 @@ def test_current_poi_state_fingerprint_changes_only_when_public_content_changes(
 
 def test_merge_decisions_are_stable_across_growing_prefixes() -> None:
     provider = _HashIdentityProvider()
-    m1_origin = _candle(0, "100", "100", "99", "99", timeframe=Timeframe.M1)
-    m1_displacement = _candle(1, "99", "101", "99", "101", timeframe=Timeframe.M1)
-    h4_origin = _candle(0, "100", "100", "99", "99", timeframe=Timeframe.H4)
-    h4_displacement = _candle(1, "99", "102", "99", "102", timeframe=Timeframe.H4)
-    m1_extra = _candle(2, "101", "101.5", "100.8", "101.2", timeframe=Timeframe.M1)
-
-    m1_bundle_short = PoiTimeframeInput(
-        timeframe=Timeframe.M1,
-        candles=(m1_origin, m1_displacement),
-        measurement_analysis=_measurement_analysis(2),
+    m1_bundle_short = _structured_bundle(
+        (("100", "100", "99", "99"), ("99", "101", "99", "101"))
     )
-    m1_bundle_grown = PoiTimeframeInput(
-        timeframe=Timeframe.M1,
-        candles=(m1_origin, m1_displacement, m1_extra),
-        measurement_analysis=_measurement_analysis(3),
+    m1_bundle_grown = _structured_bundle(
+        (
+            ("100", "100", "99", "99"),
+            ("99", "101", "99", "101"),
+            ("101", "101.5", "100.8", "101.2"),
+        )
     )
-    h4_bundle = PoiTimeframeInput(
-        timeframe=Timeframe.H4,
-        candles=(h4_origin, h4_displacement),
-        measurement_analysis=_measurement_analysis(2, timeframe=Timeframe.H4),
+    h4_bundle = _structured_bundle(
+        (("100", "100", "99", "99"), ("99", "102", "99", "102")), Timeframe.H4
     )
 
     short_result = analyze_pois((m1_bundle_short, h4_bundle), _CONFIG, provider)
@@ -248,12 +258,14 @@ def test_merge_decisions_are_stable_across_growing_prefixes() -> None:
     short_parent = next(
         o
         for o in short_result.poi_observations
-        if o.poi_type == PoiType.BULLISH_ENGULFING and o.source_timeframe == Timeframe.H4
+        if o.poi_type == PoiType.BULLISH_ENGULFING
+        and o.source_timeframe == Timeframe.H4
     )
     grown_parent = next(
         o
         for o in grown_result.poi_observations
-        if o.poi_type == PoiType.BULLISH_ENGULFING and o.source_timeframe == Timeframe.H4
+        if o.poi_type == PoiType.BULLISH_ENGULFING
+        and o.source_timeframe == Timeframe.H4
     )
 
     assert (

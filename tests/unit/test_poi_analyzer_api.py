@@ -11,8 +11,13 @@ from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
 from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolumeKind
 from btmm_ai_scanner.contracts.types import SemVer
 from btmm_ai_scanner.domain import MarketMeasurementAnalysis, MixedSymbolAnalysisError
+from btmm_ai_scanner.domain.analyzer import analyze_market_measurements
+from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
 from btmm_ai_scanner.domain.enums import SupportResistanceType
 from btmm_ai_scanner.domain.support_resistance import SupportResistanceZone
+from btmm_ai_scanner.historical_backtest.identity import (
+    ContentAddressedIdentityProvider,
+)
 from btmm_ai_scanner.poi.analyzer import (
     DuplicatePoiTimeframeInputError,
     InputPrefixMismatchError,
@@ -23,6 +28,7 @@ from btmm_ai_scanner.poi.analyzer import (
 )
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import PoiType
+from tests.parity_support.structured_context import bullish_structure_prefix
 
 _RAW_CANDLE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdaa")
 _PROVENANCE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdff")
@@ -239,11 +245,22 @@ def test_unconfirmed_candidate_is_not_exposed_as_poi_observation() -> None:
 
 
 def test_public_poi_observation_exists_only_after_confirmation() -> None:
-    origin, displacement = _order_block_pair(ratio_ok=True)
+    # RC3 context gate: the engulfing maps only inside confirmed structure, so
+    # the pair follows a bullish structure with its real measurements.
+    rows = [
+        *bullish_structure_prefix(),
+        ("100", "100", "99", "99"),
+        ("99", "101", "99", "101"),
+    ]
+    candles = tuple(_candle(i, *row) for i, row in enumerate(rows))
     bundle = PoiTimeframeInput(
         timeframe=Timeframe.M1,
-        candles=(origin, displacement),
-        measurement_analysis=_measurement_analysis(2),
+        candles=candles,
+        measurement_analysis=analyze_market_measurements(
+            candles,
+            MarketMeasurementConfiguration(minimum_price_tick=Decimal("0.01")),
+            ContentAddressedIdentityProvider(),
+        ),
     )
 
     result = analyze_pois((bundle,), _CONFIG, _HashIdentityProvider())
@@ -254,7 +271,12 @@ def test_public_poi_observation_exists_only_after_confirmation() -> None:
     assert len(engulfing_observations) == 1
     # RC3 leg origin: with no structure break confirming a leg from this pair,
     # the frozen OB formation is not an ORDER BLOCK.
-    assert all(o.poi_type != PoiType.BUY_ORDER_BLOCK for o in result.poi_observations)
+    pair = {candles[-2].record_id, candles[-1].record_id}
+    assert all(
+        o.poi_type != PoiType.BUY_ORDER_BLOCK
+        or not pair & set(o.source_candle_record_ids)
+        for o in result.poi_observations
+    )
 
 
 def test_poi_outputs_use_engineering_provisional_evidence() -> None:

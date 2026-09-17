@@ -110,6 +110,7 @@ def _skip_if_no_data() -> None:
 _SYNTH_BARS_PER_DAY = 24
 _SYNTH_DAYS = 5
 _SYNTH_FIRST_SESSION_OPEN = datetime(2026, 8, 9, 22, 0, tzinfo=UTC)
+_SYNTH_DAY0_STEPS = (0.5,) * 8 + (-0.5,) * 3 + (0.5,) * 6 + (-0.5,) * 3 + (0.5,) * 4
 
 
 def _synthetic_rows() -> list[tuple[datetime, float, float, float, float, int]]:
@@ -128,8 +129,11 @@ def _synthetic_rows() -> list[tuple[datetime, float, float, float, float, int]]:
         for index in range(_SYNTH_BARS_PER_DAY):
             event_time = start + timedelta(minutes=15 * index)
             if day == 0:
+                # RC3 context gate: a bullish structure (higher high + higher
+                # low) so day 1's bullish displacement maps trend-aligned
+                step = _SYNTH_DAY0_STEPS[index]
                 open_price = price
-                close = price + (0.4 if index % 2 == 0 else -0.4)
+                close = price + step
                 high = max(open_price, close) + 0.2
                 low = min(open_price, close) - 0.2
             elif day == 1 and index in (8, 9, 10):

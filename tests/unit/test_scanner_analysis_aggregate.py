@@ -26,6 +26,10 @@ from btmm_ai_scanner.scanner.analyzer import scan_market
 from btmm_ai_scanner.scanner.configuration import ScannerConfiguration
 from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
+from tests.parity_support.structured_context import (
+    PREFIX_LENGTH,
+    bullish_structure_prefix,
+)
 
 _FINGERPRINT = "a" * 64
 _RAW_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdaa")
@@ -107,10 +111,13 @@ def _config() -> ScannerConfiguration:
 
 
 def _bundles_with_engulfing_and_optional_h1() -> tuple[ScannerTimeframeInput, ...]:
-    engulfed = _candle(0, "100", "100", "99", "99")
-    engulfing = _candle(1, "99", "101", "99", "101")
+    prefix = tuple(
+        _candle(i, *row) for i, row in enumerate(bullish_structure_prefix())
+    )
+    engulfed = _candle(PREFIX_LENGTH, "100", "100", "99", "99")
+    engulfing = _candle(PREFIX_LENGTH + 1, "99", "101", "99", "101")
     return (
-        ScannerTimeframeInput(timeframe=Timeframe.M1, candles=(engulfed, engulfing)),
+        ScannerTimeframeInput(timeframe=Timeframe.M1, candles=(*prefix, engulfed, engulfing)),
         ScannerTimeframeInput(
             timeframe=Timeframe.M5, candles=(_flat_candle(0, Timeframe.M5),)
         ),

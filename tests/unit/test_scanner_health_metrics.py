@@ -20,6 +20,10 @@ from btmm_ai_scanner.scanner.health import build_scanner_health_report
 from btmm_ai_scanner.scanner.replay import ScannerReplayResult, run_scanner_replay
 from btmm_ai_scanner.scanner.timeframe_input import ScannerTimeframeInput
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
+from tests.parity_support.structured_context import (
+    PREFIX_LENGTH,
+    bullish_structure_prefix,
+)
 
 _FINGERPRINT = "a" * 64
 _RAW_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdaa")
@@ -98,10 +102,18 @@ def _config() -> ScannerConfiguration:
 
 
 def _inputs() -> tuple[ScannerTimeframeInput, ...]:
-    engulfed = _candle(0, Timeframe.M1, 0, "100", "100", "99", "99")
-    engulfing = _candle(1, Timeframe.M1, 1, "99", "101", "99", "101")
+    prefix = tuple(
+        _candle(i, Timeframe.M1, i, *row)
+        for i, row in enumerate(bullish_structure_prefix())
+    )
+    engulfed = _candle(
+        PREFIX_LENGTH, Timeframe.M1, PREFIX_LENGTH, "100", "100", "99", "99"
+    )
+    engulfing = _candle(
+        PREFIX_LENGTH + 1, Timeframe.M1, PREFIX_LENGTH + 1, "99", "101", "99", "101"
+    )
     return (
-        ScannerTimeframeInput(timeframe=Timeframe.M1, candles=(engulfed, engulfing)),
+        ScannerTimeframeInput(timeframe=Timeframe.M1, candles=(*prefix, engulfed, engulfing)),
         ScannerTimeframeInput(
             timeframe=Timeframe.M5, candles=(_candle(0, Timeframe.M5, 0),)
         ),
@@ -130,7 +142,7 @@ def _replay_result(
 def test_health_report_counts_candles_and_availability_groups_processed() -> None:
     replay = _replay_result()
     report = build_scanner_health_report(replay, Decimal("0.01"))
-    assert report.candles_processed == 4
+    assert report.candles_processed == PREFIX_LENGTH + 4
     assert report.availability_groups_processed == len(replay.snapshots)
 
 

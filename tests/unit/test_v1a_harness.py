@@ -39,6 +39,7 @@ from tests.parity_support.v1a_harness import (
 _ROOT = Path(__file__).resolve().parents[2] / "artifacts" / "v1a_validation"
 _SMALL_BARS = 12
 _SMALL_LOOKBACK = 15
+_MULTI_EVENT_BARS = 48
 
 
 def _skip_if_no_data() -> None:
@@ -262,7 +263,10 @@ def test_duplicate_and_overlapping_events_are_not_collapsed() -> None:
     harness must never de-duplicate by (poi, bar) alone."""
     _skip_if_no_data()
     result = run_dev_replay(
-        dataset_root=_ROOT, pre_dev_lookback_bars=_SMALL_LOOKBACK, max_bars=_SMALL_BARS
+        dataset_root=_ROOT,
+        pre_dev_lookback_bars=_SMALL_LOOKBACK,
+        # RC3 context gate maps fewer POIs: 12 DEV bars hold no same-bar pair
+        max_bars=_MULTI_EVENT_BARS,
     )
     by_poi_and_bar: dict[tuple[str, int], set[str]] = {}
     for event in result.events:
