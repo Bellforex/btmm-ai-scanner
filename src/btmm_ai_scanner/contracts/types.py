@@ -26,8 +26,23 @@ class ContractModel(BaseModel):
     )
 
 
+_UUID_VERSION_SHIFT = 76
+_RFC_4122_VARIANT_MASK = 0xC000 << 48
+_RFC_4122_VARIANT_BITS = 0x8000 << 48
+
+
 def _validate_uuidv7(value: object) -> UUID:
     if isinstance(value, UUID):
+        # Hot path (millions of calls per replay): a valid UUIDv7 instance is
+        # accepted from its integer bits alone -- version nibble 7 and RFC 4122
+        # variant bits 10 are exactly what `.version` / `.variant` compute (and
+        # rule out the nil UUID). Anything else takes the full checks below, so
+        # accepted values, error types and messages are unchanged.
+        bits = value.int
+        if (bits >> _UUID_VERSION_SHIFT) & 0xF == 7 and (
+            bits & _RFC_4122_VARIANT_MASK
+        ) == _RFC_4122_VARIANT_BITS:
+            return value
         candidate = value
     elif isinstance(value, str):
         try:
