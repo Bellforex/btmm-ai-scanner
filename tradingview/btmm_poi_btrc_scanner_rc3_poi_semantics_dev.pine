@@ -2529,6 +2529,8 @@ var array<int>  poiTermTime     = array.new<int>()   // availability time of the
 var array<PoiRec> obPending = array.new<PoiRec>()   // raw OB formations awaiting a leg-confirming break
 var map<int, bool> obSwingUsed = map.new<int, bool>()   // leg-origin swings that already anchor an ORDER BLOCK
 var map<int, bool> poiOriginKey = map.new<int, bool>()  // final candle open time x direction of every emitted candle pattern (types 7-16)
+var map<int, bool> poiNamedKey = map.new<int, bool>()   // candle open time x direction of every HAMMER / SHOOTING STAR
+var array<PoiRec> ctPending = array.new<PoiRec>()       // counter-trend patterns awaiting a leg-confirming break
 var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promoted this bar
 var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
@@ -2737,10 +2739,21 @@ f_poiIsBearCandle(int wi) =>
 
 // Emit one POI if its identity is not already in the registry. Production emits
 // each semantic POI once; the registry preserves that across the sliding window.
+// RC3 qualification + structural context gate (poi/qualification.py, poi/leg_origin.py):
+// arbitration keys are recorded before any gate; a pressure wick whose candle is
+// also a HAMMER / SHOOTING STAR is not mapped; a candle pattern (types 3-16) maps
+// only when this bar's P2 direction agrees with it. A counter-trend pattern waits
+// in ctPending for a break that confirms a leg it formed inside; neutral drops.
 f_poiEmit(int typeCode, int direction, float zoneTop, float zoneBottom, int tier, int srcFirstT, int srcCount, int srcLastT, int candT, int confT) =>
     if typeCode >= C_POI_BASE_RALLY and typeCode <= C_POI_EVENING_STAR
         map.put(poiOriginKey, srcLastT * direction, true)
-    if f_poiFind(typeCode, srcFirstT, srcCount, srcLastT, f_poiTicks(zoneBottom), f_poiTicks(zoneTop)) == -1
+    if typeCode == C_POI_HAMMER or typeCode == C_POI_SHOOTING_STAR
+        map.put(poiNamedKey, srcLastT * direction, true)
+    bool wickNamed = (typeCode == C_POI_BULLISH_PRESSURE_WICK or typeCode == C_POI_BEARISH_PRESSURE_WICK) and map.contains(poiNamedKey, srcLastT * direction)
+    bool gated = typeCode >= C_POI_BUY_FAIR_VALUE_GAP and typeCode <= C_POI_EVENING_STAR
+    if not wickNamed and gated and p2Direction == -direction
+        array.push(ctPending, PoiRec.new(typeCode, direction, zoneTop, zoneBottom, candT, confT, confT, tier, srcFirstT, srcCount, srcLastT))
+    if not wickNamed and (not gated or p2Direction == direction) and f_poiFind(typeCode, srcFirstT, srcCount, srcLastT, f_poiTicks(zoneBottom), f_poiTicks(zoneTop)) == -1
         f_poiAppend(PoiRec.new(typeCode, direction, zoneTop, zoneBottom, candT, confT, confT, tier, srcFirstT, srcCount, srcLastT))
 
 // ---- ORDER BLOCKS (order_blocks.py:27) --------------------------------------
@@ -3138,6 +3151,19 @@ f_poiGateOrderBlocks() =>
                     oStart := sStart
                     oEnd := s.pivotEndTime
                     oConf := s.meaningfulConfTime
+            // reversal context: counter-trend patterns formed inside the confirmed leg
+            if not na(best)
+                int k2 = 0
+                while k2 < array.size(ctPending)
+                    PoiRec cp = array.get(ctPending, k2)
+                    bool take = cp.direction == (bull ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH) and cp.candidateTime >= oStart and cp.availTime <= ev.availabilityTime
+                    if take
+                        array.remove(ctPending, k2)
+                        int ca = math.max(math.max(cp.availTime, oConf), math.max(ev.availabilityTime, nowT))
+                        if f_poiFind(cp.poiType, cp.srcFirstTime, cp.srcCount, cp.srcLastTime, f_poiTicks(cp.zoneBottom), f_poiTicks(cp.zoneTop)) == -1
+                            f_poiAppend(PoiRec.new(cp.poiType, cp.direction, cp.zoneTop, cp.zoneBottom, cp.candidateTime, ca, ca, cp.strengthTier, cp.srcFirstTime, cp.srcCount, cp.srcLastTime))
+                    if not take
+                        k2 += 1
             if not na(best) and not map.contains(obSwingUsed, oEnd + want)
                 int pick = -1
                 for [pk, r] in obPending
@@ -3151,6 +3177,13 @@ f_poiGateOrderBlocks() =>
                     // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
                     array.push(obPromoEng, f_poiFind(ob.poiType + 10, ob.srcFirstTime, 2, ob.srcLastTime, f_poiTicks(ob.zoneBottom), f_poiTicks(ob.zoneTop)))
                     array.push(obPromoT, avail)
+    int k3 = 0
+    while k3 < array.size(ctPending)
+        bool stale = array.get(ctPending, k3).srcFirstTime < array.get(wOpenT, 0)
+        if stale
+            array.remove(ctPending, k3)
+        if not stale
+            k3 += 1
     // a formation whose origin left the analytical window can no longer anchor a leg
     while array.size(obPending) > 0 and array.get(obPending, 0).srcFirstTime < array.get(wOpenT, 0)
         array.shift(obPending)

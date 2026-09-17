@@ -44,7 +44,7 @@ from btmm_ai_scanner.poi.enums import (
     PoiType,
 )
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
-from btmm_ai_scanner.poi.leg_origin import immutable_leg_origin_order_blocks
+from btmm_ai_scanner.poi.leg_origin import immutable_structure_gate
 from btmm_ai_scanner.poi.lifecycle import (
     LifecycleWalkResult,
     PoiLifecycleTransition,
@@ -398,23 +398,32 @@ def _detect_bundle_candidates(
     measurement_configuration = MarketMeasurementConfiguration(
         minimum_price_tick=configuration.minimum_price_tick
     )
-    candidates: list[Any] = []
-    candidates.extend(
-        immutable_leg_origin_order_blocks(
-            detect_order_blocks(bundle.candles, configuration),
-            bundle.candles,
-            bundle.measurement_analysis.confirmed_swings,
-            measurement_configuration,
-        )
+    # RC3 pipeline: RAW -> TYPE QUALITY -> SAME-ORIGIN ARBITRATION ->
+    # STRUCTURAL CONTEXT GATE -> MAPPED (poi/qualification.py, poi/leg_origin.py).
+    patterns: list[Any] = [
+        *detect_fair_value_gaps(bundle.candles, configuration),
+        *detect_reversal_candles(bundle.candles, configuration),
+        *detect_bases(bundle.candles, configuration),
+        *detect_pressure_wicks(bundle.candles, configuration),
+        *detect_engulfing(bundle.candles, configuration),
+        *detect_single_candle_reversals(bundle.candles, configuration),
+        *detect_three_candle_stars(bundle.candles, configuration),
+    ]
+    atr = compute_atr_series(bundle.candles, 14)
+    qualified, _decisions = qualify_candidates(
+        patterns,
+        {c.record_id: a for c, a in zip(bundle.candles, atr, strict=True)},
+        configuration,
     )
-    candidates.extend(detect_fair_value_gaps(bundle.candles, configuration))
-    candidates.extend(detect_reversal_candles(bundle.candles, configuration))
-    candidates.extend(detect_bases(bundle.candles, configuration))
-    candidates.extend(detect_pressure_wicks(bundle.candles, configuration))
-    candidates.extend(detect_engulfing(bundle.candles, configuration))
-    candidates.extend(detect_single_candle_reversals(bundle.candles, configuration))
-    candidates.extend(detect_three_candle_stars(bundle.candles, configuration))
-    candidates.extend(
+    order_blocks, context_mapped = immutable_structure_gate(
+        detect_order_blocks(bundle.candles, configuration),
+        qualified,
+        bundle.candles,
+        bundle.measurement_analysis.confirmed_swings,
+        measurement_configuration,
+    )
+    mapped: list[Any] = [*order_blocks, *context_mapped]
+    mapped.extend(
         immutable_reference_candidates(
             bundle.candles,
             bundle.measurement_analysis,
@@ -422,15 +431,7 @@ def _detect_bundle_candidates(
             identity_provider,
         )
     )
-    candidates.extend(detect_period_levels(bundle.candles, configuration))
-    # RC3 qualification: raw candidates -> mapped candidates (FVG gap quality and
-    # same-origin arbitration), decided before the enabled-type filter.
-    atr = compute_atr_series(bundle.candles, 14)
-    mapped, _decisions = qualify_candidates(
-        candidates,
-        {c.record_id: a for c, a in zip(bundle.candles, atr, strict=True)},
-        configuration,
-    )
+    mapped.extend(detect_period_levels(bundle.candles, configuration))
     return [c for c in mapped if c.poi_type in configuration.enabled_poi_types]
 
 

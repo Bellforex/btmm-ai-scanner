@@ -611,6 +611,17 @@ def advance_detector_frontier(
         for c in step_candidates
         if c.poi_type in ARBITER_TYPES
     }
+    # RC3 structural context gate: qualified candidates map only through the
+    # leg-origin frontier (trend-aligned now, or later as reversal context);
+    # everything it locks is append-only from here on.
+    new_leg_origin = advance_leg_origin_frontier(
+        state.leg_origin,
+        new_raw_order_blocks,
+        candles_so_far,
+        measurement_analysis.confirmed_swings,
+        step_candidates,
+    )
+    step_candidates = list(new_leg_origin.newly_mapped)
     new_append_only = (*state.append_only_candidates, *step_candidates)
 
     # Period levels.
@@ -641,14 +652,6 @@ def advance_detector_frontier(
             *(c for c in current if c.poi_type not in LOCKED_REFERENCE_TYPES),
         )
 
-    # Leg-origin ORDER BLOCKs (RC3 final): locked the first time the gate
-    # produces them and never removed or changed afterwards (immutability).
-    new_leg_origin = advance_leg_origin_frontier(
-        state.leg_origin,
-        new_raw_order_blocks,
-        candles_so_far,
-        measurement_analysis.confirmed_swings,
-    )
     new_origin_order_blocks = new_leg_origin.locked
 
     # A6-AΔ: exact bounded delta. Append-only families contribute this candle's

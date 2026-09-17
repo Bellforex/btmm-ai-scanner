@@ -188,7 +188,10 @@ def test_pullback_end_starting_a_continuation_leg_is_an_order_block(
     assert [b for k, b in breaks if k in kinds] == [46, 73]
     assert f[(40, 41)][ob]["available"] == 46  # at the confirming break
     assert f[(63, 64)][ob]["available"] == 73
-    assert f[(40, 41)][eng]["available"] == 41  # the engulfing keeps its timing
+    # RC3 context gate: the pullback-end engulfing formed before the structure had
+    # a direction (bootstrap at bar 43) stays raw; the later one is trend-aligned.
+    assert eng not in f[(40, 41)]
+    assert f[(63, 64)][eng]["available"] == 64
 
 
 def test_mid_leg_engulfings_one_two_three_are_engulfing_only(continuation) -> None:
@@ -246,13 +249,17 @@ def test_end_of_opposite_leg_is_an_order_block_at_the_choch(
     assert _order_blocks(f, ob) == [(50, 51)]
     assert f[(50, 51)][ob]["available"] == 59
     assert ob not in f[(54, 55)] and eng in f[(54, 55)]
+    # both engulfings formed against the bearish structure inside the leg the
+    # CHOCH confirms: reversal context, mapped at the break
+    assert f[(54, 55)][eng]["available"] == 59
+    assert f[(50, 51)][eng]["available"] == 59
 
 
 def test_promoted_engulfing_ends_at_the_order_block_unless_used_first(
     continuation,
 ) -> None:
     f, _c, _m, ob, eng = continuation
-    for pair in ((40, 41), (63, 64)):
+    for pair in ((63, 64),):
         terminal = f[pair][eng]["terminal"]
         assert terminal in (
             PoiTerminalReason.PROMOTED_TO_ORDER_BLOCK,

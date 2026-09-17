@@ -102,16 +102,30 @@ def _raw_fvg(candles, source: str):
 
 
 @pytest.mark.parametrize(
-    ("source", "bottom", "top", "mapped"),
+    ("source", "bottom", "top", "quality", "context"),
     [
-        ("2026-09-17T05:15", "4294.06", "4295.89", False),  # author: weak (X)
-        ("2026-09-17T05:30", "4298.06", "4304.27", True),  # author: valid (tick)
+        # author: weak (X) -> never passes quality, never mapped
+        ("2026-09-17T05:15", "4294.06", "4295.89", False, None),
+        # author: valid (tick) -> passes quality; on this M15 window the frozen
+        # structure is still BEARISH (no bullish CHOCH yet), so the bullish gap
+        # is counter-trend and stays raw until a break confirms the leg
+        (
+            "2026-09-17T05:30",
+            "4298.06",
+            "4304.27",
+            True,
+            "CONTEXT_REJECT_COUNTER_TREND",
+        ),
     ],
 )
-def test_author_m15_fvg_pair(m15, source, bottom, top, mapped) -> None:
+def test_author_m15_fvg_pair(m15, source, bottom, top, quality, context) -> None:
     raw = _raw_fvg(m15, source)
     assert len(raw) == 1 and raw[0].poi_type is PoiType.BUY_FAIR_VALUE_GAP
     assert (str(raw[0].zone_bottom), str(raw[0].zone_top)) == (bottom, top)
+    atr = compute_atr_series(m15, 14)
+    atr_by = {c.record_id: a for c, a in zip(m15, atr, strict=True)}
+    passed, _d = qualify_candidates(raw, atr_by, _PCONFIG)
+    assert bool(passed) is quality
     by_id = {c.record_id: c for c in m15}
     present = [
         o
@@ -119,7 +133,17 @@ def test_author_m15_fvg_pair(m15, source, bottom, top, mapped) -> None:
         if o.poi_type is PoiType.BUY_FAIR_VALUE_GAP
         and _utc(by_id[o.source_candle_record_ids[0]].event_time_utc) == source
     ]
-    assert bool(present) is mapped
+    assert not present
+    if context is not None:
+        from btmm_ai_scanner.poi.leg_origin import structure_context_decisions
+
+        measurement = analyze_market_measurements(
+            m15, _MCONFIG, ContentAddressedIdentityProvider()
+        )
+        (decision,) = structure_context_decisions(
+            passed, m15, measurement.confirmed_swings
+        )
+        assert decision.reason.value == context
 
 
 def test_author_m15_fvg_decisions_carry_the_gap_quality(m15) -> None:
@@ -152,6 +176,9 @@ def test_author_h1_pressure_wick_is_primary_over_same_origin_fvg(h1) -> None:
         and o.source_candle_record_ids == (departure.record_id,)
     ]
     assert len(wicks) == 1
+    # counter-trend at 06:00 (bearish structure); the 11:00 bullish CHOCH confirms
+    # the leg departing from the 09-16 19:00 low, so the wick maps at the break
+    assert _utc(wicks[0].availability_time_utc) == "2026-09-17T12:00"
     assert not [
         o
         for o in observations
@@ -226,6 +253,21 @@ def test_tiny_gap_is_rejected_and_wide_gap_is_mapped() -> None:
         QualificationReason.QUALITY_REJECT,
     ]
 
+
+def test_frozen_threshold_boundary_uses_the_departure_candle_atr() -> None:
+    """Decision C (2026-09-17): 0.35 frozen; 0.349999 rejects, 0.35 admits; the
+    ATR is the departure (middle) candle's, never the first or third."""
+    assert _PCONFIG.fvg_min_gap_atr_ratio == Decimal("0.35")
+    ids = [uuid4(), uuid4(), uuid4()]
+    atr = {ids[0]: Decimal("0.0001"), ids[1]: Decimal("1"), ids[2]: Decimal("1000")}
+    below = _fvg(ids, "100.000000", "100.349999")
+    at = _fvg(ids, "100.000000", "100.350000")
+    mapped, decisions = qualify_candidates([below, at], atr, _PCONFIG)
+    assert mapped == [at]
+    assert [d.reason for d in decisions] == [
+        QualificationReason.QUALITY_REJECT,
+        QualificationReason.MAPPED,
+    ]
 
 def test_no_atr_yet_means_the_gap_cannot_qualify() -> None:
     ids = [uuid4(), uuid4(), uuid4()]

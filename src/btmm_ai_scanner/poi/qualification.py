@@ -23,9 +23,15 @@ Rules (author decisions, 2026-09-17):
   available no later than the FVG, so arbitration never needs a future bar. An
   FVG departing from a later, independent candle is kept.
 
-Market context (trend, leg, retracement, liquidity) is recorded for audit by
-``tests/parity_support/rc3_poi_context_audit.py`` and is not a mapping gate: the
-project authority states no automated context gate for these types.
+* **Hammer / shooting star over pressure wick** (author decision B): when one
+  candle is both HAMMER and BULLISH PRESSURE WICK (or SHOOTING STAR and BEARISH
+  PRESSURE WICK) the named formation is primary; the wick is suppressed. No other
+  non-FVG pair is ordered (``BTRC_V1_RC3_NON_FVG_ARBITRATION_MATRIX.md``).
+* **Structural context** (author decision A) is the hard gate after this step:
+  ``poi/leg_origin.py`` maps a candidate only when the frozen P2 structure at its
+  availability agrees with its direction, or when a later break makes its candle
+  the origin of the confirmed leg (reversal context). Retracement, trendline,
+  S/R and liquidity stay confluence metadata (``rc3_poi_context_audit.py``).
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
 
 __all__ = [
     "ARBITER_TYPES",
+    "CONTEXT_GATED_TYPES",
     "FVG_TYPES",
     "QualificationDecision",
     "QualificationReason",
@@ -63,6 +70,21 @@ ARBITER_TYPES = frozenset(
         PoiType.EVENING_STAR,
         PoiType.BASE_RALLY,
         PoiType.BASE_DROP,
+    }
+)
+
+
+_PRESSURE_WICKS = frozenset(
+    {PoiType.BULLISH_PRESSURE_WICK, PoiType.BEARISH_PRESSURE_WICK}
+)
+# same candle, same direction: HAMMER is bullish, SHOOTING STAR is bearish
+_WICK_SPECIALIZATIONS = frozenset({PoiType.HAMMER, PoiType.SHOOTING_STAR})
+CONTEXT_GATED_TYPES = frozenset(
+    {
+        *FVG_TYPES,
+        *ARBITER_TYPES,
+        PoiType.BUY_TO_SELL_CANDLE,
+        PoiType.SELL_TO_BUY_CANDLE,
     }
 )
 
@@ -113,9 +135,26 @@ def qualify_candidates(
     for candidate in items:
         if candidate.poi_type in ARBITER_TYPES:
             origins.setdefault(origin_key(candidate), candidate.poi_type)
+    specific = {
+        origin_key(c): c.poi_type for c in items if c.poi_type in _WICK_SPECIALIZATIONS
+    }
     mapped: list[Any] = []
     decisions: list[QualificationDecision] = []
     for candidate in items:
+        if candidate.poi_type in _PRESSURE_WICKS:
+            # Author decision B (2026-09-17): HAMMER / SHOOTING STAR is the more
+            # specific named rejection formation of the same candle.
+            named = specific.get(origin_key(candidate))
+            if named is not None:
+                decisions.append(
+                    QualificationDecision(
+                        candidate,
+                        QualificationReason.SAME_ORIGIN_SUPPRESSED,
+                        None,
+                        named,
+                    )
+                )
+                continue
         if candidate.poi_type not in FVG_TYPES:
             mapped.append(candidate)
             continue

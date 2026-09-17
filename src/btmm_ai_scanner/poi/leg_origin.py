@@ -43,10 +43,12 @@ Author decisions (2026-09-17, final semantic lock):
 
 from __future__ import annotations
 
+import bisect
 import uuid
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
@@ -67,10 +69,13 @@ from btmm_ai_scanner.domain.swings import (
     _Pivot,
     _supersede_same_direction_runs,
 )
-from btmm_ai_scanner.poi.enums import PoiDirection
+from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
 from btmm_ai_scanner.poi.order_blocks import OrderBlockCandidate
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
-from btmm_ai_scanner.structure.enums import StructureDirection
+from btmm_ai_scanner.structure.enums import (
+    StructureDirection,
+    SwingRelationshipLabel,
+)
 from btmm_ai_scanner.structure.relationships import detect_swing_relationships
 from btmm_ai_scanner.structure.transitions import (
     StructureWalkResult,
@@ -78,14 +83,19 @@ from btmm_ai_scanner.structure.transitions import (
 )
 
 __all__ = [
+    "ContextDecision",
+    "ContextReason",
     "LegOriginFrontier",
     "advance_leg_origin_frontier",
     "immutable_leg_origin_order_blocks",
+    "immutable_structure_gate",
     "iter_prefix_swing_candidates",
     "leg_origin_order_blocks",
+    "structure_context_decisions",
 ]
 
 _STRUCTURE_CONFIGURATION = StructureConfiguration()
+_OB_TYPES = frozenset({PoiType.BUY_ORDER_BLOCK, PoiType.SELL_ORDER_BLOCK})
 
 
 def _formation_key(formation: OrderBlockCandidate) -> tuple[Any, ...]:
@@ -93,21 +103,114 @@ def _formation_key(formation: OrderBlockCandidate) -> tuple[Any, ...]:
 
 
 # ---------------------------------------------------------------------------
-# The rule (pure function of candles, swings and raw formations)
+# The rule (pure function of candles, swings, raw formations and candidates)
 # ---------------------------------------------------------------------------
+
+
+class ContextReason(StrEnum):
+    MAPPED_TREND_ALIGNED = "MAPPED_TREND_ALIGNED"
+    MAPPED_REVERSAL_CONTEXT = "MAPPED_REVERSAL_CONTEXT"
+    CONTEXT_REJECT_COUNTER_TREND = "CONTEXT_REJECT_COUNTER_TREND"
+    CONTEXT_REJECT_NEUTRAL = "CONTEXT_REJECT_NEUTRAL"
+
+
+@dataclass(frozen=True)
+class ContextDecision:
+    candidate: Any
+    reason: ContextReason
+    structure_direction: StructureDirection
+    mapped: Any | None  # the mapped candidate (reversal: re-timed to its break)
+
+
+def _direction_timeline(
+    walk: StructureWalkResult, relationships: Sequence[Any]
+) -> tuple[list[datetime], list[StructureDirection]]:
+    """Structure direction as the frozen walk sets it: the first HH+HL / LH+LL
+    relationship pair (walk bootstrap, same event order), then each break's
+    direction_after at its availability. Direction at t = last change <= t."""
+    times: list[datetime] = []
+    dirs: list[StructureDirection] = []
+    latest: dict[SwingType, Any] = {}
+    for r in sorted(
+        relationships,
+        key=lambda r: (
+            r.availability_time_utc,
+            r.current_swing.pivot_bar_index,
+            str(r.current_swing_record_id),
+        ),
+    ):
+        latest[r.swing_type] = r.label
+        hi = latest.get(SwingType.SWING_HIGH)
+        lo = latest.get(SwingType.SWING_LOW)
+        if (
+            hi == SwingRelationshipLabel.HIGHER_HIGH
+            and lo == SwingRelationshipLabel.HIGHER_LOW
+        ):
+            times.append(r.availability_time_utc)
+            dirs.append(StructureDirection.BULLISH)
+            break
+        if (
+            hi == SwingRelationshipLabel.LOWER_HIGH
+            and lo == SwingRelationshipLabel.LOWER_LOW
+        ):
+            times.append(r.availability_time_utc)
+            dirs.append(StructureDirection.BEARISH)
+            break
+    for transition in walk.transitions:
+        times.append(transition.availability_time_utc)
+        dirs.append(transition.direction_after)
+    return times, dirs
+
+
+def _direction_at(
+    timeline: tuple[list[datetime], list[StructureDirection]], t: datetime
+) -> StructureDirection:
+    times, dirs = timeline
+    k = bisect.bisect_right(times, t)
+    return dirs[k - 1] if k else StructureDirection.UNDETERMINED
+
+
+def _classify_aligned(candidate: Any, direction: StructureDirection) -> ContextReason:
+    if direction is StructureDirection.UNDETERMINED:
+        return ContextReason.CONTEXT_REJECT_NEUTRAL
+    bullish = candidate.direction is PoiDirection.BULLISH
+    if (direction is StructureDirection.BULLISH) == bullish:
+        return ContextReason.MAPPED_TREND_ALIGNED
+    return ContextReason.CONTEXT_REJECT_COUNTER_TREND
 
 
 def _gate(
     formations: Sequence[OrderBlockCandidate],
     candles: Sequence[NormalizedCandle],
     swings: tuple[ConfirmedSwing, ...],
-) -> tuple[tuple[OrderBlockCandidate, ...], StructureWalkResult]:
+    candidates: Sequence[Any] = (),
+) -> tuple[
+    tuple[OrderBlockCandidate, ...],
+    StructureWalkResult,
+    tuple[ContextDecision, ...],
+    tuple[list[datetime], list[StructureDirection]],
+]:
     relationships = detect_swing_relationships(swings, _STRUCTURE_CONFIGURATION)
     walk = run_structure_walk(tuple(candles), swings, relationships)
+    timeline = _direction_timeline(walk, relationships)
     by_candle: dict[tuple[PoiDirection, object], list[OrderBlockCandidate]] = {}
     for formation in formations:
         for candle_id in formation.source_candle_record_ids:
             by_candle.setdefault((formation.direction, candle_id), []).append(formation)
+
+    decisions: dict[tuple[Any, ...], ContextDecision] = {}
+    counter: dict[PoiDirection, list[Any]] = {}
+    for candidate in candidates:
+        structure_dir = _direction_at(timeline, candidate.availability_time_utc)
+        reason = _classify_aligned(candidate, structure_dir)
+        decisions[_formation_key(candidate)] = ContextDecision(
+            candidate,
+            reason,
+            structure_dir,
+            candidate if reason is ContextReason.MAPPED_TREND_ALIGNED else None,
+        )
+        if reason is ContextReason.CONTEXT_REJECT_COUNTER_TREND:
+            counter.setdefault(candidate.direction, []).append(candidate)
 
     by_id = {s.record_id: s for s in swings}
     gated: list[OrderBlockCandidate] = []
@@ -133,10 +236,35 @@ def _gate(
                 -s.pivot_start_time_utc.timestamp(),
             ),
         )
+        direction = PoiDirection.BULLISH if bullish else PoiDirection.BEARISH
+        # Reversal context: this break confirms a leg departing from `origin`.
+        # A counter-trend candidate of the leg's direction formed inside that leg
+        # (source at or after the origin pivot, complete by the break) belongs to
+        # the confirmed impulse; it maps at the break. Earlier ones stay raw.
+        for c in counter.get(direction, ()):
+            key = _formation_key(c)
+            if (
+                decisions[key].mapped is not None
+                or c.candidate_event_time_utc < origin.pivot_start_time_utc
+                or c.availability_time_utc > transition.availability_time_utc
+            ):
+                continue
+            available = max(
+                c.availability_time_utc,
+                origin.meaningful_confirmation_time_utc,
+                transition.availability_time_utc,
+            )
+            decisions[key] = ContextDecision(
+                c,
+                ContextReason.MAPPED_REVERSAL_CONTEXT,
+                decisions[key].structure_direction,
+                c._replace(
+                    confirmation_time_utc=available, availability_time_utc=available
+                ),
+            )
         if origin.record_id in used:
             continue
         used.add(origin.record_id)
-        direction = PoiDirection.BULLISH if bullish else PoiDirection.BEARISH
         anchored = {
             _formation_key(f): f
             for candle_id in origin.pivot_candle_record_ids
@@ -162,7 +290,7 @@ def _gate(
                 confirmation_time_utc=available, availability_time_utc=available
             )
         )
-    return tuple(gated), walk
+    return tuple(gated), walk, tuple(decisions.values()), timeline
 
 
 def leg_origin_order_blocks(
@@ -172,6 +300,15 @@ def leg_origin_order_blocks(
 ) -> tuple[OrderBlockCandidate, ...]:
     """The leg-origin gate on ONE set of inputs (no immutability)."""
     return _gate(tuple(formations), candles, tuple(confirmed_swings))[0]
+
+
+def structure_context_decisions(
+    candidates: Iterable[Any],
+    candles: Sequence[NormalizedCandle],
+    confirmed_swings: Iterable[ConfirmedSwing],
+) -> tuple[ContextDecision, ...]:
+    """Context decisions on ONE set of inputs (audit; no immutability)."""
+    return _gate((), candles, tuple(confirmed_swings), tuple(candidates))[2]
 
 
 # ---------------------------------------------------------------------------
@@ -286,38 +423,57 @@ def _relationship_keys(
     )
 
 
-def immutable_leg_origin_order_blocks(
+def immutable_structure_gate(
     formations: Iterable[OrderBlockCandidate],
+    candidates: Iterable[Any],
     candles: Sequence[NormalizedCandle],
     confirmed_swings: Iterable[ConfirmedSwing],
     measurement_configuration: MarketMeasurementConfiguration,
-) -> tuple[OrderBlockCandidate, ...]:
-    """Batch ORDER BLOCKs = the union, over every prefix, of the leg-origin gate
-    on that prefix, each snapshotted when it first appears. Identical to what
-    ``advance_leg_origin_frontier`` has locked after the last candle."""
+) -> tuple[tuple[OrderBlockCandidate, ...], tuple[Any, ...]]:
+    """Batch ORDER BLOCKs and context-mapped candidates = the union, over every
+    prefix, of the structure gate on that prefix, each snapshotted when it first
+    appears. Identical to what ``advance_leg_origin_frontier`` has locked after
+    the last candle."""
     formations = tuple(formations)
+    candidates = tuple(candidates)
     final_swings = tuple(confirmed_swings)
-    final_gated, _walk = _gate(formations, candles, final_swings)
+    final_gated, _walk, final_decisions, _timeline = _gate(
+        formations, candles, final_swings, candidates
+    )
     final_sorted = sorted(
-        final_gated,
-        key=lambda f: (f.availability_time_utc, _formation_key(f)[1]),
+        [*final_gated, *(d.mapped for d in final_decisions if d.mapped is not None)],
+        key=lambda f: (
+            f.availability_time_utc,
+            f.poi_type.value,
+            tuple(map(str, f.source_candle_record_ids)),
+        ),
+    )
+    candidates_by_time = sorted(
+        candidates,
+        key=lambda c: (
+            c.availability_time_utc,
+            c.poi_type.value,
+            tuple(map(str, c.source_candle_record_ids)),
+        ),
     )
     final_by_conf = sorted(
         final_swings, key=lambda s: (s.meaningful_confirmation_time_utc, _swing_key(s))
     )
     final_relationships = _relationship_keys(final_swings, None)
 
-    locked: dict[tuple[Any, ...], OrderBlockCandidate] = {}
+    locked: dict[tuple[Any, ...], Any] = {}
     order: list[tuple[Any, ...]] = []
 
-    def lock(candidate: OrderBlockCandidate, now: datetime) -> None:
+    def lock(candidate: Any, now: datetime) -> None:
         key = _formation_key(candidate)
         if key in locked:
             return
         available = max(candidate.availability_time_utc, now)
-        locked[key] = candidate._replace(
-            confirmation_time_utc=available, availability_time_utc=available
-        )
+        if available != candidate.availability_time_utc:
+            candidate = candidate._replace(
+                confirmation_time_utc=available, availability_time_utc=available
+            )
+        locked[key] = candidate
         order.append(key)
 
     key_text: dict[Any, str] = {}
@@ -332,6 +488,7 @@ def immutable_leg_origin_order_blocks(
 
     final_text = ["|".join(map(str, _swing_key(s))) for s in final_by_conf]
     walked: StructureWalkResult | None = None
+    walked_timeline: tuple[list[datetime], list[StructureDirection]] = ([], [])
     prefix: tuple[ConfirmedSwingCandidate, ...] = ()
     prefix_swings: tuple[ConfirmedSwing, ...] = ()
     prefix_keys: list[str] = []
@@ -342,11 +499,19 @@ def immutable_leg_origin_order_blocks(
     swing_pointer = 0
     relationship_pointer = 0
     gated_pointer = 0
+    candidate_pointer = 0
     diverged = False
     for index, current in iter_prefix_swing_candidates(
         candles, measurement_configuration
     ):
         now = candles[index].availability_time_utc
+        arrived: list[Any] = []
+        while (
+            candidate_pointer < len(candidates_by_time)
+            and candidates_by_time[candidate_pointer].availability_time_utc <= now
+        ):
+            arrived.append(candidates_by_time[candidate_pointer])
+            candidate_pointer += 1
         dirty = False
         if current is not prefix and current != prefix:
             prefix = current
@@ -376,15 +541,28 @@ def immutable_leg_origin_order_blocks(
             )
         if diverged:
             # Same swing inputs and no possible break on this close: the gate
-            # output cannot change (see advance_leg_origin_frontier).
+            # output cannot change except for candidates arriving now, which
+            # are classified on the unchanged structure (see the frontier).
             if walked is None or _may_break(walked, candles[index].close):
-                gated, walked = _gate(
+                gated, walked, decisions, walked_timeline = _gate(
                     tuple(f for f in formations if f.availability_time_utc <= now),
                     candles[: index + 1],
                     prefix_swings,
+                    candidates_by_time[:candidate_pointer],
                 )
                 for candidate in gated:
                     lock(candidate, now)
+                for decision in decisions:
+                    if decision.mapped is not None:
+                        lock(decision.mapped, now)
+            else:
+                for candidate in arrived:
+                    reason = _classify_aligned(
+                        candidate,
+                        _direction_at(walked_timeline, candidate.availability_time_utc),
+                    )
+                    if reason is ContextReason.MAPPED_TREND_ALIGNED:
+                        lock(candidate, now)
             continue
         walked = None
         while (
@@ -399,7 +577,21 @@ def immutable_leg_origin_order_blocks(
             "confirmed swings do not match the measurement configuration used"
             " to replay their prefixes"
         )
-    return tuple(locked[key] for key in order)
+    obs = tuple(locked[k] for k in order if k[0] in _OB_TYPES)
+    mapped = tuple(locked[k] for k in order if k[0] not in _OB_TYPES)
+    return obs, mapped
+
+
+def immutable_leg_origin_order_blocks(
+    formations: Iterable[OrderBlockCandidate],
+    candles: Sequence[NormalizedCandle],
+    confirmed_swings: Iterable[ConfirmedSwing],
+    measurement_configuration: MarketMeasurementConfiguration,
+) -> tuple[OrderBlockCandidate, ...]:
+    """ORDER BLOCKs only (no context candidates)."""
+    return immutable_structure_gate(
+        formations, (), candles, confirmed_swings, measurement_configuration
+    )[0]
 
 
 # ---------------------------------------------------------------------------
@@ -411,8 +603,13 @@ def immutable_leg_origin_order_blocks(
 class LegOriginFrontier:
     swing_signature: tuple[Any, ...] = ()
     walk: StructureWalkResult | None = None
+    timeline: tuple[list[datetime], list[StructureDirection]] = ([], [])
     locked: tuple[OrderBlockCandidate, ...] = ()
     locked_keys: frozenset[tuple[Any, ...]] = frozenset()
+    candidates: tuple[Any, ...] = ()
+    mapped: tuple[Any, ...] = ()
+    mapped_keys: frozenset[tuple[Any, ...]] = frozenset()
+    newly_mapped: tuple[Any, ...] = ()
 
 
 def _may_break(walk: StructureWalkResult | None, close: Any) -> bool:
@@ -434,19 +631,60 @@ def advance_leg_origin_frontier(
     formations: tuple[OrderBlockCandidate, ...],
     candles: Sequence[NormalizedCandle],
     confirmed_swings: tuple[ConfirmedSwing, ...],
+    new_candidates: Sequence[Any] = (),
 ) -> LegOriginFrontier:
-    """Lock the ORDER BLOCKs the gate produces on this prefix. The structure
-    walk is recomputed only when the swing inputs changed or the newest close
-    can trigger a break of the current protected / weak level; otherwise no
-    transition -- and therefore no new ORDER BLOCK -- can appear."""
+    """Lock the ORDER BLOCKs and context-mapped candidates the gate produces on
+    this prefix. The structure walk is recomputed only when the swing inputs
+    changed or the newest close can trigger a break of the current protected /
+    weak level; otherwise no transition can appear, the direction timeline is
+    unchanged, and only the candidates arriving on this candle are classified."""
     signature = tuple((s.record_id, s.content_fingerprint) for s in confirmed_swings)
     candle = candles[-1]
+    now = candle.availability_time_utc
+    all_candidates = (
+        (*state.candidates, *new_candidates) if new_candidates else state.candidates
+    )
+    mapped = list(state.mapped)
+    mapped_keys = set(state.mapped_keys)
+    newly: list[Any] = []
+
+    def lock_candidate(candidate: Any) -> None:
+        key = _formation_key(candidate)
+        if key in mapped_keys:
+            return
+        available = max(candidate.availability_time_utc, now)
+        if available != candidate.availability_time_utc:
+            candidate = candidate._replace(
+                confirmation_time_utc=available, availability_time_utc=available
+            )
+        mapped.append(candidate)
+        newly.append(candidate)
+        mapped_keys.add(key)
+
     if signature == state.swing_signature and not _may_break(state.walk, candle.close):
-        return state
-    gated, walk = _gate(formations, candles, confirmed_swings)
+        for candidate in new_candidates:
+            reason = _classify_aligned(
+                candidate,
+                _direction_at(state.timeline, candidate.availability_time_utc),
+            )
+            if reason is ContextReason.MAPPED_TREND_ALIGNED:
+                lock_candidate(candidate)
+        return LegOriginFrontier(
+            state.swing_signature,
+            state.walk,
+            state.timeline,
+            state.locked,
+            state.locked_keys,
+            all_candidates,
+            tuple(mapped) if newly else state.mapped,
+            frozenset(mapped_keys) if newly else state.mapped_keys,
+            tuple(newly),
+        )
+    gated, walk, decisions, timeline = _gate(
+        formations, candles, confirmed_swings, all_candidates
+    )
     locked = list(state.locked)
     keys = set(state.locked_keys)
-    now = candle.availability_time_utc
     for candidate in gated:
         key = _formation_key(candidate)
         if key in keys:
@@ -458,4 +696,17 @@ def advance_leg_origin_frontier(
             )
         )
         keys.add(key)
-    return LegOriginFrontier(signature, walk, tuple(locked), frozenset(keys))
+    for decision in decisions:
+        if decision.mapped is not None:
+            lock_candidate(decision.mapped)
+    return LegOriginFrontier(
+        signature,
+        walk,
+        timeline,
+        tuple(locked),
+        frozenset(keys),
+        all_candidates,
+        tuple(mapped),
+        frozenset(mapped_keys),
+        tuple(newly),
+    )
