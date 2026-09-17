@@ -39,6 +39,14 @@ The ATR is final at the departure close, before availability (third close): no
 lookahead. During ATR warm-up an FVG cannot qualify. §35J's expansion rule stays
 documented-not-implemented; this replaces it for mapping.
 
+**Frozen (author decision C, 2026-09-17).** `FVG_GAP_MIN_ATR = 0.35`: a ratio of
+0.349999 rejects, 0.35 admits; the ATR is the departure (middle) candle's Wilder
+ATR-14. §35J (departure range ≥ 2.0 × max of the previous three) is **not
+adopted**: it rejects both author examples (the valid M15 FVG included). The
+departure-speed, §35J expansion and net-move columns above stay diagnostic; no
+further FVG threshold is added. After quality and arbitration the FVG passes the
+structural context gate like every candle pattern.
+
 ## 4. Tests (`tests/unit/test_rc3_poi_qualification.py`)
 
 Author pair (raw TRUE both; mapped FALSE / TRUE, gap ratios < 0.25 / > 0.60);

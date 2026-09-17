@@ -1,4 +1,4 @@
-"""RC3 qualification type coverage: RAW -> QUALITY -> ARBITRATION -> MAPPED -> FRESH.
+"""RC3 qualification type coverage: RAW -> QUALITY -> ARBITRATION -> CONTEXT -> MAPPED -> FRESH.
 
 Test/validation tooling only. Per timeframe (unsealed FXCM segments) and core POI
 type: raw detector candidates, candidates passing type quality, candidates
@@ -28,9 +28,14 @@ from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
+from btmm_ai_scanner.poi.leg_origin import ContextReason, structure_context_decisions
 from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
-from btmm_ai_scanner.poi.qualification import QualificationReason, qualify_candidates
+from btmm_ai_scanner.poi.qualification import (
+    CONTEXT_GATED_TYPES,
+    QualificationReason,
+    qualify_candidates,
+)
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -80,6 +85,18 @@ def coverage(segment) -> dict[str, Counter[str]]:
     raw_counts = Counter(c.poi_type.value for c in raw)
     quality = raw_counts - rejected
     arbitration = quality - suppressed
+    context = structure_context_decisions(
+        [c for c in _mapped if c.poi_type in CONTEXT_GATED_TYPES],
+        segment,
+        m.confirmed_swings,
+    )
+    by_reason: dict[str, Counter[str]] = {
+        r.value: Counter(d.candidate.poi_type.value for d in context if d.reason is r)
+        for r in ContextReason
+    }
+    context_pass = arbitration - by_reason["CONTEXT_REJECT_COUNTER_TREND"] - by_reason[
+        "CONTEXT_REJECT_NEUTRAL"
+    ]
     pois = analyze_pois(
         (PoiTimeframeInput(segment[0].timeframe, segment, m),), _PCONFIG, identity
     )
@@ -91,7 +108,8 @@ def coverage(segment) -> dict[str, Counter[str]]:
         if states[o.record_id].fresh_active
     )
     return {"raw": raw_counts, "quality": quality, "arbitration": arbitration,
-            "mapped": mapped, "fresh": fresh, "suppressed": suppressed}  # fmt: skip
+            "context": context_pass, "mapped": mapped, "fresh": fresh,
+            "suppressed": suppressed, **by_reason}  # fmt: skip
 
 
 def main() -> int:  # pragma: no cover - manual measurement
@@ -115,10 +133,10 @@ def main() -> int:  # pragma: no cover - manual measurement
             for k, v in coverage(seg).items():
                 total[k] = total.get(k, Counter()) + v
         report[tf.value] = {
-            t: {k: total.get(k, Counter())[t] for k in ("raw", "quality", "arbitration", "mapped", "fresh", "suppressed")}
+            t: {k: total.get(k, Counter())[t] for k in ("raw", "quality", "arbitration", "context", "mapped", "fresh", "suppressed", "MAPPED_TREND_ALIGNED", "MAPPED_REVERSAL_CONTEXT", "CONTEXT_REJECT_COUNTER_TREND", "CONTEXT_REJECT_NEUTRAL")}
             for t in _CORE
         }  # fmt: skip
-        print(tf.value, json.dumps({t: [v["raw"], v["quality"], v["arbitration"], v["mapped"], v["fresh"]] for t, v in report[tf.value].items()}), flush=True)  # fmt: skip
+        print(tf.value, json.dumps({t: [v["raw"], v["quality"], v["arbitration"], v["context"], v["mapped"], v["fresh"]] for t, v in report[tf.value].items()}), flush=True)  # fmt: skip
     (out / "type_coverage.json").write_text(json.dumps(report, indent=1), "utf-8")
     return 0
 

@@ -8,17 +8,59 @@ Branch `rc3-ob-origin-revision`. Commits `d6118dd` (confirmed S/R zones immutabl
 ```
 RAW PATTERN CANDIDATE        frozen detectors (poi/*.py), auditable
   -> PATTERN VALIDATION      detector geometry + frozen standards
-  -> TYPE-SPECIFIC QUALITY   FVG: gap >= 0.35 x ATR-14 (departure)        [implemented]
-  -> SAME-ORIGIN ARBITRATION pattern primary over its own FVG            [implemented]
-  -> STRUCTURE (OB)          leg origin from P2 breaks (poi/leg_origin)  [implemented]
-  -> MARKET CONTEXT          leg role / retracement / confluence         [measured, not gated]
-  -> QUALIFIED MAPPED POI    immutable once available (OB, S/R locks)    [implemented]
+  -> TYPE-SPECIFIC QUALITY   FVG: gap >= 0.35 x ATR-14 (departure)   [FROZEN, decision C]
+  -> SAME-ORIGIN ARBITRATION pattern primary over its own FVG;
+                             HAMMER / SHOOTING STAR over same-candle
+                             pressure wick                          [decision B]
+  -> STRUCTURAL CONTEXT GATE P2 direction at availability; reversal
+                             rescue at the confirming break          [decision A]
+  -> STRUCTURE (OB)          leg origin from P2 breaks (poi/leg_origin)
+  -> QUALIFIED MAPPED POI    immutable once available (OB, S/R, context locks)
   -> LIFECYCLE -> P5 (source TF) -> P8
 ```
 
-Reason codes (`poi/qualification.py`): `MAPPED`, `QUALITY_REJECT`,
-`SAME_ORIGIN_SUPPRESSED`. `CONTEXT_REJECT` is reserved: no authority exists for a
-context gate (`BTRC_V1_RC3_MARKET_CONTEXT_AUDIT.md`).
+Reason codes: `poi/qualification.py` `MAPPED`, `QUALITY_REJECT`,
+`SAME_ORIGIN_SUPPRESSED`; `poi/leg_origin.py` `ContextReason`
+`MAPPED_TREND_ALIGNED`, `MAPPED_REVERSAL_CONTEXT`,
+`CONTEXT_REJECT_COUNTER_TREND`, `CONTEXT_REJECT_NEUTRAL`.
+
+## Structural context gate (author decision A, 2026-09-17)
+
+Gated types (`CONTEXT_GATED_TYPES`): BUY / SELL FVG, B2S / S2B, BASE RALLY /
+DROP, BULLISH / BEARISH PRESSURE WICK, BULLISH / BEARISH ENGULFING, HAMMER,
+SHOOTING STAR, MORNING / EVENING STAR. Not gated, because their own contract is
+already structural: ORDER BLOCK (exists only as the leg origin of a confirmed P2
+break), SUPPORT / RESISTANCE ZONE (confirmed swing levels), period and reference
+levels (calendar / swing references, never candle patterns).
+
+Only frozen P2 primitives are read — no second structure engine, no numeric
+score, no Fibonacci / trendline / S/R / liquidity gate:
+
+* **Direction timeline** — UNDETERMINED until the first HH+HL (BULLISH) or
+  LH+LL (BEARISH) relationship becomes available, then `direction_after` of
+  every BOS / CHOCH at its availability (`_direction_timeline`).
+* **Aligned** — the direction at the candidate's availability equals its
+  direction → `MAPPED_TREND_ALIGNED`, available at its own availability.
+* **Neutral** — UNDETERMINED at availability → `CONTEXT_REJECT_NEUTRAL`
+  (never mapped later).
+* **Counter-trend** — opposite direction → `CONTEXT_REJECT_COUNTER_TREND`
+  unless a later break in the candidate's direction confirms a leg whose origin
+  swing (the same extreme opposite swing the ORDER BLOCK rule uses) starts at or
+  before the candidate's first candle, and the candidate was available by that
+  break → `MAPPED_REVERSAL_CONTEXT`, available at
+  max(candidate availability, origin confirmation, break availability).
+* **Historical impulse POIs** are kept: a mapped POI is locked on first
+  appearance (prefix union, identical to the incremental frontier) and never
+  removed when later structure changes.
+* Fibonacci buckets (<50, 50–61.8, 61.8–79, >79, outside), trendline, S/R and
+  liquidity remain audit metadata (`tests/parity_support/rc3_poi_context_audit.py`).
+
+Pine (USER v30 `a2467260…`, PARITY v13 `84d3f7e7…`): `f_poiEmit` records the
+arbitration keys first, then maps types 3–16 only when `p2Direction == direction`;
+a counter-trend record waits in `ctPending`; `f_poiGateOrderBlocks` rescues it on
+a break confirmed on this bar (same origin search as the ORDER BLOCK, before the
+OB of that break); neutral records drop; pending records older than the window
+are pruned like `obPending`.
 
 Trace per candidate (`QualificationDecision`): candidate (type, direction, source
 candles, availability, zone), reason, gap/ATR ratio, primary type. Context fields
@@ -74,7 +116,7 @@ if gap quality holds and the departure key is absent. Both compile. Live
 FX:XAUUSD: M15 weak FVG absent / valid FVG present; H1 pressure wick drawn
 without its same-origin FVG; M1..W1 ready, 0 unannotated boxes.
 
-## Interim aligned parity (qualified engine; NOT final authority)
+## PRE-CONTEXT-GATE aligned parity (qualified engine at `be9bae1`; superseded by the context gate, kept as evidence)
 
 Fresh same-session capture 2026-09-17 (PARITY DEV v11, FX:XAUUSD M15 host,
 `artifacts/rc3_qual_aligned/pine_m15_run3.csv` sha256 `875f694d…`; RUNMETA +

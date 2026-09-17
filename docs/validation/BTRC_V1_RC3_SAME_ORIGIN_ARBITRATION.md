@@ -36,19 +36,10 @@ PRESSURE WICK (4285.37–4297.35). Python: wick mapped, FVG
 `SAME_ORIGIN_SUPPRESSED` (primary = BULLISH_PRESSURE_WICK). Live FX:XAUUSD H1
 (USER DEV v29): only the pressure-wick box is drawn.
 
-## Not arbitrated (authority says keep separately)
+## Non-FVG pairs (author decision B, 2026-09-17)
 
-Pressure wick + hammer / shooting star on one candle, engulfing + pressure wick,
-B2S / S2B with anything: REG §35L and KB state "preserved separately, never
-merged". The presentation layer already merges exact-geometry boxes into one
-labelled box. A primary rule for these pairs needs an author decision.
-
-Measured same-origin pattern pairs (same final candle and direction, unsealed FXCM):
-
-| TF | PW + SHOOTING STAR / HAMMER | PW + STAR | ENGULFING + PW | BASE + ENGULFING |
-|---|---|---|---|---|
-| M15 | 16 + 11 | 7 + 2 (+2 with hammer) | 4 | 8 |
-| H1 | 13 + 6 | 7 | 3 | 10 |
-| H4 | 7 + 11 | 6 | 3 | 8 |
-
-These remain separate mapped POIs until the author defines a primary rule.
+HAMMER is primary over a same-candle BULLISH PRESSURE WICK and SHOOTING STAR over
+a same-candle BEARISH PRESSURE WICK (identical zone in every measured
+co-occurrence); the wick stays raw as `SAME_ORIGIN_SUPPRESSED`. All other
+non-FVG pairs stay separate mapped POIs. Evidence and per-pair decisions:
+`BTRC_V1_RC3_NON_FVG_ARBITRATION_MATRIX.md`.
