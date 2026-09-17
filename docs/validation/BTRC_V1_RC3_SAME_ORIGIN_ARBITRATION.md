@@ -42,3 +42,13 @@ Pressure wick + hammer / shooting star on one candle, engulfing + pressure wick,
 B2S / S2B with anything: REG §35L and KB state "preserved separately, never
 merged". The presentation layer already merges exact-geometry boxes into one
 labelled box. A primary rule for these pairs needs an author decision.
+
+Measured same-origin pattern pairs (same final candle and direction, unsealed FXCM):
+
+| TF | PW + SHOOTING STAR / HAMMER | PW + STAR | ENGULFING + PW | BASE + ENGULFING |
+|---|---|---|---|---|
+| M15 | 16 + 11 | 7 + 2 (+2 with hammer) | 4 | 8 |
+| H1 | 13 + 6 | 7 | 3 | 10 |
+| H4 | 7 + 11 | 6 | 3 | 8 |
+
+These remain separate mapped POIs until the author defines a primary rule.
