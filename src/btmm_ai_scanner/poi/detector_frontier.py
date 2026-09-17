@@ -65,6 +65,11 @@ from btmm_ai_scanner.poi.period_levels import (
     PeriodLevelCandidate,
 )
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
+from btmm_ai_scanner.poi.qualification import (
+    ARBITER_TYPES,
+    origin_key,
+    qualify_candidates,
+)
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -167,6 +172,9 @@ class _DetectorFrontierState:
     reference_signature: tuple[Any, ...] = ()
     reference_candidates: tuple[Any, ...] = ()
     locked_zones: tuple[Any, ...] = ()
+    # RC3 qualification: arbiter patterns whose final candle is the newest candle
+    # (the only possible same-origin primaries of the next candle's FVG).
+    previous_origins: dict[Any, Any] = field(default_factory=dict)
     # A6-AΔ: the previous candle's period candidates (bounded <=12), kept so the
     # next advance can diff them; and the delta emitted by the advance that
     # produced this state (transient per-advance output, consumed by the caller).
@@ -589,6 +597,20 @@ def advance_detector_frontier(
     step_candidates.extend(
         _evaluate_new_bases(new_ring, reference_atr_prev, configuration)
     )
+    # RC3 qualification. A new FVG's departure is the previous candle, so its ATR
+    # is atr[-2] and the only patterns that can share its origin are those whose
+    # final candle is that previous candle -- exactly last step's arbiters.
+    step_candidates, _decisions = qualify_candidates(
+        step_candidates,
+        {new_ring[-2].record_id: new_atr_series[-2]} if len(new_ring) >= 2 else {},
+        configuration,
+        state.previous_origins,
+    )
+    new_previous_origins = {
+        origin_key(c): c.poi_type
+        for c in step_candidates
+        if c.poi_type in ARBITER_TYPES
+    }
     new_append_only = (*state.append_only_candidates, *step_candidates)
 
     # Period levels.
@@ -613,9 +635,7 @@ def advance_detector_frontier(
             measurement_analysis.equal_level_clusters,
             measurement_analysis.confirmed_swings,
         )
-        new_locked_zones = lock_reference_candidates(
-            state.locked_zones, current, candle.availability_time_utc
-        )
+        new_locked_zones = lock_reference_candidates(state.locked_zones, current)
         new_reference_candidates = (
             *new_locked_zones,
             *(c for c in current if c.poi_type not in LOCKED_REFERENCE_TYPES),
@@ -687,6 +707,7 @@ def advance_detector_frontier(
         reference_signature=new_signature,
         reference_candidates=new_reference_candidates,
         locked_zones=new_locked_zones,
+        previous_origins=new_previous_origins,
         period_candidates=tuple(period_candidates),
         last_delta=delta,
         raw_order_blocks=new_raw_order_blocks,

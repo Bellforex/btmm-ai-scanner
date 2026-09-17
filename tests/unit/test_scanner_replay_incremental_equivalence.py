@@ -1941,7 +1941,7 @@ def test_poi_measurement_to_poi_handoff_matches_the_batch_oracle() -> None:
 # =====================================================================
 
 _BTMM_CONFIG = BtmmConfiguration(minimum_price_tick=Decimal("0.01"))
-_BTMM_SEEDS = (42, 34, 7, 123)
+_BTMM_SEEDS = (42, 34, 7, 123, 2)
 
 
 def _btmm_candle(
@@ -2205,7 +2205,10 @@ def test_btmm_poi_required_eligibility_matches_the_batch_oracle() -> None:
 def test_btmm_liquidity_required_no_evidence_cancels_and_matches_the_oracle() -> None:
     # With no reviewed liquidity evidence a setup reaching the final gate cancels
     # via NO_LIQUIDITY_EVIDENCE.
-    result = _btmm_driven(42, with_evidence=False)
+    # Seed 2: since RC3 POI qualification (FVG gap quality + same-origin
+    # arbitration) seed 42 no longer yields a POI whose setup reaches the final
+    # gate; seed 2 exercises the same path on the qualified engine.
+    result = _btmm_driven(2, with_evidence=False)
     assert (
         BtmmLifecycleTransitionType.NO_LIQUIDITY_EVIDENCE in result.transition_types()
     )
@@ -2245,7 +2248,10 @@ def test_btmm_intermediate_gate_progression_matches_the_oracle() -> None:
 
 
 def test_btmm_confirmation_matches_the_batch_oracle() -> None:
-    result = _btmm_driven(42)
+    # Seed 2: since RC3 POI qualification (FVG gap quality + same-origin
+    # arbitration) seed 42 no longer yields a POI whose setup reaches the final
+    # gate; seed 2 exercises the same path on the qualified engine.
+    result = _btmm_driven(2)
     assert BtmmLifecycleStatus.BTMM_CONFIRMED in result.states_seen()
     assert BtmmLifecycleTransitionType.CONFIRMED in result.transition_types()
     assert result.all_match, f"mismatched prefixes: {result.mismatched}"
@@ -2330,7 +2336,10 @@ def test_btmm_transition_priority_confirmed_from_full_gate_sequence() -> None:
     # The single confirmed setup must have passed the full ordered gate sequence:
     # ENTERED_FORMING -> ACCURACY_GATE_CONFIRMED -> REACTION_GATE_CONFIRMED ->
     # REACTION_SPEED_GATE_CONFIRMED -> CONFIRMED, in availability order.
-    result = _btmm_driven(42)
+    # Seed 2: since RC3 POI qualification (FVG gap quality + same-origin
+    # arbitration) seed 42 no longer yields a POI whose setup reaches the final
+    # gate; seed 2 exercises the same path on the qualified engine.
+    result = _btmm_driven(2)
     final = result.analysis_series[-1]
     confirmed_setups = {
         t.btmm_setup_record_id

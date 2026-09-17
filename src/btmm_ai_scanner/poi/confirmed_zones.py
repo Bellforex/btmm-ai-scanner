@@ -8,8 +8,7 @@ it could disappear retroactively (observed on real FXCM M15 data, while Pine,
 which never removes a registry POI, kept and mitigated it).
 
 The SUPPORT_ZONE / RESISTANCE_ZONE POI therefore snapshots each zone the first
-time it appears (source, geometry, availability = max(zone availability, that
-candle)) and never removes or changes it; it still ends through the normal
+time it appears (source, geometry, availability) and never removes or changes it; it still ends through the normal
 lifecycle. EQUAL_HIGHS / EQUAL_LOWS liquidity stay P3 context (not lifecycle
 POIs) and keep following the current measurement.
 
@@ -22,7 +21,6 @@ POIs) and keep following the current measurement.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
 from typing import Any
 
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
@@ -55,10 +53,11 @@ def _key(candidate: ReferenceZoneCandidate) -> tuple[Any, ...]:
 def lock_reference_candidates(
     locked: tuple[ReferenceZoneCandidate, ...],
     current: Sequence[ReferenceZoneCandidate],
-    now: datetime,
 ) -> tuple[ReferenceZoneCandidate, ...]:
-    """Append every S/R zone not seen before (snapshot, availability never
-    before ``now``); already-locked zones are kept exactly as first seen."""
+    """Append every S/R zone not seen before; already-locked zones are kept
+    exactly as first seen. The zone keeps its own availability even when the
+    measurement discovers it after that close (reaction windows confirm late):
+    the frozen reference-zone backfill contract (be1df56), which Pine mirrors."""
     keys = {_key(c) for c in locked}
     added: list[ReferenceZoneCandidate] = []
     for candidate in current:
@@ -68,17 +67,7 @@ def lock_reference_candidates(
         if key in keys:
             continue
         keys.add(key)
-        available = max(candidate.availability_time_utc, now)
-        confirmation = (
-            candidate.confirmation_time_utc
-            if available == candidate.availability_time_utc
-            else available
-        )
-        added.append(
-            candidate._replace(
-                confirmation_time_utc=confirmation, availability_time_utc=available
-            )
-        )
+        added.append(candidate)
     return (*locked, *added) if added else locked
 
 
@@ -116,7 +105,6 @@ def immutable_reference_candidates(
         locked = lock_reference_candidates(
             locked,
             detect_reference_zones(zones, (), state.confirmed_swings_so_far),
-            candle.availability_time_utc,
         )
     if candles and [
         (z.record_id, z.content_fingerprint)

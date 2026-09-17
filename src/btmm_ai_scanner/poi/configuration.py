@@ -52,6 +52,10 @@ class PoiConfiguration(ContractModel):
     doji_body_efficiency_standard: Decimal = Decimal("0.10")
     doji_body_efficiency_strong: Decimal = Decimal("0.05")
 
+    # RC3 qualification (author decision 2026-09-17): an FVG is mapped only when
+    # gap width >= this x ATR-14 of its departure candle.
+    fvg_min_gap_atr_ratio: Decimal = Decimal("0.35")
+
     reversal_candidate_size_ratio_standard: Decimal = Decimal("2.0")
     reversal_candidate_size_ratio_strong: Decimal = Decimal("3.0")
     reversal_body_efficiency_standard: Decimal = Decimal("0.60")
@@ -102,6 +106,7 @@ _POSITIVE_DECIMAL_FIELDS: tuple[str, ...] = (
     "hammer_shooting_star_opposite_wick_strong",
     "doji_body_efficiency_standard",
     "doji_body_efficiency_strong",
+    "fvg_min_gap_atr_ratio",
     "reversal_candidate_size_ratio_standard",
     "reversal_candidate_size_ratio_strong",
     "reversal_body_efficiency_standard",

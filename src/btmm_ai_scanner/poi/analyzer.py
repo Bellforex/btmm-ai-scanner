@@ -73,6 +73,7 @@ from btmm_ai_scanner.poi.overlap import (
 from btmm_ai_scanner.poi.period_levels import detect_period_levels
 from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
+from btmm_ai_scanner.poi.qualification import qualify_candidates
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.scheduler_walk import cursor_walk_result
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -422,7 +423,15 @@ def _detect_bundle_candidates(
         )
     )
     candidates.extend(detect_period_levels(bundle.candles, configuration))
-    return [c for c in candidates if c.poi_type in configuration.enabled_poi_types]
+    # RC3 qualification: raw candidates -> mapped candidates (FVG gap quality and
+    # same-origin arbitration), decided before the enabled-type filter.
+    atr = compute_atr_series(bundle.candles, 14)
+    mapped, _decisions = qualify_candidates(
+        candidates,
+        {c.record_id: a for c, a in zip(bundle.candles, atr, strict=True)},
+        configuration,
+    )
+    return [c for c in mapped if c.poi_type in configuration.enabled_poi_types]
 
 
 def _semantic_key_for_candidate(

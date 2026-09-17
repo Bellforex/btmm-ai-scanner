@@ -2374,6 +2374,9 @@ float C_POI_HSS_WICK_SHARE_STRONG    = 0.70
 float C_POI_HSS_BODY_EFF_STRONG      = 0.20
 float C_POI_HSS_OPP_WICK_STRONG      = 0.05
 float C_POI_DOJI_BODY_EFF_STANDARD   = 0.10
+// RC3 qualification (poi/qualification.py): FVG mapped only if gap >= this x ATR-14
+// of its departure candle (author decision 2026-09-17).
+float C_POI_FVG_MIN_GAP_ATR          = 0.35
 float C_POI_DOJI_BODY_EFF_STRONG     = 0.05
 float C_POI_REV_RATIO_STANDARD       = 2.0
 float C_POI_REV_RATIO_STRONG         = 3.0
@@ -2487,6 +2490,7 @@ var array<int>  poiTermReason   = array.new<int>()   // C_POI_TERM_*
 var array<int>  poiTermTime     = array.new<int>()   // availability time of the terminal bar
 var array<PoiRec> obPending = array.new<PoiRec>()   // raw OB formations awaiting a leg-confirming break
 var map<int, bool> obSwingUsed = map.new<int, bool>()   // leg-origin swings that already anchor an ORDER BLOCK
+var map<int, bool> poiOriginKey = map.new<int, bool>()  // final candle open time x direction of every emitted candle pattern (types 7-16)
 var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promoted this bar
 var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
@@ -2696,6 +2700,8 @@ f_poiIsBearCandle(int wi) =>
 // Emit one POI if its identity is not already in the registry. Production emits
 // each semantic POI once; the registry preserves that across the sliding window.
 f_poiEmit(int typeCode, int direction, float zoneTop, float zoneBottom, int tier, int srcFirstT, int srcCount, int srcLastT, int candT, int confT) =>
+    if typeCode >= C_POI_BASE_RALLY and typeCode <= C_POI_EVENING_STAR
+        map.put(poiOriginKey, srcLastT * direction, true)
     if f_poiFind(typeCode, srcFirstT, srcCount, srcLastT, f_poiTicks(zoneBottom), f_poiTicks(zoneTop)) == -1
         f_poiAppend(PoiRec.new(typeCode, direction, zoneTop, zoneBottom, candT, confT, confT, tier, srcFirstT, srcCount, srcLastT))
 
@@ -2747,9 +2753,11 @@ f_poiDetectFvg(int wn) =>
             direction := C_POI_DIR_BEARISH
             zoneTop := array.get(wLow, fi)
             zoneBottom := array.get(wHigh, ti)
-        if typeCode != 0
+        // RC3 qualification: gap quality vs the departure candle's ATR, and same-origin
+        // exclusivity -- a same-direction candle pattern ending on the departure candle
+        // (emitted on an earlier bar) is the primary POI of that formation.
+        if typeCode != 0 and zoneTop - zoneBottom >= C_POI_FVG_MIN_GAP_ATR * array.get(wAtr, mi) and not map.contains(poiOriginKey, array.get(wOpenT, mi) * direction)
             f_poiEmit(typeCode, direction, zoneTop, zoneBottom, C_POI_TIER_NA, array.get(wOpenT, fi), 3, array.get(wOpenT, ti), array.get(wOpenT, fi), array.get(wAvailT, ti))
-        int _unusedMi = mi
 
 // ---- ENGULFING (engulfing.py:27) --------------------------------------------
 // Range ratio + opposite colours ONLY. Production has no body-engulfment test,
