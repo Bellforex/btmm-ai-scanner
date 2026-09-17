@@ -513,7 +513,8 @@ var int lastSwingFingerprint = na
 var int lastSRFingerprint    = na
 
 // Persistent draw-object handles (bounded, redrawn on change).
-var array<SwingRec> p3Swings = array.new<SwingRec>()   // this bar's P1 confirmed swings, for the OB origin gate
+var array<SwingRec> p3Swings = array.new<SwingRec>()   // this bar's P1 confirmed swings, for the OB leg-origin gate
+var array<StructEventRec> p3Events = array.new<StructEventRec>()   // this bar's P2 breaks, for the OB leg-origin gate
 var array<line>  msLines  = array.new<line>()
 var array<label> msLabels = array.new<label>()
 
@@ -1997,6 +1998,7 @@ if barstate.isconfirmed
     p2WeakLowBound  := p2bWlBound
     p2ChochAborts   := p2bAborts
     p2TransCount    := array.size(p2bEvents)
+    p3Events := p2bEvents
     p2LastTransCode := C_ST_NA
     p2LastBrokenKey := C_ST_NA
     p2LastBrokenLvl := na
@@ -2521,8 +2523,8 @@ var array<int>  poiFirstTouchT  = array.new<int>()   // first post-availability 
 var array<int>  poiInvalT       = array.new<int>()   // genuine-invalidation time
 var array<int>  poiTermReason   = array.new<int>()   // C_POI_TERM_*
 var array<int>  poiTermTime     = array.new<int>()   // availability time of the terminal bar
-var array<PoiRec> obPending = array.new<PoiRec>()   // OB formations awaiting a movement-origin swing
-var map<int, bool> obSwingUsed = map.new<int, bool>()   // swings that already anchor an ORDER BLOCK
+var array<PoiRec> obPending = array.new<PoiRec>()   // raw OB formations awaiting a leg-confirming break
+var map<int, bool> obSwingUsed = map.new<int, bool>()   // leg-origin swings that already anchor an ORDER BLOCK
 var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promoted this bar
 var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
@@ -2757,8 +2759,8 @@ f_poiDetectOrderBlocks(int wn) =>
                     direction := C_POI_DIR_BEARISH
                 if typeCode != 0
                     int tier = ratio >= C_POI_OB_RATIO_STRONG ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD
-                    // RC3 movement origin: a formation only; it becomes an ORDER BLOCK in
-                    // f_poiGateOrderBlocks once a confirmed opposite swing proves it started a leg.
+                    // RC3 leg origin: a formation only; it becomes an ORDER BLOCK in
+                    // f_poiGateOrderBlocks once a structure break proves it is the leg origin.
                     array.push(obPending, PoiRec.new(typeCode, direction, array.get(wHigh, oi), array.get(wLow, oi), array.get(wOpenT, oi), array.get(wAvailT, di), array.get(wAvailT, di), tier, array.get(wOpenT, oi), 2, array.get(wOpenT, di)))
 
 // ---- FAIR VALUE GAPS (fair_value_gaps.py:25) --------------------------------
@@ -3100,47 +3102,50 @@ f_poiDetectBases(int wn) =>
 // deliberately not emitted here.
 // =============================================================================
 
-// ---- RC3 ORDER BLOCK = MOVEMENT ORIGIN (author semantic revision) ----------
-// Mirrors poi/order_blocks.apply_movement_origin_gate exactly. A frozen OB
-// formation (2.0 size rule, colours, close beyond the origin extreme) is an
-// ORDER BLOCK only when a meaningfully confirmed opposite swing (P1, including
-// alternation) pivots on its origin or displacement candle. Source stays the
-// origin formation; availability = the later of the displacement close and the
-// swing's meaningful confirmation. A formation whose origin has left the
-// analytical window can no longer be anchored by a P1 swing and is dropped.
+// ---- RC3 ORDER BLOCK = ACTUAL LEG ORIGIN (final semantic lock) --------------
+// Mirrors poi/leg_origin.py. Each P2 break (BOS / CHOCH, this bar's walk)
+// confirms one leg; its origin is the most extreme confirmed opposite swing
+// whose pivot lies after the broken swing and before the break candle (ties:
+// latest pivot). The earliest pending raw formation on that origin swing that
+// was complete by the break becomes the leg's ORDER BLOCK, available at the
+// break bar. Every other formation stays an ENGULFING.
+// Emitted POIs are never removed (confirmed history is immutable).
 f_poiGateOrderBlocks() =>
-    // Oldest formation first: a confirmed swing starts ONE leg, so when two
-    // formations share an anchoring swing (a plateau pivot) only the earliest
-    // becomes its ORDER BLOCK (obSwingUsed), exactly as in Python.
-    int k = 0
-    while k < array.size(obPending)
-        PoiRec r = array.get(obPending, k)
-        int want = r.direction == C_POI_DIR_BULLISH ? SWING_LOW : SWING_HIGH
-        int conf = C_ST_NA
-        int key = 0
-        for [_gi, s] in p3Swings
-            if s.swingType == want and r.srcFirstTime <= s.pivotEndTime and r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx) and (conf == C_ST_NA or s.meaningfulConfTime < conf)
-                conf := s.meaningfulConfTime
-                key := s.pivotEndTime + want
-        // Branches only set `drop`; the array edit happens below, because Pine
-        // requires every branch of one if/else chain to end in the same type.
-        bool drop = r.srcFirstTime < array.get(wOpenT, 0)
-        if conf != C_ST_NA and map.contains(obSwingUsed, key)
-            drop := true
-        else if conf != C_ST_NA
-            map.put(obSwingUsed, key, true)
-            // conf is always after the displacement close: meaningful confirmation of a
-            // pivot on the origin/displacement candle is at pivot end + 3 at the earliest,
-            // so Python's max(displacement close, confirmation) is conf itself.
-            f_poiEmit(r.poiType, r.direction, r.zoneTop, r.zoneBottom, r.strengthTier, r.srcFirstTime, 2, r.srcLastTime, r.candidateTime, conf)
-            // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
-            array.push(obPromoEng, f_poiFind(r.poiType + 10, r.srcFirstTime, 2, r.srcLastTime, f_poiTicks(r.zoneBottom), f_poiTicks(r.zoneTop)))
-            array.push(obPromoT, conf)
-            drop := true
-        if drop
-            array.remove(obPending, k)
-        if not drop
-            k += 1
+    int nowT = array.get(wAvailT, array.size(wAvailT) - 1)
+    for [_ek, ev] in p3Events
+        // only a break confirmed on THIS bar: the window walk re-derives older
+        // breaks every bar, and one re-derived at the window edge must not create
+        // a late ORDER BLOCK Python never saw at that break
+        if ev.availabilityTime == nowT
+            bool bull = ev.transitionCode > 0
+            int want = bull ? SWING_LOW : SWING_HIGH
+            float best = na
+            int oStart = 0
+            int oEnd = 0
+            int oConf = 0
+            for [_gi, s] in p3Swings
+                int sStart = array.get(wOpenT, s.pivotStartIdx)
+                if s.swingType == want and sStart > ev.brokenSwingKey and s.pivotEndTime < ev.breakTime and s.meaningfulConfTime <= ev.availabilityTime and (na(best) or (bull ? s.price <= best : s.price >= best))
+                    best := s.price
+                    oStart := sStart
+                    oEnd := s.pivotEndTime
+                    oConf := s.meaningfulConfTime
+            if not na(best) and not map.contains(obSwingUsed, oEnd + want)
+                int pick = -1
+                for [pk, r] in obPending
+                    if r.direction == (bull ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH) and r.srcFirstTime <= oEnd and r.srcLastTime >= oStart and r.availTime <= ev.availabilityTime and (pick < 0 or r.srcFirstTime < array.get(obPending, pick).srcFirstTime)
+                        pick := pk
+                if pick >= 0
+                    map.put(obSwingUsed, oEnd + want, true)
+                    PoiRec ob = array.remove(obPending, pick)
+                    int avail = math.max(math.max(ob.availTime, oConf), math.max(ev.availabilityTime, nowT))
+                    f_poiEmit(ob.poiType, ob.direction, ob.zoneTop, ob.zoneBottom, ob.strengthTier, ob.srcFirstTime, 2, ob.srcLastTime, ob.candidateTime, avail)
+                    // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
+                    array.push(obPromoEng, f_poiFind(ob.poiType + 10, ob.srcFirstTime, 2, ob.srcLastTime, f_poiTicks(ob.zoneBottom), f_poiTicks(ob.zoneTop)))
+                    array.push(obPromoT, avail)
+    // a formation whose origin left the analytical window can no longer anchor a leg
+    while array.size(obPending) > 0 and array.get(obPending, 0).srcFirstTime < array.get(wOpenT, 0)
+        array.shift(obPending)
 
 // The same formation's engulfing ends when its ORDER BLOCK becomes available,
 // unless an earlier cause already ended it (poi/lifecycle.apply_order_block_
@@ -5556,7 +5561,7 @@ f_p5T4Session(int evalMs) =>
 // -----------------------------------------------------------------------------
 // Reads the host's OWN candle window (wHigh/wLow, already 300-bar deep) and
 // its OWN incremental ATR (wAtr) -- P3 POI is host-only (single M15 context in
-// this deployment), so poi.effective_timeframe is always this same host, and
+// this deployment), so poi.source_timeframe is always this same host, and
 // "the POI timeframe's own candle history" needs no new P6 transport. ATR
 // itself is reused (the proven P1 measurement), not re-derived; only the
 // percentile/banding/abnormal-spike logic is new.
@@ -6138,7 +6143,7 @@ if barstate.isconfirmed
     // contract (BTRC_V1_P6_MTF_ARCHITECTURE.md: T3 momentum / breakout /
     // liquidity -> "per POI timeframe") and production Python agree -- the
     // latter keys its momentum/breakout/pullback assessments by
-    // `poi.effective_timeframe` (btrc/t5_engine.py). P3's POI registry is
+    // `poi.source_timeframe` (btrc/t5_engine.py, RC3 author decision). P3's POI registry is
     // host-only, so the POI timeframe IS the host timeframe. Reading `m15Ext`
     // unconditionally, as earlier builds did, evaluated every non-M15 host
     // against a foreign M15 context: exact on an M15 chart, wrong on M5/H1/H4.

@@ -210,7 +210,7 @@ def _assert_universe_matches_every_prefix(
         prefix = tuple(candles[:k])
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         frontier, universe, atr_series = advance_detector_frontier(
-            frontier, candles[k - 1], measurement, _PCONFIG
+            frontier, candles[k - 1], measurement, _PCONFIG, candles_so_far=prefix
         )
         # ATR handed to the lifecycle is the exact full-prefix series.
         assert tuple(atr_series) == compute_atr_series(prefix, 14)
@@ -249,7 +249,7 @@ def test_base_frontier_matches_full_prefix_bases_every_prefix() -> None:
         prefix = tuple(candles[:k])
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         frontier, universe, _ = advance_detector_frontier(
-            frontier, candles[k - 1], measurement, _PCONFIG
+            frontier, candles[k - 1], measurement, _PCONFIG, candles_so_far=prefix
         )
         frontier_bases = [c for c in universe if type(c).__name__ == "BaseCandidate"]
         assert _sorted_repr(frontier_bases) == _sorted_repr(
@@ -303,7 +303,7 @@ def test_reversal_delayed_confirmation_matches_batch_and_respects_no_lookahead()
         prefix = tuple(candles[:k])
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         frontier, universe, _ = advance_detector_frontier(
-            frontier, candles[k - 1], measurement, _PCONFIG
+            frontier, candles[k - 1], measurement, _PCONFIG, candles_so_far=prefix
         )
         bundle = PoiTimeframeInput(
             timeframe=Timeframe.M1, candles=prefix, measurement_analysis=measurement
@@ -334,7 +334,7 @@ def test_period_levels_add_replace_remove_current_and_previous() -> None:
         prefix = tuple(candles[:k])
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         frontier, universe, _ = advance_detector_frontier(
-            frontier, candles[k - 1], measurement, _PCONFIG
+            frontier, candles[k - 1], measurement, _PCONFIG, candles_so_far=prefix
         )
         period = [c for c in universe if type(c).__name__ == "PeriodLevelCandidate"]
         bundle = PoiTimeframeInput(
@@ -365,7 +365,7 @@ def test_reference_zones_track_measurement_and_reuse_when_unchanged() -> None:
         prefix = tuple(candles[:k])
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         frontier, universe, _ = advance_detector_frontier(
-            frontier, candles[k - 1], measurement, _PCONFIG
+            frontier, candles[k - 1], measurement, _PCONFIG, candles_so_far=prefix
         )
         refs = [c for c in universe if type(c).__name__ == "ReferenceZoneCandidate"]
         expected = detect_reference_zones(

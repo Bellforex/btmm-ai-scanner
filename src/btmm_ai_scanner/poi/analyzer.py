@@ -20,6 +20,7 @@ from btmm_ai_scanner.domain import (
     MixedSymbolAnalysisError,
     UnsortedCandleSequenceError,
 )
+from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
 from btmm_ai_scanner.domain.enums import DerivedOutputType
 from btmm_ai_scanner.measurements.atr import compute_atr_series
 from btmm_ai_scanner.persistent_map import PersistentMap
@@ -42,6 +43,7 @@ from btmm_ai_scanner.poi.enums import (
     PoiType,
 )
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
+from btmm_ai_scanner.poi.leg_origin import immutable_leg_origin_order_blocks
 from btmm_ai_scanner.poi.lifecycle import (
     LifecycleWalkResult,
     PoiLifecycleTransition,
@@ -61,10 +63,7 @@ from btmm_ai_scanner.poi.lifecycle_scheduler import (
     create_scheduler,
 )
 from btmm_ai_scanner.poi.observation import PoiObservation
-from btmm_ai_scanner.poi.order_blocks import (
-    apply_movement_origin_gate,
-    detect_order_blocks,
-)
+from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
 from btmm_ai_scanner.poi.overlap import (
     PoiOverlapRelationship,
     compute_overlap_relationships,
@@ -395,9 +394,13 @@ def _detect_bundle_candidates(
 ) -> list[Any]:
     candidates: list[Any] = []
     candidates.extend(
-        apply_movement_origin_gate(
+        immutable_leg_origin_order_blocks(
             detect_order_blocks(bundle.candles, configuration),
+            bundle.candles,
             bundle.measurement_analysis.confirmed_swings,
+            MarketMeasurementConfiguration(
+                minimum_price_tick=configuration.minimum_price_tick
+            ),
         )
     )
     candidates.extend(detect_fair_value_gaps(bundle.candles, configuration))
@@ -1178,8 +1181,8 @@ class _PoiReplayState:
     # + fingerprint only the *new* append-only suffix and the bounded reference/
     # period sets, instead of re-resolving the entire cumulative candidate
     # universe every candle (the O(history)-per-candle -> O(N^2) advance cost).
-    # RC3 OB movement origin: the gated ORDER BLOCK observations (mutable,
-    # swing-dependent), carried by reference while the frontier reuses its tuple.
+    # RC3 OB leg origin: the locked ORDER BLOCK observations (append-only, never
+    # removed), carried by reference while the frontier reuses its tuple.
     origin_ob_cache: dict[UUID, tuple[dict[str, object], PoiObservation]] = field(
         default_factory=dict
     )
@@ -1250,7 +1253,11 @@ def _advance_poi_replay_state(
     # enabled_poi_types filter), and atr_series is the exact full-prefix Wilder
     # ATR-14 the lifecycle walk requires (never recomputed from a suffix).
     new_detector_frontier, _all_candidates, atr_values = advance_detector_frontier(
-        state.detector_frontier, candle, measurement_analysis, configuration
+        state.detector_frontier,
+        candle,
+        measurement_analysis,
+        configuration,
+        candles_so_far=new_candles,
     )
     enabled = configuration.enabled_poi_types
     prior_bounded = state.bounded_cache
@@ -1342,8 +1349,8 @@ def _advance_poi_replay_state(
         if removed_record_id not in new_bounded:
             new_ordered = new_ordered.delete(_observation_sort_key(prior_entry[1]))
 
-    # RC3 movement-origin ORDER BLOCKs: same bounded-mutable treatment, skipped
-    # entirely while the frontier carries the identical gated tuple.
+    # RC3 leg-origin ORDER BLOCKs: rebuilt only when the frontier locked a new
+    # one; skipped entirely while it carries the identical tuple.
     prior_origin = state.origin_ob_cache
     if (
         new_detector_frontier.origin_order_blocks
@@ -1424,21 +1431,6 @@ def _advance_poi_replay_state(
         # Only reference SR zones (identity tag "R") are lifecycle-eligible mutable
         # POIs that can be removed; append-only families are never removed and
         # period/EL families are NOT_APPLICABLE.
-        if identity[0] in LIFECYCLE_ELIGIBLE_POI_TYPES and identity[1] == "A":
-            # A movement-origin ORDER BLOCK whose anchoring swing disappeared.
-            removed_ids.append(
-                resolver.resolve(
-                    DerivedOutputType.POI_OBSERVATION,
-                    (
-                        symbol_value_text,
-                        timeframe_value_text,
-                        identity[0].value,
-                        *(str(cid) for cid in identity[2]),
-                        rule_version_text,
-                    ),
-                )
-            )
-            continue
         if identity[0] in LIFECYCLE_ELIGIBLE_POI_TYPES and identity[1] == "R":
             removed_key = (
                 symbol_value_text,

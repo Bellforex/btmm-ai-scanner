@@ -252,8 +252,8 @@ def test_public_poi_observation_exists_only_after_confirmation() -> None:
         o for o in result.poi_observations if o.poi_type == PoiType.BULLISH_ENGULFING
     ]
     assert len(engulfing_observations) == 1
-    # RC3 movement origin: with no confirmed swing low on the pair, the frozen
-    # OB formation is not (yet) an ORDER BLOCK.
+    # RC3 leg origin: with no structure break confirming a leg from this pair,
+    # the frozen OB formation is not an ORDER BLOCK.
     assert all(o.poi_type != PoiType.BUY_ORDER_BLOCK for o in result.poi_observations)
 
 

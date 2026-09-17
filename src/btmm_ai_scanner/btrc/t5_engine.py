@@ -147,7 +147,17 @@ def assess_confluence(
     bar_context: ConfluenceBarContext | None = None,
 ) -> BtrcDecision:
     config = configuration or ConfluenceConfiguration()
-    poi_tf = poi.effective_timeframe
+    # RC3 author decision (2026-09-17): POI-specific scoring (T3 momentum /
+    # breakout / pullback, T4 volatility) uses the POI's own detection
+    # timeframe. A cross-timeframe overlap that raised ``effective_timeframe``
+    # is carried as explicit derived context (``higher_tf_context``) and never
+    # re-times the POI.
+    poi_tf = poi.source_timeframe
+    higher_tf_context = (
+        poi.effective_timeframe
+        if poi.effective_timeframe != poi.source_timeframe
+        else None
+    )
     poi_bullish = poi.direction is PoiDirection.BULLISH
 
     if bar_context is None:
@@ -316,6 +326,7 @@ def assess_confluence(
         evaluation_time_utc=analysis.availability_time_utc,
         poi_record_id=str(poi.record_id),
         poi_timeframe=poi_tf,
+        higher_tf_context=higher_tf_context,
         poi_type=poi.poi_type,
         poi_direction=poi.direction,
         poi_valid=True,

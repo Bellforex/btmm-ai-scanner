@@ -1,4 +1,3 @@
-from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
 from typing import NamedTuple
@@ -6,8 +5,6 @@ from uuid import UUID
 
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
-from btmm_ai_scanner.domain.enums import SwingType
-from btmm_ai_scanner.domain.swings import ConfirmedSwing
 from btmm_ai_scanner.measurements.candle_metrics import body_efficiency, total_range
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
@@ -92,82 +89,3 @@ def detect_order_blocks(
         )
 
     return tuple(results)
-
-
-def apply_movement_origin_gate(
-    formations: Iterable[OrderBlockCandidate],
-    confirmed_swings: Iterable[ConfirmedSwing],
-) -> tuple[OrderBlockCandidate, ...]:
-    """RC3 ORDER BLOCK = MOVEMENT ORIGIN (author semantic revision, 2026-09-17).
-
-    `formations` are the frozen two-candle order-block formations from
-    `detect_order_blocks` (2.0 size rule, colours, close beyond the origin
-    extreme -- unchanged). A formation is an ORDER BLOCK only when it is the
-    origin of a new directional leg, decided with the frozen swing primitive
-    (`domain/swings.py`), never a second structure model:
-
-    * BUY: a meaningfully confirmed SWING_LOW whose pivot candles include the
-      origin or the displacement candle.
-    * SELL: a meaningfully confirmed SWING_HIGH likewise.
-
-    Swing alternation already encodes "the previous leg was opposite": a low
-    that follows an already-confirmed low with no confirmed high between is
-    never a confirmed swing, so a same-direction formation inside a leg that
-    has already started fails the gate and remains an ENGULFING only.
-
-    Timing: source (candidate event time, zone, source candles) stays the
-    origin formation. Availability = confirmation = the swing's meaningful
-    confirmation time (never earlier than the displacement close). A swing is
-    only present once confirmed, so nothing is known before it happened.
-    """
-    earliest: dict[tuple[SwingType, object], ConfirmedSwing] = {}
-    for swing in confirmed_swings:
-        for candle_id in swing.pivot_candle_record_ids:
-            key = (swing.swing_type, candle_id)
-            held = earliest.get(key)
-            if held is None or (
-                swing.meaningful_confirmation_time_utc,
-                str(swing.record_id),
-            ) < (held.meaningful_confirmation_time_utc, str(held.record_id)):
-                earliest[key] = swing
-
-    gated: list[OrderBlockCandidate] = []
-    # One ORDER BLOCK per leg origin: a confirmed swing is the start of exactly
-    # one leg, so when several formations share an anchoring swing (possible on
-    # a multi-candle plateau pivot) only the earliest formation is its origin.
-    anchored: set[object] = set()
-    for formation in sorted(
-        formations,
-        key=lambda f: (
-            f.candidate_event_time_utc,
-            tuple(map(str, f.source_candle_record_ids)),
-        ),
-    ):
-        want = (
-            SwingType.SWING_LOW
-            if formation.direction == PoiDirection.BULLISH
-            else SwingType.SWING_HIGH
-        )
-        matches = [
-            earliest[(want, candle_id)]
-            for candle_id in formation.source_candle_record_ids
-            if (want, candle_id) in earliest
-        ]
-        if not matches:
-            continue
-        anchor = min(
-            matches,
-            key=lambda s: (s.meaningful_confirmation_time_utc, str(s.record_id)),
-        )
-        if anchor.record_id in anchored:
-            continue
-        anchored.add(anchor.record_id)
-        available = max(
-            formation.availability_time_utc, anchor.meaningful_confirmation_time_utc
-        )
-        gated.append(
-            formation._replace(
-                confirmation_time_utc=available, availability_time_utc=available
-            )
-        )
-    return tuple(gated)

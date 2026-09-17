@@ -395,7 +395,7 @@ def test_end_to_end_component_scores_match_the_model_on_real_scanner_output() ->
         assert decision.component_scores.regime_score == regime_score(decision.regime)
 
         momentum = {m.timeframe: m for m in assess_momentum(analysis)}.get(
-            poi.effective_timeframe
+            poi.source_timeframe
         )
         raw_momentum_score = momentum.momentum_score if momentum is not None else 0
         assert decision.component_scores.momentum_score == momentum_score(

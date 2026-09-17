@@ -51,6 +51,9 @@ class BtrcDecision(ContractModel):
     # --- hard analytical truths (never overridden by scores) ---
     poi_record_id: str
     poi_timeframe: Timeframe
+    # Derived higher-timeframe overlap context (the merged effective timeframe
+    # when it differs from the source). Informational: no score reads it.
+    higher_tf_context: Timeframe | None = None
     poi_type: PoiType
     poi_direction: PoiDirection
     poi_valid: bool

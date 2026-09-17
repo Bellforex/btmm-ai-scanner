@@ -78,13 +78,15 @@ def test_out_of_authority_hosts_get_productions_missing_component_scores() -> No
 
 
 def test_python_selects_t3_assessments_by_the_pois_own_timeframe() -> None:
-    """Guard the other direction too: the Python authority must keep keying
-    T3 on `poi.effective_timeframe`, since the Pine dispatch above is built
-    to match it."""
+    """Guard the other direction too: the Python authority keys T3 on the
+    POI's own detection timeframe (`poi.source_timeframe`, RC3 author decision
+    2026-09-17), which is what the host-only Pine dispatch above matches.
+    Higher-timeframe overlap stays explicit derived context."""
     engine = (_REPO / "src" / "btmm_ai_scanner" / "btrc" / "t5_engine.py").read_text(
         encoding="utf-8"
     )
-    assert "poi_tf = poi.effective_timeframe" in engine
+    assert "poi_tf = poi.source_timeframe" in engine
+    assert "higher_tf_context=higher_tf_context" in engine
     # Computed once per bar in ConfluenceBarContext, selected per POI timeframe.
     for component, table in (
         ("assess_momentum", "momentum_by_timeframe"),

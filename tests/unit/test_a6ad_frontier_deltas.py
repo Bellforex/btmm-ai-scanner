@@ -140,7 +140,7 @@ def _apply_delta_matches_universe_every_prefix(
         prefix = tuple(candles[:k])
         measurement = analyze_market_measurements(prefix, _MCONFIG, idp)
         frontier, filtered, _atr = advance_detector_frontier(
-            frontier, candles[k - 1], measurement, _PCONFIG
+            frontier, candles[k - 1], measurement, _PCONFIG, candles_so_far=prefix
         )
         delta = frontier.last_delta
 

@@ -1,6 +1,6 @@
-"""RC3 ORDER BLOCK movement-origin port in the USER and PARITY Pine builds.
+"""RC3 ORDER BLOCK leg-origin port in the USER and PARITY Pine builds.
 
-Source locks mirroring ``poi/order_blocks.apply_movement_origin_gate`` and
+Source locks mirroring ``poi/leg_origin.py`` and
 ``poi/lifecycle.apply_order_block_promotion``. Runtime agreement with Python
 needs a real capture; these guarantee the port is present, ordered correctly
 and identical in both builds.
@@ -44,24 +44,51 @@ def test_formation_is_not_emitted_as_an_order_block_directly(build: str) -> None
 
 
 @pytest.mark.parametrize("build", sorted(_BUILDS))
-def test_gate_requires_a_confirmed_opposite_swing_on_the_formation(build: str) -> None:
+def test_gate_is_the_leg_origin_of_each_structure_break(build: str) -> None:
+    code = _code(build)
+    assert "    p3Events := p2bEvents" in code  # this bar's frozen P2 breaks
+    gate = code[code.index("f_poiGateOrderBlocks() =>") :]
+    gate = gate[: gate.index("\nf_poiApplyPromotions() =>")]
+    assert "for [_ek, ev] in p3Events" in gate
+    # a break is gated on the bar it becomes available (never re-derived later
+    # at the edge of the sliding analytical window)
+    assert "if ev.availabilityTime == nowT" in gate
+    assert "int want = bull ? SWING_LOW : SWING_HIGH" in gate
+    # origin: extreme confirmed opposite swing between the broken swing and the
+    # break candle, confirmed by the break; exact ties -> latest pivot
+    assert (
+        "s.swingType == want and sStart > ev.brokenSwingKey and "
+        "s.pivotEndTime < ev.breakTime and "
+        "s.meaningfulConfTime <= ev.availabilityTime and "
+        "(na(best) or (bull ? s.price <= best : s.price >= best))"
+    ) in gate
+    # earliest pending raw formation on the origin swing, complete by the break
+    assert (
+        "r.srcFirstTime <= oEnd and r.srcLastTime >= oStart and "
+        "r.availTime <= ev.availabilityTime and "
+        "(pick < 0 or r.srcFirstTime < array.get(obPending, pick).srcFirstTime)"
+    ) in gate
+    assert "map.contains(obSwingUsed, oEnd + want)" in gate  # one OB per leg origin
+    assert (
+        "int avail = math.max(math.max(ob.availTime, oConf), "
+        "math.max(ev.availabilityTime, nowT))"
+    ) in gate  # never before this bar (immutable first appearance)
+    assert (
+        "f_poiEmit(ob.poiType, ob.direction, ob.zoneTop, ob.zoneBottom, "
+        "ob.strengthTier, ob.srcFirstTime, 2, ob.srcLastTime, ob.candidateTime, avail)"
+    ) in gate
+    assert "f_poiFind(ob.poiType + 10," in gate  # the same formation's engulfing
+
+
+@pytest.mark.parametrize("build", sorted(_BUILDS))
+def test_no_emitted_poi_is_ever_removed(build: str) -> None:
     code = _code(build)
     gate = code[code.index("f_poiGateOrderBlocks() =>") :]
     gate = gate[: gate.index("\nf_poiApplyPromotions() =>")]
-    assert (
-        "int want = r.direction == C_POI_DIR_BULLISH ? SWING_LOW : SWING_HIGH"
-    ) in gate
-    assert "for [_gi, s] in p3Swings" in gate
-    assert (
-        "s.swingType == want and r.srcFirstTime <= s.pivotEndTime and "
-        "r.srcLastTime >= array.get(wOpenT, s.pivotStartIdx)"
-    ) in gate
-    assert "s.meaningfulConfTime < conf" in gate  # earliest confirmation wins
-    assert (
-        "f_poiEmit(r.poiType, r.direction, r.zoneTop, r.zoneBottom, "
-        "r.strengthTier, r.srcFirstTime, 2, r.srcLastTime, r.candidateTime, conf)"
-    ) in gate  # source = origin formation, availability = confirmation
-    assert "f_poiFind(r.poiType + 10," in gate  # the same formation's engulfing
+    # only pending raw formations are dropped; the registry is append-only
+    assert "array.remove(obPending, pick)" in gate
+    assert "array.shift(obPending)" in gate
+    assert "array.remove(poi" not in code and "array.shift(poi" not in code
 
 
 @pytest.mark.parametrize("build", sorted(_BUILDS))
