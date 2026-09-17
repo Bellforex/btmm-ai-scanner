@@ -73,3 +73,20 @@ USER DEV v29 (`20b79415…`), PARITY DEV v11 (`9f9d74ef…`): `C_POI_FVG_MIN_GAP
 if gap quality holds and the departure key is absent. Both compile. Live
 FX:XAUUSD: M15 weak FVG absent / valid FVG present; H1 pressure wick drawn
 without its same-origin FVG; M1..W1 ready, 0 unannotated boxes.
+
+## Interim aligned parity (qualified engine; NOT final authority)
+
+Fresh same-session capture 2026-09-17 (PARITY DEV v11, FX:XAUUSD M15 host,
+`artifacts/rc3_qual_aligned/pine_m15_run3.csv` sha256 `875f694d…`; RUNMETA +
+OHLC checksums verified for all six windows), Level-A replay over 500 host bars
+(2026-08-20 22:00 onward), `rc3_aligned_compare`:
+
+| stage | compared | Python-only | Pine-only | mismatches |
+|---|---|---|---|---|
+| P3 | 149 POIs | 0 | 0 | 0 |
+| P5 | 1 041 rows on 300 bars | 0 | 0 | 6 — all `poiStatus` on the POI's own first-touch/terminal bar (Pine wire reports the pre-advance breach status; scores, permission and signal lifecycle equal) |
+| P8 | 656 events | 0 | 0 | 0 payload, 0 ordering |
+
+Before qualification (capture run2, same comparator) the S/R zone locks were
+also verified: P3 0 mismatches after the comparator's `-99` sentinel fix. The
+remaining P5 class is the single open wire-level item.
