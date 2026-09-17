@@ -8,7 +8,6 @@ alone. Both registry records survive. Independent POIs that merely overlap
 
 from __future__ import annotations
 
-import hashlib
 import re
 from decimal import Decimal
 from pathlib import Path
@@ -25,6 +24,7 @@ from tests.parity_support.p7z_zone_model import (
     combined_zone_label,
     same_formation,
 )
+from tests.parity_support.pine_semantic_core import semantic_core_sha256
 from tests.parity_support.v1a_csv_loader import load_v1a_csv
 
 _USER = (
@@ -34,6 +34,9 @@ _USER = (
 )
 
 BUY_OB, SELL_OB, BUY_FVG = 1, 2, 3
+SEMANTIC_CORE_SHA256 = (
+    "5c8ea88f13b1750c912cba85278e63650e3dbcb770fb58da6ce29039a39ccf2c"
+)
 BULL_ENG, BEAR_ENG, EVENING_STAR, RESISTANCE = 11, 12, 16, 18
 
 
@@ -192,13 +195,10 @@ def test_pine_registers_order_blocks_before_engulfing_on_the_same_bar() -> None:
     assert ob < eng
 
 
-def test_presentation_change_leaves_every_non_p7z_line_untouched() -> None:
-    # P3 detection/lifecycle, P5 and the P8 event stream all live outside the
-    # P7-Z block; this hash is the same at 39c0640 (the performance gate) and
-    # after the FVG draw fix and the primary-name rule.
-    src = _pine()
-    start = src.index("P7-Z — POI zone visualization")
-    end = src.index("P9 — full-system integration trace")
-    outside = hashlib.sha256((src[:start] + src[end:]).encode("utf-8")).hexdigest()
-    assert outside == "f041fa85957bafe4e96e0a5256f760826c2e6da1f7f68f05ea08ab8080944a07"
-    assert re.search(r"f_poiEmit\(typeCode", src)
+def test_presentation_change_leaves_the_semantic_core_untouched() -> None:
+    # P3 detection/lifecycle, P4, P5 and the P8 alert conditions all sit in
+    # the semantic core (every executable line outside the presentation
+    # layer). Same hash from 39c0640 (the performance gate) through this rule
+    # and the RC3 display layers.
+    assert semantic_core_sha256(_pine()) == SEMANTIC_CORE_SHA256
+    assert re.search(r"f_poiEmit\(typeCode", _pine())

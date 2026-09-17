@@ -60,6 +60,13 @@ maxDrawPerFamily = input.int(20, "  Max drawings per family", minval = 1, maxval
 // batch scanner but heavier per confirmed bar. Not a strategy parameter.
 lookbackWindow = input.int(300, "Analytical window (bars, provisional)", minval = 60, maxval = 1000, group = grpDev)
 
+// ---- RC3 display layers (presentation only; no semantic value reads these) --
+grpView = "Display layers"
+dspFvg   = input.bool(true,  "Show FVG", group = grpView)
+dspSR    = input.bool(true,  "Show Support / Resistance", group = grpView)
+dspMs    = input.bool(false, "Show Market Structure (BOS / CHOCH / swings)", group = grpView)
+dspBtmm  = input.bool(false, "Show BTMM Lifecycle (markers)", tooltip = "Small diamond under the bar on which a BTMM setup changes state. Orange = a setup reached the final gate. Yellow = a setup started forming. Existing P4 states only; nothing is painted before the bar that confirmed it.", group = grpView)
+
 // -----------------------------------------------------------------------------
 // CONFIGURATION — EXACT defaults from MarketMeasurementConfiguration.
 // ENGINEERING-PROVISIONAL, centralized, NOT production-approved, NOT tuned here.
@@ -482,6 +489,8 @@ var int lastSRFingerprint    = na
 
 // Persistent draw-object handles (bounded, redrawn on change).
 var array<label> swingLabelObjs = array.new<label>()
+var array<line>  msLines  = array.new<line>()
+var array<label> msLabels = array.new<label>()
 var array<line>  eqLineObjs     = array.new<line>()
 var array<box>   srBoxObjs      = array.new<box>()
 var array<line>  tlLineObjs     = array.new<line>()
@@ -1973,6 +1982,24 @@ if barstate.isconfirmed
         p2LastTransCode := lastEv.transitionCode
         p2LastBrokenKey := lastEv.brokenSwingKey
         p2LastBrokenLvl := lastEv.brokenLevel
+
+    // ---- RC3 market-structure overlay (presentation only). Draws the frozen
+    // P2 walk's own BOS / CHOCH events and P1's confirmed swings -- no second
+    // structure algorithm. Rebuilt on the last confirmed bars only, each event
+    // at its own break candle, so history shows real transitions and nothing
+    // is painted before it was available. Bull = green, bear = red.
+    if dspMs and bar_index >= last_bar_index - 1
+        f_clearLines(msLines)
+        f_clearLabels(msLabels)
+        for [k, ev] in p2bEvents
+            if k >= p2TransCount - maxDrawPerFamily
+                color msC = ev.transitionCode > 0 ? color.green : color.red
+                array.push(msLines, line.new(ev.brokenSwingKey, ev.brokenLevel, ev.breakTime, ev.brokenLevel, xloc.bar_time, color = msC, style = line.style_dotted))
+                array.push(msLabels, label.new(ev.breakTime, ev.brokenLevel, math.abs(ev.transitionCode) == 2 ? "CHOCH" : "BOS", xloc.bar_time, color = color(na), textcolor = msC, style = label.style_label_left, size = size.tiny))
+        for [k, sw] in swings
+            if k >= array.size(swings) - maxDrawPerFamily
+                bool msHigh = sw.swingType == SWING_HIGH
+                array.push(msLabels, label.new(sw.pivotEndTime, sw.price, msHigh ? "SH" : "SL", xloc.bar_time, color = color(na), textcolor = color.gray, style = msHigh ? label.style_label_down : label.style_label_up, size = size.tiny))
 
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
@@ -4486,6 +4513,16 @@ if barstate.isconfirmed
         f_btmmMaterializeAll()
         f_btmmReportCounts()
 
+// ---- RC3 BTMM lifecycle markers (presentation only). Reads the frozen P4
+// counts, recomputed on every confirmed bar, and puts one small diamond at the
+// bottom of the pane on the bar where a count GROWS: orange = a setup reached
+// the final gate, yellow = a setup started forming. No background paint, so
+// candles stay unobstructed; each marker sits on the bar that confirmed it,
+// so history is never repainted. Neutral hues: BTMM state has no direction.
+float p4dGate = ta.change(array.get(p4Counts, C_P4_N_FINAL_GATE))
+float p4dForm = ta.change(array.get(p4Counts, C_P4_N_FORMING))
+plotshape(dspBtmm and barstate.isconfirmed and (p4dGate > 0 or p4dForm > 0), "BTMM: orange = final gate, yellow = forming", shape.diamond, location.bottom, p4dGate > 0 ? color.orange : color.yellow, size = size.tiny)
+
 // ---- P4 diagnostics in the data window (no drawing, no alerts, no orders) ---
 plot(debugMode ? array.get(p4Counts, C_P4_N_REGISTRY)   : na, "P4_setup_registry",  color = color.gray, display = display.data_window)
 plot(debugMode ? array.get(p4Counts, C_P4_N_CANDIDATE)  : na, "P4_candidate",       color = color.gray, display = display.data_window)
@@ -5750,8 +5787,8 @@ p5DowngradeExtremeVol = input.bool(true, "Downgrade BUY/SELL bias on EXTREME vol
 // convention for anything beyond the original nine P1 outputs.
 // =============================================================================
 grpP7 = "P7 — Scanner UI"
-p7ShowUi        = input.bool(true, "Show BTRC scanner panel", group = grpP7)
-p7ShowActivePois = input.bool(true, "Show active-POI table", group = grpP7)
+p7ShowUi        = input.bool(true, "Show Dashboard", group = grpP7)
+p7ShowActivePois = input.bool(true, "Show POI Table", group = grpP7)
 p7MaxVisiblePois = input.int(8, "Max active POIs shown", minval = 1, maxval = 20, group = grpP7)
 
 // =============================================================================
@@ -5774,11 +5811,10 @@ p8EnableBtmmValidated     = input.bool(true, "Alert: BTMM validated at POI", gro
 p8EnableEnteredActionable = input.bool(true, "Alert: permission entered actionable band", group = grpP8)
 p8EnableLostActionable    = input.bool(true, "Alert: permission lost actionable band", group = grpP8)
 p8EnableTerminal          = input.bool(true, "Alert: POI terminal/invalidated", group = grpP8)
-p8DebugLog                = input.bool(false, "P8 event/prime debug log (independent of P1 Debug Mode)", group = grpP8)
 
 grpP7Z = "P7-Z — POI Zone Visualization"
-p7zShowZones        = input.bool(true, "Show POI zones", group = grpP7Z)
-p7zShowLabels       = input.bool(true, "Show POI labels", group = grpP7Z)
+p7zShowZones        = input.bool(true, "Show POI Zones", group = grpP7Z)
+p7zShowLabels       = input.bool(true, "Show POI Text", group = grpP7Z)
 // How far a fresh zone projects past the last close. Presentation only: the
 // semantic end of a POI's life is its first reaction, never a bar count.
 p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minval = 0, maxval = 200, group = grpP7Z)
@@ -6265,36 +6301,10 @@ if barstate.isconfirmed
                           "|dir=" + p8Dir + "|reason=" + f_p8TermReasonLabel(array.get(poiTermReason, i)) +
                           "|lifecycle=" + f_p7LifecycleLabel(lifecycle), alert.freq_once_per_bar_close)
 
-                // ---- P8 debug event log (canonical, machine-comparable
-                // record of what WOULD have alerted this bar for this POI,
-                // regardless of the `p8Enable*`/`p8Enable` toggles above, so
-                // a Python parity replay sees the full, untoggled event
-                // stream) -- gated on its OWN `p8DebugLog` toggle, decoupled
-                // from `debugMode`, so a real capture is not drowned out by
-                // the much higher-volume P5EVAL/P7DIAG per-POI-per-bar log
-                // lines when only the sparse P8 event/prime stream is needed.
-                if p8DebugLog
-                    if not p8Primed
-                        log.info("P8PRIME|bar=" + str.tostring(time_close) + "|poiIdx=" + str.tostring(i) +
-                          "|btmmValid=" + str.tostring(btmmValid) + "|permission=" + str.tostring(permission) +
-                          "|terminal=" + str.tostring(isTerminal))
-                    else
-                        string p8Base = "|bar=" + str.tostring(time_close) + "|poiIdx=" + str.tostring(i) +
-                          "|poiDir=" + (poiBullish ? "BULL" : "BEAR") + "|poiTier=" + str.tostring(array.get(poiTier, i)) +
-                          "|btmmValid=" + str.tostring(btmmValid) + "|permission=" + str.tostring(permission) +
-                          "|lifecycle=" + str.tostring(lifecycle)
-                        if p8IsNew
-                            log.info("P8EVENT|type=POI_ACTIVATED" + p8Base)
-                        if p8BtmmEnteredValid
-                            log.info("P8EVENT|type=BTMM_VALIDATED" + p8Base)
-                        if p8EnteredActionable
-                            log.info("P8EVENT|type=PERMISSION_ENTERED_ACTIONABLE" + p8Base)
-                        else if p8LostActionable
-                            log.info("P8EVENT|type=PERMISSION_LOST_ACTIONABLE" + p8Base)
-                        if p8TerminalNow
-                            log.info("P8EVENT|type=POI_TERMINAL" + p8Base +
-                              "|terminalReason=" + f_p8TermReasonLabel(array.get(poiTermReason, i)))
-
+                // ---- RC3 USER: the P8EVENT / P8PRIME debug log lives in
+                // btmm_poi_btrc_scanner_rc3_parity_dev.pine only (the capture
+                // build); it computed nothing, and its tokens pay for the
+                // display layers. Alerts above and state below are unchanged.
                 // ---- P8 state update -- always runs, priming bar or not.
                 array.set(p8Known, i, true)
                 array.set(p8PrevBtmmValid, i, btmmValid)
@@ -6334,9 +6344,24 @@ if barstate.isconfirmed
         // visual slot or drag a fresh neighbour into a group.
         array<int> p7zFreshIdx = array.new<int>()
         int p7zEligible = array.size(p7PoiIdx)
+        // VISUAL DOMINANCE (presentation only): ORDER BLOCK > ENGULFING > FVG
+        // for ONE formation. An FVG shares an OB / engulfing's impulse exactly
+        // when it starts on that pattern's first candle in the same direction
+        // (its middle candle is then the displacement candle), so the key is
+        // source time x direction -- candle identity, never price overlap.
+        // A dominated FVG keeps its registry record, P5 row and P8 events; it
+        // is only left out of the drawing and takes no display slot.
+        map<int, bool> p7zDom = map.new<int, bool>()
         for r = 0 to (p7zEligible > 0 ? p7zEligible - 1 : na)
             int pI = array.get(p7PoiIdx, r)
-            if array.get(poiFreshActive, pI)
+            int ty = array.get(poiType, pI)
+            if array.get(poiFreshActive, pI) and (ty <= C_POI_SELL_ORDER_BLOCK or ty == C_POI_BULLISH_ENGULFING or ty == C_POI_BEARISH_ENGULFING)
+                map.put(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI), true)
+        for r = 0 to (p7zEligible > 0 ? p7zEligible - 1 : na)
+            int pI = array.get(p7PoiIdx, r)
+            int ty = array.get(poiType, pI)
+            bool isFvg = ty == C_POI_BUY_FAIR_VALUE_GAP or ty == C_POI_SELL_FAIR_VALUE_GAP
+            if array.get(poiFreshActive, pI) and not (isFvg and (not dspFvg or map.contains(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI)))) and (dspSR or ty < C_POI_SUPPORT_ZONE)
                 array.push(p7zFreshIdx, pI)
         int p7zActive = array.size(p7zFreshIdx)
 
@@ -6678,7 +6703,7 @@ if barstate.isconfirmed
                     // the infinite extension is clipped.
                     box p7zNewBox = box.new(left = p7zAvailTime, top = p7zTop, right = p7zRightEdge, bottom = p7zBottom,
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
-                      extend = extend.right, text = p7zBoxTxt, text_halign = text.align_center,
+                      extend = extend.right, border_style = str.contains(array.get(p7zGNames, p7zG), "ZONE") ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
                       text_valign = text.align_center, text_color = p7zTextColor, text_size = size.auto)
                     // size.auto: TradingView fits the name inside the box at every
                     // zoom. A fixed size overflowed the zone when the chart was
@@ -6738,7 +6763,7 @@ if barstate.isconfirmed
     // still only runs on `barstate.islast`, unchanged), and P7-Z's own
     // already-updated box registry (`array.indexof(p7zBoxPoiIdx, poiI)`).
     // P8's own alert-event stream is NOT re-derived here -- the existing,
-    // separately-gated `p8DebugLog` toggle already emits `P8EVENT`/
+    // PARITY DEV build's `p8DebugLog` toggle emits `P8EVENT`/
     // `P8PRIME` lines; a real capture correlates the two streams by
     // `(bar, poiIdx)`, exactly as the closed P8 real-parity work already
     // did for P5EVAL+P8EVENT. See
@@ -6763,23 +6788,25 @@ if barstate.isconfirmed
 // already established), so this adds exactly two persistent table objects,
 // zero new plots, and a bounded, fixed number of cell writes per bar.
 // =============================================================================
-if barstate.islast and p7ShowUi
-    // Debug-gated per the P5EVAL convention (matching test_p5_resource_budget's
-    // "unconditional log volume" concern) -- verified once, real FXCM data,
-    // during P7 UI validation; see BTRC_V1_P7_UI_CLOSURE.md.
-    // RC3 DEV: P7DIAG line removed with P5EVAL and P9TRACE, same reason.
-    var table p7Summary = table.new(position.top_left, 2, 12, border_width = 1, bgcolor = color.new(color.black, 15))
-    f_row(p7Summary, 0, "P7 — BTRC Scanner", "")
-    f_row(p7Summary, 1, "Feed", syminfo.prefix + ":" + syminfo.ticker)
-    f_row(p7Summary, 2, "Host TF", timeframe.period)
-    // Compaction (RC3): rows 3-11 written by one loop over parallel key/value
-    // arrays instead of nine separate writes; cell content is unchanged.
-    array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Momentum accel.|Breakout|Pullback|Session|Volatility|Active POIs", "|")
-    array<string> p7SumVals = array.from(f_p7DirLabel(p7LastGlobalDir), f_p7RegimeLabel(p7LastRegime), f_p7DirLabel(p7LastMomDir), f_p7MomAccelLabel(p7LastMomAccel), f_p7BrkLabel(p7LastBrk), f_p7PbLabel(p7LastPb), f_p7SessionLabel(p7LastSession), f_p7VolLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)))
-    // Phase 14 zero-state: no confirmed bar processed yet -- every row
-    // reads "-", never a stale or fabricated value.
-    for r = 3 to 11
-        f_row(p7Summary, r, p7HasData ? array.get(p7SumKeys, r - 3) : "-", p7HasData ? array.get(p7SumVals, r - 3) : "-")
+if barstate.islast
+    // RC3: Dashboard and POI table are independent toggles.
+    if p7ShowUi
+        // Debug-gated per the P5EVAL convention (matching test_p5_resource_budget's
+        // "unconditional log volume" concern) -- verified once, real FXCM data,
+        // during P7 UI validation; see BTRC_V1_P7_UI_CLOSURE.md.
+        // RC3 DEV: P7DIAG line removed with P5EVAL and P9TRACE, same reason.
+        var table p7Summary = table.new(position.top_left, 2, 12, border_width = 1, bgcolor = color.new(color.black, 15))
+        f_row(p7Summary, 0, "P7 — BTRC Scanner", "")
+        f_row(p7Summary, 1, "Feed", syminfo.prefix + ":" + syminfo.ticker)
+        f_row(p7Summary, 2, "Host TF", timeframe.period)
+        // Compaction (RC3): rows 3-11 written by one loop over parallel key/value
+        // arrays instead of nine separate writes; cell content is unchanged.
+        array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Momentum accel.|Breakout|Pullback|Session|Volatility|Active POIs", "|")
+        array<string> p7SumVals = array.from(f_p7DirLabel(p7LastGlobalDir), f_p7RegimeLabel(p7LastRegime), f_p7DirLabel(p7LastMomDir), f_p7MomAccelLabel(p7LastMomAccel), f_p7BrkLabel(p7LastBrk), f_p7PbLabel(p7LastPb), f_p7SessionLabel(p7LastSession), f_p7VolLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)))
+        // Phase 14 zero-state: no confirmed bar processed yet -- every row
+        // reads "-", never a stale or fabricated value.
+        for r = 3 to 11
+            f_row(p7Summary, r, p7HasData ? array.get(p7SumKeys, r - 3) : "-", p7HasData ? array.get(p7SumVals, r - 3) : "-")
 
     if p7ShowActivePois
         int p7Active = array.size(p7PoiIdx)

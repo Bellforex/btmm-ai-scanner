@@ -49,6 +49,7 @@ confirmed it.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, replace
 
 from .p5_active_poi_loop_model import resolve_eligible_and_next
@@ -119,6 +120,9 @@ class PoiGeometry:
     zone_bottom: float
     avail_time_ms: int
     tier: int
+    # `poiCandTime`: open time of the formation's FIRST source candle. Needed
+    # only by visual dominance; None disables it for that POI.
+    source_time_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -709,6 +713,139 @@ def fvg_cluster_label(
     return base if len(group) == 1 else f"{base} ×{len(group)}"
 
 
+# =========================================================================
+# RC3 VISUAL DOMINANCE (presentation only, author-authorized)
+# =========================================================================
+# When an FVG and an order block / engulfing describe the SAME originating
+# formation, only the stronger structure is drawn: ORDER BLOCK > ENGULFING >
+# FVG. Registry records are never removed; the dominated FVG simply does not
+# enter visual grouping, so it neither draws nor consumes a display slot.
+#
+# Same formation is candle identity, never price overlap:
+# * OB and engulfing are two-candle patterns (c0, c1) with zone = c0's range
+#   and availability = c1's close, so two of them are one formation exactly
+#   when their geometry key matches (see same_formation).
+# * An FVG is (c0, c1, c2). It shares the impulse of an OB / engulfing exactly
+#   when its FIRST candle is that pattern's first candle (equal source time)
+#   in the same direction: then its middle candle is the pattern's
+#   displacement candle. Only one FVG per direction can start on a candle.
+
+STRUCTURE_RANK = {1: 3, 2: 3, 11: 2, 12: 2, 3: 1, 4: 1}
+
+
+def same_visual_formation(a: PoiGeometry, b: PoiGeometry) -> bool:
+    """True when two POIs describe one originating formation (see above)."""
+    if a.idx == b.idx or a.direction != b.direction:
+        return False
+    if a.poi_type not in STRUCTURE_RANK or b.poi_type not in STRUCTURE_RANK:
+        return False
+    a_fvg, b_fvg = a.poi_type in FVG_TYPES, b.poi_type in FVG_TYPES
+    if a_fvg and b_fvg:
+        return False  # distinct gaps; FVG clustering handles those
+    if not a_fvg and not b_fvg:
+        return same_formation(a, b)
+    return a.source_time_ms is not None and a.source_time_ms == b.source_time_ms
+
+
+def apply_visual_dominance(
+    active: list[int] | frozenset[int], geometry_by_idx: dict[int, PoiGeometry]
+) -> tuple[list[int], dict[int, int]]:
+    """(visual candidates, {dominated FVG idx: primary owner idx}).
+
+    Only an FVG can be dominated here (OB vs engulfing already share one box
+    and one primary name). Owner = highest rank, then lowest registry index,
+    so the result is deterministic. No quality score is invented."""
+    ids = sorted(active)
+    owners: dict[tuple[int, int], int] = {}
+    for i in ids:
+        g = geometry_by_idx[i]
+        if g.poi_type in FVG_TYPES or g.poi_type not in STRUCTURE_RANK:
+            continue
+        if g.source_time_ms is None:
+            continue
+        key = (g.source_time_ms, g.direction)
+        best = owners.get(key)
+        if best is None or STRUCTURE_RANK[g.poi_type] > STRUCTURE_RANK[
+            geometry_by_idx[best].poi_type
+        ]:
+            owners[key] = i
+    dominated: dict[int, int] = {}
+    for i in ids:
+        g = geometry_by_idx[i]
+        if g.poi_type in FVG_TYPES and g.source_time_ms is not None:
+            owner = owners.get((g.source_time_ms, g.direction))
+            if owner is not None and same_visual_formation(g, geometry_by_idx[owner]):
+                dominated[i] = owner
+    return [i for i in ids if i not in dominated], dominated
+
+
+def visual_selection_audit(
+    active: list[int] | frozenset[int],
+    geometry_by_idx: dict[int, PoiGeometry],
+    close: float,
+    capacity: int,
+    period: str,
+) -> dict:
+    """Diagnostic (not user-facing): why each fresh POI is or is not drawn.
+
+    Every row names its primary visual owner, what suppressed it (if
+    anything) and the reason; the counters are the slot accounting."""
+    candidates, dominated = apply_visual_dominance(active, geometry_by_idx)
+    all_groups = build_visual_groups_fast(
+        active, geometry_by_idx, close, 10**9, period
+    )
+    shown = all_groups[: min(capacity, len(all_groups))]
+    group_of = {m: g for g in all_groups for m in g["members"]}
+    shown_members = {m for g in shown for m in g["members"]}
+    rows = []
+    for i in sorted(active):
+        if i in dominated:
+            owner = dominated[i]
+            rows.append(
+                {
+                    "idx": i,
+                    "type": type_label(geometry_by_idx[i].poi_type),
+                    "primary_owner": owner,
+                    "suppressed_by": owner,
+                    "reason": "SAME_FORMATION_DOMINATED",
+                    "drawn": False,
+                }
+            )
+            continue
+        g = group_of[i]
+        rows.append(
+            {
+                "idx": i,
+                "type": type_label(geometry_by_idx[i].poi_type),
+                "primary_owner": min(g["members"]),
+                "suppressed_by": None,
+                "reason": "DRAWN" if i in shown_members else "DISPLAY_CAP",
+                "drawn": i in shown_members,
+                "label": g["label"],
+            }
+        )
+    plain = {
+        i: dataclasses.replace(g, source_time_ms=None)
+        for i, g in geometry_by_idx.items()
+    }
+    before = build_visual_groups_fast(active, plain, close, 10**9, period)
+    before_shown = before[: min(capacity, len(before))]
+    slots_recovered = sum(
+        1 for g in before_shown if all(m in dominated for m in g["members"])
+    )
+    return {
+        "fresh_pois": len(list(active)),
+        "visual_candidates_before_dominance": len(list(active)),
+        "visual_candidates_after_dominance": len(candidates),
+        "dominated_fvgs": len(dominated),
+        "visual_groups": len(all_groups),
+        "boxes_drawn": len(shown),
+        "visual_groups_before_dominance": len(before),
+        "slots_recovered": slots_recovered,
+        "rows": rows,
+    }
+
+
 def build_visual_groups(
     active: list[int] | frozenset[int],
     geometry_by_idx: dict[int, PoiGeometry],
@@ -716,7 +853,7 @@ def build_visual_groups(
     capacity: int,
     period: str,
 ) -> list[dict]:
-    """The full V2 presentation projection.
+    """The full V2 presentation projection (after visual dominance).
 
     Grouping runs over the WHOLE active set before capacity is applied, so a
     cluster can never be split by the display cut. Groups are then ordered by
@@ -724,7 +861,7 @@ def build_visual_groups(
     index) and the first `capacity` GROUPS are drawn -- capacity counts
     visual groups, not semantic POIs, so a 4-member FVG cluster costs one
     slot."""
-    ids = sorted(active)
+    ids, _dominated = apply_visual_dominance(active, geometry_by_idx)
     groups: list[list[int]] = []
 
     # FVG family: connected components, partitioned by direction.
@@ -880,7 +1017,7 @@ def build_visual_groups_fast(
 
     Grouping still runs over the WHOLE active set before capacity is applied;
     only the algorithm changed, never the contract."""
-    ids = sorted(active)
+    ids, _dominated = apply_visual_dominance(active, geometry_by_idx)
     groups: list[list[int]] = []
 
     for direction in (DIRECTION_BULLISH, DIRECTION_BEARISH):
