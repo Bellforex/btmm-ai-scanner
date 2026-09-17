@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from itertools import pairwise
@@ -738,11 +738,14 @@ class _BtmmReplayState:
     transition_cache: dict[UUID, tuple[dict[str, object], ContractModel]] = field(
         default_factory=dict
     )
-    # A6-B2-C: which source POIs have already had a relevant (genuine/false
-    # invalidation) transition relayed into the scheduler — both types are
-    # terminal and emitted at most once per POI, so once relayed a POI's
-    # further (e.g. tap-driven) scheduler wakes never re-relay it.
-    relayed_relevant_poi_transitions: frozenset[UUID] = frozenset()
+    # A6-B2-C: which relevant (genuine / false invalidation) source-POI
+    # transitions have already been relayed into the scheduler, keyed per
+    # transition (POI, type, availability). A FALSE invalidation is NOT
+    # terminal: the same POI can later be genuinely invalidated, and that
+    # transition must still reach the scheduler (seed-43 BTMM divergence).
+    relayed_relevant_poi_transitions: frozenset[tuple[UUID, str, datetime]] = (
+        frozenset()
+    )
     # A6-B2-C: which source POIs' reviewed evidence has already been fed to
     # the scheduler — duplicate reviewed evidence per source POI is rejected
     # upstream, so this only ever grows by genuinely new arrivals.
@@ -893,22 +896,27 @@ def _advance_btmm_replay_state(
             )
         new_obs_cache[record_id] = (observation_fields, observation)
 
-    # New POI-transition events: relay only the two relevant, terminal types,
-    # and only once per source POI (bounded by poi_scheduler_last_walks, which
+    # New POI-transition events: relay only the two relevant types, each
+    # distinct transition once (bounded by poi_scheduler_last_walks, which
     # itself only names POIs actually advanced by the POI scheduler this
     # candle).
     new_relayed_transitions = set(state.relayed_relevant_poi_transitions)
     new_poi_transitions: list[PoiLifecycleTransition] = []
     for poi_record_id, poi_walk in poi_scheduler_last_walks.items():
-        if poi_record_id in new_relayed_transitions:
-            continue
         for poi_candidate in poi_walk.transitions:
-            if poi_candidate.transition_type in _RELEVANT_POI_TRANSITION_TYPES:
-                new_poi_transitions.append(
-                    _relay_poi_transition(poi_candidate, resolver, configuration)
-                )
-                new_relayed_transitions.add(poi_record_id)
-                break
+            if poi_candidate.transition_type not in _RELEVANT_POI_TRANSITION_TYPES:
+                continue
+            relay_key = (
+                poi_record_id,
+                poi_candidate.transition_type.value,
+                poi_candidate.availability_time_utc,
+            )
+            if relay_key in new_relayed_transitions:
+                continue
+            new_poi_transitions.append(
+                _relay_poi_transition(poi_candidate, resolver, configuration)
+            )
+            new_relayed_transitions.add(relay_key)
 
     # New reviewed-evidence events: only genuinely new source-POI arrivals.
     new_relayed_evidence = set(state.relayed_reviewed_evidence)

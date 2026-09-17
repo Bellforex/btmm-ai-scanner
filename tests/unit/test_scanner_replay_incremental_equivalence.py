@@ -2567,6 +2567,26 @@ def test_btmm_complete_analysis_equality_at_every_prefix_without_evidence(
     assert result.all_match, f"seed={seed} mismatched prefixes: {result.mismatched}"
 
 
+def test_btmm_genuine_invalidation_after_a_false_invalidation_reaches_confirmed_setups() -> (
+    None
+):
+    """Regression (seed 43): three BTMM_CONFIRMED setups whose source POI had a
+    FALSE_INVALIDATION_CONFIRMED (18:15) and later a GENUINE_INVALIDATION_CONFIRMED
+    (03:15, bar 109). Batch cancels them POI_REJECTED; the incremental replay
+    used to treat the false invalidation as terminal (relayed once per POI and
+    froze the confirmed setup), so it never cancelled them."""
+    result = _measurement_poi_btmm_driven(
+        _btmm_build(_random_walk_prices(120, seed=43)), True
+    )
+    assert result.all_match, f"mismatched prefixes: {result.mismatched}"
+    final = result.analysis_series[-1]
+    assert sum(
+        1
+        for state in final.current_btmm_states
+        if state.cancellation_reason is not None
+        and state.cancellation_reason.value == "POI_REJECTED"
+    ) >= 3
+
 def test_btmm_transaction_rollback_leaves_prior_state_untouched() -> None:
     candles = _BTMM_CANDLES[42]
     m_state = _create_initial_measurement_replay_state(_HashIdentityProvider(), _CONFIG)

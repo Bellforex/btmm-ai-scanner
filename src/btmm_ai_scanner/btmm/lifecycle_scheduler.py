@@ -351,10 +351,11 @@ def _reconcile(
         return
 
     # Price-resolved (naturally or forced by a genuine invalidation): walk was
-    # already materialized and captured above.
-    poi_terminal = any(
-        t.transition_type in _RELEVANT_POI_TRANSITION_TYPES for t in poi_transitions
-    )
+    # already materialized and captured above. Only a GENUINE invalidation is
+    # final for the setup: after a FALSE invalidation the POI can still be
+    # genuinely invalidated, which cancels the setup (materialize tail), so the
+    # setup must keep watching its source POI (seed-43 BTMM divergence).
+    poi_terminal = has_genuine_invalidation
     primary_state = walk.final_fields.primary_state
 
     if primary_state == BtmmLifecycleStatus.BTMM_BLOCKED:
