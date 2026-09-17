@@ -217,7 +217,7 @@ def _assert_universe_matches_every_prefix(
         bundle = PoiTimeframeInput(
             timeframe=timeframe, candles=prefix, measurement_analysis=measurement
         )
-        batch = _detect_bundle_candidates(bundle, _PCONFIG)
+        batch = _detect_bundle_candidates(bundle, _PCONFIG, idp)
         assert _sorted_repr(universe) == _sorted_repr(batch)
 
 
@@ -309,7 +309,7 @@ def test_reversal_delayed_confirmation_matches_batch_and_respects_no_lookahead()
             timeframe=Timeframe.M1, candles=prefix, measurement_analysis=measurement
         )
         assert _sorted_repr(universe) == _sorted_repr(
-            _detect_bundle_candidates(bundle, _PCONFIG)
+            _detect_bundle_candidates(bundle, _PCONFIG, idp)
         )
     # And the per-prefix novelty (delayed confirmation) is exercised on a random
     # series: newly emitted reversals per prefix are exactly the batch delta.
@@ -342,7 +342,7 @@ def test_period_levels_add_replace_remove_current_and_previous() -> None:
         )
         batch_period = [
             c
-            for c in _detect_bundle_candidates(bundle, _PCONFIG)
+            for c in _detect_bundle_candidates(bundle, _PCONFIG, idp)
             if type(c).__name__ == "PeriodLevelCandidate"
         ]
         assert _sorted_repr(period) == _sorted_repr(batch_period)

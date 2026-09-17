@@ -313,7 +313,7 @@ def compare(
                 int(pine["termReason"]),
             )
             checks["termTime"] = (py_term_ms, int(pine["termTime"]))
-        elif int(pine["termTime"] or 0) and int(pine["termTime"]) <= int(py["bar_ms"]):
+        elif 0 < int(pine["termTime"] or 0) <= int(py["bar_ms"]):
             checks["terminal_by_last_python_bar"] = (0, int(pine["termTime"]))
         for name, (a, b) in checks.items():
             if a != b:

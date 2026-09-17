@@ -46,6 +46,10 @@ from btmm_ai_scanner.measurements.atr import (
 from btmm_ai_scanner.measurements.candle_metrics import total_range
 from btmm_ai_scanner.poi.bases import BaseCandidate
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
+from btmm_ai_scanner.poi.confirmed_zones import (
+    LOCKED_REFERENCE_TYPES,
+    lock_reference_candidates,
+)
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
@@ -162,6 +166,7 @@ class _DetectorFrontierState:
     # candidates themselves. Unchanged upstream => the identical tuple is reused.
     reference_signature: tuple[Any, ...] = ()
     reference_candidates: tuple[Any, ...] = ()
+    locked_zones: tuple[Any, ...] = ()
     # A6-AΔ: the previous candle's period candidates (bounded <=12), kept so the
     # next advance can diff them; and the delta emitted by the advance that
     # produced this state (transient per-advance output, consumed by the caller).
@@ -596,16 +601,24 @@ def advance_detector_frontier(
     period_candidates = _period_candidates(new_period_states, candle)
 
     # Reference zones: reuse verbatim when upstream unchanged.
+    # RC3 final: S/R zone POIs are locked on first appearance (confirmed history
+    # is immutable); equal-level liquidity context follows the measurement.
     new_signature = _reference_signature(measurement_analysis)
     if new_signature == state.reference_signature:
         new_reference_candidates = state.reference_candidates
+        new_locked_zones = state.locked_zones
     else:
-        new_reference_candidates = tuple(
-            detect_reference_zones(
-                measurement_analysis.support_resistance_zones,
-                measurement_analysis.equal_level_clusters,
-                measurement_analysis.confirmed_swings,
-            )
+        current = detect_reference_zones(
+            measurement_analysis.support_resistance_zones,
+            measurement_analysis.equal_level_clusters,
+            measurement_analysis.confirmed_swings,
+        )
+        new_locked_zones = lock_reference_candidates(
+            state.locked_zones, current, candle.availability_time_utc
+        )
+        new_reference_candidates = (
+            *new_locked_zones,
+            *(c for c in current if c.poi_type not in LOCKED_REFERENCE_TYPES),
         )
 
     # Leg-origin ORDER BLOCKs (RC3 final): locked the first time the gate
@@ -673,6 +686,7 @@ def advance_detector_frontier(
         period_states=new_period_states,
         reference_signature=new_signature,
         reference_candidates=new_reference_candidates,
+        locked_zones=new_locked_zones,
         period_candidates=tuple(period_candidates),
         last_delta=delta,
         raw_order_blocks=new_raw_order_blocks,

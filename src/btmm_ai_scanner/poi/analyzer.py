@@ -26,6 +26,7 @@ from btmm_ai_scanner.measurements.atr import compute_atr_series
 from btmm_ai_scanner.persistent_map import PersistentMap
 from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration, validate_configuration
+from btmm_ai_scanner.poi.confirmed_zones import immutable_reference_candidates
 from btmm_ai_scanner.poi.current_state import CurrentPoiState
 from btmm_ai_scanner.poi.detector_frontier import (
     _DetectorFrontierState,
@@ -72,7 +73,6 @@ from btmm_ai_scanner.poi.overlap import (
 from btmm_ai_scanner.poi.period_levels import detect_period_levels
 from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
-from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.scheduler_walk import cursor_walk_result
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -390,17 +390,20 @@ def _validate_timeframe_inputs(
 
 
 def _detect_bundle_candidates(
-    bundle: PoiTimeframeInput, configuration: PoiConfiguration
+    bundle: PoiTimeframeInput,
+    configuration: PoiConfiguration,
+    identity_provider: DerivedOutputIdentityProvider,
 ) -> list[Any]:
+    measurement_configuration = MarketMeasurementConfiguration(
+        minimum_price_tick=configuration.minimum_price_tick
+    )
     candidates: list[Any] = []
     candidates.extend(
         immutable_leg_origin_order_blocks(
             detect_order_blocks(bundle.candles, configuration),
             bundle.candles,
             bundle.measurement_analysis.confirmed_swings,
-            MarketMeasurementConfiguration(
-                minimum_price_tick=configuration.minimum_price_tick
-            ),
+            measurement_configuration,
         )
     )
     candidates.extend(detect_fair_value_gaps(bundle.candles, configuration))
@@ -411,10 +414,11 @@ def _detect_bundle_candidates(
     candidates.extend(detect_single_candle_reversals(bundle.candles, configuration))
     candidates.extend(detect_three_candle_stars(bundle.candles, configuration))
     candidates.extend(
-        detect_reference_zones(
-            bundle.measurement_analysis.support_resistance_zones,
-            bundle.measurement_analysis.equal_level_clusters,
-            bundle.measurement_analysis.confirmed_swings,
+        immutable_reference_candidates(
+            bundle.candles,
+            bundle.measurement_analysis,
+            measurement_configuration,
+            identity_provider,
         )
     )
     candidates.extend(detect_period_levels(bundle.candles, configuration))
@@ -564,7 +568,9 @@ def analyze_pois(
 
     all_candidates: list[Any] = []
     for bundle in timeframe_inputs:
-        all_candidates.extend(_detect_bundle_candidates(bundle, configuration))
+        all_candidates.extend(
+            _detect_bundle_candidates(bundle, configuration, identity_provider)
+        )
 
     observations_list: list[PoiObservation] = []
     for candidate in all_candidates:
