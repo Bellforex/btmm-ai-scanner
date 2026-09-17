@@ -90,3 +90,19 @@ OHLC checksums verified for all six windows), Level-A replay over 500 host bars
 Before qualification (capture run2, same comparator) the S/R zone locks were
 also verified: P3 0 mismatches after the comparator's `-99` sentinel fix. The
 remaining P5 class is the single open wire-level item.
+
+### After the PARITY P5 wire fix (PARITY DEV v12, `ae2ebc4`)
+
+The remaining P5 class was the capture logging Pine's committed-only
+`poiStatus`; Python reports the lifecycle status including the pending breach
+window. P5C / P5EVAL now log `poiReported`. Fresh same-session capture run4
+(`artifacts/rc3_qual_aligned_v12/pine_m15_run4.csv` sha256 `5dfe2d8f…`, host
+2026-08-20 22:30 onward, RUNMETA + checksums verified), Level-A 500 bars:
+
+| stage | compared | mismatches |
+|---|---|---|
+| P3 | 150 POIs | **0** |
+| P5 | 1 049 rows on 300 bars (990 higher-TF-context, 59 host-only) | **0** |
+| P8 | 657 events | **0** (0 missing, 0 extra, 0 payload, 0 ordering) |
+
+Interim evidence on a 500-bar window; not the final authority.
