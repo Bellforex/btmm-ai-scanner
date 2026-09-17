@@ -171,3 +171,7 @@ yellow = forming), with a tooltip legend; the earlier full-height background
 was removed. Other toggles: Show FVG, Show Support / Resistance, Show Market
 Structure (default OFF), Show Dashboard, Show POI Table, Show POI Zones,
 Show POI Text.
+
+**Superseded in part:** `Show FVG` / `Show Support / Resistance` were replaced
+by per-type POI filters, and the Doji rule plus one-ORDER-BLOCK-per-leg were
+added — see `BTRC_V1_RC3_POI_FILTERS_DOJI_ANNOTATION.md`.
