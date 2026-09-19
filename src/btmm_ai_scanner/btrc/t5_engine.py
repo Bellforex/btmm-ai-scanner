@@ -46,7 +46,18 @@ from btmm_ai_scanner.btrc.trend_assessment import TrendAssessment
 from btmm_ai_scanner.btrc.trend_engine import assess_trend
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
-from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier
+from btmm_ai_scanner.framework import (
+    FrameworkBarContext,
+    FrameworkTracker,
+    PoiFrameworkAssessment,
+    evaluate_poi_framework,
+    framework_context_for,
+)
+from btmm_ai_scanner.poi.enums import (
+    LIFECYCLE_ELIGIBLE_POI_TYPES,
+    PoiDirection,
+    PoiStrengthTier,
+)
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
 
@@ -94,11 +105,14 @@ class ConfluenceBarContext:
         candles_by_timeframe: Mapping[Timeframe, Sequence[NormalizedCandle]]
         | None = None,
         evaluation_time_utc: datetime | None = None,
+        framework_trackers: dict[Timeframe, FrameworkTracker] | None = None,
     ) -> None:
         self.analysis = analysis
+        self.framework_trackers = framework_trackers
         self.candles_by_timeframe = candles_by_timeframe
         self.evaluation_time_utc = evaluation_time_utc
         self._volatility: dict[Timeframe, VolatilityAssessment | None] = {}
+        self._framework: dict[Timeframe, FrameworkBarContext | None] = {}
 
     @cached_property
     def trend(self) -> TrendAssessment:
@@ -125,6 +139,18 @@ class ConfluenceBarContext:
         if self.evaluation_time_utc is None:
             return None
         return assess_session(self.evaluation_time_utc)
+
+    def framework(self, timeframe: Timeframe) -> FrameworkBarContext | None:
+        """RC4: the POI-independent market-framework context of ``timeframe``
+        for this bar (ranges, liquidity sweeps, ATR), built once per bar."""
+        if timeframe not in self._framework:
+            self._framework[timeframe] = framework_context_for(
+                self.analysis,
+                timeframe,
+                (self.candles_by_timeframe or {}).get(timeframe),
+                (self.framework_trackers or {}).get(timeframe),
+            )
+        return self._framework[timeframe]
 
     def volatility(self, timeframe: Timeframe) -> VolatilityAssessment | None:
         if timeframe not in self._volatility:
@@ -279,6 +305,43 @@ def assess_confluence(
 
     liquidity_score = 60 if btmm_valid else 40  # provisional; refined in a later phase
 
+    # --- RC4 market framework (author 2026-09-19): an explicit override of the
+    # two RC3 placeholders above, only when the RC4 profile is on and only for
+    # the 18 canonical tradeable POI types (period / liquidity reference levels
+    # move with their period and are context, not trade locations).
+    framework: PoiFrameworkAssessment | None = None
+    if config.market_framework and poi.poi_type in LIFECYCLE_ELIGIBLE_POI_TYPES:
+        framework_context = bar_context.framework(config.framework_timeframe or poi_tf)
+        if framework_context is not None:
+            framework = evaluate_poi_framework(
+                framework_context,
+                direction=poi.direction,
+                zone_top=poi.zone_top,
+                zone_bottom=poi.zone_bottom,
+                availability_time_utc=poi.availability_time_utc,
+                first_touch_time_utc=(
+                    poi_state.mitigation_time_utc if poi_state is not None else None
+                ),
+                source_time_utc=poi.candidate_event_time_utc,
+            )
+            fcfg = framework_context.config
+            # BTMM = the pre-trade cycle; a score, not a gate.
+            if framework.pretrade_valid:
+                btmm_score = fcfg.btmm_action_score
+                supporting.append(f"BTMM pre-trade {framework.pretrade_reason.value}")
+            elif btmm_valid:
+                btmm_score = fcfg.btmm_setup_only_score
+                missing.append("BTMM pre-trade action (DISTRACTION / DELAY / WIPEOUT)")
+            else:
+                btmm_score = fcfg.btmm_none_score
+            if framework.true_failure:
+                opposing.append("price accepted beyond the POI without reclaim")
+            btmm_valid = framework.pretrade_valid
+            liquidity_score = framework.location_score
+            supporting.append(
+                f"{framework.framework.value} location score {framework.location_score}"
+            )
+
     volatility = bar_context.volatility(poi_tf)
     if volatility is not None:
         volatility_score = volatility.suitability_score
@@ -321,7 +384,7 @@ def assess_confluence(
         liquidity_ok=liquidity_score >= 60,
     )
 
-    return BtrcDecision(
+    decision = BtrcDecision(
         symbol=analysis.symbol,
         evaluation_time_utc=analysis.availability_time_utc,
         poi_record_id=str(poi.record_id),
@@ -352,6 +415,33 @@ def assess_confluence(
         provenance_ids=(str(poi.record_id),)
         + ((str(btmm.record_id),) if btmm is not None else ()),
     )
+    if framework is not None:
+        decision = decision.model_copy(update=_framework_fields(framework))
+    return decision
+
+
+def _framework_fields(f: PoiFrameworkAssessment) -> dict[str, object]:
+    return {
+        "framework": f.framework.value,
+        "fib_bucket": f.fib_bucket.value if f.fib_bucket is not None else None,
+        "retracement_pct": (
+            str(f.retracement_pct) if f.retracement_pct is not None else None
+        ),
+        "range_position": f.range_position.value
+        if f.range_position is not None
+        else None,
+        "sweep_before_poi": f.sweep_before_poi,
+        "btmm_pretrade_reason": f.pretrade_reason.value,
+        "btmm_distraction": f.distraction,
+        "btmm_delay": f.delay,
+        "btmm_wipeout": f.wipeout,
+        "btmm_true_failure": f.true_failure,
+        "poi_dwell_bars": f.poi_dwell_bars,
+        "poi_touch_count": f.poi_touch_count,
+        "poi_zone_return_count": f.poi_reentry_count,
+        "interaction_episode": f.episode.value,
+        "framework_evidence": f.evidence,
+    }
 
 
 def _weighted_final(scores: ComponentScores, weights: Mapping[str, int]) -> int:

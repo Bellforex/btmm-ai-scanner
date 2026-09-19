@@ -85,3 +85,19 @@ class BtrcDecision(ContractModel):
     missing_components: tuple[str, ...]
     rejection_or_watch_reasons: tuple[str, ...]
     provenance_ids: tuple[str, ...]
+    # --- RC4 market framework (defaults when the profile is off) ---
+    framework: str | None = None
+    fib_bucket: str | None = None
+    retracement_pct: str | None = None
+    range_position: str | None = None
+    sweep_before_poi: bool = False
+    btmm_pretrade_reason: str | None = None
+    btmm_distraction: bool = False
+    btmm_delay: bool = False
+    btmm_wipeout: bool = False
+    btmm_true_failure: bool = False
+    poi_dwell_bars: int = 0
+    poi_touch_count: int = 0
+    poi_zone_return_count: int = 0
+    interaction_episode: str | None = None
+    framework_evidence: tuple[str, ...] = ()

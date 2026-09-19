@@ -14,6 +14,7 @@ from types import MappingProxyType
 
 from pydantic import Field
 
+from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.types import ContractModel
 
 _DEFAULT_WEIGHTS: Mapping[str, int] = MappingProxyType(
@@ -39,3 +40,9 @@ class ConfluenceConfiguration(ContractModel):
     watch_only_min: int = Field(default=45, ge=0, le=100)
     # Volatility state that downgrades permission (never changes direction).
     downgrade_on_extreme_volatility: bool = True
+    # RC4 market framework (author 2026-09-19). Off = RC3 behaviour, unchanged.
+    # On: the BTMM score comes from the pre-trade cycle (DISTRACTION / DELAY /
+    # WIPEOUT) and the liquidity score from framework location, both evaluated
+    # on ``framework_timeframe`` (the host / chart timeframe).
+    market_framework: bool = False
+    framework_timeframe: Timeframe | None = None
