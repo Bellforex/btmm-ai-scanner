@@ -122,7 +122,7 @@ for which in ("user", "parity"):
         )
         # POI table: one more column with the BTMM cycle + location
         s = sub(s, "table.new(position.bottom_right, 8, ", "table.new(position.bottom_right, 9, ")
-        s = sub(s, '"#|Dir|Tier|BTMM|Align|Score|Permission|State"', '"#|Dir|Tier|BTMM|Align|Score|Permission|State|Cycle | Location | Liq"')
+        s = sub(s, '"#|Dir|Tier|BTMM|Align|Score|Permission|State"', '"#|Dir|Tier|BTMM|Align|Score|Permission|State|Cycle / Location / Liq"')
         s = sub(
             s,
             "        for c = 0 to 7\n            table.cell(p7Pois, c, 0,",

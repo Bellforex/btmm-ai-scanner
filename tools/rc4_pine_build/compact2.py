@@ -48,10 +48,15 @@ DRAW2 = '''
         if dspRange and not na(fwR)
             for [q, y] in array.from(fwR.h, fwR.l, (fwR.h + fwR.l) / 2)
                 array.push(fwLines, line.new(fwR.c, y, time, y, xloc.bar_time, extend.right, color.aqua, q == 2 ? line.style_dotted : line.style_solid))
+        // newest levels first; trendlines and liquidity pools capped separately
         int nd = 0
-        for l in fwLv
-            if nd < maxDrawPerFamily and l.k <= time and (l.t == 2 ? dspTl : dspLiq and l.t < 2)
-                nd += 1
+        int nt = 0
+        for j = array.size(fwLv) - 1 to 0
+            FwLv l = array.size(fwLv) > 0 ? array.get(fwLv, j) : na
+            bool tl = not na(l) and l.t == 2
+            if not na(l) and l.k <= time and (tl ? dspTl and nt < maxDrawPerFamily : dspLiq and l.t < 2 and nd < maxDrawPerFamily)
+                nt += tl ? 1 : 0
+                nd += tl ? 0 : 1
                 int x1 = l.t == 2 ? bar_index - fwNow + l.a : bar_index - 10
                 array.push(fwLines, line.new(x1, l.p + l.s * (x1 - bar_index + fwNow - l.a), bar_index, l.p + l.s * (fwNow - l.a), extend = extend.right, color = l.t == 2 ? color.purple : l.d > 0 ? color.orange : color.teal, style = l.t == 2 ? line.style_solid : line.style_dashed))
                 if l.t < 2
