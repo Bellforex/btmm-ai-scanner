@@ -23,6 +23,9 @@ from botdryrun.safety import (
     LiveTradingForbiddenError,
     assert_paper_mode,
 )
+from tests.parity_support.rc3_daily_authority import (
+    DEFAULT_CONTEXT_LOOKBACK_BARS as SCANNER_CONTEXT_LOOKBACK_BARS,
+)
 
 __all__ = [
     "BotConfig",
@@ -83,7 +86,10 @@ class BotConfig:
     data_source: DataSourceKind = DataSourceKind.FXCM_V1A
     host_timeframe: str = "M15"
     context_timeframes: tuple[str, ...] = ("W1", "D1", "H4", "H1", "M5")
-    context_lookback_bars: int = 40
+    #: Pre-window context bars per timeframe. Inherited from the scanner's own
+    #: authority requirement (single source): 40 starved the D1 / W1 trend
+    #: context and produced no actionable permission on real data.
+    context_lookback_bars: int = SCANNER_CONTEXT_LOOKBACK_BARS
     gap_policy: GapPolicy = GapPolicy.CONTINUE
     scanner_profile: ScannerProfile = ScannerProfile.RC4
     # --- paper account / practice policy ----------------------------------

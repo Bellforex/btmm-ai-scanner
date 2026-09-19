@@ -54,10 +54,11 @@ __all__ = [
 
 SCANNER_FINGERPRINT_VERSION = "BOT-SCANNER-PIN-V1"
 
-#: rc4-market-framework head the bot integrates.
-PINNED_SCANNER_COMMIT = "a15c199dc3d1b9436fa18f707aed3c51b95fa03d"
+#: Final RC4 semantic commit the bot integrates (interaction-episode contract
+#: locked). Later rc4-market-framework commits are docs / Pine only.
+PINNED_SCANNER_COMMIT = "e228c5d6060f775561f822c13eed1301eb38314e"
 #: ``compute_source_digest`` of the fingerprinted files at that commit.
-PINNED_SOURCE_DIGEST = "6d6e89c58f89d43bf1117965c90a2112c98ed6dd357d6738d6c18ad0b1718d30"
+PINNED_SOURCE_DIGEST = "c0d4bb1556b78d1398833cdc3bfc351d1112a55a86b6eb0e824f870201fc60b1"
 
 SCANNER_PACKAGE = "btmm_ai_scanner"
 SCANNER_PACKAGE_REPO_PATH = "src/btmm_ai_scanner"
