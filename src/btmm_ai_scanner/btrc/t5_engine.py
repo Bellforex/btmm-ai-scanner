@@ -440,6 +440,9 @@ def _framework_fields(f: PoiFrameworkAssessment) -> dict[str, object]:
         "poi_touch_count": f.poi_touch_count,
         "poi_zone_return_count": f.poi_reentry_count,
         "interaction_episode": f.episode.value,
+        "first_touch_time_utc": f.first_touch_time_utc,
+        "episode_start_time_utc": f.episode_start_time_utc,
+        "episode_end_time_utc": f.episode_end_time_utc,
         "framework_evidence": f.evidence,
     }
 
