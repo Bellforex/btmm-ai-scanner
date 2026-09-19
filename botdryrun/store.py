@@ -14,8 +14,9 @@ Tables split into two groups:
   per POI, and every per-bar decision row with the RC4 market-framework
   fields), P8 events (= processed event ids), signals (= processed signal
   ids), paper trade intents, orders, positions, ledger, incidents;
-* operational, NON-deterministic records: ``runs`` and ``bar_timing``
-  (wall-clock). They are never part of a journal digest.
+* operational, NON-deterministic records: ``runs``, ``bar_timing``
+  (wall-clock) and ``scanner_pin_checks`` (one row per run). They are never
+  part of a journal digest.
 """
 
 from __future__ import annotations
@@ -171,6 +172,16 @@ CREATE TABLE IF NOT EXISTS trade_intents (
     signal_status TEXT,
     signal_reason TEXT,
     execution_mode TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scanner_pin_checks (
+    run_no INTEGER PRIMARY KEY,
+    pinned_commit TEXT NOT NULL,
+    pinned_digest TEXT NOT NULL,
+    observed_digest TEXT NOT NULL,
+    session_pinned_digest TEXT,
+    file_count INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    overridden INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
     event_id TEXT PRIMARY KEY,

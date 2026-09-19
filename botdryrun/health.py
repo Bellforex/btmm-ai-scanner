@@ -12,6 +12,20 @@ from botdryrun.store import StateStore
 __all__ = ["health_report", "status_report"]
 
 
+def _scanner_pin(store: StateStore) -> dict[str, Any]:
+    raw = store.get_meta("scanner_pin")
+    last = store.query(
+        "SELECT run_no,status,observed_digest FROM scanner_pin_checks ORDER BY run_no DESC LIMIT 1"
+    )
+    return {
+        "session_pin": json.loads(raw) if raw else None,
+        "last_check": None
+        if not last
+        else {"run_no": last[0][0], "status": last[0][1], "observed_digest": last[0][2]},
+        "override_ever_used": store.get_meta("scanner_pin_overridden") == "1",
+    }
+
+
 def status_report(state_dir: Path) -> dict[str, Any]:
     store = StateStore(state_dir)
     try:
@@ -25,6 +39,8 @@ def status_report(state_dir: Path) -> dict[str, Any]:
             "status": store.get_meta("status") or "NEW",
             "window_start_utc": config.get("window_start_utc"),
             "window_end_utc": config.get("window_end_utc"),
+            "scanner_profile": config.get("scanner_profile"),
+            "scanner_pin": _scanner_pin(store),
             "bars_processed": store.processed_bar_count(),
             "last_bar_index": last[0][0] if last else None,
             "last_bar_open_utc": last[0][1] if last else None,
@@ -66,6 +82,11 @@ def health_report(state_dir: Path) -> dict[str, Any]:
             problems.append("status RUNNING: a process is active or stopped uncleanly (use restart)")
         if rebuild is not None and not rebuild.get("verified", False):
             problems.append("last rebuild digest verification FAILED")
+        pin = _scanner_pin(store)
+        if pin["override_ever_used"]:
+            problems.append("a scanner pin mismatch was overridden (--allow-scanner-mismatch)")
+        if pin["last_check"] is not None and pin["last_check"]["status"] == "MISMATCH_REFUSED":
+            problems.append("last run was refused: scanner source does not match the pin")
         last_run = runs[0] if runs else None
         return {
             "execution_mode": EXECUTION_MODE,
@@ -78,6 +99,7 @@ def health_report(state_dir: Path) -> dict[str, Any]:
             "bars_processed": store.processed_bar_count(),
             "incidents_by_severity": incidents,
             "digest_verification": rebuild,
+            "scanner_pin": pin,
             "chain_digest": store.get_meta("chain_digest"),
             "open_positions": last[0][4] if last else 0,
             "pending_orders": last[0][5] if last else 0,

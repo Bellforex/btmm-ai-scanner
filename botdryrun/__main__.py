@@ -12,7 +12,9 @@ Commands
 
 Exit codes: 0 ok (completed or paused), 2 usage/config, 3 feed integrity
 error, 4 rebuild digest mismatch / feed revision, 5 sealed-range refusal,
-6 live trading refused, 7 halted on a data gap.
+6 live trading refused, 7 halted on a data gap, 8 scanner pin mismatch
+(the running scanner source is not the pinned one; ``--allow-scanner-mismatch``
+overrides and is recorded in the journals).
 
 Scanner profile: ``--scanner-profile RC4`` (default; RC4 market framework)
 or ``RC3``.
@@ -39,6 +41,7 @@ from botdryrun.engine import (
 from botdryrun.health import health_report, status_report
 from botdryrun.market_data import FeedIntegrityError, SealedRangeRefusedError
 from botdryrun.safety import LiveTradingForbiddenError
+from botdryrun.scanner_pin import ScannerPinMismatchError
 
 
 def _print(payload: Any) -> None:
@@ -109,11 +112,14 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--scanner-profile", choices=["RC4", "RC3"],
                         help="scanner contract to consume (default RC4)")
     replay.add_argument("--max-bars", type=int, help="pause cleanly after N bars")
+    replay.add_argument("--allow-scanner-mismatch", action="store_true",
+                        help="run even if the scanner source differs from the pin (recorded)")
 
     for name in ("resume", "restart", "_recover"):
         p = sub.add_parser(name, help=argparse.SUPPRESS if name.startswith("_") else None)
         p.add_argument("--state-dir", required=True)
         p.add_argument("--max-bars", type=int)
+        p.add_argument("--allow-scanner-mismatch", action="store_true")
     for name in ("status", "health"):
         p = sub.add_parser(name)
         p.add_argument("--state-dir", required=True)
@@ -124,17 +130,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     state_dir = Path(args.state_dir)
     try:
+        allow = bool(getattr(args, "allow_scanner_mismatch", False))
         if args.command == "replay":
             config = _build_config(args)
-            return _run(BotEngine(state_dir, config, command="replay"), args.max_bars, allow_unclean=False)
+            engine = BotEngine(state_dir, config, command="replay", allow_scanner_mismatch=allow)
+            return _run(engine, args.max_bars, allow_unclean=False)
         if args.command == "resume":
-            return _run(BotEngine(state_dir, command="resume"), args.max_bars, allow_unclean=False)
+            engine = BotEngine(state_dir, command="resume", allow_scanner_mismatch=allow)
+            return _run(engine, args.max_bars, allow_unclean=False)
         if args.command == "_recover":
-            return _run(BotEngine(state_dir, command="restart"), args.max_bars, allow_unclean=True)
+            engine = BotEngine(state_dir, command="restart", allow_scanner_mismatch=allow)
+            return _run(engine, args.max_bars, allow_unclean=True)
         if args.command == "restart":
             child = [sys.executable, "-m", "botdryrun", "_recover", "--state-dir", str(state_dir)]
             if args.max_bars is not None:
                 child += ["--max-bars", str(args.max_bars)]
+            if allow:
+                child.append("--allow-scanner-mismatch")
             return subprocess.call(child)
         if args.command == "status":
             _print(status_report(state_dir))
@@ -153,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 store.close()
             return 0
+    except ScannerPinMismatchError as exc:
+        print(f"REFUSED (scanner pin): {exc}", file=sys.stderr)
+        return 8
     except LiveTradingForbiddenError as exc:
         print(f"REFUSED (live trading): {exc}", file=sys.stderr)
         return 6

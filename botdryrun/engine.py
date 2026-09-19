@@ -19,6 +19,13 @@ resume after a pause, or recovery after a crash — does the same thing:
 4. restore bot state (processed ids, orders, positions, ledger) from the
    store and continue with bar ``last_processed + 1``.
 
+SCANNER PIN: before step 1, every run fingerprints the scanner source this
+process imports and compares it with the pin (``botdryrun.scanner_pin``) and
+with the pin recorded when the session was created. A mismatch refuses the
+run (``ScannerPinMismatchError``) unless the engine was built with
+``allow_scanner_mismatch=True``; every check -- including a refusal and an
+override -- is recorded in ``scanner_pin_checks`` and the journal manifest.
+
 Each bar's derived state is written in ONE sqlite transaction. A crash
 before COMMIT leaves no trace of that bar, so on restart it is processed
 exactly once; a crash after COMMIT is simply a completed bar.
@@ -35,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -62,6 +70,14 @@ from botdryrun.market_data import (
 )
 from botdryrun.policy import FixedFractionalRiskPolicy, PracticePolicy, Side
 from botdryrun.safety import EXECUTION_MODE, assert_paper_mode
+from botdryrun.scanner_pin import (
+    ScannerPin,
+    ScannerPinCheck,
+    ScannerPinMismatchError,
+    evaluate_scanner_pin,
+    pinned,
+    refusal_message,
+)
 from botdryrun.store import StateStore, pack_lines
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
@@ -73,6 +89,7 @@ __all__ = [
     "RebuildDigestMismatchError",
     "RunOutcome",
     "RunReport",
+    "ScannerPinMismatchError",
     "SessionMismatchError",
 ]
 
@@ -115,6 +132,7 @@ class RunReport:
     seconds_per_bar: float | None
     incidents: int
     feed_error: str | None = None
+    scanner_pin: dict[str, object] | None = None
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
@@ -132,6 +150,7 @@ class RunReport:
             "seconds_per_bar": None if self.seconds_per_bar is None else round(self.seconds_per_bar, 3),
             "incidents": self.incidents,
             "feed_error": self.feed_error,
+            "scanner_pin": self.scanner_pin,
             "execution_mode": EXECUTION_MODE,
         }
 
@@ -162,6 +181,8 @@ class BotEngine:
         scanner_source: ScannerSource | None = None,
         fault_injector: FaultInjector | None = None,
         command: str = "run",
+        allow_scanner_mismatch: bool = False,
+        scanner_pin: ScannerPin | None = None,
     ) -> None:
         self.state_dir = state_dir
         self.store = StateStore(state_dir)
@@ -173,6 +194,18 @@ class BotEngine:
         elif persisted is None:
             self.store.set_meta("config_json", config.to_json())
             self.store.set_meta("status", "NEW")
+            session_pin = scanner_pin or pinned()
+            self.store.set_meta(
+                "scanner_pin",
+                json.dumps(
+                    {
+                        "commit": session_pin.commit,
+                        "source_digest": session_pin.source_digest,
+                        "fingerprint_version": session_pin.fingerprint_version,
+                    },
+                    sort_keys=True,
+                ),
+            )
         elif persisted != config.to_json():
             raise SessionMismatchError(
                 f"{state_dir} already holds a session with a different configuration; "
@@ -186,6 +219,8 @@ class BotEngine:
 
             scanner_source = LevelAScannerSource(profile=config.scanner_profile)
         self._scanner = scanner_source
+        self._pin = scanner_pin or pinned()
+        self._allow_scanner_mismatch = allow_scanner_mismatch
         self._fault = fault_injector
         self._command = command
         self._poisoned = False
@@ -209,11 +244,13 @@ class BotEngine:
         store = self.store
         cfg = self.config
         run_no = int(store.scalar("SELECT COALESCE(MAX(run_no),0)+1 FROM runs"))
+        pin_check = self._check_scanner_pin(run_no)
         with store.transaction() as conn:
             conn.execute(
                 "INSERT INTO runs(run_no,command,pid,started_wall_utc) VALUES(?,?,?,?)",
                 (run_no, self._command, os.getpid(), _now()),
             )
+            self._record_pin_check(conn, run_no, pin_check)
             store.set_meta("status", "RUNNING", conn)
 
         feed = assemble_feed(
@@ -328,12 +365,44 @@ class BotEngine:
             seconds_per_bar=(process_seconds / done) if done else None,
             incidents=incidents,
             feed_error=feed_error,
+            scanner_pin=pin_check.as_dict(),
         )
         if outcome is RunOutcome.HALTED_FEED_ERROR and feed.fatal is not None:
             raise feed.fatal
         return report
 
     # ------------------------------------------------------------------
+    def _check_scanner_pin(self, run_no: int) -> ScannerPinCheck:
+        raw = self.store.get_meta("scanner_pin")
+        session_digest = str(json.loads(raw)["source_digest"]) if raw else None
+        check = evaluate_scanner_pin(
+            self._pin,
+            session_pinned_digest=session_digest,
+            allow_mismatch=self._allow_scanner_mismatch,
+        )
+        if check.status == "MISMATCH_REFUSED":
+            # Record the refusal; the session status is left untouched.
+            with self.store.transaction() as conn:
+                conn.execute(
+                    "INSERT INTO runs(run_no,command,pid,started_wall_utc,ended_wall_utc,outcome) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (run_no, self._command, os.getpid(), _now(), _now(), "REFUSED_SCANNER_PIN"),
+                )
+                self._record_pin_check(conn, run_no, check)
+            raise ScannerPinMismatchError(refusal_message(check))
+        return check
+
+    def _record_pin_check(
+        self, conn: sqlite3.Connection, run_no: int, check: ScannerPinCheck
+    ) -> None:
+        conn.execute(
+            "INSERT INTO scanner_pin_checks VALUES(?,?,?,?,?,?,?,?)",
+            (run_no, check.pinned_commit, check.pinned_digest, check.observed_digest,
+             check.session_pinned_digest, check.file_count, check.status, int(check.overridden)),
+        )
+        if check.overridden:
+            self.store.set_meta("scanner_pin_overridden", "1", conn)
+
     def _reconcile_inputs(
         self, feed: ValidatedFeed, processed: int
     ) -> tuple[list[NormalizedCandle], dict[Timeframe, list[NormalizedCandle]]]:

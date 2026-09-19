@@ -20,7 +20,8 @@ Deterministic journals:
   poi_registry.csv           registered POIs, latest persisted state
   incident_journal.csv       data-quality incidents
 Operational (NOT deterministic, excluded from the manifest digests):
-  perf_bar_timing.csv, runs.csv
+  perf_bar_timing.csv, runs.csv, scanner_pin_journal.csv (one scanner-pin
+  check per run; the manifest's ``scanner_pin`` block summarizes it)
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from botdryrun.domain import DECISION_ROW_FIELDS
 from botdryrun.intents import TRADE_INTENT_COLUMNS
 from botdryrun.policy import PRACTICE_POLICY_LABEL
 from botdryrun.safety import EXECUTION_MODE
+from botdryrun.scanner_pin import SCANNER_FINGERPRINT_VERSION, pinned
 from botdryrun.store import StateStore, unpack_lines
 from tests.parity_support.rc3_daily_authority import fold_period_digest
 
@@ -270,8 +272,18 @@ def export_journals(store: StateStore, out_dir: Path) -> dict[str, Any]:
         deterministic=False,
     )
 
+    pin_columns = (
+        "run_no", "pinned_commit", "pinned_digest", "observed_digest", "session_pinned_digest",
+        "file_count", "status", "overridden",
+    )
+    pin_rows = store.query("SELECT * FROM scanner_pin_checks ORDER BY run_no")
+    write("scanner_pin_journal.csv", _csv(pin_columns, pin_rows), deterministic=False)
+
     config_json = store.get_meta("config_json") or "{}"
     config = json.loads(config_json)
+    session_pin_raw = store.get_meta("scanner_pin")
+    bot_pin = pinned()
+    last_check = dict(zip(pin_columns, pin_rows[-1], strict=True)) if pin_rows else None
     manifest: dict[str, Any] = {
         "execution_mode": EXECUTION_MODE,
         "disclaimer": (
@@ -281,6 +293,16 @@ def export_journals(store: StateStore, out_dir: Path) -> dict[str, Any]:
         ),
         "config": config,
         "scanner_profile": config.get("scanner_profile"),
+        "scanner_pin": {
+            "pinned_commit": bot_pin.commit,
+            "pinned_source_digest": bot_pin.source_digest,
+            "fingerprint_version": SCANNER_FINGERPRINT_VERSION,
+            "session_pin": json.loads(session_pin_raw) if session_pin_raw else None,
+            "checks": len(pin_rows),
+            "last_check": last_check,
+            "all_checks_matched": all(r[6] == "MATCH" for r in pin_rows),
+            "override_ever_used": store.get_meta("scanner_pin_overridden") == "1",
+        },
         "bars_processed": store.processed_bar_count(),
         "last_processed_bar_index": store.get_meta("last_processed_bar_index"),
         "chain_digest": store.get_meta("chain_digest"),
