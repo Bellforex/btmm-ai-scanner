@@ -100,4 +100,7 @@ class BtrcDecision(ContractModel):
     poi_touch_count: int = 0
     poi_zone_return_count: int = 0
     interaction_episode: str | None = None
+    first_touch_time_utc: datetime | None = None
+    episode_start_time_utc: datetime | None = None
+    episode_end_time_utc: datetime | None = None
     framework_evidence: tuple[str, ...] = ()

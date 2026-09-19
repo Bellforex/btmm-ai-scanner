@@ -187,3 +187,7 @@ class PoiFrameworkAssessment:
     liquidity_above: Decimal | None
     liquidity_below: Decimal | None
     evidence: tuple[str, ...]
+    # RC4 interaction episode (author-accepted RC4 lifecycle contract)
+    first_touch_time_utc: datetime | None = None  # P3 first qualifying touch
+    episode_start_time_utc: datetime | None = None  # host bar closing at/after it
+    episode_end_time_utc: datetime | None = None  # true-failure bar or window end

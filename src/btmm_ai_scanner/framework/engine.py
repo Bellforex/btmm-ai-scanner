@@ -565,7 +565,10 @@ def evaluate_poi_framework(
     delay = wipeout = true_failure = False
     dwell = touches = reentries = 0
     episode = InteractionEpisode.NOT_TOUCHED
+    episode_start: datetime | None = None
+    episode_end: datetime | None = None
     if start_index is not None:
+        episode_start = candles[start_index].availability_time_utc
         end_index = start_index + cfg.episode_bars - 1
         last = min(now_index, end_index)
         atr = context.atr[start_index] or Decimal(0)
@@ -611,6 +614,7 @@ def evaluate_poi_framework(
                     reclaimed = True
                 elif j - penetrated_at >= cfg.sweep_reclaim_bars:
                     true_failure = True
+                    episode_end = c.availability_time_utc
                     evidence.append(
                         f"TRUE_FAILURE accepted beyond the POI at {c.event_time_utc.isoformat()}"
                     )
@@ -632,6 +636,7 @@ def evaluate_poi_framework(
             episode = InteractionEpisode.FAILED
         elif now_index >= end_index:
             episode = InteractionEpisode.ENDED
+            episode_end = candles[end_index].availability_time_utc
         else:
             episode = InteractionEpisode.ACTIVE
 
@@ -748,6 +753,9 @@ def evaluate_poi_framework(
         liquidity_above=min(above) if above else None,
         liquidity_below=max(below) if below else None,
         evidence=tuple(evidence),
+        first_touch_time_utc=first_touch_time_utc if start_index is not None else None,
+        episode_start_time_utc=episode_start,
+        episode_end_time_utc=episode_end,
     )
 
 
