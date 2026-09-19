@@ -2,18 +2,24 @@
 
 It wraps ``tests.parity_support.level_a_replay.iter_level_a_bars`` (the one
 orchestration of the frozen scanner: incremental kernel -> RC3 freshness ->
-P5 active-POI loop -> P8 alert engine) and converts each ``LevelABar`` into a
-bot-domain ``ScannerBarSnapshot``. It makes no rule decision of its own:
+RC4 market framework -> P5 active-POI loop -> P8 alert engine) and converts
+each ``LevelABar`` into a bot-domain ``ScannerBarSnapshot``. It makes no rule
+decision of its own:
 
 * POI detection / freshness / terminal reason -> copied from the kernel;
-* P5 permission / score / lifecycle -> copied from ``BtrcDecision``;
+* P5 permission / score / lifecycle and the RC4 market-framework fields
+  (framework, fib bucket, range position, sweep, BTMM pre-trade cycle,
+  interaction episode ...) -> copied from ``BtrcDecision``;
 * P8 events -> copied from the alert engine, in native order;
 * the canonical P3/P5/P8 row lines are rendered with the RC3 daily
   authority's own row builders, so the bot's daily digests are the
   authority's daily digests (asserted in ``tests/bot``).
 
-``rc3_freshness=True`` and ``WarmupFeedPolicy.AVAILABILITY`` are fixed: the
-RC3 contract is the only contract this bot consumes.
+``rc3_freshness=True`` and ``WarmupFeedPolicy.AVAILABILITY`` are fixed.
+``rc4_framework`` follows ``ScannerProfile``: ``RC4`` (the default — the
+market-framework profile of the pinned scanner, see ``scanner_pin``) or
+``RC3`` (the same call with the framework off). The daily digests equal
+``run_daily_authority(..., rc4_framework=<same flag>)``.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from uuid import UUID
 
+from botdryrun.config import ScannerProfile
 from botdryrun.domain import (
     DecisionView,
     EventView,
@@ -72,8 +79,13 @@ def _iso(value: object) -> str | None:
 
 
 class LevelAScannerSource:
-    def __init__(self, context_timeframes: Sequence[Timeframe] | None = None) -> None:
+    def __init__(
+        self,
+        context_timeframes: Sequence[Timeframe] | None = None,
+        profile: ScannerProfile = ScannerProfile.RC4,
+    ) -> None:
         self._context_timeframes = context_timeframes
+        self.profile = profile
 
     def iterate(
         self,
@@ -95,6 +107,7 @@ class LevelAScannerSource:
             configuration=configuration,
             rc3_freshness=True,
             warmup_feed_policy=WarmupFeedPolicy.AVAILABILITY,
+            rc4_framework=self.profile is ScannerProfile.RC4,
         ):
             yield _snapshot(bar, seen_registry)
 
@@ -162,6 +175,20 @@ def _snapshot(bar: LevelABar, seen_registry: set[UUID]) -> ScannerBarSnapshot:
                 final_score=decision.final_confluence_score,
                 lifecycle=decision.lifecycle_state.value,
                 btmm_valid=decision.btmm_valid,
+                framework=decision.framework,
+                fib_bucket=decision.fib_bucket,
+                retracement_pct=decision.retracement_pct,
+                range_position=decision.range_position,
+                sweep_before_poi=decision.sweep_before_poi,
+                btmm_pretrade_reason=decision.btmm_pretrade_reason,
+                btmm_distraction=decision.btmm_distraction,
+                btmm_delay=decision.btmm_delay,
+                btmm_wipeout=decision.btmm_wipeout,
+                btmm_true_failure=decision.btmm_true_failure,
+                poi_dwell_bars=decision.poi_dwell_bars,
+                poi_touch_count=decision.poi_touch_count,
+                poi_zone_return_count=decision.poi_zone_return_count,
+                interaction_episode=decision.interaction_episode,
             )
         )
         p3_lines.append(_canonical_line(P3_FIELDS, _p3_row(bar, poi_id, day)))
@@ -217,6 +244,7 @@ def _snapshot(bar: LevelABar, seen_registry: set[UUID]) -> ScannerBarSnapshot:
         p3_lines=p3_lines,
         p5_lines=p5_lines,
         p8_lines=p8_lines,
+        decision_lines=[d.canonical_line() for d in decisions],
     )
     return ScannerBarSnapshot(
         bar_index=bar.bar_index,

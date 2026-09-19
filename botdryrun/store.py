@@ -10,9 +10,10 @@ one, and only then continues. See ``botdryrun.engine``.
 Tables split into two groups:
 
 * deterministic content (everything journals are exported from): inputs,
-  bar summaries, canonical scanner lines, POI registry, P5 decisions, P8
-  events (= processed event ids), signals (= processed signal ids), orders,
-  positions, ledger, incidents;
+  bar summaries, canonical scanner lines, POI registry, P5 decisions (latest
+  per POI, and every per-bar decision row with the RC4 market-framework
+  fields), P8 events (= processed event ids), signals (= processed signal
+  ids), paper trade intents, orders, positions, ledger, incidents;
 * operational, NON-deterministic records: ``runs`` and ``bar_timing``
   (wall-clock). They are never part of a journal digest.
 """
@@ -28,7 +29,7 @@ from typing import Any
 
 __all__ = ["SCHEMA_VERSION", "StateStore"]
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS bar_summary (
     events_consumed INTEGER NOT NULL,
     events_duplicate INTEGER NOT NULL,
     signals INTEGER NOT NULL,
+    trade_intents INTEGER NOT NULL,
     fills INTEGER NOT NULL,
     exits INTEGER NOT NULL,
     cancels INTEGER NOT NULL,
@@ -113,6 +115,62 @@ CREATE TABLE IF NOT EXISTS poi_decisions (
     final_score INTEGER NOT NULL,
     lifecycle TEXT NOT NULL,
     btmm_valid INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decision_rows (
+    bar_index INTEGER NOT NULL,
+    record_id TEXT NOT NULL,
+    poi_idx INTEGER NOT NULL,
+    permission TEXT NOT NULL,
+    permission_code INTEGER NOT NULL,
+    actionable INTEGER NOT NULL,
+    final_score INTEGER NOT NULL,
+    lifecycle TEXT NOT NULL,
+    btmm_valid INTEGER NOT NULL,
+    framework TEXT,
+    fib_bucket TEXT,
+    retracement_pct TEXT,
+    range_position TEXT,
+    sweep_before_poi INTEGER NOT NULL,
+    btmm_pretrade_reason TEXT,
+    btmm_distraction INTEGER NOT NULL,
+    btmm_delay INTEGER NOT NULL,
+    btmm_wipeout INTEGER NOT NULL,
+    btmm_true_failure INTEGER NOT NULL,
+    poi_dwell_bars INTEGER NOT NULL,
+    poi_touch_count INTEGER NOT NULL,
+    poi_zone_return_count INTEGER NOT NULL,
+    interaction_episode TEXT,
+    PRIMARY KEY (bar_index, poi_idx)
+);
+CREATE TABLE IF NOT EXISTS trade_intents (
+    intent_id TEXT PRIMARY KEY,
+    source_event_id TEXT NOT NULL UNIQUE,
+    bar_index INTEGER NOT NULL,
+    bar_ms INTEGER NOT NULL,
+    trading_day TEXT NOT NULL,
+    poi_idx INTEGER NOT NULL,
+    poi_record_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    poi_type TEXT,
+    source_timeframe TEXT,
+    effective_timeframe TEXT,
+    zone_bottom TEXT,
+    zone_top TEXT,
+    event_permission_code INTEGER NOT NULL,
+    permission TEXT,
+    final_score INTEGER,
+    btmm_valid INTEGER NOT NULL,
+    btmm_pretrade_reason TEXT,
+    framework TEXT,
+    range_position TEXT,
+    fib_bucket TEXT,
+    retracement_pct TEXT,
+    sweep_before_poi INTEGER,
+    interaction_episode TEXT,
+    signal_id TEXT,
+    signal_status TEXT,
+    signal_reason TEXT,
+    execution_mode TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
     event_id TEXT PRIMARY KEY,

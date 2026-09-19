@@ -1,7 +1,10 @@
 """The bot driving the REAL scanner (``level_a_replay``) on synthetic candles.
 
-* the bot's daily P3/P5/P8 digests equal the RC3 daily authority's digests
-  for the same series (the bot consumes, it does not fork);
+* the bot's daily P3/P5/P8 digests equal the daily authority's digests for
+  the same series under the RC4 market-framework profile (the bot's default;
+  ``run_daily_authority(..., rc4_framework=True)``) and, when the RC3
+  profile is selected, under ``rc4_framework=False`` (the bot consumes, it
+  does not fork);
 * restart mid-run rebuilds the real kernel from persisted inputs, verifies
   every bar digest, and ends byte-identical to an uninterrupted run;
 * a higher-TF candle never influences a bar before its availability;
@@ -65,17 +68,19 @@ def uninterrupted(tmp_path_factory: pytest.TempPathFactory, data):  # type: igno
     return state, deterministic_journals(state)
 
 
-def test_daily_digests_equal_the_rc3_authority(data, uninterrupted) -> None:  # type: ignore[no-untyped-def]
-    _, _, candles = data
-    authority = run_daily_authority(
+def _authority(candles, *, rc4: bool):  # type: ignore[no-untyped-def]
+    return run_daily_authority(
         host_timeframe=Timeframe.M15,
         host_series=candles,
         context_series={},
         configuration=build_scanner_configuration(
             required_timeframes=frozenset({Timeframe.M15}), optional_timeframes=frozenset()
         ),
+        rc4_framework=rc4,
     )
-    state, _ = uninterrupted
+
+
+def _assert_bot_matches_authority(state: Path, authority) -> None:  # type: ignore[no-untyped-def]
     rows = (state / "journals" / "daily_authority_journal.csv").read_text(encoding="utf-8").splitlines()
     header = rows[0].split(",")
     assert tuple(header) == DAILY_COLUMNS
@@ -91,6 +96,25 @@ def test_daily_digests_equal_the_rc3_authority(data, uninterrupted) -> None:  # 
         "P5": authority.period_p5_digest,
         "P8": authority.period_p8_digest,
     }
+
+
+def test_daily_digests_equal_the_rc4_authority(data, uninterrupted) -> None:  # type: ignore[no-untyped-def]
+    _, _, candles = data
+    state, _ = uninterrupted
+    manifest = json.loads((state / "journals" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["scanner_profile"] == "RC4"
+    _assert_bot_matches_authority(state, _authority(candles, rc4=True))
+
+
+def test_rc3_profile_remains_selectable_and_equals_the_rc3_authority(tmp_path: Path, data) -> None:  # type: ignore[no-untyped-def]
+    root, times, candles = data
+    state = tmp_path / "rc3"
+    engine = BotEngine(state, config_for(root, times, scanner_profile="RC3"))
+    try:
+        assert engine.run().outcome is RunOutcome.COMPLETED
+    finally:
+        engine.close()
+    _assert_bot_matches_authority(state, _authority(candles, rc4=False))
 
 
 def test_two_replays_are_byte_identical(tmp_path: Path, data, uninterrupted) -> None:  # type: ignore[no-untyped-def]

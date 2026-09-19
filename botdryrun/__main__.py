@@ -13,6 +13,9 @@ Commands
 Exit codes: 0 ok (completed or paused), 2 usage/config, 3 feed integrity
 error, 4 rebuild digest mismatch / feed revision, 5 sealed-range refusal,
 6 live trading refused, 7 halted on a data gap.
+
+Scanner profile: ``--scanner-profile RC4`` (default; RC4 market framework)
+or ``RC3``.
 """
 
 from __future__ import annotations
@@ -63,6 +66,7 @@ def _build_config(args: argparse.Namespace) -> BotConfig:
         "context_lookback_bars": args.context_lookback_bars,
         "gap_policy": args.gap_policy,
         "entry_mode": args.entry_mode,
+        "scanner_profile": args.scanner_profile,
     }
     if args.context_timeframes is not None:
         overrides["context_timeframes"] = [t for t in args.context_timeframes.split(",") if t]
@@ -102,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--context-lookback-bars", type=int)
     replay.add_argument("--gap-policy", choices=["CONTINUE", "HALT"])
     replay.add_argument("--entry-mode", choices=["LIMIT_AT_ZONE", "NEXT_OPEN"])
+    replay.add_argument("--scanner-profile", choices=["RC4", "RC3"],
+                        help="scanner contract to consume (default RC4)")
     replay.add_argument("--max-bars", type=int, help="pause cleanly after N bars")
 
     for name in ("resume", "restart", "_recover"):

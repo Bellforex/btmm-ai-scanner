@@ -30,6 +30,7 @@ __all__ = [
     "DataSourceKind",
     "EntryMode",
     "GapPolicy",
+    "ScannerProfile",
     "parse_utc",
 ]
 
@@ -44,6 +45,14 @@ class DataSourceKind(StrEnum):
     #: A directory of ``<TF>.csv`` files in the same format. UNVERIFIED; for
     #: synthetic fixtures and experiments only.
     CSV_DIR = "CSV_DIR"
+
+
+class ScannerProfile(StrEnum):
+    #: RC4 market-framework profile (``iter_level_a_bars(rc4_framework=True)``)
+    #: on top of the RC3 freshness contract. The default.
+    RC4 = "RC4"
+    #: The plain RC3 freshness contract (``rc4_framework=False``).
+    RC3 = "RC3"
 
 
 class GapPolicy(StrEnum):
@@ -76,6 +85,7 @@ class BotConfig:
     context_timeframes: tuple[str, ...] = ("W1", "D1", "H4", "H1", "M5")
     context_lookback_bars: int = 40
     gap_policy: GapPolicy = GapPolicy.CONTINUE
+    scanner_profile: ScannerProfile = ScannerProfile.RC4
     # --- paper account / practice policy ----------------------------------
     initial_balance: Decimal = Decimal("10000")
     risk_fraction: Decimal = Decimal("0.01")
@@ -162,6 +172,8 @@ class BotConfig:
                 kwargs[key] = DataSourceKind(str(value))
             elif key == "gap_policy":
                 kwargs[key] = GapPolicy(str(value))
+            elif key == "scanner_profile":
+                kwargs[key] = ScannerProfile(str(value))
             elif key == "entry_mode":
                 kwargs[key] = EntryMode(str(value))
             elif key in ("context_lookback_bars", "max_concurrent_positions", "pending_expiry_bars"):

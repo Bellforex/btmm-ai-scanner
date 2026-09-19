@@ -52,6 +52,7 @@ from botdryrun.domain import (
     fold_chain_digest,
 )
 from botdryrun.events import P8EventConsumer
+from botdryrun.intents import TRADE_INTENT_COLUMNS, build_trade_intents
 from botdryrun.market_data import (
     FeedItem,
     ValidatedFeed,
@@ -183,7 +184,7 @@ class BotEngine:
         if scanner_source is None:
             from botdryrun.scanner_adapter import LevelAScannerSource
 
-            scanner_source = LevelAScannerSource()
+            scanner_source = LevelAScannerSource(profile=config.scanner_profile)
         self._scanner = scanner_source
         self._fault = fault_injector
         self._command = command
@@ -463,6 +464,7 @@ class BotEngine:
         batch = consumer.consume(snap.events)
         execution = broker.process_bar(i, snap.candle)
         actions = self.policy.on_events(batch.new_events, snap, broker)
+        intents = build_trade_intents(batch.new_events, snap, actions.signals)
         cancels = 0
         for cancel in actions.cancels:
             cancels += broker.cancel_for_poi(cancel.poi_record_id, cancel.reason, i)
@@ -529,6 +531,19 @@ class BotEngine:
                     for d in snap.decisions
                 ],
             )
+            conn.executemany(
+                "INSERT INTO decision_rows(bar_index,record_id,poi_idx,permission,permission_code,"
+                "actionable,final_score,lifecycle,btmm_valid,framework,fib_bucket,retracement_pct,"
+                "range_position,sweep_before_poi,btmm_pretrade_reason,btmm_distraction,btmm_delay,"
+                "btmm_wipeout,btmm_true_failure,poi_dwell_bars,poi_touch_count,"
+                "poi_zone_return_count,interaction_episode) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [(i, *d.as_row()) for d in snap.decisions],
+            )
+            conn.executemany(
+                "INSERT INTO trade_intents VALUES(" + ",".join("?" * len(TRADE_INTENT_COLUMNS)) + ")",
+                [t.as_row() for t in intents],
+            )
             for stream, lines in (("P3", snap.p3_lines), ("P5", snap.p5_lines), ("P8", snap.p8_lines)):
                 conn.execute(
                     "INSERT INTO bar_lines VALUES(?,?,?,?,?)",
@@ -573,7 +588,7 @@ class BotEngine:
                  for e in broker.new_ledger],
             )
             conn.execute(
-                "INSERT INTO bar_summary VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO bar_summary VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     i, snap.bar_ms, candle.event_time_utc.isoformat(), snap.trading_day, int(snap.primed),
                     len(snap.pois), snap.new_registry_pois, len(snap.decisions),
@@ -581,7 +596,7 @@ class BotEngine:
                     snap.fresh_at_close, snap.mitigated_at_close, snap.invalidated_at_close,
                     len(snap.events), sum(1 for e in snap.events if e.event_type == "POI_TERMINAL"),
                     len(batch.new_events), len(batch.duplicates),
-                    len(actions.signals), execution.fills, execution.exits, cancels + expired,
+                    len(actions.signals), len(intents), execution.fills, execution.exits, cancels + expired,
                     len(broker.open_positions()), len(broker.pending_orders()),
                     str(broker.balance), str(equity), snap.digest, new_chain,
                 ),

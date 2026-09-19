@@ -182,6 +182,17 @@ class ScriptedScannerSource:
                     final_score=50,
                     lifecycle="POI_VALIDATED",
                     btmm_valid=True,
+                    # Scripted RC4 market-framework fields (copied through
+                    # verbatim by the bot; never interpreted by it).
+                    framework="SCRIPTED_TREND",
+                    fib_bucket="DISCOUNT" if p.direction == "BULLISH" else "PREMIUM",
+                    retracement_pct="61.8",
+                    range_position="LOWER" if p.direction == "BULLISH" else "UPPER",
+                    sweep_before_poi=p.idx % 2 == 0,
+                    btmm_pretrade_reason=f"SCRIPTED_REASON_{p.idx}",
+                    poi_dwell_bars=index,
+                    poi_touch_count=p.idx,
+                    interaction_episode=f"EP-{p.idx}",
                 )
                 for p in self.pois
             )
@@ -201,6 +212,7 @@ class ScriptedScannerSource:
                 p3_lines=p3,
                 p5_lines=p5,
                 p8_lines=p8,
+                decision_lines=[d.canonical_line() for d in decisions],
             )
             yield ScannerBarSnapshot(
                 bar_index=index,

@@ -7,7 +7,11 @@ files. ``manifest.json`` lists the sha256 of each deterministic journal.
 
 Deterministic journals:
   decision_journal.csv       one row per processed host bar
+  p5_decision_journal.csv    one row per P5-evaluated POI per bar, including
+                             the RC4 market-framework fields
   event_journal.csv          consumed P8 events, native order
+  trade_intent_journal.csv   one paper trade intent per consumed
+                             PERMISSION_ENTERED_ACTIONABLE event
   signal_journal.csv         every signal decision (accepted and skipped)
   order_journal.csv          paper orders and their final status
   trade_journal.csv          paper positions (entries/exits/PnL)
@@ -31,6 +35,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from botdryrun.domain import DECISION_ROW_FIELDS
+from botdryrun.intents import TRADE_INTENT_COLUMNS
 from botdryrun.policy import PRACTICE_POLICY_LABEL
 from botdryrun.safety import EXECUTION_MODE
 from botdryrun.store import StateStore, unpack_lines
@@ -60,6 +66,7 @@ DAILY_AUTHORITY_COLUMNS: tuple[str, ...] = (
 )
 DAILY_COLUMNS: tuple[str, ...] = (
     *DAILY_AUTHORITY_COLUMNS,
+    "trade_intents",
     "signals_accepted",
     "signals_skipped",
     "fills",
@@ -77,10 +84,22 @@ _DETERMINISTIC_QUERIES: dict[str, tuple[Sequence[str], str]] = {
             "bar_index", "bar_ms", "event_utc", "trading_day", "primed", "registry_size",
             "new_registry_pois", "evaluated", "actionable", "fresh_at_close",
             "mitigated_at_close", "invalidated_at_close", "p8_events", "p8_terminal_events",
-            "events_consumed", "events_duplicate", "signals", "fills", "exits", "cancels",
+            "events_consumed", "events_duplicate", "signals", "trade_intents", "fills", "exits",
+            "cancels",
             "open_positions", "pending_orders", "balance", "equity", "bar_digest", "chain_digest",
         ),
         "SELECT * FROM bar_summary ORDER BY bar_index",
+    ),
+    "p5_decision_journal.csv": (
+        ("bar_index", *DECISION_ROW_FIELDS),
+        "SELECT bar_index," + ",".join(DECISION_ROW_FIELDS)
+        + " FROM decision_rows ORDER BY bar_index, poi_idx",
+    ),
+    "trade_intent_journal.csv": (
+        TRADE_INTENT_COLUMNS,
+        "SELECT " + ",".join(f"t.{c}" for c in TRADE_INTENT_COLUMNS)
+        + " FROM trade_intents t JOIN events e ON e.event_id = t.source_event_id "
+        "ORDER BY t.bar_index, e.sequence_in_bar",
     ),
     "event_journal.csv": (
         (
@@ -152,16 +171,16 @@ def daily_authority_rows(store: StateStore) -> list[dict[str, Any]]:
     for row in store.query(
         "SELECT bar_index,bar_ms,trading_day,registry_size,new_registry_pois,evaluated,actionable,"
         "fresh_at_close,mitigated_at_close,invalidated_at_close,p8_events,p8_terminal_events,"
-        "fills,exits,cancels,balance,equity FROM bar_summary ORDER BY bar_index"
+        "trade_intents,fills,exits,cancels,balance,equity FROM bar_summary ORDER BY bar_index"
     ):
         (_i, bar_ms, day, registry, new, evaluated, actionable, fresh, mitigated, invalidated,
-         p8, p8t, fills, exits, cancels, balance, equity) = row
+         p8, p8t, intents, fills, exits, cancels, balance, equity) = row
         d = days.get(day)
         if d is None:
             d = days[day] = {
                 "trading_day": day, "first_bar_ms": bar_ms, "first_bar_utc": _utc_from_ms(bar_ms),
                 "bars_processed": 0, "new_p3_pois": 0, "p5_rows": 0, "p5_actionable": 0,
-                "p8_events": 0, "p8_terminal_events": 0, "fills": 0, "exits": 0,
+                "p8_events": 0, "p8_terminal_events": 0, "trade_intents": 0, "fills": 0, "exits": 0,
                 "cancels_or_expiries": 0,
             }
             hashes[day] = {s: hashlib.sha256() for s in ("P3", "P5", "P8")}
@@ -177,6 +196,7 @@ def daily_authority_rows(store: StateStore) -> list[dict[str, Any]]:
         d["p5_actionable"] += actionable
         d["p8_events"] += p8
         d["p8_terminal_events"] += p8t
+        d["trade_intents"] += intents
         d["fills"] += fills
         d["exits"] += exits
         d["cancels_or_expiries"] += cancels
@@ -251,6 +271,7 @@ def export_journals(store: StateStore, out_dir: Path) -> dict[str, Any]:
     )
 
     config_json = store.get_meta("config_json") or "{}"
+    config = json.loads(config_json)
     manifest: dict[str, Any] = {
         "execution_mode": EXECUTION_MODE,
         "disclaimer": (
@@ -258,7 +279,8 @@ def export_journals(store: StateStore, out_dir: Path) -> dict[str, Any]:
             + PRACTICE_POLICY_LABEL
             + ". No profitability or production-readiness claim."
         ),
-        "config": json.loads(config_json),
+        "config": config,
+        "scanner_profile": config.get("scanner_profile"),
         "bars_processed": store.processed_bar_count(),
         "last_processed_bar_index": store.get_meta("last_processed_bar_index"),
         "chain_digest": store.get_meta("chain_digest"),

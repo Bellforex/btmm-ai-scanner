@@ -130,7 +130,7 @@ def test_scanner_adapter_is_the_only_module_driving_the_scanner() -> None:
     assert "tests.parity_support.level_a_replay.iter_level_a_bars" in modules["scanner_adapter.py"]
 
 
-def test_scanner_adapter_pins_the_rc3_contract() -> None:
+def test_scanner_adapter_pins_the_rc3_freshness_and_rc4_framework_contract() -> None:
     tree = ast.parse((PACKAGE / "scanner_adapter.py").read_text(encoding="utf-8"))
     calls = [
         node for node in ast.walk(tree)
@@ -140,6 +140,12 @@ def test_scanner_adapter_pins_the_rc3_contract() -> None:
     keywords = {k.arg: k.value for k in calls[0].keywords}
     assert isinstance(keywords["rc3_freshness"], ast.Constant) and keywords["rc3_freshness"].value is True
     assert ast.unparse(keywords["warmup_feed_policy"]) == "WarmupFeedPolicy.AVAILABILITY"
+    assert ast.unparse(keywords["rc4_framework"]) == "self.profile is ScannerProfile.RC4"
+    from botdryrun.config import ScannerProfile
+    from botdryrun.scanner_adapter import LevelAScannerSource
+
+    assert LevelAScannerSource().profile is ScannerProfile.RC4
+    assert BotConfig.from_mapping(_BASE).scanner_profile is ScannerProfile.RC4
 
 
 def test_signals_only_originate_from_consumed_p8_events() -> None:

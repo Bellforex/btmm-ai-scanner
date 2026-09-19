@@ -20,7 +20,9 @@ from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 
 __all__ = [
     "BAR_DIGEST_VERSION",
+    "DECISION_ROW_FIELDS",
     "GENESIS_CHAIN_DIGEST",
+    "RC4_DECISION_FIELDS",
     "SESSION_DAY_OFFSET",
     "DecisionView",
     "EventView",
@@ -34,7 +36,9 @@ __all__ = [
     "trading_day_of",
 ]
 
-BAR_DIGEST_VERSION = "BOT-DRYRUN-BAR-V1"
+#: V2: the digest also covers every P5 decision row including the RC4
+#: market-framework fields (``DecisionView.canonical_line``).
+BAR_DIGEST_VERSION = "BOT-DRYRUN-BAR-V2"
 
 #: FXCM session day: 22:00 UTC opens the next trading day. Mirrors the frozen
 #: authority decision (``rc3_daily_authority.SESSION_DAY_OFFSET``).
@@ -96,6 +100,39 @@ class PoiView:
         )
 
 
+#: RC4 market-framework fields copied verbatim from ``BtrcDecision`` (their
+#: defaults are what the scanner emits when the RC4 profile is off).
+RC4_DECISION_FIELDS: tuple[str, ...] = (
+    "framework",
+    "fib_bucket",
+    "retracement_pct",
+    "range_position",
+    "sweep_before_poi",
+    "btmm_pretrade_reason",
+    "btmm_distraction",
+    "btmm_delay",
+    "btmm_wipeout",
+    "btmm_true_failure",
+    "poi_dwell_bars",
+    "poi_touch_count",
+    "poi_zone_return_count",
+    "interaction_episode",
+)
+
+#: Column order of one decision row (journal + digest line).
+DECISION_ROW_FIELDS: tuple[str, ...] = (
+    "record_id",
+    "poi_idx",
+    "permission",
+    "permission_code",
+    "actionable",
+    "final_score",
+    "lifecycle",
+    "btmm_valid",
+    *RC4_DECISION_FIELDS,
+)
+
+
 @dataclass(frozen=True)
 class DecisionView:
     record_id: str
@@ -106,6 +143,32 @@ class DecisionView:
     final_score: int
     lifecycle: str
     btmm_valid: bool
+    # --- RC4 market framework (BtrcDecision; defaults when the profile is off)
+    framework: str | None = None
+    fib_bucket: str | None = None
+    retracement_pct: str | None = None
+    range_position: str | None = None
+    sweep_before_poi: bool = False
+    btmm_pretrade_reason: str | None = None
+    btmm_distraction: bool = False
+    btmm_delay: bool = False
+    btmm_wipeout: bool = False
+    btmm_true_failure: bool = False
+    poi_dwell_bars: int = 0
+    poi_touch_count: int = 0
+    poi_zone_return_count: int = 0
+    interaction_episode: str | None = None
+
+    def as_row(self) -> tuple[object, ...]:
+        """Storage/journal row in ``DECISION_ROW_FIELDS`` order (bools as 0/1)."""
+        out: list[object] = []
+        for name in DECISION_ROW_FIELDS:
+            value = getattr(self, name)
+            out.append(int(value) if isinstance(value, bool) else value)
+        return tuple(out)
+
+    def canonical_line(self) -> str:
+        return "|".join("" if v is None else str(v) for v in self.as_row())
 
 
 @dataclass(frozen=True)
@@ -171,6 +234,7 @@ def compute_bar_digest(
     p3_lines: Sequence[str],
     p5_lines: Sequence[str],
     p8_lines: Sequence[str],
+    decision_lines: Sequence[str] = (),
 ) -> str:
     h = hashlib.sha256()
     header = (
@@ -178,7 +242,12 @@ def compute_bar_digest(
         f"{new_registry_pois}|{fresh_at_close}|{mitigated_at_close}|{invalidated_at_close}"
     )
     h.update(header.encode("utf-8") + b"\n")
-    for tag, lines in (("P3", p3_lines), ("P5", p5_lines), ("P8", p8_lines)):
+    for tag, lines in (
+        ("P3", p3_lines),
+        ("P5", p5_lines),
+        ("P8", p8_lines),
+        ("DV", decision_lines),
+    ):
         h.update(f"#{tag}|{len(lines)}\n".encode())
         for line in lines:
             h.update(line.encode("utf-8") + b"\n")
