@@ -732,6 +732,7 @@ def run_daily_authority(
     retain_rows: bool = False,
     progress_every: int = 0,
     progress_path: Path | None = None,
+    rc4_framework: bool = False,
 ) -> AuthorityResult:
     """One continuous chronological replay, partitioned into trading days
     only for REPORTING. See the module docstring."""
@@ -828,6 +829,7 @@ def run_daily_authority(
             configuration=configuration,
             rc3_freshness=True,
             warmup_feed_policy=WarmupFeedPolicy.AVAILABILITY,
+            rc4_framework=rc4_framework,
         ):
             day_key = trading_day_of(bar.candle.event_time_utc)
             if current is None or current.trading_day != day_key:
@@ -1002,6 +1004,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--output-dir", type=Path, default=repo_root / "artifacts" / "rc3_authority"
     )
     parser.add_argument("--max-bars", type=int, default=None)
+    parser.add_argument("--rc4", action="store_true", help="RC4 market-framework profile")
     parser.add_argument(
         "--context-lookback-bars", type=int, default=DEFAULT_CONTEXT_LOOKBACK_BARS
     )
@@ -1025,6 +1028,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir,
         progress_every=args.progress_every,
         progress_path=progress_path,
+        rc4_framework=args.rc4,
     )
     # run_daily_authority already wrote the final (complete) artifact set.
     print(json.dumps(result.summary(), indent=2))

@@ -243,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--export-dir", type=Path, default=base)
     parser.add_argument("--output-dir", type=Path, default=base / "authority")
     parser.add_argument("--max-bars", type=int, default=None)
+    parser.add_argument("--rc4", action="store_true", help="RC4 market-framework profile")
     parser.add_argument("--progress-every", type=int, default=10)
     args = parser.parse_args(argv)
 
@@ -268,6 +269,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir,
         progress_every=args.progress_every,
         progress_path=progress_path,
+        rc4_framework=args.rc4,
     )
     print(json.dumps(result.summary(), indent=2))
     return 0

@@ -85,6 +85,7 @@ from btmm_ai_scanner.btrc.t5_decision import BtrcDecision
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
+from btmm_ai_scanner.framework import FrameworkTracker
 from btmm_ai_scanner.historical_backtest.identity import (
     ContentAddressedIdentityProvider,
 )
@@ -96,7 +97,11 @@ from btmm_ai_scanner.scanner.analysis import ScannerAnalysis, ScannerSetupSummar
 from btmm_ai_scanner.scanner.configuration import ScannerConfiguration
 from btmm_ai_scanner.scanner.replay import IncrementalReplayKernel
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
-from tests.parity_support.p5_active_poi_loop_model import run_active_poi_loop
+from tests.parity_support.p5_active_poi_loop_model import (
+    rc4_is_terminal,
+    rc4_terminal_reason,
+    run_active_poi_loop,
+)
 from tests.parity_support.p5_wire_normalized_replay import (
     LIFECYCLE_CODE,
     PERMISSION_CODE,
@@ -244,6 +249,7 @@ def iter_level_a_bars(
     configuration: ScannerConfiguration,
     rc3_freshness: bool,
     warmup_feed_policy: WarmupFeedPolicy = WarmupFeedPolicy.AVAILABILITY,
+    rc4_framework: bool = False,
 ) -> Iterator[LevelABar]:
     """Walk ``host_series`` one confirmed bar at a time and yield a
     ``LevelABar`` per bar.
@@ -312,6 +318,7 @@ def iter_level_a_bars(
     next_poi_idx = 0
     previously_active: frozenset[UUID] = frozenset()
     alert_engine = AlertEngine()
+    framework_trackers = {host_timeframe: FrameworkTracker()} if rc4_framework else None
 
     for bar_index, candle in enumerate(host_series):
         bound = candle.availability_time_utc
@@ -328,9 +335,13 @@ def iter_level_a_bars(
             candles_by_timeframe=visible,
             evaluation_time_utc=analysis.availability_time_utc,
             rc3_freshness=rc3_freshness,
+            framework_timeframe=host_timeframe if rc4_framework else None,
+            framework_trackers=framework_trackers,
         )
 
-        observation_by_id = {o.record_id: o for o in analysis.poi_analysis.poi_observations}
+        observation_by_id = {
+            o.record_id: o for o in analysis.poi_analysis.poi_observations
+        }
         state_by_id = {
             s.poi_record_id: s for s in analysis.poi_analysis.current_poi_states
         }
@@ -344,13 +355,15 @@ def iter_level_a_bars(
                 next_poi_idx += 1
             decision = loop.decisions_by_poi_id[poi_id]
             state = state_by_id.get(poi_id)
-            if rc3_freshness:
+            if rc4_framework:
+                terminal = rc4_is_terminal(state, decision)
+                terminal_reason = rc4_terminal_reason(state, decision)
+            elif rc3_freshness:
                 terminal = state is not None and not state.fresh_active
                 terminal_reason = state.terminal_reason if state is not None else None
             else:
                 terminal = (
-                    state is not None
-                    and state.poi_lifecycle_status is _TERMINAL_STATUS
+                    state is not None and state.poi_lifecycle_status is _TERMINAL_STATUS
                 )
                 terminal_reason = None
             poi_snapshots.append(

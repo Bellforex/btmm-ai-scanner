@@ -58,7 +58,8 @@ from btmm_ai_scanner.btrc.t5_decision import BtrcDecision
 from btmm_ai_scanner.btrc.t5_engine import ConfluenceBarContext
 from btmm_ai_scanner.config.enums import Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
-from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
+from btmm_ai_scanner.framework import FrameworkTracker
+from btmm_ai_scanner.poi.enums import PoiLifecycleStatus, PoiTerminalReason
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
 
@@ -149,18 +150,20 @@ def resolve_eligible_and_next(
     Returns `(eligible_ids_this_bar, next_bar_active_ids)`.
     """
     return _resolve_from_terminal_flags(
-        {
-            poi_id: status is _TERMINAL_STATUS
-            for poi_id, status in status_by_id.items()
-        },
+        {poi_id: status is _TERMINAL_STATUS for poi_id, status in status_by_id.items()},
         previously_active_ids,
         known_ids,
     )
 
 
-def _stable_order(ids: frozenset[UUID], obs_by_id: dict[UUID, PoiObservation]) -> tuple[UUID, ...]:
+def _stable_order(
+    ids: frozenset[UUID], obs_by_id: dict[UUID, PoiObservation]
+) -> tuple[UUID, ...]:
     return tuple(
-        sorted(ids, key=lambda poi_id: (obs_by_id[poi_id].availability_time_utc, str(poi_id)))
+        sorted(
+            ids,
+            key=lambda poi_id: (obs_by_id[poi_id].availability_time_utc, str(poi_id)),
+        )
     )
 
 
@@ -172,6 +175,8 @@ def run_active_poi_loop(
     evaluation_time_utc: datetime | None = None,
     configuration: ConfluenceConfiguration | None = None,
     rc3_freshness: bool = False,
+    framework_timeframe: Timeframe | None = None,
+    framework_trackers: dict[Timeframe, FrameworkTracker] | None = None,
 ) -> ActiveLoopResult:
     """Evaluate every eligible POI for one confirmed bar's `ScannerAnalysis`,
     using `resolve_eligible_and_next` for the set algebra and calling the
@@ -202,6 +207,14 @@ def run_active_poi_loop(
         )
     ordered = _stable_order(eligible_ids, obs_by_id)
 
+    if framework_timeframe is not None:
+        # RC4 market-framework profile (author 2026-09-19).
+        configuration = (configuration or ConfluenceConfiguration()).model_copy(
+            update={
+                "market_framework": True,
+                "framework_timeframe": framework_timeframe,
+            }
+        )
     decisions: dict[UUID, BtrcDecision] = {}
     # One POI-independent T1-T4 context per bar, shared by every POI: the
     # decisions are bit-identical to per-POI recomputation (see
@@ -210,6 +223,7 @@ def run_active_poi_loop(
         analysis,
         candles_by_timeframe=candles_by_timeframe,
         evaluation_time_utc=evaluation_time_utc,
+        framework_trackers=framework_trackers,
     )
     for poi_id in ordered:
         poi = obs_by_id[poi_id]
@@ -222,8 +236,47 @@ def run_active_poi_loop(
             bar_context=bar_context,
         )
 
+    if framework_timeframe is not None:
+        # RC4 interaction episode: a POI mitigated by its first touch stays in
+        # the active universe while its BTMM episode is still running, and
+        # leaves the NEXT bar after the episode ends (terminal-bar rule kept).
+        state_by_id = {
+            st.poi_record_id: st for st in analysis.poi_analysis.current_poi_states
+        }
+        next_active = frozenset(
+            poi_id
+            for poi_id in eligible_ids
+            if not rc4_is_terminal(state_by_id.get(poi_id), decisions[poi_id])
+        )
+
     return ActiveLoopResult(
         decisions_by_poi_id=decisions,
         next_bar_active_ids=next_active,
         evaluated_order=ordered,
     )
+
+
+def rc4_is_terminal(state: object, decision: BtrcDecision) -> bool:
+    """RC4: terminal = no longer fresh AND not inside a running interaction
+    episode that began with a first-touch mitigation."""
+    if state is None:
+        return False
+    fresh = getattr(state, "fresh_active", True)
+    if fresh:
+        return False
+    reason = getattr(state, "terminal_reason", None)
+    return not (
+        reason is PoiTerminalReason.MITIGATED
+        and decision.interaction_episode == "ACTIVE"
+    )
+
+
+def rc4_terminal_reason(
+    state: object, decision: BtrcDecision
+) -> PoiTerminalReason | None:
+    """The reason P8 reports when an RC4 POI goes terminal: a true failure
+    (price accepted beyond the POI, no reclaim) is an invalidation."""
+    if decision.interaction_episode == "FAILED":
+        return PoiTerminalReason.INVALIDATED
+    reason = getattr(state, "terminal_reason", None)
+    return reason if isinstance(reason, PoiTerminalReason) else None
