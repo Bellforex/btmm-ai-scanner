@@ -1,0 +1,226 @@
+//@version=6
+// EZFX generic Pine UI helpers -- PRESENTATION ONLY.
+//
+// This library contains NO trading logic. It maps integer display codes to the
+// text and colours the scanner already prints on the chart, and formats a
+// timeframe token. It holds no threshold, no score, no qualification rule and
+// no market decision of any kind. Every value it returns is already visible to
+// any user of the scanner.
+library("ezfx_pine_ui_helpers", overlay = true)
+
+// @function poiTypeLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export poiTypeLabel(int code) =>
+    switch code
+        1       => "BUY ORDER BLOCK"
+        2      => "SELL ORDER BLOCK"
+        3    => "BUY FVG"
+        4   => "SELL FVG"
+        5    => "BUY TO SELL CANDLE"
+        6    => "SELL TO BUY CANDLE"
+        7            => "BASE RALLY"
+        8             => "BASE DROP"
+        9 => "BULLISH PRESSURE WICK"
+        10 => "BEARISH PRESSURE WICK"
+        11     => "BULLISH ENGULFING"
+        12     => "BEARISH ENGULFING"
+        13                => "HAMMER"
+        14         => "SHOOTING STAR"
+        15          => "MORNING STAR"
+        16          => "EVENING STAR"
+        17          => "SUPPORT ZONE"
+        18       => "RESISTANCE ZONE"
+        => "UNKNOWN"
+
+// @function permissionLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export permissionLabel(int code) =>
+    switch code
+        0           => "BUY BIAS"
+        1          => "SELL BIAS"
+        2 => "ALLOW (BOTH)"
+        3      => "COUNTER-TREND"
+        4         => "WATCH ONLY"
+        5   => "NO TRADE"
+        => "-"
+
+// @function lifecycleLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export lifecycleLabel(int code) =>
+    switch code
+        0               => "DETECTED"
+        1 => "STRUCTURAL"
+        3          => "POI VALIDATED"
+        4        => "TREND VALIDATED"
+        5       => "REGIME VALIDATED"
+        6     => "MOMENTUM VALIDATED"
+        7    => "LIQUIDITY VALIDATED"
+        => "-"
+
+// @function tierLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export tierLabel(int code) =>
+    switch code
+        2   => "STRONG"
+        1 => "STANDARD"
+        => "-"
+
+// @function directionLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export directionLabel(int code) =>
+    switch code
+        2 => "STRONG BULL"
+        1        => "BULLISH"
+        0        => "NEUTRAL"
+        -1        => "BEARISH"
+        -2 => "STRONG BEAR"
+        => "-"
+
+// @function trendStateLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export trendStateLabel(int code) =>
+    switch code
+        0    => "UNKNOWN"
+        1    => "FORMING"
+        2   => "TRENDING"
+        3 => "TRANSITION"
+        4 => "EXHAUSTING"
+        5      => "RANGE"
+        => "-"
+
+// @function regimeLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export regimeLabel(int code) =>
+    switch code
+        0        => "UNCERTAIN"
+        1       => "TRANSITION"
+        2            => "TREND"
+        3     => "DECELERATION"
+        4            => "RANGE"
+        5        => "EXPANSION"
+        6 => "BREAKOUT PENDING"
+        7      => "COMPRESSION"
+        => "-"
+
+// @function momentumAccelLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export momentumAccelLabel(int code) =>
+    switch code
+        1 => "ACCELERATING"
+        0       => "STEADY"
+        -1 => "DECELERATING"
+        => "-"
+
+// @function breakoutLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export breakoutLabel(int code) =>
+    switch code
+        1      => "WEAK BREAK"
+        2     => "VALID BREAK"
+        3    => "STRONG BREAK"
+        4 => "EXPLOSIVE BREAK"
+        5    => "FAILED BREAK"
+        => "NONE"
+
+// @function pullbackLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export pullbackLabel(int code) =>
+    switch code
+        1   => "SHALLOW"
+        2   => "HEALTHY"
+        3      => "DEEP"
+        4 => "STRUCTURAL FAILURE"
+        => "NONE"
+
+// @function sessionLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export sessionLabel(int code) =>
+    switch code
+        0             => "ASIAN"
+        1    => "LONDON PRE-OPEN"
+        2            => "LONDON"
+        3  => "NEW YORK PRE-OPEN"
+        4 => "LONDON/NY OVERLAP"
+        5          => "NEW YORK"
+        6           => "POST NY"
+        => "-"
+
+// @function volatilityLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export volatilityLabel(int code) =>
+    switch code
+        0 => "VERY LOW"
+        1      => "LOW"
+        2   => "NORMAL"
+        3     => "HIGH"
+        4  => "EXTREME"
+        => "-"
+
+// @function alignmentLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export alignmentLabel(int code) =>
+    switch code
+        0       => "ALIGNED"
+        1       => "PARTIAL"
+        2       => "NEUTRAL"
+        3 => "COUNTER-TREND"
+        => "-"
+
+// @function terminalReasonLabel: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export terminalReasonLabel(int code) =>
+    switch code
+        1   => "MITIGATED"
+        2 => "INVALIDATED"
+        3    => "PROMOTED_TO_ORDER_BLOCK"
+        => "NONE"
+
+// @function permissionColor: display text for an already-computed code.
+// @param code the display code
+// @returns the label
+export permissionColor(int code) =>
+    switch code
+        0           => color.lime
+        1          => color.red
+        2 => color.aqua
+        3      => color.orange
+        4         => color.yellow
+        => color.gray
+
+// @function timeframeLabel: display text for an already-computed code.
+// @param p the display code
+// @returns the label
+export timeframeLabel(string p) =>
+    // RC3 FIX. The previous body exact-matched "D"/"W"/"M" and then tried to
+    // parse the token as a number. TradingView hands a DAILY chart "1D", which
+    // matches neither branch, so every annotation on a daily host rendered
+    // "TF?" -- the release-blocking defect in the author's D1 screenshot.
+    // Numeric first, calendar suffix second, which covers both the bare and
+    // the counted spellings. Mirrors `timeframe_label` in p7z_zone_model.py.
+    string outTf = "TF?"
+    float minsRaw = str.tonumber(p)
+    if not na(minsRaw) and minsRaw > 0
+        int mins = int(minsRaw)
+        outTf := mins < 60 ? "M" + str.tostring(mins) : mins < 1440 and mins % 60 == 0 ? "H" + str.tostring(int(mins / 60)) : mins == 1440 ? "D1" : "M" + str.tostring(mins)
+    else
+        int n = str.length(p)
+        string sfx = n > 0 ? str.substring(p, n - 1) : ""
+        float hdRaw = n > 1 ? str.tonumber(str.substring(p, 0, n - 1)) : 1.0
+        int hd = na(hdRaw) ? 0 : int(hdRaw)
+        if hd > 0
+            outTf := sfx == "D" ? "D" + str.tostring(hd) : sfx == "W" ? "W" + str.tostring(hd) : sfx == "M" ? "MN" + str.tostring(hd) : sfx == "S" ? "S" + str.tostring(hd) : "TF?"
+    outTf
