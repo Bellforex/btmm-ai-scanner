@@ -27,6 +27,19 @@ Rules (author decisions, 2026-09-17):
   candle is both HAMMER and BULLISH PRESSURE WICK (or SHOOTING STAR and BEARISH
   PRESSURE WICK) the named formation is primary; the wick is suppressed. No other
   non-FVG pair is ordered (``BTRC_V1_RC3_NON_FVG_ARBITRATION_MATRIX.md``).
+* **RC4 profile only** (author decision 2026-09-19, ``rc4_fvg_quality``): the
+  gap rule above is necessary but not sufficient. The FVG's departure candle
+  must also be a genuine expansion -- the FROZEN displacement primitive must
+  class it at least FAST (``range_speed_ratio`` >= ``displacement_fast_ratio``
+  = 1.50 x the median range of the previous 20 bars, ``domain/displacement.py``)
+  AND its range must strictly exceed the immediately preceding candle's range.
+  No new multiplier is introduced: both numbers already exist. Separately, an
+  FVG whose imbalance was already FULLY consumed between its formation and its
+  (possibly much later, reversal-context) availability is not admitted --
+  ``PRE_AVAILABILITY_CONSUMED``. That decision reads only bars already closed at
+  the availability bar, so it adds no lookahead, and it does NOT change the
+  frozen lifecycle rule: a pre-availability touch still never mitigates.
+
 * **Structural context** (author decision A) is the hard gate after this step:
   ``poi/leg_origin.py`` maps a candidate only when the frozen P2 structure at its
   availability agrees with its direction, or when a later break makes its candle
@@ -36,13 +49,20 @@ Rules (author decisions, 2026-09-17):
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
+from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
+from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
+from btmm_ai_scanner.measurements.candle_metrics import (
+    median_total_range,
+    total_range,
+)
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
 
@@ -50,9 +70,12 @@ __all__ = [
     "ARBITER_TYPES",
     "CONTEXT_GATED_TYPES",
     "FVG_TYPES",
+    "DepartureMetrics",
     "QualificationDecision",
     "QualificationReason",
+    "departure_metrics_by_candle",
     "fvg_passes_quality",
+    "fvg_pre_availability_consumed",
     "origin_key",
     "qualify_candidates",
 ]
@@ -91,8 +114,12 @@ CONTEXT_GATED_TYPES = frozenset(
 
 class QualificationReason(StrEnum):
     MAPPED = "MAPPED"
-    QUALITY_REJECT = "QUALITY_REJECT"
+    QUALITY_REJECT = "QUALITY_REJECT"  # gap < 0.35 x ATR-14 (RC3 rule)
     SAME_ORIGIN_SUPPRESSED = "SAME_ORIGIN_SUPPRESSED"
+    # RC4 profile only
+    NO_DISPLACEMENT = "NO_DISPLACEMENT"
+    PREDECESSOR_NOT_EXPANSIVE = "PREDECESSOR_NOT_EXPANSIVE"
+    PRE_AVAILABILITY_CONSUMED = "PRE_AVAILABILITY_CONSUMED"
 
 
 @dataclass(frozen=True)
@@ -112,6 +139,92 @@ def _departure_key(fvg: Any) -> tuple[UUID, PoiDirection]:
     return (fvg.source_candle_record_ids[1], fvg.direction)
 
 
+#: The frozen displacement window / threshold, read from the measurement
+#: contract so this module never restates them (the tick is irrelevant here).
+_DISPLACEMENT = MarketMeasurementConfiguration(minimum_price_tick=Decimal("0.01"))
+
+
+@dataclass(frozen=True)
+class DepartureMetrics:
+    """The frozen expansion measurements of an FVG's departure (middle) candle.
+
+    ``displacement_ratio`` is ``range_speed_ratio``: the candle's total range
+    over the median total range of the previous ``range_context_window`` bars
+    (the same primitive ``domain/displacement.py`` classifies). ``None`` while
+    fewer than a full window of predecessors exists, exactly as an unknown ATR
+    blocks the gap rule."""
+
+    displacement_ratio: Decimal | None
+    expands_predecessor: bool
+
+    @property
+    def is_fast(self) -> bool:
+        return (
+            self.displacement_ratio is not None
+            and self.displacement_ratio >= _DISPLACEMENT.displacement_fast_ratio
+        )
+
+
+def departure_metrics_by_candle(
+    candles: Sequence[NormalizedCandle],
+    indexes: Iterable[int],
+    window: int | None = None,
+) -> dict[UUID, DepartureMetrics]:
+    """``DepartureMetrics`` for the candles at ``indexes`` (departure candles),
+    measured over the bars that precede each one."""
+    size = window or _DISPLACEMENT.range_context_window
+    out: dict[UUID, DepartureMetrics] = {}
+    for index in indexes:
+        if index <= 0 or index >= len(candles):
+            continue
+        candle = candles[index]
+        preceding = candles[max(0, index - size) : index]
+        ratio = (
+            total_range(candle) / median_total_range(preceding)
+            if len(preceding) >= size and median_total_range(preceding) > 0
+            else None
+        )
+        out[candle.record_id] = DepartureMetrics(
+            displacement_ratio=ratio,
+            expands_predecessor=total_range(candle) > total_range(candles[index - 1]),
+        )
+    return out
+
+
+def fvg_pre_availability_consumed(
+    fvg: Any,
+    availability_time_utc: datetime,
+    candles: Sequence[NormalizedCandle],
+) -> bool:
+    """RC4: was the imbalance already fully filled by the time the candidate
+    became available? Reads only candles closed at or before
+    ``availability_time_utc`` and strictly after the formation completed, so it
+    is causal at the availability bar. Full consumption = price traded to the
+    far edge of the gap (a bullish gap is consumed at its bottom).
+
+    The window starts at the THIRD source candle's close, read from the candle
+    itself: the structural context gate rewrites a delayed candidate's
+    ``confirmation_time_utc`` to its new availability, so that field cannot be
+    used to find the formation."""
+    bullish = fvg.direction is PoiDirection.BULLISH
+    third = fvg.source_candle_record_ids[2]
+    formation_end = next(
+        (c.availability_time_utc for c in candles if c.record_id == third), None
+    )
+    if formation_end is None:
+        return False
+    for candle in candles:
+        if candle.availability_time_utc <= formation_end:
+            continue
+        if candle.availability_time_utc > availability_time_utc:
+            break
+        if bullish and candle.low <= fvg.zone_bottom:
+            return True
+        if not bullish and candle.high >= fvg.zone_top:
+            return True
+    return False
+
+
 def fvg_passes_quality(
     fvg: Any, departure_atr: Decimal | None, configuration: PoiConfiguration
 ) -> tuple[bool, Decimal | None]:
@@ -121,11 +234,24 @@ def fvg_passes_quality(
     return ratio >= configuration.fvg_min_gap_atr_ratio, ratio
 
 
+def _rc4_departure_reject(
+    fvg: Any, departure_metrics: Mapping[UUID, DepartureMetrics] | None
+) -> QualificationReason | None:
+    """RC4 displacement gate. ``None`` means the departure candle qualifies."""
+    metrics = (departure_metrics or {}).get(fvg.source_candle_record_ids[1])
+    if metrics is None or not metrics.is_fast:
+        return QualificationReason.NO_DISPLACEMENT
+    if not metrics.expands_predecessor:
+        return QualificationReason.PREDECESSOR_NOT_EXPANSIVE
+    return None
+
+
 def qualify_candidates(
     candidates: Iterable[Any],
     atr_by_candle: Mapping[UUID, Decimal | None],
     configuration: PoiConfiguration,
     known_origins: Mapping[tuple[UUID, PoiDirection], PoiType] | None = None,
+    departure_metrics: Mapping[UUID, DepartureMetrics] | None = None,
 ) -> tuple[list[Any], list[QualificationDecision]]:
     """Split raw candidates into mapped candidates and a decision per FVG.
     Non-FVG candidates pass unchanged (their quality is their frozen detector).
@@ -179,6 +305,12 @@ def qualify_candidates(
                     candidate, QualificationReason.QUALITY_REJECT, ratio
                 )
             )
+        elif configuration.rc4_fvg_quality and (
+            rc4_reason := _rc4_departure_reject(candidate, departure_metrics)
+        ):
+            # RC4 only: a material gap is not enough -- the departure candle
+            # must be a real expansion (frozen displacement primitive).
+            decisions.append(QualificationDecision(candidate, rc4_reason, ratio))
         else:
             decisions.append(
                 QualificationDecision(candidate, QualificationReason.MAPPED, ratio)

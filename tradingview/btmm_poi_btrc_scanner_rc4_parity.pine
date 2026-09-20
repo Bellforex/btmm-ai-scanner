@@ -2797,7 +2797,13 @@ f_poiDetectFvg(int wn) =>
         // RC3 qualification: gap quality vs the departure candle's ATR, and same-origin
         // exclusivity -- a same-direction candle pattern ending on the departure candle
         // (emitted on an earlier bar) is the primary POI of that formation.
-        if typeCode != 0 and zoneTop - zoneBottom >= C_POI_FVG_MIN_GAP_ATR * array.get(wAtr, mi) and not map.contains(poiOriginKey, array.get(wOpenT, mi) * direction)
+        // RC4: the gap must be material AND the departure candle must be a real
+        // expansion -- frozen displacement primitive at least FAST, and larger
+        // than the candle immediately before it.
+        float fvgDepR = array.get(wHigh, mi) - array.get(wLow, mi)
+        float fvgBase = mi >= C_RANGE_CONTEXT_WINDOW ? f_medianRange(wHigh, wLow, mi - C_RANGE_CONTEXT_WINDOW, mi, scDispRange) : 0.0
+        bool fvgDepOk = fvgBase > 0.0 and fvgDepR >= C_DISP_FAST_RATIO * fvgBase and fvgDepR > array.get(wHigh, fi) - array.get(wLow, fi)
+        if typeCode != 0 and fvgDepOk and zoneTop - zoneBottom >= C_POI_FVG_MIN_GAP_ATR * array.get(wAtr, mi) and not map.contains(poiOriginKey, array.get(wOpenT, mi) * direction)
             f_poiEmit(typeCode, direction, zoneTop, zoneBottom, C_POI_TIER_NA, array.get(wOpenT, fi), 3, array.get(wOpenT, ti), array.get(wOpenT, fi), array.get(wAvailT, ti))
 
 // ---- ENGULFING (engulfing.py:27) --------------------------------------------
@@ -3150,7 +3156,14 @@ f_poiGateOrderBlocks() =>
                     if take
                         array.remove(ctPending, k2)
                         int ca = math.max(math.max(cp.availTime, oConf), math.max(ev.availabilityTime, nowT))
-                        if f_poiFind(cp.poiType, cp.srcFirstTime, cp.srcCount, cp.srcLastTime, f_poiTicks(cp.zoneBottom), f_poiTicks(cp.zoneTop)) == -1
+                        // RC4 PRE_AVAILABILITY_CONSUMED: an imbalance already
+                        // filled before this late release is not admitted.
+                        bool cpOk = true
+                        if cp.poiType == C_POI_BUY_FAIR_VALUE_GAP or cp.poiType == C_POI_SELL_FAIR_VALUE_GAP
+                            for [cj, cav] in wAvailT
+                                if cpOk and cav > cp.availTime and cav <= ca and (cp.direction == C_POI_DIR_BULLISH ? array.get(wLow, cj) <= cp.zoneBottom : array.get(wHigh, cj) >= cp.zoneTop)
+                                    cpOk := false
+                        if cpOk and f_poiFind(cp.poiType, cp.srcFirstTime, cp.srcCount, cp.srcLastTime, f_poiTicks(cp.zoneBottom), f_poiTicks(cp.zoneTop)) == -1
                             f_poiAppend(PoiRec.new(cp.poiType, cp.direction, cp.zoneTop, cp.zoneBottom, cp.candidateTime, ca, ca, cp.strengthTier, cp.srcFirstTime, cp.srcCount, cp.srcLastTime))
                     if not take
                         k2 += 1

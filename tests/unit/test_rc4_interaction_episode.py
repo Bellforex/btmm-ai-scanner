@@ -216,12 +216,20 @@ def _run(rc4: bool):
                 and not state.fresh_active
             ):
                 episode_open_bars += 1
+        last_analysis = bar.analysis
         for ev in bar.events:
             if terminal_bars.get(ev.poi_idx):
                 events_after.append((ev.poi_idx, ev.event_type.value))
             if ev.event_type.value == "POI_TERMINAL":
                 terminal_bars[ev.poi_idx].append(bar.bar_index)
+    fvgs = {
+        (str(o.zone_bottom), str(o.zone_top), o.candidate_event_time_utc.isoformat())
+        for o in last_analysis.poi_analysis.poi_observations
+        if o.poi_type.value.endswith("FAIR_VALUE_GAP")
+        and o.source_timeframe is Timeframe.M15
+    }
     return {
+        "fvgs": fvgs,
         "first_nonfresh": first_nonfresh,
         "terminal_bars": terminal_bars,
         "events_after": events_after,
@@ -289,3 +297,11 @@ def test_rc4_incremental_equals_batch_for_unrevised_levels(runs) -> None:
     bat = {(e.level_id, e.bar_index, e.sweep_type, e.level_price) for e in batch}
     assert inc and inc == bat
     assert Decimal(0) not in {e.level_price for e in batch}
+
+
+def test_rc4_fvg_quality_is_rc4_only_and_strictly_more_selective(runs) -> None:
+    """RC3 keeps every FVG its frozen contract mapped; the RC4 profile maps a
+    strict subset (author decision 2026-09-19: displacement + predecessor
+    expansion + not already consumed at availability)."""
+    rc3, rc4 = runs["rc3"]["fvgs"], runs["rc4"]["fvgs"]
+    assert rc4 < rc3, (len(rc3), len(rc4))

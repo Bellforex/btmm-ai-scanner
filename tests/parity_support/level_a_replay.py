@@ -261,6 +261,17 @@ def iter_level_a_bars(
     """
     if len(host_series) == 0:
         return
+    if rc4_framework and not configuration.poi_configuration.rc4_fvg_quality:
+        # One profile switch: the RC4 market framework always runs the RC4 POI
+        # qualification contract (FVG displacement + pre-availability
+        # consumption). RC3 callers are untouched.
+        configuration = configuration.model_copy(
+            update={
+                "poi_configuration": configuration.poi_configuration.model_copy(
+                    update={"rc4_fvg_quality": True}
+                )
+            }
+        )
     if host_timeframe in context_series:
         raise ValueError(
             f"{host_timeframe} is the host timeframe and must not also appear "
