@@ -1,6 +1,6 @@
 //@version=6
 // =============================================================================
-// EZFX generic Pine UI helpers -- PRESENTATION AND GENERIC ALGORITHMS ONLY.
+// BAH generic Pine UI helpers -- PRESENTATION AND GENERIC ALGORITHMS ONLY.
 // -----------------------------------------------------------------------------
 // This library contains NO trading logic. It holds no threshold, no score, no
 // weight, no qualification rule and no market decision. It does two things:
@@ -14,11 +14,11 @@
 // already decided. Scanner constant names are inlined as integer literals so
 // the library carries none of the scanner's internal vocabulary.
 //
-// Copyright and authorship: EZFX (this script's author).
+// Copyright and authorship: BAH (this script's author).
 // The author permits this library to be imported by the author's own
-// protected / invite-only EZFX scripts.
+// protected / invite-only BAH scripts.
 // =============================================================================
-library("ezfx_pine_ui_helpers", overlay = true)
+library("bah_pine_ui_helpers", overlay = true)
 
 // @function POI type code -> display name.
 // @param code already-computed code
