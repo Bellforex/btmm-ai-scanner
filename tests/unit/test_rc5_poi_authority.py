@@ -225,3 +225,50 @@ def test_containment_is_inclusive_on_both_edges() -> None:
     above = _c(PoiType.SHOOTING_STAR, "4657.56", "4673.71")
     assert contains_zone(outer, flush)
     assert not contains_zone(outer, above)
+
+
+# --------------------------------------------------------------------------
+# author cluster-identity guard: structural identifiers take precedence
+# --------------------------------------------------------------------------
+
+FORMATION_CLUSTER = OriginClusterKey(
+    direction=PoiDirection.BEARISH,
+    formation_candle_id=uuid.uuid4(),
+)
+
+
+def test_structural_provenance_is_reported() -> None:
+    assert CLUSTER.is_structural
+    assert not FORMATION_CLUSTER.is_structural
+
+
+def test_a_same_candle_cluster_never_subordinates_an_fvg() -> None:
+    """One candle can produce a reversal AND its own imbalance. Without
+    structural provenance the FVG must survive even when contained."""
+    star = _c(PoiType.SHOOTING_STAR, "4460", "4500")
+    fvg = _c(PoiType.SELL_FAIR_VALUE_GAP, "4470", "4490")
+    got = _by_type(arbitrate_cluster([star, fvg], FORMATION_CLUSTER))
+    assert got[PoiType.SHOOTING_STAR] is AuthorityReason.PRIMARY
+    assert got[PoiType.SELL_FAIR_VALUE_GAP] is AuthorityReason.INDEPENDENT
+
+
+def test_a_same_candle_cluster_still_arbitrates_reversal_synonyms() -> None:
+    """The legitimate same-candle case: a HAMMER drawn inside its own
+    BULLISH ENGULFING is one formation described twice."""
+    eng = _c(
+        PoiType.BULLISH_ENGULFING,
+        "3285.11",
+        "3297.55",
+        direction=PoiDirection.BULLISH,
+    )
+    hammer = _c(PoiType.HAMMER, "3285.11", "3294.40", direction=PoiDirection.BULLISH)
+    got = _by_type(
+        arbitrate_cluster(
+            [hammer, eng],
+            OriginClusterKey(
+                direction=PoiDirection.BULLISH, formation_candle_id=uuid.uuid4()
+            ),
+        )
+    )
+    assert got[PoiType.BULLISH_ENGULFING] is AuthorityReason.PRIMARY
+    assert got[PoiType.HAMMER] is AuthorityReason.SAME_ORIGIN_SUBORDINATE

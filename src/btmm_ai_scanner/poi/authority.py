@@ -103,15 +103,30 @@ class AuthorityReason(StrEnum):
     INDEPENDENT = "INDEPENDENT"
 
 
+class ClusterProvenance(StrEnum):
+    """How a cluster was identified. STRUCTURAL always wins (author guard,
+    2026-09-20): when authoritative structural identifiers exist they take
+    precedence, and a same-candle relationship may never override valid
+    structural separation."""
+
+    STRUCTURAL = "STRUCTURAL"
+    FORMATION_CANDLE = "FORMATION_CANDLE"
+
+
 @dataclass(frozen=True)
 class OriginClusterKey:
     """A structural decision origin.
 
-    ``formation_candle_id`` alone identifies candidates detected on the same
-    candle (a HAMMER inside its BULLISH ENGULFING). ``transition_break_candle_id``
-    plus ``origin_swing_id`` identifies the leg-level origin the frozen
-    reversal-context gate assigns -- the case where the members sit on
-    *different* candles of one reversal, as on the author's M45 example.
+    ``STRUCTURAL`` provenance names the leg origin the frozen reversal-context
+    gate assigns -- ``(confirming transition, broken swing, origin swing)`` --
+    and covers the case where the members sit on *different* candles of one
+    reversal, as on the author's M45 example.
+
+    ``FORMATION_CANDLE`` is the weak fallback used ONLY when structural
+    provenance is unavailable. One candle can legitimately produce a reversal
+    formation AND a separate imbalance, so a shared candle alone is never
+    enough to merge semantic families: a formation-candle cluster arbitrates
+    reversal synonyms only and never touches an FVG.
     """
 
     direction: PoiDirection
@@ -121,9 +136,15 @@ class OriginClusterKey:
     origin_swing_id: UUID | None = None
 
     @property
+    def provenance(self) -> ClusterProvenance:
+        if self.origin_swing_id is not None:
+            return ClusterProvenance.STRUCTURAL
+        return ClusterProvenance.FORMATION_CANDLE
+
+    @property
     def is_structural(self) -> bool:
         """True when the key names a leg origin rather than a single candle."""
-        return self.origin_swing_id is not None
+        return self.provenance is ClusterProvenance.STRUCTURAL
 
 
 @dataclass(frozen=True)
@@ -199,8 +220,12 @@ def arbitrate_cluster(
         )
 
     for candidate in others:
+        # Author guard: a shared formation candle is NOT authority. One candle
+        # can produce a reversal AND an independent imbalance, so only a
+        # STRUCTURAL cluster may ever subordinate an FVG.
         by_product = (
-            candidate.poi_type in FVG_TYPES
+            cluster.is_structural
+            and candidate.poi_type in FVG_TYPES
             and candidate.direction is primary.direction
             and contains_zone(primary, candidate)
         )
