@@ -13,6 +13,10 @@
 // It DECIDES nothing. It only DRAWS and FORMATS what the closed scanner has
 // already decided. Scanner constant names are inlined as integer literals so
 // the library carries none of the scanner's internal vocabulary.
+//
+// Copyright and authorship: EZFX (this script's author).
+// The author permits this library to be imported by the author's own
+// protected / invite-only EZFX scripts.
 // =============================================================================
 library("ezfx_pine_ui_helpers", overlay = true)
 
@@ -21,24 +25,24 @@ library("ezfx_pine_ui_helpers", overlay = true)
 // @returns the display value
 export poiTypeLabel(int code) =>
     switch code
-        1       => "BUY ORDER BLOCK"
-        2      => "SELL ORDER BLOCK"
-        3    => "BUY FVG"
-        4   => "SELL FVG"
-        5    => "BUY TO SELL CANDLE"
-        6    => "SELL TO BUY CANDLE"
-        7            => "BASE RALLY"
-        8             => "BASE DROP"
+        1 => "BUY ORDER BLOCK"
+        2 => "SELL ORDER BLOCK"
+        3 => "BUY FVG"
+        4 => "SELL FVG"
+        5 => "BUY TO SELL CANDLE"
+        6 => "SELL TO BUY CANDLE"
+        7 => "BASE RALLY"
+        8 => "BASE DROP"
         9 => "BULLISH PRESSURE WICK"
         10 => "BEARISH PRESSURE WICK"
-        11     => "BULLISH ENGULFING"
-        12     => "BEARISH ENGULFING"
-        13                => "HAMMER"
-        14         => "SHOOTING STAR"
-        15          => "MORNING STAR"
-        16          => "EVENING STAR"
-        17          => "SUPPORT ZONE"
-        18       => "RESISTANCE ZONE"
+        11 => "BULLISH ENGULFING"
+        12 => "BEARISH ENGULFING"
+        13 => "HAMMER"
+        14 => "SHOOTING STAR"
+        15 => "MORNING STAR"
+        16 => "EVENING STAR"
+        17 => "SUPPORT ZONE"
+        18 => "RESISTANCE ZONE"
         => "UNKNOWN"
 
 // @function permission code -> display text.
@@ -46,12 +50,12 @@ export poiTypeLabel(int code) =>
 // @returns the display value
 export permissionLabel(int code) =>
     switch code
-        0           => "BUY BIAS"
-        1          => "SELL BIAS"
+        0 => "BUY BIAS"
+        1 => "SELL BIAS"
         2 => "ALLOW (BOTH)"
-        3      => "COUNTER-TREND"
-        4         => "WATCH ONLY"
-        5   => "NO TRADE"
+        3 => "COUNTER-TREND"
+        4 => "WATCH ONLY"
+        5 => "NO TRADE"
         => "-"
 
 // @function lifecycle code -> display text.
@@ -59,13 +63,13 @@ export permissionLabel(int code) =>
 // @returns the display value
 export lifecycleLabel(int code) =>
     switch code
-        0               => "DETECTED"
+        0 => "DETECTED"
         1 => "STRUCTURAL"
-        3          => "POI VALIDATED"
-        4        => "TREND VALIDATED"
-        5       => "REGIME VALIDATED"
-        6     => "MOMENTUM VALIDATED"
-        7    => "LIQUIDITY VALIDATED"
+        3 => "POI VALIDATED"
+        4 => "TREND VALIDATED"
+        5 => "REGIME VALIDATED"
+        6 => "MOMENTUM VALIDATED"
+        7 => "LIQUIDITY VALIDATED"
         => "-"
 
 // @function strength tier code -> display text.
@@ -73,7 +77,7 @@ export lifecycleLabel(int code) =>
 // @returns the display value
 export tierLabel(int code) =>
     switch code
-        2   => "STRONG"
+        2 => "STRONG"
         1 => "STANDARD"
         => "-"
 
@@ -83,9 +87,9 @@ export tierLabel(int code) =>
 export directionLabel(int code) =>
     switch code
         2 => "STRONG BULL"
-        1        => "BULLISH"
-        0        => "NEUTRAL"
-        -1        => "BEARISH"
+        1 => "BULLISH"
+        0 => "NEUTRAL"
+        -1 => "BEARISH"
         -2 => "STRONG BEAR"
         => "-"
 
@@ -94,12 +98,12 @@ export directionLabel(int code) =>
 // @returns the display value
 export trendStateLabel(int code) =>
     switch code
-        0    => "UNKNOWN"
-        1    => "FORMING"
-        2   => "TRENDING"
+        0 => "UNKNOWN"
+        1 => "FORMING"
+        2 => "TRENDING"
         3 => "TRANSITION"
         4 => "EXHAUSTING"
-        5      => "RANGE"
+        5 => "RANGE"
         => "-"
 
 // @function regime code -> display text.
@@ -107,14 +111,14 @@ export trendStateLabel(int code) =>
 // @returns the display value
 export regimeLabel(int code) =>
     switch code
-        0        => "UNCERTAIN"
-        1       => "TRANSITION"
-        2            => "TREND"
-        3     => "DECELERATION"
-        4            => "RANGE"
-        5        => "EXPANSION"
+        0 => "UNCERTAIN"
+        1 => "TRANSITION"
+        2 => "TREND"
+        3 => "DECELERATION"
+        4 => "RANGE"
+        5 => "EXPANSION"
         6 => "BREAKOUT PENDING"
-        7      => "COMPRESSION"
+        7 => "COMPRESSION"
         => "-"
 
 // @function momentum-acceleration code -> display text.
@@ -123,7 +127,7 @@ export regimeLabel(int code) =>
 export momentumAccelLabel(int code) =>
     switch code
         1 => "ACCELERATING"
-        0       => "STEADY"
+        0 => "STEADY"
         -1 => "DECELERATING"
         => "-"
 
@@ -132,11 +136,11 @@ export momentumAccelLabel(int code) =>
 // @returns the display value
 export breakoutLabel(int code) =>
     switch code
-        1      => "WEAK BREAK"
-        2     => "VALID BREAK"
-        3    => "STRONG BREAK"
+        1 => "WEAK BREAK"
+        2 => "VALID BREAK"
+        3 => "STRONG BREAK"
         4 => "EXPLOSIVE BREAK"
-        5    => "FAILED BREAK"
+        5 => "FAILED BREAK"
         => "NONE"
 
 // @function pullback code -> display text.
@@ -144,9 +148,9 @@ export breakoutLabel(int code) =>
 // @returns the display value
 export pullbackLabel(int code) =>
     switch code
-        1   => "SHALLOW"
-        2   => "HEALTHY"
-        3      => "DEEP"
+        1 => "SHALLOW"
+        2 => "HEALTHY"
+        3 => "DEEP"
         4 => "STRUCTURAL FAILURE"
         => "NONE"
 
@@ -155,13 +159,13 @@ export pullbackLabel(int code) =>
 // @returns the display value
 export sessionLabel(int code) =>
     switch code
-        0             => "ASIAN"
-        1    => "LONDON PRE-OPEN"
-        2            => "LONDON"
-        3  => "NEW YORK PRE-OPEN"
+        0 => "ASIAN"
+        1 => "LONDON PRE-OPEN"
+        2 => "LONDON"
+        3 => "NEW YORK PRE-OPEN"
         4 => "LONDON/NY OVERLAP"
-        5          => "NEW YORK"
-        6           => "POST NY"
+        5 => "NEW YORK"
+        6 => "POST NY"
         => "-"
 
 // @function volatility code -> display text.
@@ -170,10 +174,10 @@ export sessionLabel(int code) =>
 export volatilityLabel(int code) =>
     switch code
         0 => "VERY LOW"
-        1      => "LOW"
-        2   => "NORMAL"
-        3     => "HIGH"
-        4  => "EXTREME"
+        1 => "LOW"
+        2 => "NORMAL"
+        3 => "HIGH"
+        4 => "EXTREME"
         => "-"
 
 // @function alignment code -> display text.
@@ -181,9 +185,9 @@ export volatilityLabel(int code) =>
 // @returns the display value
 export alignmentLabel(int code) =>
     switch code
-        0       => "ALIGNED"
-        1       => "PARTIAL"
-        2       => "NEUTRAL"
+        0 => "ALIGNED"
+        1 => "PARTIAL"
+        2 => "NEUTRAL"
         3 => "COUNTER-TREND"
         => "-"
 
@@ -192,9 +196,9 @@ export alignmentLabel(int code) =>
 // @returns the display value
 export terminalReasonLabel(int code) =>
     switch code
-        1   => "MITIGATED"
+        1 => "MITIGATED"
         2 => "INVALIDATED"
-        3    => "PROMOTED_TO_ORDER_BLOCK"
+        3 => "PROMOTED_TO_ORDER_BLOCK"
         => "NONE"
 
 // @function permission code -> display colour.
@@ -202,23 +206,20 @@ export terminalReasonLabel(int code) =>
 // @returns the display value
 export permissionColor(int code) =>
     switch code
-        0           => color.lime
-        1          => color.red
+        0 => color.lime
+        1 => color.red
         2 => color.aqua
-        3      => color.orange
-        4         => color.yellow
+        3 => color.orange
+        4 => color.yellow
         => color.gray
 
 // @function raw timeframe token -> M1/M5/M15/H1/H4/D1/W1 vocabulary.
 // @param p already-computed code
 // @returns the display value
 export timeframeLabel(string p) =>
-    // RC3 FIX. The previous body exact-matched "D"/"W"/"M" and then tried to
-    // parse the token as a number. TradingView hands a DAILY chart "1D", which
-    // matches neither branch, so every annotation on a daily host rendered
-    // "TF?" -- the release-blocking defect in the author's D1 screenshot.
-    // Numeric first, calendar suffix second, which covers both the bare and
-    // the counted spellings. Mirrors `timeframe_label` in p7z_zone_model.py.
+    // Numeric first, calendar suffix second: TradingView hands a daily chart
+    // the token "1D" and an intraday chart a bare minute count, so both
+    // spellings have to be covered.
     string outTf = "TF?"
     float minsRaw = str.tonumber(p)
     if not na(minsRaw) and minsRaw > 0
