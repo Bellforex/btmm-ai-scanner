@@ -1,7 +1,7 @@
 # RC4 seminar demo runbook
 
 Build: TradingView USER `[RC4 MARKET FRAMEWORK]` v14 (saved source `1279474b…`),
-scanner semantics `e228c5d`, paper bot `bot-dryrun-integration` `c5199d5`.
+scanner semantics `2f1d2b9`, paper bot `bot-dryrun-integration`.
 Educational demonstration only: paper / simulation, no live broker, no
 profitability claim. Status: RC4 EVENT / DEMO READY; full RC4 authority,
 production approval, main merge and TradingView publication are all still
@@ -52,7 +52,7 @@ PYTHONPATH="$(pwd -W)/src;$(pwd -W)" /c/Users/user/Desktop/btmm-ai-scanner/.venv
 ```
 
 * Context lookback defaults to **250** (inherited from the scanner; 40 starved
-  the higher-timeframe trend context). Scanner pin **`e228c5d`**: the run
+  the higher-timeframe trend context). Scanner pin **`2f1d2b9`**: the run
   refuses to start on any other scanner source. Execution mode **PAPER**;
   there is no broker code.
 * One trading day ≈ 30 s. Show `status`, `health`, then the journals in

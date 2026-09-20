@@ -11,10 +11,10 @@ SHA `3f9f790` untouched). Bot: branch `bot-dryrun-integration`.
 
 | item | value |
 |---|---|
-| final RC4 semantic SHA | `e228c5d` (interaction-episode contract locked; evidence fields only, P3/P5/P8 digests unchanged vs `a15c199`) |
-| USER build | `[RC4 MARKET FRAMEWORK]` v14, saved source `1279474b…`, token count ≈ 100 240–100 255 of 100 256 (headroom ≈ 0) |
-| PARITY build | `[RC4 PARITY]` v1, saved source `127f775c…` |
-| bot | `bot-dryrun-integration` `c5199d5`, pinned to `e228c5d` (digest `c0d4bb15…`), context lookback inherited from the scanner (250) |
+| final RC4 semantic SHA | `2f1d2b9` (RC4 FVG quality + `PRE_AVAILABILITY_CONSUMED`; supersedes `e228c5d`) |
+| USER build | `[RC4 MARKET FRAMEWORK]` v16, saved source `a0417dcc…`, **99 410** of 100 256 compiled tokens (headroom **846**) |
+| PARITY build | `[RC4 PARITY]` v3, saved source `84c87936…` |
+| bot | `bot-dryrun-integration`, pinned to `2f1d2b9` (digest `f751c46b…`), context lookback inherited from the scanner (250), `EXECUTION_MODE = PAPER` |
 
 ### RC4 interaction-episode contract (RC4 profile only; RC3 unchanged)
 
@@ -89,7 +89,7 @@ All values are provisional and were never tuned on outcomes.
 | RC4 unit tests (`tests/unit/test_rc4_market_framework.py`, 19) | pass |
 | RC4 interaction-episode matrix (`tests/unit/test_rc4_interaction_episode.py`, 17) | pass |
 | RC4 Pine source contract (`tests/unit/test_rc4_pine_sources.py`, 8) | pass |
-| full suite (`--ignore=tests/unit/test_v1a_m5_materiality.py`) on `e228c5d` | **4 919 passed, 0 failed** (exit 0); bot branch `tests/bot` 73 passed |
+| full suite (`--ignore=tests/unit/test_v1a_m5_materiality.py`) on `2f1d2b9` | **4 941 passed, 0 failed** (exit 0); bot branch `tests/bot` 73 passed |
 | ruff (src + RC4 files) / mypy src / git diff --check | all clean / no issues in 144 files / clean |
 | no-lookahead | unit: a past assessment is unchanged by future candles; Pine and Python both evaluate on confirmed bars only |
 | determinism | repeat bounded runs identical; aligned replay period digests P3 `946b6a9c…`, P5 `e72e6f97…`, P8 `9d24dd57…` |
@@ -97,16 +97,22 @@ All values are provisional and were never tuned on outcomes.
 
 ## 3. Python ↔ Pine parity (RC4 profile, real FXCM data)
 
-Capture `artifacts/rc4_aligned/pine_m15_run1.csv` (sha256 `772ab9d7…`),
-PARITY build v1 (saved source `127f775c…`), FX:XAUUSD M15 host window
-2026-08-24 07:00 → 2026-09-18 20:30 (1 800 bars). Six same-session OHLC exports
-selected by RUNMETA count + checksum. Level-A replay 500 host bars with `--rc4`.
+Re-established after the RC4 FVG correction on a **fresh same-session capture**:
+`artifacts/rc4_aligned_v2/pine_m15_run2.csv`, PARITY build v3 (saved source
+`84c87936…`), FX:XAUUSD M15 host window 2026-08-24 07:00 → 2026-09-18 20:30
+(1 800 bars, RUNMETA host checksum `31903896.42999992`). Six same-session OHLC
+exports selected by RUNMETA count + checksum. Level-A replay 500 host bars with
+`--rc4`; 300 bars compared.
 
 | stage | compared | mismatches |
 |---|---|---|
-| P3 | 108 POIs | 0 |
-| P5 | 1 874 rows / 300 bars | 0 |
-| P8 | 471 events | 0 payload, 0 ordering |
+| P3 | 93 POIs | 0 (0 python-only, 0 pine-only) |
+| P5 | 1 634 rows / 300 bars | 0 |
+| P8 | 394 events (Pine 394 / Python 394) | 0 payload, 0 ordering, 0 terminal anomalies |
+
+`first_divergence: null`. The superseded pre-correction capture
+(`artifacts/rc4_aligned/`, PARITY v1, P3 108 / P5 1 874 / P8 471) is retained
+for the forensic record.
 
 RC4 exercised inside the window: BTMM score 85 on 1 191 rows and 55 on 683;
 location scores 20 / 35 / 40 / 50 / 55 / 65 / 70 / 75 / 80 / 90 / 95 all
@@ -116,13 +122,13 @@ present (range, trend and sweep-bonus paths).
 
 | build | saved version | saved source sha256 | compile |
 |---|---|---|---|
-| USER `[RC4 MARKET FRAMEWORK]` | v14 | `1279474b…` | OK (under the 100 256-token limit) |
-| PARITY `[RC4 PARITY]` | v1 | `127f775c…` | OK |
+| USER `[RC4 MARKET FRAMEWORK]` | v16 | `a0417dcc…` | OK — 99 410 / 100 256 tokens (headroom 846) |
+| PARITY `[RC4 PARITY]` | v3 | `84c87936…` | OK |
 
 Generated deterministically by `tools/rc4_pine_build/build_rc4_pine.py` from
 the frozen RC3 builds (byte-identical regeneration).
 
-Live acceptance (USER v14 on FX:XAUUSD): M1, M5, M15, H1, H4, D1, W1 all complete
+Live acceptance (USER v16 on FX:XAUUSD): M1, M5, M15, H1, H4, D1, W1 all complete
 with no runtime error. Display switches verified on M15 by counting drawn
 objects: all layers off → 0 lines / 0 labels; on → market structure
 (BOS / CHOCH / SH / SL), range (high, low, dotted midpoint), trendline,
@@ -136,22 +142,26 @@ range was never replayed). Final decision per POI; "core" = the 18 canonical
 types. H4 120 already spans the whole in-sample dataset (to 2026-09-04), so no
 longer H4 window exists; H1 500 was stopped as optional (deadline).
 
-| run | window | POIs raw / core | TREND / RANGE | Fib <50 / 50–61.8 / 61.8–79 / >79 | DIS / DEL / WIP / MULTIPLE (reason) | P5 WATCH / BUY / SELL / COUNTER | P8 ACT / BTMM / ENTER / LOST / TERM |
+| run | window | POIs evaluated | TREND / RANGE | Fib <50 / 50–61.8 / 61.8–79 / >79 | DIS / DEL / WIP / MULTIPLE (reason) | P5 final WATCH / BUY / SELL / COUNTER | P8 ACT / BTMM / ENTER / LOST / TERM |
 |---|---|---|---|---|---|---|---|
-| M15 120 | 08-09 → 08-11 | 269 / 143 | 141 / 0 | 19 / 8 / 23 / 91 | 79 / 14 / 7 / 25 | 143 / 78 / 5 / 39 | 141 / 125 / 159 / 76 / 59 |
-| M15 300 | 08-09 → 08-13 | 503 / 323 | 178 / 145 | 44 / 31 / 43 / 60 | 95 / 58 / 15 / 77 | 227 / 144 / 5 / 123 | 375 / 255 / 643 / 494 / 225 |
-| M15 500 | 08-09 → 08-17 | 754 / 476 | 401 / 75 | 79 / 50 / 75 / 197 | 108 / 78 / 29 / 138 | 362 / 206 / 5 / 177 | 626 / 369 / 965 / 754 / 378 |
-| H1 120 | 08-09 → 08-17 | 600 / 336 | 334 / 0 | 78 / 36 / 64 / 156 | 87 / 31 / 31 / 98 | 294 / 157 / 4 / 141 | 474 / 255 / 436 / 275 / 219 |
-| H1 300 | 08-09 → 08-26 | 1 184 / 683 | 549 / 134 | 187 / 66 / 120 / 176 | 107 / 66 / 53 / 251 | 530 / 313 / 4 / 333 | 1 058 / 512 / 1 319 / 1 002 / 563 |
-| H4 120 | 08-09 → 09-04 | 1 405 / 720 | 459 / 261 | 121 / 39 / 66 / 233 | 110 / 29 / 80 / 268 | 663 / 256 / 0 / 472 | 1 293 / 512 / 1 015 / 759 / 550 |
+| M15 120 | 08-09 → 08-11 | 244 | 116 / 0 | 15 / 7 / 20 / 74 | 61 / 11 / 6 / 22 | 143 / 60 / 5 / 32 | 130 / 100 / 140 / 75 / 52 |
+| M15 300 | 08-09 → 08-13 | 454 | 156 / 118 | 37 / 25 / 38 / 56 | 77 / 51 / 13 / 64 | 221 / 120 / 5 / 104 | 340 / 215 / 579 / 454 / 196 |
+| H1 120 | 08-09 → 08-17 | 538 | 272 / 0 | 62 / 32 / 51 / 127 | 64 / 23 / 22 / 88 | 285 / 128 / 4 / 117 | 426 / 204 / 375 / 243 / 186 |
+| H4 120 | 08-09 → 09-04 | 1 306 | 398 / 223 | 106 / 35 / 58 / 199 | 89 / 27 / 70 / 236 | 642 / 220 / 0 / 430 | 1 201 / 443 / 878 / 658 / 481 |
+
+Re-run **after** the RC4 FVG correction; the pre-correction snapshots are kept
+as `artifacts/rc4_backtest/<run>_before.json`. The M15 500 / H1 300 / H4 500
+directories still hold pre-correction runs (not re-run; deadline). Impact and
+rejection breakdown:
+`docs/validation/BTRC_V1_RC4_FVG_QUALITY_AND_PRE_AVAILABILITY_CONSUMPTION.md`.
 
 All 18 canonical types occur across the runs (fewest: B2S 6, S2B 10,
 SELL_ORDER_BLOCK 20). Reports: `artifacts/rc4_backtest/<run>/report.json`.
 
 ## 6. Dry-run bot (paper only)
 
-Branch `bot-dryrun-integration` `c5199d5`: final scanner `e228c5d` merged, pin
-`e228c5d` (fingerprint of 160 imported scanner files `c0d4bb15…`; mismatch
+Branch `bot-dryrun-integration`: final scanner `2f1d2b9` merged, pin
+`2f1d2b9` (fingerprint of 160 imported scanner files `f751c46b…`; mismatch
 refuses to run), context lookback **inherited from the scanner authority
 (250)** — the old bot default of 40 starved the D1 / W1 context and produced
 zero actionable permissions (regression tests added). No broker code
