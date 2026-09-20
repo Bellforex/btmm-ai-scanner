@@ -628,6 +628,7 @@ def advance_detector_frontier(
         candles_so_far,
         measurement_analysis.confirmed_swings,
         step_candidates,
+        rc5_structural_origin=configuration.rc5_structural_origin,
     )
     step_candidates = list(new_leg_origin.newly_mapped)
     if configuration.rc4_fvg_quality:

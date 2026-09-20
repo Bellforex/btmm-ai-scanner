@@ -432,12 +432,16 @@ def _detect_bundle_candidates(
         if configuration.rc4_fvg_quality
         else None,
     )
-    order_blocks, context_mapped = immutable_structure_gate(
+    # The RC5 structural-origin gate runs INSIDE the prefix replay, not here:
+    # a role is only true from its confirming break's availability, so the
+    # final-prefix context returned below must never gate an earlier bar.
+    order_blocks, context_mapped, _structural_context = immutable_structure_gate(
         detect_order_blocks(bundle.candles, configuration),
         qualified,
         bundle.candles,
         bundle.measurement_analysis.confirmed_swings,
         measurement_configuration,
+        rc5_structural_origin=configuration.rc5_structural_origin,
     )
     if configuration.rc4_fvg_quality:
         # RC4: an FVG whose imbalance was already fully consumed by the time its

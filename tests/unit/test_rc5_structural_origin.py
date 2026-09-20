@@ -109,20 +109,34 @@ def test_a_bearish_pattern_on_a_broken_swing_high_is_a_swing_high_origin() -> No
     candle, swing = uuid.uuid4(), uuid.uuid4()
     candidate = _c(PoiType.EVENING_STAR, "4629.23", "4673.71", candle=candle)
     (decision,) = assign_structural_roles(
-        [candidate], swing_high_candle_ids={candle: swing}
+        [candidate],
+        swing_high_candle_ids={candle: swing},
+        broken_swing_ids=frozenset({swing}),
     )
     assert decision.role is StructuralRole.SWING_HIGH_ORIGIN
 
 
-def test_an_unbroken_swing_makes_the_terminal_a_pullback_extreme() -> None:
+def test_the_walks_live_protected_level_is_a_pullback_extreme() -> None:
     candle, swing = uuid.uuid4(), uuid.uuid4()
     candidate = _c(PoiType.SHOOTING_STAR, "4460", "4500", candle=candle)
     (decision,) = assign_structural_roles(
         [candidate],
         swing_high_candle_ids={candle: swing},
-        unbroken_swing_ids=frozenset({swing}),
+        live_structure_swing_ids=frozenset({swing}),
     )
     assert decision.role is StructuralRole.PULLBACK_HIGH
+
+
+def test_a_swing_the_walk_neither_took_nor_protects_confers_no_role() -> None:
+    """The H3 staircase defect: every wick is its own confirmed swing high, so
+    'is a confirmed swing pivot' promotes all six and refuses nothing."""
+    candle, swing = uuid.uuid4(), uuid.uuid4()
+    candidate = _c(PoiType.BEARISH_PRESSURE_WICK, "4588", "4600", candle=candle)
+    (decision,) = assign_structural_roles(
+        [candidate], swing_high_candle_ids={candle: swing}
+    )
+    assert decision.role is StructuralRole.MID_LEG
+    assert decision.origin_swing_id is None
 
 
 def test_a_bullish_pattern_on_a_swing_high_is_not_promoted() -> None:
@@ -144,7 +158,9 @@ def test_a_bullish_pattern_on_a_swing_low_is_promoted() -> None:
         PoiType.HAMMER, "4000", "4040", candle=candle, direction=PoiDirection.BULLISH
     )
     (decision,) = assign_structural_roles(
-        [candidate], swing_low_candle_ids={candle: swing}
+        [candidate],
+        swing_low_candle_ids={candle: swing},
+        broken_swing_ids=frozenset({swing}),
     )
     assert decision.role is StructuralRole.SWING_LOW_ORIGIN
 

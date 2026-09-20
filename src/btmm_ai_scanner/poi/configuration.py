@@ -65,6 +65,16 @@ class PoiConfiguration(ContractModel):
     #: False keeps the frozen RC3 contract exactly.
     rc4_fvg_quality: bool = False
 
+    #: RC5 profile only (author decision 2026-09-20). A reversal-family
+    #: candidate is promoted only where the market actually made a structural
+    #: decision: its formation must touch a leg origin, a confirmed swing
+    #: extreme on its own side, a pullback terminal, a range boundary,
+    #: tracked liquidity or a trendline. Geometrically perfect candles in
+    #: mid-leg texture stay raw patterns. Answers "is this a POI at all?";
+    #: same-origin arbitration is a separate filter (``poi/authority.py``).
+    #: False keeps the frozen RC3/RC4 contract exactly.
+    rc5_structural_origin: bool = False
+
     reversal_candidate_size_ratio_standard: Decimal = Decimal("2.0")
     reversal_candidate_size_ratio_strong: Decimal = Decimal("3.0")
     reversal_body_efficiency_standard: Decimal = Decimal("0.60")

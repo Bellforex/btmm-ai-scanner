@@ -46,7 +46,7 @@ from __future__ import annotations
 import bisect
 import uuid
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -69,8 +69,10 @@ from btmm_ai_scanner.domain.swings import (
     _Pivot,
     _supersede_same_direction_runs,
 )
+from btmm_ai_scanner.poi.authority import REVERSAL_TYPES
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
 from btmm_ai_scanner.poi.order_blocks import OrderBlockCandidate
+from btmm_ai_scanner.poi.structural_role import StructuralRole
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
 from btmm_ai_scanner.structure.enums import (
     StructureDirection,
@@ -86,11 +88,14 @@ __all__ = [
     "ContextDecision",
     "ContextReason",
     "LegOriginFrontier",
+    "StructuralContext",
+    "StructuralRoleFact",
     "advance_leg_origin_frontier",
     "immutable_leg_origin_order_blocks",
     "immutable_structure_gate",
     "iter_prefix_swing_candidates",
     "leg_origin_order_blocks",
+    "structural_role_of",
     "structure_context_decisions",
 ]
 
@@ -112,6 +117,38 @@ class ContextReason(StrEnum):
     MAPPED_REVERSAL_CONTEXT = "MAPPED_REVERSAL_CONTEXT"
     CONTEXT_REJECT_COUNTER_TREND = "CONTEXT_REJECT_COUNTER_TREND"
     CONTEXT_REJECT_NEUTRAL = "CONTEXT_REJECT_NEUTRAL"
+    #: RC5 only: the pattern is real but sits in mid-leg texture rather than at
+    #: a structural decision point. Not a refusal of a late confirmation -- a
+    #: candidate rejected on this prefix may earn a role on a later one.
+    CONTEXT_REJECT_NO_STRUCTURAL_ORIGIN = "CONTEXT_REJECT_NO_STRUCTURAL_ORIGIN"
+
+
+#: Precedence when a candidate's source candles touch several used swings.
+_ROLE_RANK: dict[StructuralRole, int] = {
+    StructuralRole.LEG_ORIGIN: 0,
+    StructuralRole.SWING_HIGH_ORIGIN: 1,
+    StructuralRole.SWING_LOW_ORIGIN: 1,
+    StructuralRole.PULLBACK_HIGH: 2,
+    StructuralRole.PULLBACK_LOW: 2,
+}
+
+
+@dataclass(frozen=True)
+class StructuralRoleFact:
+    """A swing's meaning to the walk, and the availability from which that
+    meaning exists. ``since`` is what makes the RC5 gate causal: it is always a
+    real structural event's ``availability_time_utc``, never a later prefix's
+    hindsight."""
+
+    role: StructuralRole
+    since: datetime
+    origin_swing_id: Any
+    broken_swing_id: Any | None
+    break_candle_id: Any | None
+
+    @property
+    def rank(self) -> int:
+        return _ROLE_RANK[self.role]
 
 
 @dataclass(frozen=True)
@@ -120,6 +157,202 @@ class ContextDecision:
     reason: ContextReason
     structure_direction: StructureDirection
     mapped: Any | None  # the mapped candidate (reversal: re-timed to its break)
+    #: RC5 provenance, set only where the gate actually resolved it -- i.e. on
+    #: MAPPED_REVERSAL_CONTEXT, where a specific break named a specific origin.
+    #: These are the existing frozen identifiers, never fabricated ones.
+    origin_swing_id: Any | None = None
+    broken_swing_id: Any | None = None
+    break_candle_id: Any | None = None
+    structural_role: StructuralRole | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class StructuralContext:
+    """What the frozen structure walk already knows, surfaced for RC5.
+
+    ``_gate`` resolves all of this to place ORDER BLOCKS and to map reversal
+    candidates, then throws it away. RC5 needs the same facts to decide whether
+    *any* reversal candidate sits at a decision origin, so the gate now returns
+    them instead. Nothing here is recomputed and no identifier is invented:
+    every id is a frozen swing ``record_id`` or candle ``record_id``.
+
+    ``eq=False`` keeps :class:`LegOriginFrontier` hashable despite the maps.
+
+    CAUSALITY WARNING. Every entry here is established by a structure *break*,
+    so it is only true from that break's ``availability_time_utc`` onwards. The
+    frontier's context is the state of its own prefix and is therefore safe to
+    read directly. The batch gate returns the FINAL prefix's context, which
+    knows about breaks that had not happened yet when an earlier candidate
+    formed -- reading it to promote an earlier candidate would be look-ahead.
+    Batch consumers must go through the prefix replay in
+    ``immutable_structure_gate``, exactly as ORDER BLOCKS already do.
+    """
+
+    #: pivot candle id -> the origin swing a confirmed break departed from
+    leg_origin_candle_ids: dict[Any, Any]
+    #: origin swing id -> the break candle that confirmed its leg (the leg id)
+    leg_id_by_origin_swing: dict[Any, Any]
+    #: origin swing id -> the swing that break broke
+    broken_swing_by_origin: dict[Any, Any]
+    #: pivot candle id -> confirmed swing id, per side
+    swing_high_candle_ids: dict[Any, Any]
+    swing_low_candle_ids: dict[Any, Any]
+    #: RC5: what the walk makes of each swing it actually uses, and the
+    #: availability from which that became true. Empty outside RC5 callers is
+    #: not a thing -- it is always built; only the gate consults it.
+    role_by_swing: dict[Any, StructuralRoleFact]
+    #: confirmed swings the walk broke -- price actually took them
+    broken_swing_ids: frozenset[Any]
+    #: everything the walk did not break. NOT a promotion signal on its own:
+    #: in any trending leg most swings are unbroken texture.
+    unbroken_swing_ids: frozenset[Any]
+    #: the walk's live protected / weak levels at this prefix -- the unbroken
+    #: swings that currently define structure, as opposed to the rest
+    live_structure_swing_ids: frozenset[Any]
+
+    @classmethod
+    def empty(cls) -> StructuralContext:
+        return cls({}, {}, {}, {}, {}, {}, frozenset(), frozenset(), frozenset())
+
+
+def _structural_context(
+    swings: tuple[ConfirmedSwing, ...],
+    walk: StructureWalkResult,
+    legs: Sequence[tuple[Any, ConfirmedSwing, PoiDirection]],
+) -> StructuralContext:
+    """Everything the walk resolved on THIS prefix, with the availability from
+    which each fact became true. Built once per ``_gate`` call so that batch and
+    incremental see identical structure for identical inputs."""
+    leg_origin_candle_ids: dict[Any, Any] = {}
+    leg_id_by_origin_swing: dict[Any, Any] = {}
+    broken_swing_by_origin: dict[Any, Any] = {}
+    role_by_swing: dict[Any, StructuralRoleFact] = {}
+
+    # The first break to name a swing owns it; later breaks that reach back to
+    # the same swing do not re-date the leg.
+    for transition, origin, _direction in legs:
+        if origin.record_id in leg_id_by_origin_swing:
+            continue
+        leg_id_by_origin_swing[origin.record_id] = transition.break_candle_id
+        broken_swing_by_origin[origin.record_id] = transition.broken_swing_id
+        for candle_id in origin.pivot_candle_record_ids:
+            leg_origin_candle_ids.setdefault(candle_id, origin.record_id)
+        role_by_swing[origin.record_id] = StructuralRoleFact(
+            StructuralRole.LEG_ORIGIN,
+            transition.availability_time_utc,
+            origin.record_id,
+            transition.broken_swing_id,
+            transition.break_candle_id,
+        )
+
+    by_id = {s.record_id: s for s in swings}
+    # A swing a break TOOK held real liquidity. Available from that break.
+    for transition in walk.transitions:
+        broken = by_id.get(transition.broken_swing_id)
+        if broken is None or broken.record_id in role_by_swing:
+            continue
+        role_by_swing[broken.record_id] = StructuralRoleFact(
+            StructuralRole.SWING_HIGH_ORIGIN
+            if broken.swing_type == SwingType.SWING_HIGH
+            else StructuralRole.SWING_LOW_ORIGIN,
+            transition.availability_time_utc,
+            broken.record_id,
+            broken.record_id,
+            transition.break_candle_id,
+        )
+
+    # The levels the walk is currently defending. Unbroken, but load-bearing --
+    # unlike the rest of the unbroken swings, which are leg texture.
+    for swing in (
+        walk.protected_high,
+        walk.protected_low,
+        walk.weak_high,
+        walk.weak_low,
+    ):
+        if swing is None or swing.record_id in role_by_swing:
+            continue
+        role_by_swing[swing.record_id] = StructuralRoleFact(
+            StructuralRole.PULLBACK_HIGH
+            if swing.swing_type == SwingType.SWING_HIGH
+            else StructuralRole.PULLBACK_LOW,
+            swing.meaningful_confirmation_time_utc,
+            swing.record_id,
+            None,
+            None,
+        )
+
+    swing_high_candle_ids: dict[Any, Any] = {}
+    swing_low_candle_ids: dict[Any, Any] = {}
+    for swing in swings:
+        side = (
+            swing_high_candle_ids
+            if swing.swing_type == SwingType.SWING_HIGH
+            else swing_low_candle_ids
+        )
+        for candle_id in swing.pivot_candle_record_ids:
+            side.setdefault(candle_id, swing.record_id)
+
+    broken_swing_ids = frozenset(t.broken_swing_id for t in walk.transitions)
+    return StructuralContext(
+        leg_origin_candle_ids,
+        leg_id_by_origin_swing,
+        broken_swing_by_origin,
+        swing_high_candle_ids,
+        swing_low_candle_ids,
+        role_by_swing,
+        broken_swing_ids,
+        frozenset(s.record_id for s in swings) - broken_swing_ids,
+        frozenset(
+            s.record_id
+            for s in (
+                walk.protected_high,
+                walk.protected_low,
+                walk.weak_high,
+                walk.weak_low,
+            )
+            if s is not None
+        ),
+    )
+
+
+def _rc5_blocks(
+    candidate: Any, context: StructuralContext, rc5_structural_origin: bool
+) -> bool:
+    """Would the RC5 structural-origin gate refuse this candidate on the prefix
+    ``context`` describes? Used by the two fast paths, which skip the walk
+    because structure is unchanged and so may read their carried context."""
+    return (
+        rc5_structural_origin
+        and candidate.poi_type in REVERSAL_TYPES
+        and structural_role_of(candidate, context) is None
+    )
+
+
+def structural_role_of(
+    candidate: Any, context: StructuralContext
+) -> StructuralRoleFact | None:
+    """The candidate's structural role at ``context``'s prefix, or ``None`` if
+    it is mid-leg texture.
+
+    The candidate must touch a swing **on the side it claims to defend** -- a
+    bullish reversal at a swing high is not a bullish decision point -- and that
+    swing must be one the walk actually uses. Looking the candle up in only the
+    matching-side pivot map is what enforces the side.
+    """
+    pivots = (
+        context.swing_low_candle_ids
+        if candidate.direction is PoiDirection.BULLISH
+        else context.swing_high_candle_ids
+    )
+    best: StructuralRoleFact | None = None
+    for candle_id in candidate.source_candle_record_ids:
+        swing_id = pivots.get(candle_id)
+        if swing_id is None:
+            continue
+        fact = context.role_by_swing.get(swing_id)
+        if fact is not None and (best is None or fact.rank < best.rank):
+            best = fact
+    return best
 
 
 def _direction_timeline(
@@ -184,11 +417,14 @@ def _gate(
     candles: Sequence[NormalizedCandle],
     swings: tuple[ConfirmedSwing, ...],
     candidates: Sequence[Any] = (),
+    *,
+    rc5_structural_origin: bool = False,
 ) -> tuple[
     tuple[OrderBlockCandidate, ...],
     StructureWalkResult,
     tuple[ContextDecision, ...],
     tuple[list[datetime], list[StructureDirection]],
+    StructuralContext,
 ]:
     relationships = detect_swing_relationships(swings, _STRUCTURE_CONFIGURATION)
     walk = run_structure_walk(tuple(candles), swings, relationships)
@@ -198,23 +434,12 @@ def _gate(
         for candle_id in formation.source_candle_record_ids:
             by_candle.setdefault((formation.direction, candle_id), []).append(formation)
 
-    decisions: dict[tuple[Any, ...], ContextDecision] = {}
-    counter: dict[PoiDirection, list[Any]] = {}
-    for candidate in candidates:
-        structure_dir = _direction_at(timeline, candidate.availability_time_utc)
-        reason = _classify_aligned(candidate, structure_dir)
-        decisions[_formation_key(candidate)] = ContextDecision(
-            candidate,
-            reason,
-            structure_dir,
-            candidate if reason is ContextReason.MAPPED_TREND_ALIGNED else None,
-        )
-        if reason is ContextReason.CONTEXT_REJECT_COUNTER_TREND:
-            counter.setdefault(candidate.direction, []).append(candidate)
-
     by_id = {s.record_id: s for s in swings}
-    gated: list[OrderBlockCandidate] = []
-    used: set[object] = set()
+
+    # ---- pass 1: the leg each break confirmed, and where it departed from --
+    # Frozen RC3 rule, unchanged; hoisted out of the placement loop so the
+    # structural roles below can be built before candidates are classified.
+    legs: list[tuple[Any, ConfirmedSwing, PoiDirection]] = []
     for transition in walk.transitions:
         bullish = transition.direction_after == StructureDirection.BULLISH
         broken = by_id[transition.broken_swing_id]
@@ -236,7 +461,68 @@ def _gate(
                 -s.pivot_start_time_utc.timestamp(),
             ),
         )
-        direction = PoiDirection.BULLISH if bullish else PoiDirection.BEARISH
+        legs.append(
+            (
+                transition,
+                origin,
+                PoiDirection.BULLISH if bullish else PoiDirection.BEARISH,
+            )
+        )
+
+    context = _structural_context(swings, walk, legs)
+
+    # ---- pass 2: classify each candidate on this prefix's structure --------
+    decisions: dict[tuple[Any, ...], ContextDecision] = {}
+    roles: dict[tuple[Any, ...], StructuralRoleFact | None] = {}
+    counter: dict[PoiDirection, list[Any]] = {}
+    for candidate in candidates:
+        key = _formation_key(candidate)
+        structure_dir = _direction_at(timeline, candidate.availability_time_utc)
+        reason = _classify_aligned(candidate, structure_dir)
+        fact: StructuralRoleFact | None = None
+        if rc5_structural_origin and candidate.poi_type in REVERSAL_TYPES:
+            fact = structural_role_of(candidate, context)
+            roles[key] = fact
+            if fact is None:
+                # RC5: a reversal pattern in mid-leg texture is not a POI at
+                # all. It may still earn a role on a later prefix.
+                decisions[key] = ContextDecision(
+                    candidate,
+                    ContextReason.CONTEXT_REJECT_NO_STRUCTURAL_ORIGIN,
+                    structure_dir,
+                    None,
+                )
+                continue
+        mapped = candidate if reason is ContextReason.MAPPED_TREND_ALIGNED else None
+        if (
+            mapped is not None
+            and fact is not None
+            and fact.since > (candidate.availability_time_utc)
+        ):
+            # Detected at its own source time, usable only once the break that
+            # gives it structural meaning has happened. Source time, source
+            # candles, geometry and identity are untouched -- only availability
+            # moves. See ``ContextReason.CONTEXT_REJECT_NO_STRUCTURAL_ORIGIN``.
+            mapped = candidate._replace(
+                confirmation_time_utc=fact.since, availability_time_utc=fact.since
+            )
+        decisions[key] = ContextDecision(
+            candidate,
+            reason,
+            structure_dir,
+            mapped,
+            origin_swing_id=fact.origin_swing_id if fact else None,
+            broken_swing_id=fact.broken_swing_id if fact else None,
+            break_candle_id=fact.break_candle_id if fact else None,
+            structural_role=fact.role if fact else None,
+        )
+        if reason is ContextReason.CONTEXT_REJECT_COUNTER_TREND:
+            counter.setdefault(candidate.direction, []).append(candidate)
+
+    # ---- pass 3: reversal context, then ORDER BLOCK placement -------------
+    gated: list[OrderBlockCandidate] = []
+    used: set[object] = set()
+    for transition, origin, direction in legs:
         # Reversal context: this break confirms a leg departing from `origin`.
         # A counter-trend candidate of the leg's direction formed inside that leg
         # (source at or after the origin pivot, complete by the break) belongs to
@@ -249,10 +535,12 @@ def _gate(
                 or c.availability_time_utc > transition.availability_time_utc
             ):
                 continue
+            fact = roles.get(key)
             available = max(
                 c.availability_time_utc,
                 origin.meaningful_confirmation_time_utc,
                 transition.availability_time_utc,
+                *((fact.since,) if fact is not None else ()),
             )
             decisions[key] = ContextDecision(
                 c,
@@ -261,6 +549,10 @@ def _gate(
                 c._replace(
                     confirmation_time_utc=available, availability_time_utc=available
                 ),
+                origin_swing_id=origin.record_id,
+                broken_swing_id=transition.broken_swing_id,
+                break_candle_id=transition.break_candle_id,
+                structural_role=fact.role if fact else None,
             )
         if origin.record_id in used:
             continue
@@ -290,7 +582,7 @@ def _gate(
                 confirmation_time_utc=available, availability_time_utc=available
             )
         )
-    return tuple(gated), walk, tuple(decisions.values()), timeline
+    return tuple(gated), walk, tuple(decisions.values()), timeline, context
 
 
 def leg_origin_order_blocks(
@@ -306,9 +598,17 @@ def structure_context_decisions(
     candidates: Iterable[Any],
     candles: Sequence[NormalizedCandle],
     confirmed_swings: Iterable[ConfirmedSwing],
+    *,
+    rc5_structural_origin: bool = False,
 ) -> tuple[ContextDecision, ...]:
     """Context decisions on ONE set of inputs (audit; no immutability)."""
-    return _gate((), candles, tuple(confirmed_swings), tuple(candidates))[2]
+    return _gate(
+        (),
+        candles,
+        tuple(confirmed_swings),
+        tuple(candidates),
+        rc5_structural_origin=rc5_structural_origin,
+    )[2]
 
 
 # ---------------------------------------------------------------------------
@@ -429,16 +729,23 @@ def immutable_structure_gate(
     candles: Sequence[NormalizedCandle],
     confirmed_swings: Iterable[ConfirmedSwing],
     measurement_configuration: MarketMeasurementConfiguration,
-) -> tuple[tuple[OrderBlockCandidate, ...], tuple[Any, ...]]:
+    *,
+    rc5_structural_origin: bool = False,
+) -> tuple[tuple[OrderBlockCandidate, ...], tuple[Any, ...], StructuralContext]:
     """Batch ORDER BLOCKs and context-mapped candidates = the union, over every
     prefix, of the structure gate on that prefix, each snapshotted when it first
     appears. Identical to what ``advance_leg_origin_frontier`` has locked after
-    the last candle."""
+    the last candle. The third element is the final-prefix structural context,
+    for RC5 promotion decisions (see :class:`StructuralContext`)."""
     formations = tuple(formations)
     candidates = tuple(candidates)
     final_swings = tuple(confirmed_swings)
-    final_gated, _walk, final_decisions, _timeline = _gate(
-        formations, candles, final_swings, candidates
+    final_gated, _walk, final_decisions, _timeline, final_context = _gate(
+        formations,
+        candles,
+        final_swings,
+        candidates,
+        rc5_structural_origin=rc5_structural_origin,
     )
     final_sorted = sorted(
         [*final_gated, *(d.mapped for d in final_decisions if d.mapped is not None)],
@@ -544,11 +851,12 @@ def immutable_structure_gate(
             # output cannot change except for candidates arriving now, which
             # are classified on the unchanged structure (see the frontier).
             if walked is None or _may_break(walked, candles[index].close):
-                gated, walked, decisions, walked_timeline = _gate(
+                gated, walked, decisions, walked_timeline, walked_context = _gate(
                     tuple(f for f in formations if f.availability_time_utc <= now),
                     candles[: index + 1],
                     prefix_swings,
                     candidates_by_time[:candidate_pointer],
+                    rc5_structural_origin=rc5_structural_origin,
                 )
                 for candidate in gated:
                     lock(candidate, now)
@@ -561,8 +869,13 @@ def immutable_structure_gate(
                         candidate,
                         _direction_at(walked_timeline, candidate.availability_time_utc),
                     )
-                    if reason is ContextReason.MAPPED_TREND_ALIGNED:
-                        lock(candidate, now)
+                    if reason is not ContextReason.MAPPED_TREND_ALIGNED:
+                        continue
+                    # Structure is unchanged on this prefix, so the last
+                    # walked context is this prefix's context.
+                    if _rc5_blocks(candidate, walked_context, rc5_structural_origin):
+                        continue
+                    lock(candidate, now)
             continue
         walked = None
         while (
@@ -579,7 +892,7 @@ def immutable_structure_gate(
         )
     obs = tuple(locked[k] for k in order if k[0] in _OB_TYPES)
     mapped = tuple(locked[k] for k in order if k[0] not in _OB_TYPES)
-    return obs, mapped
+    return obs, mapped, final_context
 
 
 def immutable_leg_origin_order_blocks(
@@ -610,6 +923,9 @@ class LegOriginFrontier:
     mapped: tuple[Any, ...] = ()
     mapped_keys: frozenset[tuple[Any, ...]] = frozenset()
     newly_mapped: tuple[Any, ...] = ()
+    #: the structure facts of the last walk, reused verbatim on the fast path
+    #: (where nothing structural changed, so nothing in here can have moved)
+    context: StructuralContext = field(default_factory=StructuralContext.empty)
 
 
 def _may_break(walk: StructureWalkResult | None, close: Any) -> bool:
@@ -632,6 +948,8 @@ def advance_leg_origin_frontier(
     candles: Sequence[NormalizedCandle],
     confirmed_swings: tuple[ConfirmedSwing, ...],
     new_candidates: Sequence[Any] = (),
+    *,
+    rc5_structural_origin: bool = False,
 ) -> LegOriginFrontier:
     """Lock the ORDER BLOCKs and context-mapped candidates the gate produces on
     this prefix. The structure walk is recomputed only when the swing inputs
@@ -667,8 +985,13 @@ def advance_leg_origin_frontier(
                 candidate,
                 _direction_at(state.timeline, candidate.availability_time_utc),
             )
-            if reason is ContextReason.MAPPED_TREND_ALIGNED:
-                lock_candidate(candidate)
+            if reason is not ContextReason.MAPPED_TREND_ALIGNED:
+                continue
+            # Nothing structural changed, so the carried context IS this
+            # prefix's context -- no walk needed and no look-ahead possible.
+            if _rc5_blocks(candidate, state.context, rc5_structural_origin):
+                continue
+            lock_candidate(candidate)
         return LegOriginFrontier(
             state.swing_signature,
             state.walk,
@@ -679,9 +1002,14 @@ def advance_leg_origin_frontier(
             tuple(mapped) if newly else state.mapped,
             frozenset(mapped_keys) if newly else state.mapped_keys,
             tuple(newly),
+            state.context,
         )
-    gated, walk, decisions, timeline = _gate(
-        formations, candles, confirmed_swings, all_candidates
+    gated, walk, decisions, timeline, context = _gate(
+        formations,
+        candles,
+        confirmed_swings,
+        all_candidates,
+        rc5_structural_origin=rc5_structural_origin,
     )
     locked = list(state.locked)
     keys = set(state.locked_keys)
@@ -709,4 +1037,5 @@ def advance_leg_origin_frontier(
         tuple(mapped),
         frozenset(mapped_keys),
         tuple(newly),
+        context,
     )

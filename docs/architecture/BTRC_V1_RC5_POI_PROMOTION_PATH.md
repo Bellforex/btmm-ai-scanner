@@ -85,3 +85,58 @@ origin?"*. The gate must **not** reject valid same-origin subordinates just to
 produce the desired final chart — on the M45 case the B2S, both SHOOTING STARs
 and the BEAR PRESSURE WICK may all legitimately pass the gate, and authority
 then leaves the B2S.
+
+## Phase 2 result, and the causality finding that changes Phase 3
+
+Phase 2 shipped: `_gate` now returns a `StructuralContext` (leg-origin candle
+map, leg id and broken swing per origin, per-side pivot maps, broken vs unbroken
+swings) and tags every `MAPPED_REVERSAL_CONTEXT` decision with
+`origin_swing_id` / `broken_swing_id` / `break_candle_id`. All ids are frozen
+record ids. No promotion moved.
+
+Trend-aligned decisions deliberately carry **no** provenance: that branch is
+classified from the direction timeline alone and genuinely does not know which
+decision point the candidate belongs to. Claiming one would be a fabrication.
+
+Tracing that gap produced the finding that reshapes Phase 3:
+
+> **Every structural role is established by a structure break, so it is only
+> true from that break's availability onwards.**
+
+`immutable_structure_gate` returns the **final** prefix's context. Reading it to
+promote a candidate that formed earlier is look-ahead — the same class of defect
+as the P1 replay ATR-scope bug and the P3 reference-zone late start. So the
+structural-origin gate **cannot** be a post-filter at the two insertion points
+traced above, even though that is where the provenance is available.
+
+It has to run inside the prefix machinery that already exists for exactly this
+reason:
+
+* incremental — inside `advance_leg_origin_frontier`, whose `context` field is
+  by construction the state of its own prefix;
+* batch — inside `immutable_structure_gate`'s prefix replay, which reproduces
+  that union over all prefixes.
+
+This is not extra machinery; it is the mechanism ORDER BLOCKS already use. It
+does force one author-level semantic choice, because a reversal candidate whose
+structural role only materialises at a later break can be handled two ways:
+
+1. **re-time** it to that break, exactly as `MAPPED_REVERSAL_CONTEXT` already
+   does — consistent with RC3, but it re-dates candidates that RC4 published at
+   formation; or
+2. **refuse** it unless the role was already established at its own
+   availability — no re-dating, but a genuine leg-origin reversal that is only
+   named as such by the break that confirms the leg would never be promoted.
+
+Option 1 is the only one consistent with how the engine already treats ORDER
+BLOCKS and reversal context, and option 2 would silently delete most true leg
+origins. Phase 3 therefore builds on option 1, and the impact run will report
+how many candidates it re-dates.
+
+### Secondary finding: `PULLBACK_*` as drafted accepts everything
+
+`structural_role.py` currently grants `PULLBACK_HIGH` / `PULLBACK_LOW` to any
+confirmed swing the walk never broke. On the H3 six-wick staircase each wick is
+its own confirmed swing high, so all six would pass and the gate would refuse
+nothing. The role set has to be narrowed to structure the walk actually used:
+leg origins, swings a break broke, and the walk's live protected / weak levels.

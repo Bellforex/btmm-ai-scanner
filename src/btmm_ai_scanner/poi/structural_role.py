@@ -36,9 +36,10 @@ structural extreme in the direction it claims:
   origin of the leg it confirmed (the strongest role; it is exactly what
   ``poi/leg_origin.py`` already computes for ORDER BLOCKS);
 * ``SWING_HIGH_ORIGIN`` / ``SWING_LOW_ORIGIN`` -- a pivot candle of a confirmed
-  swing of the matching extreme;
-* ``PULLBACK_HIGH`` / ``PULLBACK_LOW`` -- a confirmed swing that the walk did
-  not break, i.e. the terminal of a correction inside the prevailing leg;
+  swing that a structure break actually **took**: it held real liquidity;
+* ``PULLBACK_HIGH`` / ``PULLBACK_LOW`` -- a pivot candle of the walk's live
+  protected or weak level, i.e. an unbroken swing that currently *defines*
+  structure rather than merely existing inside it;
 * ``RANGE_HIGH`` / ``RANGE_LOW`` -- the candidate's zone reaches a detected
   consolidation boundary;
 * ``LIQUIDITY_EXTREME`` -- the candidate's zone reaches a tracked liquidity
@@ -48,6 +49,14 @@ structural extreme in the direction it claims:
 
 A geometrically perfect reversal candle in the middle of an established leg
 matches none of these and stays a RAW PATTERN.
+
+WHY "UNBROKEN SWING" IS NOT A ROLE
+----------------------------------
+An earlier draft granted PULLBACK_HIGH / PULLBACK_LOW to any confirmed swing
+the walk had not broken. That refuses nothing: in a trending leg almost every
+swing is unbroken, and each wick of the H3 staircase is its own confirmed swing
+high, so all six would have passed. Structure is defined by the swings the walk
+*used* -- the ones a break took, and the ones it is currently protecting.
 """
 
 from __future__ import annotations
@@ -146,7 +155,8 @@ def assign_structural_roles(
     leg_origin_candle_ids: Mapping[UUID, UUID] | None = None,
     swing_high_candle_ids: Mapping[UUID, UUID] | None = None,
     swing_low_candle_ids: Mapping[UUID, UUID] | None = None,
-    unbroken_swing_ids: frozenset[UUID] = frozenset(),
+    broken_swing_ids: frozenset[UUID] = frozenset(),
+    live_structure_swing_ids: frozenset[UUID] = frozenset(),
     range_levels: Sequence[tuple[Decimal, StructuralRole]] = (),
     liquidity_levels: Sequence[Decimal] = (),
     trendline_levels: Sequence[Decimal] = (),
@@ -156,9 +166,14 @@ def assign_structural_roles(
 
     The maps are ``candle record_id -> swing record_id`` for the pivot candles
     of, respectively, the leg-origin swings a break named, confirmed swing
-    highs and confirmed swing lows. ``unbroken_swing_ids`` are the confirmed
-    swings the structure walk never broke, which makes their terminals
-    pullback extremes rather than leg origins.
+    highs and confirmed swing lows. ``broken_swing_ids`` are the swings a
+    structure break took; ``live_structure_swing_ids`` are the walk's current
+    protected and weak levels. A swing in neither set is texture, and its
+    pivot candle confers no role.
+
+    All of these come from :class:`~btmm_ai_scanner.poi.leg_origin.StructuralContext`,
+    which must be the context of the candidate's OWN prefix -- see the
+    causality warning there.
 
     Non-reversal families are returned untouched with ``LEG_ORIGIN`` withheld:
     they are simply not gated here (an imbalance, a base and a structural zone
@@ -182,20 +197,26 @@ def assign_structural_roles(
                 break
             pivots = lows if bullish else highs
             if candle_id in pivots:
-                swing_id = pivots[candle_id]
-                if swing_id in unbroken_swing_ids:
-                    role = (
-                        StructuralRole.PULLBACK_LOW
-                        if bullish
-                        else StructuralRole.PULLBACK_HIGH
-                    )
-                else:
+                found = pivots[candle_id]
+                if found in broken_swing_ids:
+                    swing_id = found
                     role = (
                         StructuralRole.SWING_LOW_ORIGIN
                         if bullish
                         else StructuralRole.SWING_HIGH_ORIGIN
                     )
-                break
+                    break
+                if found in live_structure_swing_ids:
+                    swing_id = found
+                    role = (
+                        StructuralRole.PULLBACK_LOW
+                        if bullish
+                        else StructuralRole.PULLBACK_HIGH
+                    )
+                    break
+                # A confirmed swing the walk neither took nor protects is
+                # texture. Keep looking at the candidate's other source
+                # candles rather than accepting it.
 
         if role is StructuralRole.MID_LEG:
             for level, boundary in range_levels:
