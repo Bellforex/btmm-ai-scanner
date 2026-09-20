@@ -17,6 +17,7 @@ from btmm_ai_scanner.poi.configuration import (
 )
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.poi.order_blocks import detect_order_blocks
+from btmm_ai_scanner.poi.transport_codes import RC5_ONLY_TRANSPORT_CODES
 
 _RAW_CANDLE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdaa")
 _PROVENANCE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdff")
@@ -83,7 +84,8 @@ def test_poi_configuration_default_values_match_approved_standards() -> None:
     assert config.reclaim_window_bars == 3
     assert config.displacement_window_bars == 3
     assert config.doji_body_efficiency_standard == Decimal("0.10")
-    assert len(config.enabled_poi_types) == 32
+    frozen = config.enabled_poi_types - set(RC5_ONLY_TRANSPORT_CODES)
+    assert len(frozen) == 32
     assert config.supported_symbols == frozenset(
         {InternalSymbol.XAUUSD, InternalSymbol.EURUSD, InternalSymbol.GBPUSD}
     )

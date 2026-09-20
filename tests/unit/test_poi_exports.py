@@ -1,4 +1,5 @@
 import btmm_ai_scanner.poi as poi
+from btmm_ai_scanner.poi.transport_codes import RC5_ONLY_TRANSPORT_CODES
 
 _EXPECTED_EXPORTS = [
     "PoiFamily",
@@ -73,7 +74,7 @@ def test_poi_type_enum_contains_no_deferred_or_placeholder_members() -> None:
     }
     member_names = {member.name for member in poi.PoiType}
     assert forbidden_members.isdisjoint(member_names)
-    assert len(poi.PoiType) == 32
+    assert len(poi.PoiType) == 32 + len(RC5_ONLY_TRANSPORT_CODES)
 
 
 def test_poi_package_never_imports_btmm_or_execution_modules() -> None:

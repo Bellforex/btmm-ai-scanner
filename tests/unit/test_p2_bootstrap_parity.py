@@ -96,8 +96,14 @@ NA = None
 class _View4:
     """Mirror of Pine `StructSwingView`, including the I4 ordering field."""
 
-    __slots__ = ("stableKey", "swingType", "pivotPrice", "referenceAtr",
-                 "meaningfulConfTime", "pivotStartAbs")
+    __slots__ = (
+        "meaningfulConfTime",
+        "pivotPrice",
+        "pivotStartAbs",
+        "referenceAtr",
+        "stableKey",
+        "swingType",
+    )
 
     def __init__(self, swing) -> None:
         self.stableKey = swing.pivot_end_time_utc

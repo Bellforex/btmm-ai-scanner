@@ -11,6 +11,7 @@ from btmm_ai_scanner.btmm.configuration import (
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.provenance_record import EvidenceClassification
 from btmm_ai_scanner.poi.enums import LIFECYCLE_ELIGIBLE_POI_TYPES
+from btmm_ai_scanner.poi.transport_codes import RC5_ONLY_TRANSPORT_CODES
 
 
 def test_configuration_defaults_match_ambiguity_8_thresholds() -> None:
@@ -79,5 +80,8 @@ def test_configuration_default_evidence_classification_is_engineering_provisiona
 def test_configuration_eligible_poi_types_default_matches_exact_18() -> None:
     config = BtmmConfiguration(minimum_price_tick=Decimal("0.01"))
 
-    assert len(config.eligible_poi_types) == 18
+    # frozen family is 18; RC5 adds DOJI. RC4 output is unchanged because
+    # no DOJI is ever detected outside the RC5 profile.
+    frozen = config.eligible_poi_types - set(RC5_ONLY_TRANSPORT_CODES)
+    assert len(frozen) == 18
     assert config.eligible_poi_types == LIFECYCLE_ELIGIBLE_POI_TYPES

@@ -28,7 +28,10 @@ from btmm_ai_scanner.poi.enums import (
     LIFECYCLE_ELIGIBLE_POI_TYPES,
     NOT_APPLICABLE_LIFECYCLE_POI_TYPES,
     PoiLifecycleStatus,
-    PoiType,
+)
+from btmm_ai_scanner.poi.transport_codes import (
+    FROZEN_TRANSPORT_CODES,
+    RC5_ONLY_TRANSPORT_CODES,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -111,9 +114,14 @@ def test_p3_dev_declares_the_p3_title_and_keeps_the_p2_execution_horizon() -> No
 
 
 def _poi_type_codes(appendix: str) -> dict[str, int]:
-    """The Pine code declared for each production PoiType, by exact name."""
+    """The Pine code declared for each FROZEN PoiType, by exact name.
+
+    Deliberately iterates ``FROZEN_TRANSPORT_CODES``, never the live ``PoiType``
+    enum: this file pins a frozen artifact, so adding an RC5 type to the enum
+    must not change what this test demands of it.
+    """
     codes: dict[str, int] = {}
-    for poi_type in PoiType:
+    for poi_type in FROZEN_TRANSPORT_CODES:
         matches = re.findall(
             rf"^int\s+C_POI_{poi_type.value}\s*=\s*(\d+)\s*$",
             appendix,
@@ -126,11 +134,32 @@ def _poi_type_codes(appendix: str) -> dict[str, int]:
     return codes
 
 
-def test_every_production_poi_type_has_exactly_one_pine_code() -> None:
+def test_every_frozen_poi_type_has_exactly_one_pine_code() -> None:
     codes = _poi_type_codes(_p3_appendix())
-    assert set(codes) == {t.value for t in PoiType}
+    assert set(codes) == {t.value for t in FROZEN_TRANSPORT_CODES}
     assert len(set(codes.values())) == 32, "POI type codes must be distinct"
     assert sorted(codes.values()) == list(range(1, 33))
+
+
+def test_frozen_pine_codes_match_the_frozen_python_transport_map() -> None:
+    """The frozen Pine artifact and FROZEN_TRANSPORT_CODES are the same wire
+    vocabulary. This is the regression that proves RC5 renumbered nothing."""
+    codes = _poi_type_codes(_p3_appendix())
+    assert codes == {t.value: c for t, c in FROZEN_TRANSPORT_CODES.items()}
+
+
+def test_the_frozen_artifact_declares_no_rc5_type_code() -> None:
+    """RC5 types have no transport-code declaration in the frozen Pine.
+
+    Matches a code DECLARATION specifically: the frozen build legitimately
+    contains ``C_POI_DOJI_BODY_EFF_STANDARD`` / ``_STRONG`` (the doji
+    suppression thresholds that RC3 already used), which is not a type code.
+    """
+    appendix = _p3_appendix()
+    for poi_type in RC5_ONLY_TRANSPORT_CODES:
+        assert not re.search(
+            rf"^int\s+C_POI_{poi_type.value}\s*=\s*\d+\s*$", appendix, re.MULTILINE
+        )
 
 
 def test_core_codes_are_exactly_the_lifecycle_eligible_types() -> None:
@@ -138,14 +167,15 @@ def test_core_codes_are_exactly_the_lifecycle_eligible_types() -> None:
     core_min = _int_const("C_POI_CORE_TYPE_MIN", appendix)
     core_max = _int_const("C_POI_CORE_TYPE_MAX", appendix)
     assert (core_min, core_max) == (1, 18)
-    assert len(LIFECYCLE_ELIGIBLE_POI_TYPES) == 18
+    frozen_eligible = LIFECYCLE_ELIGIBLE_POI_TYPES - set(RC5_ONLY_TRANSPORT_CODES)
+    assert len(frozen_eligible) == 18
     assert len(NOT_APPLICABLE_LIFECYCLE_POI_TYPES) == 14
 
     codes = _poi_type_codes(appendix)
     core_names = {
         name for name, value in codes.items() if core_min <= value <= core_max
     }
-    assert core_names == {t.value for t in LIFECYCLE_ELIGIBLE_POI_TYPES}
+    assert core_names == {t.value for t in frozen_eligible}
     context_names = set(codes) - core_names
     assert context_names == {t.value for t in NOT_APPLICABLE_LIFECYCLE_POI_TYPES}
 

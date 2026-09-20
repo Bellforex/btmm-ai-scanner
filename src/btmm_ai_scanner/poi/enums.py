@@ -45,6 +45,8 @@ class PoiType(StrEnum):
     CURRENT_WEEK_LOW = "CURRENT_WEEK_LOW"
     CURRENT_MONTH_HIGH = "CURRENT_MONTH_HIGH"
     CURRENT_MONTH_LOW = "CURRENT_MONTH_LOW"
+    #: RC5 only. Canonical student POI #19; transport code 33 (1-32 are frozen).
+    DOJI = "DOJI"
 
 
 class PoiStrengthTier(StrEnum):
@@ -135,6 +137,8 @@ LIFECYCLE_ELIGIBLE_POI_TYPES: frozenset[PoiType] = frozenset(
         PoiType.EVENING_STAR,
         PoiType.SUPPORT_ZONE,
         PoiType.RESISTANCE_ZONE,
+        #: RC5 only.
+        PoiType.DOJI,
     }
 )
 

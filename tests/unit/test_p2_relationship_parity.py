@@ -69,8 +69,13 @@ SWING_HIGH, SWING_LOW = 1, -1
 class _View:
     """Mirror of Pine `StructSwingView`."""
 
-    __slots__ = ("stableKey", "swingType", "pivotPrice", "referenceAtr",
-                 "meaningfulConfTime")
+    __slots__ = (
+        "meaningfulConfTime",
+        "pivotPrice",
+        "referenceAtr",
+        "stableKey",
+        "swingType",
+    )
 
     def __init__(self, swing) -> None:
         self.stableKey = swing.pivot_end_time_utc          # == SwingRec.pivotEndTime

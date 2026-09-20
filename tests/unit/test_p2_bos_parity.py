@@ -90,8 +90,15 @@ H, L = SwingType.SWING_HIGH, SwingType.SWING_LOW
 class _V:
     """Mirror of Pine `StructSwingView`."""
 
-    __slots__ = ("stableKey", "swingType", "pivotPrice", "referenceAtr",
-                 "meaningfulConfTime", "pivotStartTime", "pivotStartAbs")
+    __slots__ = (
+        "meaningfulConfTime",
+        "pivotPrice",
+        "pivotStartAbs",
+        "pivotStartTime",
+        "referenceAtr",
+        "stableKey",
+        "swingType",
+    )
 
     def __init__(self, swing) -> None:
         self.stableKey = swing.pivot_end_time_utc
@@ -143,9 +150,19 @@ def _pine_most_recent_unbroken(views, vis_order, want_type, broken_keys,
 
 
 class _WalkResult:
-    __slots__ = ("direction", "protected_high", "protected_low", "weak_high",
-                 "weak_low", "transitions", "broken", "weak_high_boundary",
-                 "weak_low_boundary", "aborted", "last_change")
+    __slots__ = (
+        "aborted",
+        "broken",
+        "direction",
+        "last_change",
+        "protected_high",
+        "protected_low",
+        "transitions",
+        "weak_high",
+        "weak_high_boundary",
+        "weak_low",
+        "weak_low_boundary",
+    )
 
     def state(self):
         return (self.direction, self.protected_high, self.protected_low,

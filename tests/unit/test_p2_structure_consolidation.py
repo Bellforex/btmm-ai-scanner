@@ -38,10 +38,6 @@ from pathlib import Path
 import pytest
 
 from btmm_ai_scanner.domain.enums import SwingType
-from btmm_ai_scanner.structure.enums import (
-    StructureDirection,
-    StructureTransitionType,
-)
 
 
 def _load(name: str, filename: str):
