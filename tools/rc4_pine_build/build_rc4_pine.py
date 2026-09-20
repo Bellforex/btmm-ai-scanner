@@ -105,6 +105,9 @@ for which in ("user", "parity"):
         "f_p8TermReasonLabel(array.get(poiTermReason, i))",
         "f_p8TermReasonLabel(fwEp == 3 ? C_POI_TERM_INVALIDATED : array.get(poiTermReason, i))",
     )
+    from rc4_fvg import apply_rc4_fvg
+
+    s = apply_rc4_fvg(s)
     a = s.index(P8_OLD_START)
     b = s.index(P8_OLD_END, a) + len(P8_OLD_END)
     s = s[:a] + P8_NEW + s[b:]
@@ -140,14 +143,26 @@ for which in ("user", "parity"):
         )
         s = sub(s, "        for c = 1 to 7\n            table.cell(p7Pois, c, p7MaxVisiblePois + 1,", "        for c = 1 to 8\n            table.cell(p7Pois, c, p7MaxVisiblePois + 1,")
         # dashboard: one framework row
-        s = sub(s, "table.new(position.top_left, 2, 12,", "table.new(position.top_left, 2, 13,")
-        s = sub(s, 'Session|Volatility|Active POIs", "|")', 'Session|Volatility|Active POIs|Market framework", "|")')
+        s = sub(s, "table.new(position.top_left, 2, 12,", "table.new(position.top_left, 2, 10,")
+        # RC4 USER token budget: the three purely informational dashboard rows
+        # (momentum acceleration, pullback, session) leave the student build so
+        # the RC4 FVG qualification rules fit; their label helpers become dead.
+        s = sub(
+            s,
+            '"Global direction|Regime|Momentum|Momentum accel.|Breakout|Pullback|Session|Volatility|Active POIs"',
+            '"Global direction|Regime|Momentum|Breakout|Volatility|Active POIs|Market framework"',
+        )
+        s = sub(
+            s,
+            "f_p7DirLabel(p7LastMomDir), f_p7MomAccelLabel(p7LastMomAccel), f_p7BrkLabel(p7LastBrk), f_p7PbLabel(p7LastPb), f_p7SessionLabel(p7LastSession), f_p7VolLabel(p7LastVol)",
+            "f_p7DirLabel(p7LastMomDir), f_p7BrkLabel(p7LastBrk), f_p7VolLabel(p7LastVol)",
+        )
         s = sub(
             s,
             "str.tostring(array.size(p7PoiIdx)))\n",
             "str.tostring(array.size(p7PoiIdx)), " + DASH + ")\n",
         )
-        s = sub(s, "        for r = 3 to 11\n", "        for r = 3 to 12\n")
+        s = sub(s, "        for r = 3 to 11\n", "        for r = 3 to 9\n")
         # RC4 USER token budget: developer-only outputs leave the student build
         # (the PARITY build keeps every capture stream). Nothing reads them.
         a = s.index("var bool p5xEmitted = false\n")
@@ -157,6 +172,12 @@ for which in ("user", "parity"):
         s, n = re.subn(r"(?m)^plot\([^\n]*display = display\.data_window\)\n", "", s)
         assert n == 41, n
         s = sub(s, "var bool p5xEmitted", "var bool p5xEmitted", 0)
+        # RC4 USER: the P9 trace input is inert here (the trace lives in the
+        # PARITY build); removing it frees budget for the RC4 FVG rules.
+        s, n = re.subn(
+            r"(?m)^grpP9 = [^\n]*\np9DebugLog = input\.bool\([^\n]*\)\n", "", s
+        )
+        assert n == 1 and "p9DebugLog = input" not in s
         s = trim_p6_user(s)
         s = compact_p7(s)
         from strip_dead import strip_dead_user

@@ -2794,7 +2794,13 @@ f_poiDetectFvg(int wn) =>
         // RC3 qualification: gap quality vs the departure candle's ATR, and same-origin
         // exclusivity -- a same-direction candle pattern ending on the departure candle
         // (emitted on an earlier bar) is the primary POI of that formation.
-        if typeCode != 0 and zoneTop - zoneBottom >= C_POI_FVG_MIN_GAP_ATR * array.get(wAtr, mi) and not map.contains(poiOriginKey, array.get(wOpenT, mi) * direction)
+        // RC4: the gap must be material AND the departure candle must be a real
+        // expansion -- frozen displacement primitive at least FAST, and larger
+        // than the candle immediately before it.
+        float fvgDepR = array.get(wHigh, mi) - array.get(wLow, mi)
+        float fvgBase = mi >= C_RANGE_CONTEXT_WINDOW ? f_medianRange(wHigh, wLow, mi - C_RANGE_CONTEXT_WINDOW, mi, scDispRange) : 0.0
+        bool fvgDepOk = fvgBase > 0.0 and fvgDepR >= C_DISP_FAST_RATIO * fvgBase and fvgDepR > array.get(wHigh, fi) - array.get(wLow, fi)
+        if typeCode != 0 and fvgDepOk and zoneTop - zoneBottom >= C_POI_FVG_MIN_GAP_ATR * array.get(wAtr, mi) and not map.contains(poiOriginKey, array.get(wOpenT, mi) * direction)
             f_poiEmit(typeCode, direction, zoneTop, zoneBottom, C_POI_TIER_NA, array.get(wOpenT, fi), 3, array.get(wOpenT, ti), array.get(wOpenT, fi), array.get(wAvailT, ti))
 
 // ---- ENGULFING (engulfing.py:27) --------------------------------------------
@@ -3147,7 +3153,14 @@ f_poiGateOrderBlocks() =>
                     if take
                         array.remove(ctPending, k2)
                         int ca = math.max(math.max(cp.availTime, oConf), math.max(ev.availabilityTime, nowT))
-                        if f_poiFind(cp.poiType, cp.srcFirstTime, cp.srcCount, cp.srcLastTime, f_poiTicks(cp.zoneBottom), f_poiTicks(cp.zoneTop)) == -1
+                        // RC4 PRE_AVAILABILITY_CONSUMED: an imbalance already
+                        // filled before this late release is not admitted.
+                        bool cpOk = true
+                        if cp.poiType == C_POI_BUY_FAIR_VALUE_GAP or cp.poiType == C_POI_SELL_FAIR_VALUE_GAP
+                            for [cj, cav] in wAvailT
+                                if cpOk and cav > cp.availTime and cav <= ca and (cp.direction == C_POI_DIR_BULLISH ? array.get(wLow, cj) <= cp.zoneBottom : array.get(wHigh, cj) >= cp.zoneTop)
+                                    cpOk := false
+                        if cpOk and f_poiFind(cp.poiType, cp.srcFirstTime, cp.srcCount, cp.srcLastTime, f_poiTicks(cp.zoneBottom), f_poiTicks(cp.zoneTop)) == -1
                             f_poiAppend(PoiRec.new(cp.poiType, cp.direction, cp.zoneTop, cp.zoneBottom, cp.candidateTime, ca, ca, cp.strengthTier, cp.srcFirstTime, cp.srcCount, cp.srcLastTime))
                     if not take
                         k2 += 1
@@ -5797,8 +5810,6 @@ p7zMaxVisibleZones  = input.int(8, "Max visible zone groups", minval = 1, maxval
 // mode: the zones that were FRESH at that time, frozen there; terminal zones
 // never come back to life.
 
-grpP9 = "P9 — Full-System Integration Trace (debug only)"
-p9DebugLog = input.bool(false, "P9 integrated trace log (identity/geometry/visibility, independent of P1/P8 debug)", group = grpP9)
 
 // ---- pure label lookups, one per P1-P5 enum family. Each is a straight
 // switch on an already-computed Pine integer code (the SAME codes P5EVAL logs)
@@ -6902,17 +6913,17 @@ if barstate.islast
         // "unconditional log volume" concern) -- verified once, real FXCM data,
         // during P7 UI validation; see BTRC_V1_P7_UI_CLOSURE.md.
         // RC3 DEV: P7DIAG line removed with P5EVAL and P9TRACE, same reason.
-        var table p7Summary = table.new(position.top_left, 2, 13, border_width = 1, bgcolor = color.new(color.black, 15))
+        var table p7Summary = table.new(position.top_left, 2, 10, border_width = 1, bgcolor = color.new(color.black, 15))
         f_row(p7Summary, 0, "P7 — BTRC Scanner", "")
         f_row(p7Summary, 1, "Feed", syminfo.prefix + ":" + syminfo.ticker)
         f_row(p7Summary, 2, "Host TF", timeframe.period)
         // Compaction (RC3): rows 3-11 written by one loop over parallel key/value
         // arrays instead of nine separate writes; cell content is unchanged.
-        array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Momentum accel.|Breakout|Pullback|Session|Volatility|Active POIs|Market framework", "|")
-        array<string> p7SumVals = array.from(f_p7DirLabel(p7LastGlobalDir), f_p7RegimeLabel(p7LastRegime), f_p7DirLabel(p7LastMomDir), f_p7MomAccelLabel(p7LastMomAccel), f_p7BrkLabel(p7LastBrk), f_p7PbLabel(p7LastPb), f_p7SessionLabel(p7LastSession), f_p7VolLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)), not na(fwR) ? "RANGE " + str.tostring(fwR.l) + " - " + str.tostring(fwR.h) : "TREND / impulse")
+        array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Breakout|Volatility|Active POIs|Market framework", "|")
+        array<string> p7SumVals = array.from(f_p7DirLabel(p7LastGlobalDir), f_p7RegimeLabel(p7LastRegime), f_p7DirLabel(p7LastMomDir), f_p7BrkLabel(p7LastBrk), f_p7VolLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)), not na(fwR) ? "RANGE " + str.tostring(fwR.l) + " - " + str.tostring(fwR.h) : "TREND / impulse")
         // Phase 14 zero-state: no confirmed bar processed yet -- every row
         // reads "-", never a stale or fabricated value.
-        for r = 3 to 12
+        for r = 3 to 9
             f_row(p7Summary, r, p7HasData ? array.get(p7SumKeys, r - 3) : "-", p7HasData ? array.get(p7SumVals, r - 3) : "-")
 
     if p7ShowActivePois

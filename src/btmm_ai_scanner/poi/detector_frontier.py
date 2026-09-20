@@ -67,6 +67,9 @@ from btmm_ai_scanner.poi.period_levels import (
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
 from btmm_ai_scanner.poi.qualification import (
     ARBITER_TYPES,
+    FVG_TYPES,
+    departure_metrics_by_candle,
+    fvg_pre_availability_consumed,
     origin_key,
     qualify_candidates,
 )
@@ -605,6 +608,11 @@ def advance_detector_frontier(
         {new_ring[-2].record_id: new_atr_series[-2]} if len(new_ring) >= 2 else {},
         configuration,
         state.previous_origins,
+        # RC4: the departure candle is the previous one; its expansion is
+        # measured over the bars before it (the frozen displacement window).
+        departure_metrics_by_candle(candles_so_far, (len(candles_so_far) - 2,))
+        if configuration.rc4_fvg_quality and len(candles_so_far) >= 2
+        else None,
     )
     new_previous_origins = {
         origin_key(c): c.poi_type
@@ -622,6 +630,17 @@ def advance_detector_frontier(
         step_candidates,
     )
     step_candidates = list(new_leg_origin.newly_mapped)
+    if configuration.rc4_fvg_quality:
+        # RC4: reject an FVG whose imbalance was already fully consumed before
+        # this (possibly delayed) availability. Same rule as the batch path.
+        step_candidates = [
+            c
+            for c in step_candidates
+            if c.poi_type not in FVG_TYPES
+            or not fvg_pre_availability_consumed(
+                c, c.availability_time_utc, candles_so_far
+            )
+        ]
     new_append_only = (*state.append_only_candidates, *step_candidates)
 
     # Period levels.

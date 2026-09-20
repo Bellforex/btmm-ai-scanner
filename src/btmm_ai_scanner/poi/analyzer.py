@@ -73,7 +73,12 @@ from btmm_ai_scanner.poi.overlap import (
 from btmm_ai_scanner.poi.period_levels import detect_period_levels
 from btmm_ai_scanner.poi.persistent_ordered_map import PersistentOrderedMap
 from btmm_ai_scanner.poi.pressure_wicks import detect_pressure_wicks
-from btmm_ai_scanner.poi.qualification import qualify_candidates
+from btmm_ai_scanner.poi.qualification import (
+    FVG_TYPES,
+    departure_metrics_by_candle,
+    fvg_pre_availability_consumed,
+    qualify_candidates,
+)
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.scheduler_walk import cursor_walk_result
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -410,10 +415,22 @@ def _detect_bundle_candidates(
         *detect_three_candle_stars(bundle.candles, configuration),
     ]
     atr = compute_atr_series(bundle.candles, 14)
+    index_by_candle = {c.record_id: i for i, c in enumerate(bundle.candles)}
     qualified, _decisions = qualify_candidates(
         patterns,
         {c.record_id: a for c, a in zip(bundle.candles, atr, strict=True)},
         configuration,
+        None,
+        departure_metrics_by_candle(
+            bundle.candles,
+            {
+                index_by_candle[c.source_candle_record_ids[1]]
+                for c in patterns
+                if c.poi_type in FVG_TYPES
+            },
+        )
+        if configuration.rc4_fvg_quality
+        else None,
     )
     order_blocks, context_mapped = immutable_structure_gate(
         detect_order_blocks(bundle.candles, configuration),
@@ -422,6 +439,17 @@ def _detect_bundle_candidates(
         bundle.measurement_analysis.confirmed_swings,
         measurement_configuration,
     )
+    if configuration.rc4_fvg_quality:
+        # RC4: an FVG whose imbalance was already fully consumed by the time its
+        # (delayed) availability arrived is not admitted. Causal at that bar.
+        context_mapped = tuple(
+            c
+            for c in context_mapped
+            if c.poi_type not in FVG_TYPES
+            or not fvg_pre_availability_consumed(
+                c, c.availability_time_utc, bundle.candles
+            )
+        )
     mapped: list[Any] = [*order_blocks, *context_mapped]
     mapped.extend(
         immutable_reference_candidates(

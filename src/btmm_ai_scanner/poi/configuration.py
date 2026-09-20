@@ -56,6 +56,15 @@ class PoiConfiguration(ContractModel):
     # gap width >= this x ATR-14 of its departure candle.
     fvg_min_gap_atr_ratio: Decimal = Decimal("0.35")
 
+    #: RC4 profile only (author decision 2026-09-19). Adds to the RC3 gap rule:
+    #: the departure candle must be a real expansion -- the frozen displacement
+    #: primitive must class it at least FAST (range >= 1.50 x the median range
+    #: of the previous 20 bars) AND its range must exceed the immediately
+    #: preceding candle's range -- and an FVG whose imbalance was already fully
+    #: consumed before its (possibly delayed) availability is not admitted.
+    #: False keeps the frozen RC3 contract exactly.
+    rc4_fvg_quality: bool = False
+
     reversal_candidate_size_ratio_standard: Decimal = Decimal("2.0")
     reversal_candidate_size_ratio_strong: Decimal = Decimal("3.0")
     reversal_body_efficiency_standard: Decimal = Decimal("0.60")
