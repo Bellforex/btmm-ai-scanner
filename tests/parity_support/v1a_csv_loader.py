@@ -136,6 +136,9 @@ _DURATION: dict[Timeframe, timedelta] = {
     Timeframe.M5: timedelta(minutes=5),
     Timeframe.M15: timedelta(minutes=15),
     Timeframe.H1: timedelta(hours=1),
+    # H3 was acquired for the RC5 structural-origin forensics (the author's
+    # pressure-wick staircase is an H3 host case). Same fixed-duration rule.
+    Timeframe.H3: timedelta(hours=3),
     Timeframe.H4: timedelta(hours=4),
     Timeframe.D1: timedelta(days=1),
     Timeframe.W1: timedelta(days=7),
@@ -206,7 +209,9 @@ def _epoch_ms_to_utc(time_ms: int) -> datetime:
     # Avoid float division (ms / 1000) precision loss: build the datetime
     # from whole seconds + whole milliseconds via integer arithmetic only.
     seconds, millis = divmod(time_ms, 1000)
-    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds, milliseconds=millis)
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(
+        seconds=seconds, milliseconds=millis
+    )
 
 
 def load_v1a_csv(
@@ -215,6 +220,7 @@ def load_v1a_csv(
     *,
     symbol: InternalSymbol = InternalSymbol.XAUUSD,
     close_time_ms_by_open_ms: Mapping[int, int] | None = None,
+    duration_override: timedelta | None = None,
 ) -> tuple[NormalizedCandle, ...]:
     """Parse one V1-A raw-OHLC CSV into an ordered tuple of ``NormalizedCandle``.
 
@@ -233,7 +239,7 @@ def load_v1a_csv(
     relative_path = path.name
     raw_bytes = path.read_bytes()
     expected_sha256 = hashlib.sha256(raw_bytes).hexdigest()
-    duration = _DURATION[timeframe]
+    duration = duration_override or _DURATION[timeframe]
 
     provenance_id, _ = derive_provenance_id(
         dataset_id=_DATASET_ID,
@@ -269,7 +275,9 @@ def load_v1a_csv(
 
             availability_time_utc = event_time_utc + duration
             if close_time_ms_by_open_ms is not None:
-                availability_time_utc = _epoch_ms_to_utc(close_time_ms_by_open_ms[time_ms])
+                availability_time_utc = _epoch_ms_to_utc(
+                    close_time_ms_by_open_ms[time_ms]
+                )
             open_price = Decimal(row["open"])
             high_price = Decimal(row["high"])
             low_price = Decimal(row["low"])
@@ -358,7 +366,9 @@ def load_dev_only_m15(root: Path) -> tuple[NormalizedCandle, ...]:
     returned, never passed to any caller.
     """
     verified = verify_v1a_manifest_hashes(root)
-    full_entry = next(v for v in verified if v.filename == "v1a_raw_ohlc_full_loaded.csv")
+    full_entry = next(
+        v for v in verified if v.filename == "v1a_raw_ohlc_full_loaded.csv"
+    )
     all_m15 = load_v1a_csv(full_entry.path, Timeframe.M15)
     if len(all_m15) != full_entry.row_count:
         raise DevSplitIntegrityError(
@@ -378,11 +388,15 @@ def load_dev_only_m15(root: Path) -> tuple[NormalizedCandle, ...]:
     # length and boundary timestamp only, then discarded).
     oos_len = len(fresh) - DEV_BAR_COUNT
     if oos_len != OOS_BAR_COUNT:
-        raise DevSplitIntegrityError(f"expected {OOS_BAR_COUNT} OOS bars, computed {oos_len}.")
+        raise DevSplitIntegrityError(
+            f"expected {OOS_BAR_COUNT} OOS bars, computed {oos_len}."
+        )
     oos_first_event = fresh[DEV_BAR_COUNT].event_time_utc
 
     if len(dev) != DEV_BAR_COUNT:
-        raise DevSplitIntegrityError(f"expected {DEV_BAR_COUNT} DEV bars, got {len(dev)}.")
+        raise DevSplitIntegrityError(
+            f"expected {DEV_BAR_COUNT} DEV bars, got {len(dev)}."
+        )
     if dev[0].event_time_utc != DEV_FIRST_EVENT_UTC:
         raise DevSplitIntegrityError(
             f"DEV first bar event_time_utc {dev[0].event_time_utc.isoformat()} != "
@@ -416,16 +430,26 @@ def load_context_timeframe_bounded(
     never exposing an OOS M15 row.
     """
     verified = verify_v1a_manifest_hashes(root)
-    entry = next(v for v in verified if v.timeframe is timeframe and "raw_ohlc_" in v.filename and v.filename != "v1a_raw_ohlc_full_loaded.csv")
+    entry = next(
+        v
+        for v in verified
+        if v.timeframe is timeframe
+        and "raw_ohlc_" in v.filename
+        and v.filename != "v1a_raw_ohlc_full_loaded.csv"
+    )
     all_candles = load_v1a_csv(entry.path, timeframe)
     if len(all_candles) != entry.row_count:
         raise DevSplitIntegrityError(
             f"{entry.filename}: expected {entry.row_count} rows, loaded {len(all_candles)}."
         )
-    return tuple(c for c in all_candles if c.availability_time_utc <= bound_availability_utc)
+    return tuple(
+        c for c in all_candles if c.availability_time_utc <= bound_availability_utc
+    )
 
 
-def load_dev_bounded_context(root: Path) -> dict[Timeframe, tuple[NormalizedCandle, ...]]:
+def load_dev_bounded_context(
+    root: Path,
+) -> dict[Timeframe, tuple[NormalizedCandle, ...]]:
     """Load W1/D1/H4/H1, each bounded to the DEV M15 window's own final
     availability instant (the M15 bar at ``DEV_LAST_EVENT_UTC``'s own
     ``availability_time_utc`` = ``DEV_LAST_EVENT_UTC + 15 minutes``)."""
