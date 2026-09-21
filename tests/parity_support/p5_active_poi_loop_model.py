@@ -178,6 +178,7 @@ def run_active_poi_loop(
     framework_timeframe: Timeframe | None = None,
     framework_trackers: dict[Timeframe, FrameworkTracker] | None = None,
     suppressed_poi_ids: frozenset[UUID] = frozenset(),
+    rc5_validity: bool = False,
 ) -> ActiveLoopResult:
     """Evaluate every eligible POI for one confirmed bar's `ScannerAnalysis`,
     using `resolve_eligible_and_next` for the set algebra and calling the
@@ -197,7 +198,19 @@ def run_active_poi_loop(
         # than filtering the result keeps it out of the eligibility algebra and
         # out of the carried-forward active set.
         obs_by_id = {k: v for k, v in obs_by_id.items() if k not in suppressed_poi_ids}
-    if rc3_freshness:
+    if rc5_validity:
+        # RC5 (author correction, 2026-09-21): mitigation is not termination.
+        # A POI that reacted once is still a valid decision zone when price
+        # returns, so terminality is confirmed failure through the far side --
+        # which is precisely the RC2 status-based algebra below. RC3's
+        # `not fresh_active` widened terminality to first-reaction mitigation
+        # and is what would wrongly retire the zone after one touch.
+        eligible_ids, next_active = resolve_eligible_and_next(
+            _current_status_by_id(analysis),
+            previously_active_ids,
+            known_ids=frozenset(obs_by_id),
+        )
+    elif rc3_freshness:
         eligible_ids, next_active = resolve_eligible_and_next_rc3(
             {
                 s.poi_record_id: s.fresh_active
@@ -276,6 +289,38 @@ def rc4_is_terminal(state: object, decision: BtrcDecision) -> bool:
         reason is PoiTerminalReason.MITIGATED
         and decision.interaction_episode == "ACTIVE"
     )
+
+
+def rc5_is_terminal(state: object, decision: BtrcDecision) -> bool:
+    """RC5: terminal = the zone FAILED, not that price used it.
+
+    Author correction, 2026-09-21. ``rc4_is_terminal`` keys off
+    ``fresh_active``, which the frozen lifecycle clears on the FIRST TOUCH, so
+    a POI that reacted once and was still perfectly valid went terminal. Under
+    RC5 a successful reaction ends an interaction EPISODE, never the POI.
+
+    Both conditions below are existing doctrine, not new thresholds: a FAILED
+    interaction episode is the RC4 framework's own "price accepted beyond the
+    POI with no reclaim", and GENUINE_INVALIDATION_CONFIRMED is the frozen
+    breach walk's far-edge failure. A far-edge break that WAS reclaimed lands
+    on FALSE_INVALIDATION_CONFIRMED and is deliberately not terminal.
+    """
+    if decision.interaction_episode == "FAILED":
+        return True
+    return (
+        state is not None
+        and getattr(state, "poi_lifecycle_status", None)
+        is PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
+    )
+
+
+def rc5_terminal_reason(
+    state: object, decision: BtrcDecision
+) -> PoiTerminalReason | None:
+    """Only ever an invalidation: RC5 has no terminal-by-mitigation."""
+    if not rc5_is_terminal(state, decision):
+        return None
+    return PoiTerminalReason.INVALIDATED
 
 
 def rc4_terminal_reason(

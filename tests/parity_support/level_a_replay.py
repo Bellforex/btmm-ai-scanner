@@ -105,6 +105,8 @@ from btmm_ai_scanner.structure.configuration import StructureConfiguration
 from tests.parity_support.p5_active_poi_loop_model import (
     rc4_is_terminal,
     rc4_terminal_reason,
+    rc5_is_terminal,
+    rc5_terminal_reason,
     run_active_poi_loop,
 )
 from tests.parity_support.p5_wire_normalized_replay import (
@@ -373,6 +375,7 @@ def iter_level_a_bars(
             framework_timeframe=host_timeframe if rc4_framework else None,
             framework_trackers=framework_trackers,
             suppressed_poi_ids=suppressed,
+            rc5_validity=rc5_authority,
         )
 
         observation_by_id = {
@@ -391,7 +394,10 @@ def iter_level_a_bars(
                 next_poi_idx += 1
             decision = loop.decisions_by_poi_id[poi_id]
             state = state_by_id.get(poi_id)
-            if rc4_framework:
+            if rc5_authority:
+                terminal = rc5_is_terminal(state, decision)
+                terminal_reason = rc5_terminal_reason(state, decision)
+            elif rc4_framework:
                 terminal = rc4_is_terminal(state, decision)
                 terminal_reason = rc4_terminal_reason(state, decision)
             elif rc3_freshness:

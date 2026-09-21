@@ -45,6 +45,7 @@ __all__ = [
     "active_display_pois",
     "authoritative_rc5_pois",
     "display_hidden_reason",
+    "interaction_count",
     "is_rc5_active_for_display",
     "stable_poi_key",
     "suppressed_record_ids",
@@ -396,9 +397,8 @@ class DisplayHiddenReason(StrEnum):
     itself is never removed from history."""
 
     AUTHORITY_SUPPRESSED = "AUTHORITY_SUPPRESSED"
-    MITIGATED = "MITIGATED"
     INVALIDATED = "INVALIDATED"
-    TERMINAL = "TERMINAL"
+    SUPERSEDED = "SUPERSEDED"
 
 
 def display_hidden_reason(
@@ -409,37 +409,47 @@ def display_hidden_reason(
     """Why this POI should not render as an active zone, or ``None`` if it
     should.
 
-    The author's complaint was that dead zones still look tradeable, so this is
-    deliberately one predicate for every lifecycle-eligible family rather than
-    a per-type rule, and it is meant to govern the zone box, the POI label and
-    the active table row together -- hiding a label while leaving the rectangle
-    is exactly the failure being fixed.
+    MITIGATION IS NOT TERMINATION (author correction, 2026-09-21). The frozen
+    lifecycle sets ``terminal_reason = MITIGATED`` at the FIRST TOUCH of the
+    zone -- ``resolve_terminal(first_touch_time, invalidation_time_utc)`` --
+    and because the earliest cause wins, a POI that was touched and only later
+    broke down still records MITIGATED. So "was mitigated" says only that price
+    has been in the zone at least once. It says nothing about whether the zone
+    failed.
 
-    A POI with no lifecycle state yet has not been interacted with, so it shows.
-    History is untouched: this is a view.
+    A POI stays valid through any number of interaction episodes. It dies only
+    when price confirms failure through its FAR side, which the frozen breach
+    walk already decides: ``GENUINE_INVALIDATION_CONFIRMED``. A far-edge break
+    that was reclaimed lands on ``FALSE_INVALIDATION_CONFIRMED`` instead and
+    deliberately stays visible -- preserving exactly the false-break case the
+    author asked to keep.
+
+    No new threshold is introduced. Penetration depth, tap count and episode
+    boundaries are analytics; visibility is governed by valid vs confirmed
+    invalidated. There is no time expiry.
+
+    This reads the frozen records without mutating them, so RC4 is untouched.
     """
     record = ledger.get(stable_poi_key(observation))
     if record is not None and record.is_suppressed:
         return DisplayHiddenReason.AUTHORITY_SUPPRESSED
     if state is None:
         return None
-    reason = getattr(state, "terminal_reason", None)
-    if reason is not None:
-        # MITIGATED means price used the zone; INVALIDATED means it failed.
-        return (
-            DisplayHiddenReason.MITIGATED
-            if reason.value == "MITIGATED"
-            else DisplayHiddenReason.INVALIDATED
-        )
     if (
         getattr(state, "poi_lifecycle_status", None)
         is PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
     ):
         return DisplayHiddenReason.INVALIDATED
-    if getattr(state, "terminal_time_utc", None) is not None:
-        return DisplayHiddenReason.TERMINAL
-    # Everything else is either fresh or inside an open interaction episode,
-    # both of which the author wants visible.
+    reason = getattr(state, "terminal_reason", None)
+    if reason is not None:
+        name = reason.value
+        if name == "INVALIDATED":
+            return DisplayHiddenReason.INVALIDATED
+        if name == "PROMOTED_TO_ORDER_BLOCK":
+            # not a failure: the formation now exists as a better POI, and
+            # drawing both would duplicate one zone.
+            return DisplayHiddenReason.SUPERSEDED
+        # MITIGATED and anything else coarse: the zone was used, not broken.
     return None
 
 
@@ -449,6 +459,13 @@ def is_rc5_active_for_display(
     ledger: Rc5SemanticLedger,
 ) -> bool:
     return display_hidden_reason(observation, state, ledger) is None
+
+
+def interaction_count(state: Any | None) -> int:
+    """Completed interaction episodes, from the frozen tap count. Diagnostic
+    evidence for later backtesting -- it changes no trade rule and no
+    visibility."""
+    return 0 if state is None else int(getattr(state, "tap_count", 0) or 0)
 
 
 def active_display_pois(
