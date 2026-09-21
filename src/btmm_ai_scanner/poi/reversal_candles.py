@@ -31,6 +31,15 @@ class ReversalCandleCandidate(NamedTuple):
     candidate_event_time_utc: datetime
     confirmation_time_utc: datetime
     availability_time_utc: datetime
+    #: RC5 formation span: the source candle through the candle that confirmed
+    #: the reversal, inclusive. A BUY-TO-SELL candle IS the last up-candle
+    #: before the turn, so the swing high that completes the reversal forms on
+    #: a LATER bar of the formation, never on the source candle -- matching a
+    #: B2S to structure by source candle alone can therefore never succeed.
+    #: This is the detector's own confirmation window, so it is bounded by the
+    #: formation's geometry and needs no distance, tolerance or bar count.
+    #: Empty on every other family, which leaves them untouched.
+    formation_span_candle_record_ids: tuple[UUID, ...] = ()
 
 
 def detect_reversal_candles(
@@ -108,6 +117,9 @@ def detect_reversal_candles(
                 candidate_event_time_utc=candidate.event_time_utc,
                 confirmation_time_utc=confirmation_candle.availability_time_utc,
                 availability_time_utc=confirmation_candle.availability_time_utc,
+                formation_span_candle_record_ids=tuple(
+                    c.record_id for c in candles[index : confirmation_index + 1]
+                ),
             )
         )
 

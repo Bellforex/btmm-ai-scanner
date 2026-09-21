@@ -108,3 +108,92 @@ qualification, not merely adjacent to it.
   requirement, but the behaviour change must be measured before it is accepted.
 * **Host-timeframe locality (Part D/F)** is a Pine object-lifecycle question and
   has not been audited yet.
+
+---
+
+# UPDATE 2026-09-21 — trendline audit, and the qualifier re-measured on the frozen role set
+
+The structural role set is now frozen
+(`docs/architecture/BTRC_V1_RC5_STRUCTURAL_ROLE_DOCTRINE.md`). Formation
+adjacency changed the *matching* of candidates to swings, not `role_by_swing`
+itself, so the swing-liquidity qualifier is unaffected by that change.
+
+## Trendline quality — what the model already carries
+
+`domain/trendlines.py::Trendline` already records `anchor_1_swing_record_id`,
+`anchor_2_swing_record_id`, `qualifying_touch_swing_record_ids`, both anchor bar
+indices, `raw_slope` / `normalized_slope` / `anchor_reference_atr`, and
+`confirmation_candle_id` + `confirmation_time_utc`.
+
+**`qualifying_touch_swing_record_ids` has length exactly 1 for all 437
+trendlines on both M15 and H4.** As produced today the touch count carries no
+discriminating information at all, so it cannot be the quality signal and no
+touch-count threshold should be invented on top of it.
+
+The anchors can. A trendline is drawn *between two swings*, so the frozen role
+doctrine applies to it unchanged: a line between two swings the walk actually
+uses is meaningful liquidity; a line between two texture pivots is not. No new
+threshold, no count tuning.
+
+| host | trendlines | both anchors walk-used | trendline sweeps | qualified |
+|---|---|---|---|---|
+| M15 | 437 | 40 | 272 | 24 |
+| H4 | 437 | 27 | 297 | 21 |
+
+Importantly this does **not** require a range boundary — the provisional audit's
+`EXTERNAL` clause was diagnostic only and is now dropped, as the author asked.
+A confirmed trendline between two structurally used swings holds liquidity
+wherever it sits.
+
+## The qualifier, from existing semantics only
+
+* swing liquidity — the swing holds a role under the frozen doctrine
+* equal highs / equal lows — always qualify (genuine pools, they do not have to
+  masquerade as structural-origin swings)
+* range high / low — always qualify, on the range's existing confirmation
+* trendline — both anchor swings hold a role
+* active POI boundary — **not yet implemented** (Phase 7; no POI `LiquidityKind`
+  exists today)
+
+| host | raw sweeps | rate | qualified | rate | kept | BSL | SSL |
+|---|---|---|---|---|---|---|---|
+| M5 | 585 | 1 per 3.4 bars | **123** | 1 per 16 bars | 21% | 59 | 64 |
+| M15 | 580 | 1 per 3.4 bars | **116** | 1 per 17 bars | 20% | 53 | 63 |
+| H4 | 558 | 1 per 3.6 bars | **94** | 1 per 21 bars | 16% | 39 | 55 |
+
+Stable across three very different hosts (21% / 20% / 16%), where the rejected
+`EXTERNAL`-only rule gave 9% / 1%. Every surviving event names its reference
+kind and `level_id`, so the Part G question — *what was swept?* — is answerable
+for all of them.
+
+Internal liquidity is untouched: minor swings remain in the engine for
+structure, diagnostics and framework calculations. Only the **user-facing**
+sweep set is qualified.
+
+## All five hosts
+
+| host | bars | raw sweeps | rate | qualified | rate | kept | BSL | SSL |
+|---|---|---|---|---|---|---|---|---|
+| M5 | 2000 | 585 | 1 per 3.4 | **123** | 1 per 16 | 21% | 59 | 64 |
+| M15 | 2000 | 580 | 1 per 3.4 | **116** | 1 per 17 | 20% | 53 | 63 |
+| M45 | 529 | 102 | 1 per 5.2 | **27** | 1 per 20 | 26% | 12 | 15 |
+| H3 | 300 | 51 | 1 per 5.9 | **11** | 1 per 27 | 21% | 2 | 9 |
+| H4 | 2000 | 558 | 1 per 3.6 | **94** | 1 per 21 | 16% | 39 | 55 |
+
+Retention 16–26% on five hosts spanning 5 minutes to 4 hours, from a rule with
+no tuned constant in it. The chart goes from a sweep label every 3–6 candles to
+one every 16–27.
+
+## Still to do
+
+* **Active POI boundaries (Phase 7)** — needs a new `LiquidityKind` member and a
+  feed from the P3 lifecycle into the framework engine. Only FRESH/active
+  authoritative POIs may contribute, so it also depends on authority wiring.
+* **Host timeframe on `SweepEvent` (Phase 11)** — a contract change; today the
+  host is implicit in the per-timeframe `FrameworkTracker`.
+* **BTMM DISTRACTION delta (Phase 12)** — the coupling is confirmed at
+  `framework/engine.py:540-560`: DISTRACTION is credited from `context.events`
+  filtered by approach side and price. Adding a qualification flag to
+  `SweepEvent` and requiring it there is the minimal change that satisfies Part
+  R while leaving DELAY / WIPEOUT / MULTIPLE untouched and keeping internal
+  liquidity available. The before/after counts have not been measured yet.

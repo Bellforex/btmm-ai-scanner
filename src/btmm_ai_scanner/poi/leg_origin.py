@@ -345,7 +345,14 @@ def structural_role_of(
         else context.swing_high_candle_ids
     )
     best: StructuralRoleFact | None = None
-    for candle_id in candidate.source_candle_record_ids:
+    # The formation span, where a detector records one, is the candidate's own
+    # extent -- for B2S/S2B the source candle through the candle that confirmed
+    # the reversal. The structural extreme that COMPLETES a reversal is often
+    # carried by a later bar of the formation rather than by its source candle,
+    # so both are consulted. Families that record no span fall back to their
+    # source candles exactly as before.
+    span: tuple[Any, ...] = getattr(candidate, "formation_span_candle_record_ids", ())
+    for candle_id in (*candidate.source_candle_record_ids, *span):
         swing_id = pivots.get(candle_id)
         if swing_id is None:
             continue
