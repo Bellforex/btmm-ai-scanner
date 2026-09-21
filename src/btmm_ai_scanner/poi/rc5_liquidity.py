@@ -138,6 +138,8 @@ def reference_kind_of_level_id(level_id: str) -> SweepReferenceKind:
     A range id also starts with "R", so the ``":"`` test must come FIRST --
     checking the prefix first would classify every range boundary as a swing.
     """
+    if level_id.startswith("P"):
+        return SweepReferenceKind.POI_BOUNDARY
     if ":" in level_id:
         return SweepReferenceKind.RANGE_BOUNDARY
     if level_id.startswith("S"):
@@ -347,3 +349,148 @@ def qualify_sweep_reference(
         return _reference(tuple(str(a) for a in anchors), "BOTH_ANCHORS_MEANINGFUL")
 
     return Qualification(None, RejectionReason.UNKNOWN_LEVEL)
+
+
+# ---------------------------------------------------------------------------
+# POI far edges -- the one family with no framework lifecycle of its own
+# ---------------------------------------------------------------------------
+
+#: POI far edges are an RC5 family, and ``LiquidityKind`` is frozen with no
+#: member for them. Adding one would change a published contract surface, so a
+#: POI level CARRIES the side-appropriate existing kind purely so the shared
+#: stepper can build its internal event.
+#:
+#: NOTHING MAY READ ``kind`` FOR A POI LEVEL. The authority is the "P" prefix on
+#: ``level_id``, which ``reference_kind_of_level_id`` resolves first. These raw
+#: events never leave RC5 -- they become qualified references whose kind is
+#: POI_BOUNDARY.
+_POI_CARRIER_KIND = {
+    LiquiditySide.BUY_SIDE: LiquidityKind.SWING_HIGH,
+    LiquiditySide.SELL_SIDE: LiquidityKind.SWING_LOW,
+}
+
+
+def poi_boundary_level_id(observation: Any) -> str:
+    """Stable, host-independent identity for a POI far-edge level.
+
+    Built from the POI's ``_formation_key`` and the boundary side, never from a
+    runtime index. The "P" prefix keeps it outside the framework's own
+    S / E / T / range namespaces.
+    """
+    from btmm_ai_scanner.poi.rc5_semantics import stable_poi_key
+
+    key = stable_poi_key(observation)
+    poi_type = getattr(key[0], "value", key[0])
+    sources = "+".join(str(c) for c in key[1])
+    return f"P{poi_type}:{sources}"
+
+
+def poi_reference_is_active(
+    observation: Any,
+    state: Any | None,
+    ledger: Any,
+) -> bool:
+    """Whether a POI's far edge may CURRENTLY hold liquidity.
+
+    This is the one place an activity rule is genuinely needed. Every other
+    reference family flows through the framework's own level lifecycle, which
+    already retires a level once it is swept or accepted through. POI far edges
+    are an RC5 addition with no such lifecycle, so their activity is evaluated
+    from the layers that do own it:
+
+    * ``rc5_validity`` -- the zone still stands, and
+    * authority -- it is an independent opportunity, not a same-origin
+      subordinate hiding behind a better POI from the same origin.
+
+    ACTIVE through fresh, interaction, mitigation, RE-mitigation and a
+    false break that was reclaimed. INACTIVE only after genuine invalidation,
+    standalone lifecycle supersession, or authority suppression.
+
+    Deliberately does NOT read ``terminal_reason == MITIGATED`` or
+    ``fresh_active``: the frozen lifecycle sets both on the FIRST TOUCH, so
+    either would retire a perfectly good zone the moment price used it.
+    """
+    from btmm_ai_scanner.poi.rc5_semantics import rc5_poi_is_valid, stable_poi_key
+
+    record = ledger.get(stable_poi_key(observation))
+    if record is not None and record.is_suppressed:
+        return False
+    return rc5_poi_is_valid(state)
+
+
+def poi_boundary_sweeps(
+    candles: Any,
+    observations: Any,
+    states_by_poi_id: Any,
+    ledger: Any,
+    configuration: Any,
+) -> tuple[Any, ...]:
+    """Sweeps of POI far edges, using the framework's OWN sweep mechanics.
+
+    ``framework.engine.advance_levels`` is literally the function RC4 uses, so
+    the wick test, the close-through test, the reclaim window and the
+    "accepted beyond consumes the level" rule are shared, not re-implemented.
+    Nothing about RC4's own level set is touched: this is a separate pass over
+    levels RC4 never builds.
+
+    TWO WAYS A POI LEVEL LEAVES THE BOOK, and they are different:
+
+    * the framework consumes it -- swept, or accepted through. Same as any
+      other level; ``advance_levels`` handles it.
+    * the POI dies. A zone that is genuinely invalidated, superseded or
+      authority-suppressed stops holding liquidity, so its level is withdrawn
+      BEFORE the step rather than left to be swept. This is the check the
+      other families do not need.
+
+    A level is registered once, at the POI's own availability, and never
+    re-registered -- the same discipline the framework applies to range
+    boundaries, so a consumed far edge cannot come back.
+    """
+    from btmm_ai_scanner.framework.engine import LiquidityLevel, advance_levels
+
+    ordered = sorted(
+        observations, key=lambda o: (o.availability_time_utc, str(o.record_id))
+    )
+    pending = list(ordered)
+    active: list[Any] = []
+    level_owner: dict[str, Any] = {}
+    registered: set[str] = set()
+    events: list[Any] = []
+
+    for index, candle in enumerate(candles):
+        opened = candle.event_time_utc
+        while pending and pending[0].availability_time_utc <= opened:
+            observation = pending.pop(0)
+            level_id = poi_boundary_level_id(observation)
+            if level_id in registered:
+                continue
+            state = states_by_poi_id.get(observation.record_id)
+            if not poi_reference_is_active(observation, state, ledger):
+                continue
+            boundary = poi_boundary_liquidity(
+                observation.direction, observation.zone_top, observation.zone_bottom
+            )
+            registered.add(level_id)
+            level_owner[level_id] = observation
+            active.append(
+                LiquidityLevel(
+                    level_id,
+                    _POI_CARRIER_KIND[boundary.side],
+                    boundary.side,
+                    boundary.price,
+                    observation.availability_time_utc,
+                )
+            )
+
+        # withdraw levels whose POI is no longer a live, independent zone
+        still_live: list[Any] = []
+        for level in active:
+            observation = level_owner.get(level.level_id)
+            if observation is None:
+                continue
+            state = states_by_poi_id.get(observation.record_id)
+            if poi_reference_is_active(observation, state, ledger):
+                still_live.append(level)
+        active = advance_levels(still_live, index, candle, None, configuration, events)
+
+    return tuple(events)

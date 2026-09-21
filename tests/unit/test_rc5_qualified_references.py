@@ -246,3 +246,153 @@ def test_references_carry_the_semantic_host(replayed) -> None:
         if verdict.is_qualified:
             assert verdict.reference.host.label == "M15"
             assert "M15" in verdict.reference.key
+
+
+# ---------------------------------------------------------------------------
+# POI far edges -- the only family with an RC5-owned activity rule
+# ---------------------------------------------------------------------------
+
+
+class _Obs:
+    """Only what the boundary code reads."""
+
+    def __init__(self, direction, top, bottom, available, tag="a") -> None:
+        from btmm_ai_scanner.poi.enums import PoiType
+
+        self.poi_type = PoiType.BUY_ORDER_BLOCK
+        self.source_candle_record_ids = (tag,)
+        self.record_id = tag
+        self.direction = direction
+        self.zone_top = top
+        self.zone_bottom = bottom
+        self.availability_time_utc = available
+
+
+class _St:
+    def __init__(self, status, reason=None) -> None:
+        self.poi_lifecycle_status = status
+        self.terminal_reason = reason
+
+
+def _bull_obs(candles, tag="a"):
+    from btmm_ai_scanner.poi.enums import PoiDirection
+
+    return _Obs(
+        PoiDirection.BULLISH,
+        Decimal("102.00"),
+        Decimal("100.00"),
+        candles[0].availability_time_utc,
+        tag,
+    )
+
+
+def _series(rows, tmp_path, name):
+    return rows_to_candles(rows, tmp_path, name)
+
+
+_DIP_AND_RECOVER = [
+    (105.0, 105.5, 104.5, 105.0),
+    (105.0, 105.2, 100.5, 100.8),  # into the zone, holds above the far edge
+    (100.8, 104.0, 100.7, 103.5),
+    (103.5, 106.0, 103.2, 105.5),
+    (105.5, 105.7, 99.50, 100.90),  # wick BELOW the far edge, closes back in
+    (100.9, 104.0, 100.8, 103.6),
+]
+
+
+def test_a_valid_poi_far_edge_can_be_swept(tmp_path: Path) -> None:
+    from btmm_ai_scanner.framework.model import FrameworkConfiguration
+    from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_sweeps
+
+    candles = _series(_DIP_AND_RECOVER, tmp_path, "dip")
+    observation = _bull_obs(candles)
+    events = poi_boundary_sweeps(
+        candles,
+        [observation],
+        {observation.record_id: _St(PoiLifecycleStatus.NO_BREACH)},
+        Rc5SemanticLedger(),
+        FrameworkConfiguration(minimum_price_tick=_TICK),
+    )
+    assert events, "a live POI far edge produced no sweep"
+    assert all(e.side is LiquiditySide.SELL_SIDE for e in events)
+    assert all(e.level_id.startswith("P") for e in events)
+    assert all(
+        reference_kind_of_level_id(e.level_id) is SweepReferenceKind.POI_BOUNDARY
+        for e in events
+    )
+
+
+def test_an_invalidated_poi_far_edge_cannot_be_swept(tmp_path: Path) -> None:
+    """THE NEGATIVE CONTROL.
+
+    The same price action, the same reference, the same mechanics -- but the
+    POI is genuinely invalidated. Its history is untouched; it simply stops
+    holding liquidity, so it must not produce a sweep. Without this, a
+    write-once qualification would let dead zones keep generating events
+    forever, which is the stale-zone problem in liquidity form.
+    """
+    from btmm_ai_scanner.framework.model import FrameworkConfiguration
+    from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_sweeps
+
+    candles = _series(_DIP_AND_RECOVER, tmp_path, "dip-dead")
+    observation = _bull_obs(candles)
+    dead = _St(PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED)
+    events = poi_boundary_sweeps(
+        candles,
+        [observation],
+        {observation.record_id: dead},
+        Rc5SemanticLedger(),
+        FrameworkConfiguration(minimum_price_tick=_TICK),
+    )
+    assert events == ()
+
+
+def test_a_mitigated_poi_far_edge_still_holds_liquidity(tmp_path: Path) -> None:
+    """MITIGATION IS NOT TERMINATION. The frozen lifecycle sets
+    terminal_reason=MITIGATED on the FIRST TOUCH, so keying off it would
+    retire the zone the moment price used it."""
+    from btmm_ai_scanner.framework.model import FrameworkConfiguration
+    from btmm_ai_scanner.poi.enums import PoiLifecycleStatus, PoiTerminalReason
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_sweeps
+
+    candles = _series(_DIP_AND_RECOVER, tmp_path, "dip-mit")
+    observation = _bull_obs(candles)
+    used = _St(PoiLifecycleStatus.NO_BREACH, PoiTerminalReason.MITIGATED)
+    events = poi_boundary_sweeps(
+        candles,
+        [observation],
+        {observation.record_id: used},
+        Rc5SemanticLedger(),
+        FrameworkConfiguration(minimum_price_tick=_TICK),
+    )
+    assert events, "a mitigated but valid POI stopped holding liquidity"
+
+
+def test_a_suppressed_poi_has_no_independent_far_edge(tmp_path: Path) -> None:
+    """A same-origin subordinate is not an independent opportunity, so it must
+    not contribute a second reference to the same physical level."""
+    from btmm_ai_scanner.framework.model import FrameworkConfiguration
+    from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_sweeps
+    from btmm_ai_scanner.poi.rc5_semantics import stable_poi_key
+
+    candles = _series(_DIP_AND_RECOVER, tmp_path, "dip-sup")
+    observation = _bull_obs(candles)
+
+    class _Suppressed:
+        is_suppressed = True
+
+    ledger = Rc5SemanticLedger()
+    key = stable_poi_key(observation)
+    ledger.get = lambda k: _Suppressed() if k == key else None  # type: ignore[method-assign]
+
+    events = poi_boundary_sweeps(
+        candles,
+        [observation],
+        {observation.record_id: _St(PoiLifecycleStatus.NO_BREACH)},
+        ledger,
+        FrameworkConfiguration(minimum_price_tick=_TICK),
+    )
+    assert events == ()

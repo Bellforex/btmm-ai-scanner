@@ -48,6 +48,8 @@ from btmm_ai_scanner.structure.transitions import StructureTransition
 __all__ = [
     "FrameworkBarContext",
     "FrameworkTracker",
+    "LiquidityLevel",
+    "advance_levels",
     "build_framework_bar_context",
     "detect_ranges",
     "evaluate_poi_framework",
@@ -267,6 +269,33 @@ def _sweep_step(
             )
         )
     return survivors
+
+
+#: A liquidity level, exposed so RC5 can add reference families of its own
+#: WITHOUT re-implementing sweep mechanics. RC4's own level set is unaffected.
+LiquidityLevel = _Level
+
+
+def advance_levels(
+    active: list[_Level],
+    index: int,
+    candle: NormalizedCandle,
+    rng: TradingRange | None,
+    config: FrameworkConfiguration,
+    events: list[SweepEvent],
+) -> list[_Level]:
+    """Public seam over ``_sweep_step``.
+
+    RC5 adds reference families the framework does not build -- POI far edges
+    chief among them -- and those must be swept by exactly the same rules:
+    the same wick test, the same close-through test, the same reclaim window,
+    the same "accepted beyond consumes the level" behaviour. Re-implementing
+    any of that would create a second set of mechanics that could drift.
+
+    So RC5 supplies its own levels and calls THIS, which is literally the
+    function RC4 uses. Nothing about RC4's own level set changes.
+    """
+    return _sweep_step(active, index, candle, rng, config, events)
 
 
 def sweep_timeline(
