@@ -37,9 +37,11 @@ from btmm_ai_scanner.poi.enums import PoiLifecycleStatus, PoiType
 from btmm_ai_scanner.poi.structural_role import StructuralRole
 
 __all__ = [
+    "MEANINGFUL_STRUCTURAL_ROLES",
     "DisplayHiddenReason",
     "Rc5PoiSemanticRecord",
     "Rc5SemanticLedger",
+    "Rc5SwingSemanticRecord",
     "Rc5Validity",
     "StablePoiKey",
     "SuppressionTimeline",
@@ -109,6 +111,48 @@ class Rc5PoiSemanticRecord:
         return not self.is_suppressed
 
 
+#: The roles the frozen doctrine calls meaningful user-facing structure.
+#: Everything else -- RANGE_*, LIQUIDITY_EXTREME, TRENDLINE_EXTREME, MID_LEG --
+#: is texture: real to the walk, real to internal calculations, and not a
+#: reference a student should see annotated. There is deliberately no
+#: IMPULSE_ORIGIN; "confirmed swing + subsequent fast displacement" was
+#: measured at 84 of 85 on M15 and discriminates nothing.
+MEANINGFUL_STRUCTURAL_ROLES: frozenset[StructuralRole] = frozenset(
+    {
+        StructuralRole.LEG_ORIGIN,
+        StructuralRole.SWING_HIGH_ORIGIN,
+        StructuralRole.SWING_LOW_ORIGIN,
+        StructuralRole.PULLBACK_HIGH,
+        StructuralRole.PULLBACK_LOW,
+    }
+)
+
+
+@dataclass(frozen=True)
+class Rc5SwingSemanticRecord:
+    """What the structure walk first made of one confirmed swing.
+
+    The POI sidecar answers "why is this zone a decision point?". This answers
+    the same question about a LEVEL, which is what liquidity needs: a swing the
+    walk actually used is meaningful liquidity; a texture pivot is not.
+
+    Both are written by the one canonical frontier replay, so neither is ever
+    reconstructed from final state.
+    """
+
+    swing_record_id: Any
+    #: the FIRST role that made this swing meaningful -- never upgraded
+    role: StructuralRole
+    #: the FIRST causal availability at which that was true -- never moved
+    first_qualified_since: datetime
+    #: SWING_HIGH / SWING_LOW, as the walk already classified it
+    swing_side: Any | None = None
+
+    @property
+    def is_meaningful(self) -> bool:
+        return self.role in MEANINGFUL_STRUCTURAL_ROLES
+
+
 @dataclass
 class Rc5SemanticLedger:
     """Write-once provenance, keyed by stable POI identity.
@@ -119,6 +163,8 @@ class Rc5SemanticLedger:
     """
 
     records: dict[StablePoiKey, Rc5PoiSemanticRecord] = field(default_factory=dict)
+    #: swing record id -> the first causal structural fact about that swing
+    swing_roles: dict[Any, Rc5SwingSemanticRecord] = field(default_factory=dict)
 
     def record(self, entry: Rc5PoiSemanticRecord) -> None:
         self.records.setdefault(entry.stable_poi_key, entry)
@@ -150,6 +196,28 @@ class Rc5SemanticLedger:
 
     def suppressed_keys(self) -> frozenset[StablePoiKey]:
         return frozenset(k for k, v in self.records.items() if v.is_suppressed)
+
+    # -- per-swing structural facts -------------------------------------
+    #
+    # Same write-once discipline as POI provenance, for the same reason. The
+    # walk can give a swing a DIFFERENT role at a later prefix, and the role it
+    # held when it first became meaningful is the causal fact. Upgrading it
+    # later would move ``since`` and reintroduce exactly the path dependence
+    # option A was chosen to remove.
+
+    def record_swing_role(self, entry: Rc5SwingSemanticRecord) -> None:
+        self.swing_roles.setdefault(entry.swing_record_id, entry)
+
+    def swing_role(self, swing_record_id: Any) -> Rc5SwingSemanticRecord | None:
+        return self.swing_roles.get(swing_record_id)
+
+    def meaningful_swing_ids(self) -> frozenset[Any]:
+        """Swings that hold a role the frozen doctrine calls meaningful."""
+        return frozenset(
+            swing_id
+            for swing_id, entry in self.swing_roles.items()
+            if entry.is_meaningful
+        )
 
 
 def _cluster_key(record: Rc5PoiSemanticRecord, direction: Any) -> OriginClusterKey:

@@ -656,6 +656,12 @@ def analyze_pois(
             )
             for entry in produced.records.values():
                 rc5_ledger.record(entry)
+            # Per-swing structural facts travel the same way. Copying only the
+            # POI records would leave batch with an EMPTY swing sidecar while
+            # incremental had a full one -- silently, since nothing downstream
+            # distinguishes "no meaningful swings" from "never populated".
+            for swing_entry in produced.swing_roles.values():
+                rc5_ledger.record_swing_role(swing_entry)
 
     observations_list: list[PoiObservation] = []
     for candidate in all_candidates:

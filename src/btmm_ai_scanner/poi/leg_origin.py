@@ -75,6 +75,7 @@ from btmm_ai_scanner.poi.order_blocks import OrderBlockCandidate
 from btmm_ai_scanner.poi.rc5_semantics import (
     Rc5PoiSemanticRecord,
     Rc5SemanticLedger,
+    Rc5SwingSemanticRecord,
 )
 from btmm_ai_scanner.poi.structural_role import StructuralRole
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
@@ -368,6 +369,37 @@ def _structural_context(
             if fact.role in (StructuralRole.PULLBACK_HIGH, StructuralRole.PULLBACK_LOW)
         ),
     )
+
+
+def _record_swing_roles(
+    context: StructuralContext,
+    swings: Sequence[ConfirmedSwing],
+    ledger: Rc5SemanticLedger,
+) -> None:
+    """Persist this prefix's per-swing structural facts into the sidecar.
+
+    Called only from the causal frontier, which is the SINGLE producer of RC5
+    provenance -- the batch gate deliberately records none (see
+    ``batch_leg_origin_gate``), and batch fills its ledger by running this same
+    replay. So there is no second structural authority here and no possibility
+    of the two paths disagreeing: they execute the same code.
+
+    Write-once, so the role a swing held when it FIRST became meaningful is
+    what survives. The walk can re-describe a swing at a later prefix -- a
+    defended level that is later taken becomes a broken origin -- and adopting
+    the newer description would move ``first_qualified_since`` and reintroduce
+    the path dependence option A removed.
+    """
+    side_by_id = {s.record_id: s.swing_type for s in swings}
+    for swing_id, fact in context.role_by_swing.items():
+        ledger.record_swing_role(
+            Rc5SwingSemanticRecord(
+                swing_record_id=swing_id,
+                role=fact.role,
+                first_qualified_since=fact.since,
+                swing_side=side_by_id.get(swing_id),
+            )
+        )
 
 
 def _semantic_record(
@@ -1149,6 +1181,8 @@ def advance_leg_origin_frontier(
     for candidate in gated:
         if ledger is not None and _formation_key(candidate) in keys:
             ledger.record(_semantic_record(candidate, None, context))
+    if ledger is not None:
+        _record_swing_roles(context, confirmed_swings, ledger)
     for decision in decisions:
         if decision.mapped is not None:
             lock_candidate(decision.mapped)
