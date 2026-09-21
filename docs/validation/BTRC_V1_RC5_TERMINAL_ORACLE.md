@@ -112,16 +112,51 @@ suite, against the real breach walk — and the real M45 capture shows one.
 
 ## Host matrix (corrected path only)
 
-| Host | bars | expected | observable | actual | matched | missing | extra | dup | post | time | reason | clean |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| H3 | 300 | 14 | 14 | 14 | 14 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
-| M45 *(diag)* | 529 | 20 | 19 | 19 | 19 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
-| M5 | 2000 | — | — | — | — | — | — | — | — | — | — | pending |
-| M15 | 2000 | — | — | — | — | — | — | — | — | — | — | pending |
-| H4 | 2000 | — | — | — | — | — | — | — | — | — | — | pending |
+| Host | bars | expected | suppressed | observable | actual | matched | missing | extra | dup | post | time | reason | clean |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M5 | 2000 | 122 | 6 | 116 | 116 | 116 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
+| M15 | 2000 | 103 | 12 | 91 | 91 | 91 | 0 | 0 | 0 | 0 | **1** | 0 | no |
+| H3 | 300 | 14 | 0 | 14 | 14 | 14 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
+| H4 | 2000 | 122 | 9 | 113 | 113 | 113 | 0 | 0 | 0 | 0 | **2** | 0 | no |
+| M45 *(diag)* | 529 | 20 | 1 | 19 | 19 | 19 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
 
-M45's single unobservable record is `AUTHORITY_SUPPRESSED`. H3 has no
-suppression at all, so its expected and observable counts coincide.
+Every unobservable record on every host is `AUTHORITY_SUPPRESSED` — a
+same-origin subordinate, owed no event of its own. H3 has no suppression at
+all, so its expected and observable counts coincide.
+
+All five coverage classes are exercised on every 2000-bar host, including real
+false-break reclaims (M5 24, M15 15, H4 4, M45 1).
+
+### Open: three terminals fired EARLY
+
+`missing`, `extra`, `duplicate`, `post-terminal` and `non-invalidation` are
+**zero on all five hosts**. The only failures are timing, and they are the
+failures the set-only comparison used to hide: the right POI, the wrong bar.
+
+| Host | poi_idx | expected (lifecycle) | actual (P8) | early by |
+| --- | --- | --- | --- | --- |
+| M15 | 76 | 2026-08-28T16:00Z | 2026-08-28T15:00Z | 1h (4 bars) |
+| H4 | 336 | 2025-08-21T02:00Z | 2025-08-20T22:00Z | 4h (1 bar) |
+| H4 | 613 | 2025-10-22T02:00Z | 2025-10-21T22:00Z | 4h (1 bar) |
+
+P8 fires EARLIER than the lifecycle transition in every case — 3 of 204
+observable terminals (1.5%).
+
+**Under trace. No classification is recorded here until the trace proves one.**
+The working hypothesis, from code reading only, is that the two failure
+detectors behind `rc5_is_terminal` use different TRIGGERS with identical 3-bar
+windows:
+
+* framework `true_failure` starts its clock on a **wick** —
+  `framework/engine.py:605`, `c.low < zone_bottom - tolerance`
+* lifecycle `_is_breach` requires a **close** — `poi/lifecycle.py:99`,
+  `(zone_bottom - candle.close) > overshoot_tolerance`
+
+A wick-started clock can expire before a close-based confirmation, which would
+bound the gap at `sweep_reclaim_bars + 1` = 4 bars. Both observed gaps are ≤ 4
+bars, which is consistent — and consistency with a hypothesis is not proof of
+it. The earlier `NEVER_ENTERED_THE_EVENT_LOOP` episode is the reason this stays
+open until traced.
 
 **M45 host identity.** M45 has no member in the frozen `Timeframe` enum and
 must not gain one, so it is driven through an M15 carrier. `Rc5HostIdentity`
