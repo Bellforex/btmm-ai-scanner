@@ -309,14 +309,42 @@ def rc5_is_terminal(state: object, decision: BtrcDecision) -> bool:
     a POI that reacted once and was still perfectly valid went terminal. Under
     RC5 a successful reaction ends an interaction EPISODE, never the POI.
 
-    Both conditions below are existing doctrine, not new thresholds: a FAILED
-    interaction episode is the RC4 framework's own "price accepted beyond the
-    POI with no reclaim", and GENUINE_INVALIDATION_CONFIRMED is the frozen
-    breach walk's far-edge failure. A far-edge break that WAS reclaimed lands
-    on FALSE_INVALIDATION_CONFIRMED and is deliberately not terminal.
+    THE FROZEN BREACH WALK IS THE ONLY AUTHORITY ON FAILURE. An earlier version
+    also returned True for ``decision.interaction_episode == "FAILED"`` -- the
+    RC4 framework's own "price accepted beyond the POI with no reclaim". The
+    terminal oracle proved that wrong on real data, 3 times in 204 terminals
+    (M15 once, H4 twice), and the traces are unambiguous.
+
+    The two detectors do not agree on when a zone has failed.
+    ``GENUINE_INVALIDATION_CONFIRMED`` needs the full reclaim window, at least
+    two of its three bars closing beyond the far edge, AND the last bar closing
+    beyond (poi/lifecycle.py). A window that simply fails to reclaim lands on
+    ``RECLAIM_FAILED``, and the walk KEEPS WATCHING -- the zone has not failed
+    and may still survive. The framework's episode rule has no such test.
+
+    So the old branch fired POI_TERMINAL on a bar where the lifecycle still
+    said ``RECLAIM_FAILED``, which ``rc5_validity`` reports as VALID. A POI was
+    simultaneously valid and terminal, which is precisely the contradiction the
+    validity/display/actionability split exists to prevent. It was also
+    self-concealing: the POI left the active set, so when GENUINE arrived a bar
+    or four later it was no longer evaluated and the CORRECT terminal could
+    never fire.
+
+    The M15 trace settles that this was premature rather than merely early --
+    after the false terminal the zone was re-tested (a fresh
+    CLOSE_BREACH_CANDIDATE, tap count rising to 2) and only genuinely failed
+    four bars afterwards. It was declared dead while still alive and still
+    being traded.
+
+    Removing the branch loses nothing: ``extra`` was 0 on all five hosts, so
+    every terminal P8 emitted already had a lifecycle GENUINE behind it. The
+    branch never found a failure the breach walk missed -- it only ever
+    announced one early.
+
+    A far-edge break that WAS reclaimed lands on
+    ``FALSE_INVALIDATION_CONFIRMED`` and is deliberately not terminal.
+    ``rc4_is_terminal`` is untouched, so RC4 behaviour is unchanged.
     """
-    if decision.interaction_episode == "FAILED":
-        return True
     return (
         state is not None
         and getattr(state, "poi_lifecycle_status", None)

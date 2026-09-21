@@ -388,3 +388,82 @@ def test_every_hidden_reason_matches_the_validity_beneath_it(
                 assert validity is Rc5Validity.VALID
             checked += 1
     assert checked, "replay produced no lifecycle-eligible POIs"
+
+
+# ---------------------------------------------------------------------------
+# valid and terminal are mutually exclusive
+# ---------------------------------------------------------------------------
+
+
+def test_a_valid_poi_is_never_terminal(bars) -> None:
+    """The invariant a real defect violated.
+
+    P8 used to emit POI_TERMINAL on a bar where the lifecycle still said
+    RECLAIM_FAILED -- a status rc5_validity reports as VALID, because the
+    breach walk has NOT confirmed failure there and keeps watching. The POI was
+    simultaneously valid and terminal.
+
+    It was self-concealing too: the POI left the active set, so when GENUINE
+    arrived a few bars later it was no longer evaluated and the correct
+    terminal could never fire.
+
+    This asserts the two can never disagree again, on every POI on every bar.
+    """
+    from tests.parity_support.p5_active_poi_loop_model import rc5_is_terminal
+
+    checked = 0
+    for bar in bars:
+        for poi_id, state in bar.state_by_id.items():
+            decision = bar.decision_by_id.get(poi_id)
+            if decision is None:
+                continue
+            terminal = rc5_is_terminal(state, decision)
+            assert terminal is not rc5_poi_is_valid(state), (
+                f"{poi_id} valid={rc5_poi_is_valid(state)} terminal={terminal} "
+                f"status={state.poi_lifecycle_status}"
+            )
+            checked += 1
+    assert checked, "replay produced no decisions to check"
+
+
+def test_reclaim_failed_is_valid_and_not_terminal() -> None:
+    """The exact state the defect fired on, pinned directly.
+
+    RECLAIM_FAILED means a breach window closed without a reclaim but did NOT
+    meet the confirmation test (>=2 of 3 bars closing beyond the far edge, and
+    the last bar beyond). The walk keeps watching; the zone may still survive.
+    """
+    from tests.parity_support.p5_active_poi_loop_model import rc5_is_terminal
+
+    state = _State(
+        terminal_reason=PoiTerminalReason.MITIGATED,
+        status=PoiLifecycleStatus.RECLAIM_FAILED,
+    )
+    assert rc5_validity(state) is Rc5Validity.VALID
+    for episode in ("ACTIVE", "FAILED", "ENDED", "NOT_TOUCHED", None):
+        assert not rc5_is_terminal(state, _Decision(episode)), episode
+
+
+def test_a_failed_interaction_episode_alone_does_not_kill_a_poi() -> None:
+    """The removed branch, asserted absent. The RC4 framework's episode rule
+    has no reclaim-confirmation test, so it must not be able to terminate a
+    zone the frozen breach walk still considers alive."""
+    from tests.parity_support.p5_active_poi_loop_model import rc5_is_terminal
+
+    for status in (
+        PoiLifecycleStatus.NO_BREACH,
+        PoiLifecycleStatus.CLOSE_BREACH_CANDIDATE,
+        PoiLifecycleStatus.RECLAIM_FAILED,
+        PoiLifecycleStatus.RECLAIM_PENDING,
+        PoiLifecycleStatus.FALSE_INVALIDATION_CONFIRMED,
+    ):
+        assert not rc5_is_terminal(_State(status=status), _Decision("FAILED")), status
+    assert rc5_is_terminal(
+        _State(status=PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED),
+        _Decision("ACTIVE"),
+    )
+
+
+class _Decision:
+    def __init__(self, episode) -> None:
+        self.interaction_episode = episode
