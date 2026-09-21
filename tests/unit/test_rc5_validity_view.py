@@ -164,18 +164,111 @@ def test_display_is_a_subset_of_validity_on_every_bar(bars) -> None:
     assert checked, "replay produced nothing to check"
 
 
-def test_the_p5_evaluated_set_is_a_subset_of_display(bars) -> None:
-    """P5 may only evaluate what a student can see."""
+def test_p5_never_evaluates_a_same_origin_subordinate(bars) -> None:
+    """Authority runs BEFORE the opportunity loop, so a subordinate is never an
+    independent opportunity on any bar."""
     checked = 0
     for bar in bars:
         by_id = {o.record_id: o for o in bar.analysis.poi_analysis.poi_observations}
         for poi_id in bar.evaluated_order:
-            observation = by_id.get(poi_id)
-            if observation is None:
+            if by_id.get(poi_id) is None:
                 continue
             assert poi_id not in bar.suppressed_poi_ids
             checked += 1
     assert checked, "replay evaluated nothing"
+
+
+def test_p5_evaluates_only_valid_pois_or_the_bar_one_dies_on(bars) -> None:
+    """The ACTUAL relationship, which the tidy nesting gets wrong.
+
+    "P5 actionable => display eligible => valid" is false as stated, because a
+    POI's terminal is REPORTED by evaluating it on the bar it became invalid.
+    So an evaluated POI is either still valid, or is being evaluated exactly
+    once on its own terminal bar. Pinning the real rule is the point: asserting
+    the tidy version would fail, and weakening it to "evaluated => not
+    suppressed" would stop constraining validity at all.
+    """
+    terminal_bar_by_id: dict = {}
+    dying = 0
+    for bar in bars:
+        by_id = {o.record_id: o for o in bar.analysis.poi_analysis.poi_observations}
+        for poi_id in bar.evaluated_order:
+            if by_id.get(poi_id) is None:
+                continue
+            state = bar.state_by_id.get(poi_id)
+            if rc5_poi_is_valid(state):
+                continue
+            # not valid: this must be the FIRST bar on which that is true
+            assert poi_id not in terminal_bar_by_id, (
+                f"{poi_id} evaluated again after its terminal bar "
+                f"{terminal_bar_by_id.get(poi_id)}"
+            )
+            terminal_bar_by_id[poi_id] = bar.bar_index
+            dying += 1
+    assert dying, "no POI was evaluated on a terminal bar -- proof is vacuous"
+
+
+def test_not_every_valid_poi_is_displayable(bars) -> None:
+    """Authority and supersession legitimately hide valid formations, so the
+    nesting must NOT be asserted in this direction."""
+    hidden_but_not_invalid = 0
+    for bar in bars:
+        by_id = {o.record_id: o for o in bar.analysis.poi_analysis.poi_observations}
+        for poi_id in bar.suppressed_poi_ids:
+            if by_id.get(poi_id) is None:
+                continue
+            if rc5_validity(bar.state_by_id.get(poi_id)) is not Rc5Validity.INVALIDATED:
+                hidden_but_not_invalid += 1
+    assert hidden_but_not_invalid, (
+        "series never hid a non-invalidated POI, so this asymmetry is untested"
+    )
+
+
+def test_display_and_p5_evaluation_coincide_but_actionability_does_not(
+    bars,
+) -> None:
+    """Measured, not assumed. On this series EVERY visible POI is also
+    EVALUATED by P5 -- membership of the loop does not separate the layers.
+    What separates them is the DECISION: a visible, evaluated, perfectly valid
+    zone is routinely not actionable, because permission is a supervisory
+    verdict and not a property of the zone.
+
+    So validity must not collapse into P5, and the reason is actionability,
+    not loop membership. Both halves are asserted so a future change to either
+    one is caught.
+    """
+    ledger = Rc5SemanticLedger()
+    visible_but_unevaluated = 0
+    visible_and_evaluated = 0
+    visible_but_not_actionable = 0
+    for bar in bars:
+        evaluated = set(bar.evaluated_order)
+        for observation in bar.analysis.poi_analysis.poi_observations:
+            state = bar.state_by_id.get(observation.record_id)
+            if not is_rc5_active_for_display(observation, state, ledger):
+                continue
+            if observation.record_id not in evaluated:
+                visible_but_unevaluated += 1
+                continue
+            visible_and_evaluated += 1
+            decision = bar.decision_by_id.get(observation.record_id)
+            permission = getattr(decision, "analytical_permission", None)
+            if getattr(permission, "value", permission) not in {
+                "BUY_BIAS",
+                "SELL_BIAS",
+            }:
+                visible_but_not_actionable += 1
+
+    assert visible_and_evaluated, "series produced no visible evaluated POI"
+    assert visible_but_unevaluated == 0, (
+        "a visible POI escaped the P5 loop -- if this ever fires, the "
+        "relationship between display and evaluation has changed and this "
+        "test's premise must be re-derived, not relaxed"
+    )
+    assert visible_but_not_actionable, (
+        "every visible POI was actionable, so validity and P5 actionability "
+        "are indistinguishable here"
+    )
 
 
 def test_suppression_hides_a_poi_without_killing_it() -> None:
