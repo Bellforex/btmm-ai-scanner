@@ -29,11 +29,12 @@ from btmm_ai_scanner.poi.configuration import PoiConfiguration, validate_configu
 from btmm_ai_scanner.poi.confirmed_zones import immutable_reference_candidates
 from btmm_ai_scanner.poi.current_state import CurrentPoiState
 from btmm_ai_scanner.poi.detector_frontier import (
+    DOJI_RING_SIZE,
     _DetectorFrontierState,
     advance_detector_frontier,
     create_initial_detector_frontier_state,
 )
-from btmm_ai_scanner.poi.doji import detect_dojis
+from btmm_ai_scanner.poi.doji import detect_dojis, prefix_pivot_sides
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import (
     LIFECYCLE_ELIGIBLE_POI_TYPES,
@@ -422,7 +423,11 @@ def _detect_bundle_candidates(
             detect_dojis(
                 bundle.candles,
                 configuration,
-                bundle.measurement_analysis.confirmed_swings,
+                pivot_sides=prefix_pivot_sides(
+                    bundle.candles,
+                    measurement_configuration,
+                    ring_size=DOJI_RING_SIZE,
+                ),
             )
             if configuration.rc5_structural_origin
             else ()

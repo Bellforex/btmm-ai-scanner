@@ -90,6 +90,10 @@ _ZERO = Decimal("0")
 # reversal needs 7).
 _RING_SIZE = 21
 
+#: The ring the DOJI detector sees, exported so the batch path can bound its
+#: prefix replay to exactly the same look-back.
+DOJI_RING_SIZE = _RING_SIZE
+
 
 @dataclass(frozen=True)
 class _PeriodGranularityState:
