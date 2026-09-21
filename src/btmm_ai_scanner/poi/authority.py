@@ -87,7 +87,7 @@ REVERSAL_LADDER: dict[PoiType, int] = {
     PoiType.BEARISH_ENGULFING: 4,
     PoiType.HAMMER: 5,
     PoiType.SHOOTING_STAR: 5,
-    # RC5 adds PoiType.DOJI at rank 6 once the type exists.
+    PoiType.DOJI: 6,
     PoiType.BULLISH_PRESSURE_WICK: 7,
     PoiType.BEARISH_PRESSURE_WICK: 7,
 }

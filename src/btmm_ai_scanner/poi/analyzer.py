@@ -33,6 +33,7 @@ from btmm_ai_scanner.poi.detector_frontier import (
     advance_detector_frontier,
     create_initial_detector_frontier_state,
 )
+from btmm_ai_scanner.poi.doji import detect_dojis
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import (
     LIFECYCLE_ELIGIBLE_POI_TYPES,
@@ -111,6 +112,7 @@ _FAMILY_BY_POI_TYPE: dict[PoiType, PoiFamily] = {
     PoiType.BEARISH_ENGULFING: PoiFamily.PRICE_ACTION,
     PoiType.HAMMER: PoiFamily.PRICE_ACTION,
     PoiType.SHOOTING_STAR: PoiFamily.PRICE_ACTION,
+    PoiType.DOJI: PoiFamily.PRICE_ACTION,
     PoiType.MORNING_STAR: PoiFamily.PRICE_ACTION,
     PoiType.EVENING_STAR: PoiFamily.PRICE_ACTION,
     PoiType.SUPPORT_ZONE: PoiFamily.STRUCTURAL,
@@ -414,6 +416,17 @@ def _detect_bundle_candidates(
         *detect_engulfing(bundle.candles, configuration),
         *detect_single_candle_reversals(bundle.candles, configuration),
         *detect_three_candle_stars(bundle.candles, configuration),
+        # RC5 only: DOJI is the 19th canonical type and must not appear in a
+        # frozen RC4 run.
+        *(
+            detect_dojis(
+                bundle.candles,
+                configuration,
+                bundle.measurement_analysis.confirmed_swings,
+            )
+            if configuration.rc5_structural_origin
+            else ()
+        ),
     ]
     atr = compute_atr_series(bundle.candles, 14)
     index_by_candle = {c.record_id: i for i, c in enumerate(bundle.candles)}

@@ -50,6 +50,7 @@ from btmm_ai_scanner.poi.confirmed_zones import (
     LOCKED_REFERENCE_TYPES,
     lock_reference_candidates,
 )
+from btmm_ai_scanner.poi.doji import detect_dojis
 from btmm_ai_scanner.poi.engulfing import detect_engulfing
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
 from btmm_ai_scanner.poi.fair_value_gaps import detect_fair_value_gaps
@@ -594,6 +595,15 @@ def advance_detector_frontier(
     # Append-only frontiers (local + reversal + bases). Bases use atr[m-1].
     reference_atr_prev = new_atr_series[-2] if len(new_atr_series) >= 2 else None
     step_candidates: list[Any] = _new_local_candidates(new_ring, configuration)
+    # DOJI needs the confirmed swings to decide which side it defends, and a
+    # swing confirms AFTER its pivot candle. So it is evaluated over the whole
+    # ring against the current swing set rather than only the newest candle,
+    # and the append-only frontier de-duplicates the repeats. Batch/incremental
+    # equality on real data is what proves the ring is long enough.
+    if configuration.rc5_structural_origin:
+        step_candidates.extend(
+            detect_dojis(new_ring, configuration, measurement_analysis.confirmed_swings)
+        )
     new_raw_order_blocks = state.raw_order_blocks
     if len(new_ring) >= 2:
         step_formations = detect_order_blocks(new_ring[-2:], configuration)
