@@ -230,6 +230,11 @@ class LevelABar:
     decision_by_id: Mapping[UUID, BtrcDecision]
     poi_idx_by_id: Mapping[UUID, int]
     events: tuple[AlertEvent, ...]
+    #: RC5 same-origin subordinates removed BEFORE the opportunity loop on this
+    #: bar (empty unless ``rc5_authority``). Exposed because it is decided
+    #: against the kernel's own provenance ledger: a consumer that rebuilt it
+    #: from a fresh ledger would get a different, wrong answer.
+    suppressed_poi_ids: frozenset[UUID]
     #: True on the first host bar, where the alert engine is PRIMED from the
     #: pre-existing POI universe instead of announcing it (the frozen
     #: fresh-attach contract — see ``p8_alert_oracle`` "PRIMING").
@@ -444,6 +449,7 @@ def iter_level_a_bars(
             poi_idx_by_id=dict(poi_idx_by_id),
             events=tuple(fired),
             primed_this_bar=primed_this_bar,
+            suppressed_poi_ids=suppressed,
         )
 
         previously_active = loop.next_bar_active_ids
