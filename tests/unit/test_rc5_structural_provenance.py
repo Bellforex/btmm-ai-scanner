@@ -28,6 +28,7 @@ from btmm_ai_scanner.poi.leg_origin import (
     ContextReason,
     LegOriginFrontier,
     StructuralContext,
+    _gate,
     immutable_structure_gate,
     leg_origin_order_blocks,
     structure_context_decisions,
@@ -101,11 +102,23 @@ def test_broken_and_unbroken_swings_partition_the_confirmed_swings(gated) -> Non
     assert context.broken_swing_ids | context.unbroken_swing_ids == all_ids
 
 
-def test_live_structure_is_the_walks_own_protected_and_weak_levels(gated) -> None:
-    """The role gate needs the swings the walk is currently defending, not
-    every swing it has not broken -- see the H3 staircase."""
+def test_defended_levels_are_monotone_and_include_the_current_ones(gated) -> None:
+    """The role gate needs the swings the walk defends -- not every unbroken
+    swing (that refuses nothing, see the H3 staircase), and not only the
+    CURRENTLY defended ones either.
+
+    "Currently defended" lapses as structure moves on, which makes the role
+    non-monotone and silently breaks the replay's superset invariant. Every
+    level the walk has ever protected or armed stays in the set.
+    """
     walk = gated["walk"]
-    assert gated["context"].live_structure_swing_ids == frozenset(
+    context = gated["context"]
+    defended = context.live_structure_swing_ids
+    assert defended <= gated["swing_ids"]
+    # a defended swing may already hold a HIGHER role (leg origin, or a swing
+    # a break took), so the check is against the whole role map.
+    known = set(context.role_by_swing)
+    current = {
         s.record_id
         for s in (
             walk.protected_high,
@@ -114,8 +127,30 @@ def test_live_structure_is_the_walks_own_protected_and_weak_levels(gated) -> Non
             walk.weak_low,
         )
         if s is not None
-    )
-    assert gated["context"].live_structure_swing_ids <= gated["swing_ids"]
+    }
+    assert current <= known
+    historical = {t.protected_swing_id for t in walk.transitions} | {
+        t.weak_swing_id for t in walk.transitions if t.weak_swing_id is not None
+    }
+    assert {s for s in historical if s in gated["swing_ids"]} <= known
+
+
+def test_a_defended_role_is_never_retracted_by_later_structure(gated) -> None:
+    """The invariant the batch replay depends on: the final prefix's role map
+    is a superset of every earlier prefix's. When it is not, a POI silently
+    lands on whatever later bar happened to recompute the walk."""
+    candles, swings = gated["candles"], gated["swings"]
+    final = gated["context"].role_by_swing
+    for upto in (len(candles) // 2, (3 * len(candles)) // 4):
+        now = candles[upto - 1].availability_time_utc
+        prefix_swings = tuple(
+            s for s in swings if s.meaningful_confirmation_time_utc <= now
+        )
+        _g, _w, _d, _t, earlier = _gate((), candles[:upto], prefix_swings, ())
+        for swing_id in earlier.role_by_swing:
+            assert swing_id in final, (
+                "a role present on an earlier prefix vanished from the final one"
+            )
 
 
 def test_broken_swings_are_exactly_what_the_frozen_walk_broke(gated) -> None:

@@ -14,7 +14,7 @@ the frozen structure walk actually *uses*:
 |---|---|---|
 | `LEG_ORIGIN` | a break named it as the origin of the leg it confirmed | that break's availability |
 | `SWING_HIGH_ORIGIN` / `SWING_LOW_ORIGIN` | a break **took** it — it held real liquidity | that break's availability |
-| `PULLBACK_HIGH` / `PULLBACK_LOW` | the walk's live protected / weak level | the swing's own confirmation |
+| `PULLBACK_HIGH` / `PULLBACK_LOW` | a level the walk **has defended** — protected or weak, now or at any earlier transition | when it first became defended |
 
 Anything else is `MID_LEG` and stays a raw pattern. **"Confirmed swing" is not
 a role** — in a trending leg almost every swing is an unbroken, unused pivot.
@@ -22,6 +22,30 @@ On M15, 99 of 432 swings hold a role (23%).
 
 Precedence when a formation touches several used swings: LEG_ORIGIN (0) >
 SWING_*_ORIGIN (1) > PULLBACK_* (2).
+
+## Roles must be monotone
+
+`PULLBACK_*` is deliberately "**has** defended", not "**currently** defends".
+
+The first draft used the walk's live protected/weak levels, which lapse when
+structure moves on. That makes the role non-monotone, and the rest of the
+engine depends on the opposite: `immutable_structure_gate` skips replaying the
+walk on most bars precisely because the final gate output is a superset of
+every prefix's. A lapsing role breaks that invariant silently — it does not
+raise, it just locks the POI at whatever later prefix happened to recompute.
+
+It was caught on the author's own fixture. The gate returned availability
+`2026-09-04 13:00` at every prefix, yet the full batch pipeline published the
+M45 B2S at `2026-09-07 05:30` — an arbitrary **86-bar** delay with no semantic
+meaning. (An earlier report of this campaign stated the fixture had "no delay";
+that was measured against the RC4 record rather than the RC5 one and was
+wrong. The delay was real until this fix, and is now genuinely zero.)
+
+Each transition records the level it protected and the weak level it armed, so
+the whole defended history is available from the final walk and accumulates
+monotonically. `since` remains the moment the fact became true, so availability
+stays causal. A swing the walk ever defended was meaningful when it defended
+it, and this engine never retracts what was once true.
 
 ## Formation adjacency
 
@@ -53,8 +77,8 @@ established it.
 
 **M45 B2S — PASS.** Source `2026-09-04 07:00`, zone `4461.42–4486.42`, both
 unchanged. Matched the swing high `4490.85` on bar 201 via the formation span,
-role `PULLBACK_HIGH` available from `2026-09-04 10:45`; POI availability
-`2026-09-04 13:00`, identical to RC4 — no delay introduced.
+role `PULLBACK_HIGH`; POI availability `2026-09-04 13:00`, **identical to RC4** —
+zero delay, verified against the RC5 record itself.
 
 **H3 staircase — PASS.** All six descending BEARISH PRESSURE WICKs still
 refused (4× `NOT_A_PIVOT_ON_ITS_OWN_SIDE`, 2× `SWING_NEVER_USED_BY_THE_WALK`).
@@ -68,11 +92,11 @@ out of scope by construction, not by tuning.
 
 | host | bars | POI | reversal | refused | delayed | med/max delay |
 |---|---|---|---|---|---|---|
-| M5 | 2000 | 498 → 183 | 349 → 34 | 315 | 19 | 11 / 179 |
-| M15 | 2000 | 455 → 173 | 319 → 37 | 282 | 24 | 18 / 201 |
-| M45 | 529 | 100 → 45 | 63 → 8 | 55 | 6 | 21 / 76 |
+| M5 | 2000 | 498 → 186 | 349 → 37 | 312 | 17 | 9 / 24 |
+| M15 | 2000 | 455 → 178 | 319 → 42 | 277 | 27 | 13 / 201 |
+| M45 | 529 | 100 → 47 | 63 → 10 | 53 | 5 | 16 / 76 |
 | H3 | 300 | 82 → 42 | 43 → 3 | 40 | 2 | 14.5 / 20 |
-| H4 | 2000 | 483 → 193 | 317 → 27 | 290 | 17 | 9 / 87 |
+| H4 | 2000 | 483 → 199 | 317 → 33 | 284 | 17 | 10 / 87 |
 
 Zero POIs invented and zero non-reversal families removed on all five.
 ORDER BLOCKS unchanged wherever any exist (M5 4→4, M15 4→4, H4 3→3) — the

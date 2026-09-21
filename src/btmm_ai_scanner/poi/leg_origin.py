@@ -261,22 +261,50 @@ def _structural_context(
             transition.break_candle_id,
         )
 
-    # The levels the walk is currently defending. Unbroken, but load-bearing --
-    # unlike the rest of the unbroken swings, which are leg texture.
+    # The levels the walk DEFENDS -- unbroken, but load-bearing, unlike the rest
+    # of the unbroken swings, which are leg texture.
+    #
+    # MONOTONICITY. "Currently protected" is not usable here: the walk stops
+    # defending a level when structure moves on, so a role read from the final
+    # prefix could be ABSENT where an earlier prefix had it. Every other part of
+    # this engine relies on the final gate output being a superset of every
+    # prefix's -- that is how ``immutable_structure_gate`` avoids replaying the
+    # walk on most bars -- and a lapsing role silently breaks it, which showed
+    # up as the M45 B2S being locked at an arbitrary much later bar.
+    #
+    # A swing the walk EVER defended was meaningful at the time it defended it,
+    # and this engine never retracts what was once true. Each transition records
+    # the level it protected and the weak level it armed, so the whole history
+    # is available from the final walk and accumulates monotonically. ``since``
+    # stays the moment that fact became true, so availability stays causal.
+    defended: list[tuple[Any, datetime]] = []
+    for transition in walk.transitions:
+        defended.append(
+            (transition.protected_swing_id, transition.availability_time_utc)
+        )
+        if transition.weak_swing_id is not None:
+            defended.append(
+                (transition.weak_swing_id, transition.availability_time_utc)
+            )
     for swing in (
         walk.protected_high,
         walk.protected_low,
         walk.weak_high,
         walk.weak_low,
     ):
-        if swing is None or swing.record_id in role_by_swing:
+        if swing is not None:
+            defended.append((swing.record_id, swing.meaningful_confirmation_time_utc))
+
+    for swing_id, since in defended:
+        swing = by_id.get(swing_id)
+        if swing is None or swing_id in role_by_swing:
             continue
-        role_by_swing[swing.record_id] = StructuralRoleFact(
+        role_by_swing[swing_id] = StructuralRoleFact(
             StructuralRole.PULLBACK_HIGH
             if swing.swing_type == SwingType.SWING_HIGH
             else StructuralRole.PULLBACK_LOW,
-            swing.meaningful_confirmation_time_utc,
-            swing.record_id,
+            max(since, swing.meaningful_confirmation_time_utc),
+            swing_id,
             None,
             None,
         )
@@ -303,14 +331,9 @@ def _structural_context(
         broken_swing_ids,
         frozenset(s.record_id for s in swings) - broken_swing_ids,
         frozenset(
-            s.record_id
-            for s in (
-                walk.protected_high,
-                walk.protected_low,
-                walk.weak_high,
-                walk.weak_low,
-            )
-            if s is not None
+            swing_id
+            for swing_id, fact in role_by_swing.items()
+            if fact.role in (StructuralRole.PULLBACK_HIGH, StructuralRole.PULLBACK_LOW)
         ),
     )
 
