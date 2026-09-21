@@ -41,6 +41,7 @@ __all__ = [
     "QualifiedSweepEvent",
     "build_sweep_candidates",
     "deduplicate_sweep_candidates",
+    "replay_rc5_qualified_sweeps",
 ]
 
 #: Which reference owns the label when several describe one liquidity action.
@@ -345,3 +346,118 @@ def build_sweep_candidates(
         )
 
     return tuple(out)
+
+
+def replay_rc5_qualified_sweeps(
+    candles: Any,
+    configuration: Any,
+    identity_provider_factory: Any,
+    *,
+    host_timeframe: Any,
+    ledger: Any,
+) -> tuple[QualifiedSweepEvent, ...]:
+    # ``configuration`` is a full ScannerConfiguration: the kernel needs the
+    # whole thing, and the framework only needs its price tick.
+    """Qualified sweeps from the CAUSAL route, for batch and incremental alike.
+
+    WHY THIS EXISTS. The batch framework path builds its liquidity levels from
+    the FINAL swing / cluster / trendline collections. Anything that existed at
+    an earlier prefix and was later superseded is therefore invisible to it,
+    including levels that were genuinely swept while they were alive.
+
+    Measured on M45: equal-level cluster 4a0ffb5e appeared at prefix 462, was
+    swept at bar 487, and is absent from the final cluster set. The incremental
+    ``FrameworkTracker`` -- append-only, registering each level as it is
+    discovered -- recorded that sweep. Batch produced 102 raw framework sweeps
+    to incremental's 123, and after qualification the difference survived as a
+    real QualifiedSweepEvent present in one path and not the other.
+
+    That is the same failure that made final-context POI provenance wrong three
+    separate times, and it has the same answer: RC5 semantic output is EVENT
+    HISTORY, recorded as it happens, never reconstructed from final state. So
+    there is ONE producer -- this replay -- and both surfaces use it, exactly
+    as ``replay_rc5_semantic_provenance`` is the one producer of RC5 POI
+    provenance.
+
+    COST, stated plainly: this walks the kernel one candle at a time, which is
+    far slower than a single batch pass. RC5 batch already pays that for
+    provenance. Correctness of causal history is not negotiable against it.
+    """
+    from btmm_ai_scanner.framework.engine import (
+        FrameworkTracker,
+        framework_context_for,
+    )
+    from btmm_ai_scanner.framework.model import FrameworkConfiguration
+    from btmm_ai_scanner.poi.rc5_host_identity import host_identity_from_candles
+    from btmm_ai_scanner.poi.rc5_liquidity import (
+        poi_boundary_level_id,
+        poi_boundary_sweeps,
+    )
+    from btmm_ai_scanner.scanner.replay import IncrementalReplayKernel
+
+    candles = tuple(candles)
+    if not candles:
+        return ()
+
+    host = host_identity_from_candles(host_timeframe, candles)
+    kernel = IncrementalReplayKernel(
+        (host_timeframe,), configuration, identity_provider_factory(), (), ledger
+    )
+    tracker = FrameworkTracker()
+    analysis = None
+    context = None
+    # Accumulated across prefixes, first sighting wins. The whole reason this
+    # replay exists is that levels can EXIST and be swept and then vanish from
+    # the final collections, so resolving their sources against the final
+    # measurement would lose exactly the records we came here for.
+    swings_by_id: dict[str, Any] = {}
+    clusters_by_id: dict[str, Any] = {}
+    trendlines_by_id: dict[str, Any] = {}
+    ranges_by_id: dict[str, Any] = {}
+
+    for index, candle in enumerate(candles):
+        kernel.advance_group({host_timeframe: (candle,)})
+        analysis = kernel.finalize()
+        context = framework_context_for(
+            analysis, host_timeframe, candles[: index + 1], tracker
+        )
+        prefix = next(
+            m for m in analysis.measurement_analyses if m.timeframe == host_timeframe
+        )
+        for swing in prefix.confirmed_swings:
+            swings_by_id.setdefault(str(swing.record_id), swing)
+        for cluster in prefix.equal_level_clusters:
+            clusters_by_id.setdefault(str(cluster.record_id), cluster)
+        for line in prefix.trendlines:
+            trendlines_by_id.setdefault(str(line.record_id), line)
+        for found in getattr(context, "ranges", ()) or ():
+            ranges_by_id.setdefault(found.range_id, found)
+
+    if analysis is None or context is None:
+        return ()
+    poi_analysis = analysis.poi_analysis
+    states = {s.poi_record_id: s for s in poi_analysis.current_poi_states}
+    framework_configuration = FrameworkConfiguration(
+        minimum_price_tick=configuration.poi_configuration.minimum_price_tick
+    )
+    poi_events = poi_boundary_sweeps(
+        candles,
+        poi_analysis.poi_observations,
+        states,
+        ledger,
+        framework_configuration,
+    )
+    candidates = build_sweep_candidates(
+        context.events,
+        poi_events,
+        host=host,
+        ledger=ledger,
+        swings_by_id=swings_by_id,
+        clusters_by_id=clusters_by_id,
+        trendlines_by_id=trendlines_by_id,
+        ranges_by_id=ranges_by_id,
+        observations_by_level_id={
+            poi_boundary_level_id(o): o for o in poi_analysis.poi_observations
+        },
+    )
+    return deduplicate_sweep_candidates(candidates)
