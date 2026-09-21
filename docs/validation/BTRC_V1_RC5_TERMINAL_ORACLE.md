@@ -16,12 +16,16 @@ compares the two:
 * **P8** asks: when did the active-POI loop observe `terminal`? That runs
   through the eligibility algebra and the alert engine.
 
-The independence is real and worth stating precisely, because `rc5_is_terminal`
-has **two** causes — a FAILED interaction episode (the RC4 framework's "price
-accepted beyond the POI with no reclaim") *or* the lifecycle walk's
-`GENUINE_INVALIDATION_CONFIRMED`. The oracle knows only the second. If those
-two failure detectors ever disagree, it surfaces as an EXTRA rather than being
-quietly absorbed.
+That independence earned its keep immediately. When this was written
+`rc5_is_terminal` had **two** causes — a FAILED interaction episode (the RC4
+framework's "price accepted beyond the POI with no reclaim") *or* the lifecycle
+walk's `GENUINE_INVALIDATION_CONFIRMED` — and the oracle knew only the second.
+The two detectors disagreed on real data, which is what this document is mostly
+about. The FAILED branch has since been removed (see **Resolution**), so
+`rc5_is_terminal` now has exactly one cause.
+
+The oracle still does not read events to build its expectation, which is what
+keeps it a proof rather than a restatement.
 
 ## The defect this found first was in the oracle
 
