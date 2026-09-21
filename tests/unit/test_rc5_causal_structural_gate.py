@@ -340,11 +340,15 @@ def test_mid_leg_texture_is_refused_with_its_own_reason(series) -> None:
             }
 
 
-def test_the_resolver_refuses_a_candidate_that_touches_no_used_swing() -> None:
+def test_the_resolver_refuses_a_candidate_that_touches_no_used_swing(
+    tmp_path: Path,
+) -> None:
     """Direct check on the resolver: an empty context has no used swings, so
     nothing can hold a role in it."""
     from btmm_ai_scanner.poi.leg_origin import StructuralContext
 
-    candidate = detect_engulfing(rows_to_candles(_reversal(), Path("."), "noop"), _RC5)
+    candidate = detect_engulfing(
+        rows_to_candles(_reversal(), tmp_path, "no_used_swing"), _RC5
+    )
     assert candidate  # the series does produce engulfings
     assert structural_role_of(candidate[0], StructuralContext.empty()) is None
