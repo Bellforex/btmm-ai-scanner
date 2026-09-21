@@ -228,3 +228,122 @@ def poi_boundary_liquidity(
     if name == "BEARISH":
         return PoiBoundary(price=zone_top, side=LiquiditySide.BUY_SIDE, edge="zone_top")
     raise ValueError(f"POI direction {name!r} has no far edge")
+
+
+# ---------------------------------------------------------------------------
+# qualification
+# ---------------------------------------------------------------------------
+#
+# WHY THERE IS NO SEPARATE "ACTIVE" VIEW FOR THESE FAMILIES.
+#
+# The author's concern is that a write-once qualification could let dead
+# references keep producing sweeps forever. For every family that flows through
+# ``framework/engine.py::_levels()`` that cannot happen, and the framework
+# already prevents it rather than RC5 needing to:
+#
+# * ``_sweep_step`` drops a level that was closed through and not reclaimed
+#   within ``sweep_reclaim_bars`` -- consumed, no event;
+# * a level that DOES fire a sweep is likewise not appended to the survivors,
+#   so every level fires at most one sweep in its life and then retires;
+# * both range registration sites guard on a seen-key set, so a consumed range
+#   boundary is never re-registered.
+#
+# So a raw ``SweepEvent`` existing at all is proof its level was live at that
+# bar. Qualification therefore only has to answer the HISTORICAL question --
+# was this reference ever meaningful? -- and adding a second activity test here
+# would duplicate the framework's lifecycle and risk disagreeing with it.
+#
+# POI far edges are different: they are an RC5 addition with no level lifecycle
+# of their own, so their activity IS evaluated, from rc5_validity plus
+# authority standing. That is handled where they are produced, not here.
+
+
+class RejectionReason(StrEnum):
+    """Why a raw sweep produced no user-facing event. Never "noise"."""
+
+    TEXTURE_SWING = "TEXTURE_SWING"
+    TRENDLINE_ANCHORS_NOT_MEANINGFUL = "TRENDLINE_ANCHORS_NOT_MEANINGFUL"
+    UNKNOWN_LEVEL = "UNKNOWN_LEVEL"
+
+
+@dataclass(frozen=True)
+class Qualification:
+    """The verdict on one raw sweep: a reference, or a named refusal."""
+
+    reference: QualifiedLiquidityReference | None
+    rejected_because: RejectionReason | None = None
+
+    @property
+    def is_qualified(self) -> bool:
+        return self.reference is not None
+
+
+def qualify_sweep_reference(
+    event: Any,
+    ledger: Any,
+    host: Rc5HostIdentity,
+    *,
+    swings_by_id: Any = None,
+    trendlines_by_id: Any = None,
+) -> Qualification:
+    """Decide whether one raw ``SweepEvent`` swept a meaningful reference.
+
+    Per-family doctrine, all of it from facts that already exist:
+
+    * STRUCTURAL_SWING -- the swing must appear in the canonical swing sidecar,
+      i.e. the structure walk actually used it. Texture pivots are internal.
+    * EQUAL_HIGH_LOW -- always qualifies. A pool of equal highs or lows IS
+      liquidity; it does not have to also be a structural origin.
+    * RANGE_BOUNDARY -- always qualifies, on the range's own confirmation.
+    * TRENDLINE -- BOTH defining anchors must be meaningful swings. Touch count
+      is unusable: ``qualifying_touch_swing_record_ids`` is length 1 for all
+      437 trendlines measured on M15 and H4, so it carries no information.
+
+    ``side`` is taken from the event, which the framework already decided. It
+    is never re-derived here, so the two layers cannot disagree about BSL/SSL.
+    """
+    level_id = event.level_id
+    kind = reference_kind_of_level_id(level_id)
+    side = event.side
+
+    def _reference(source_identity: tuple[Any, ...], reason: str) -> Qualification:
+        return Qualification(
+            QualifiedLiquidityReference(
+                kind=kind,
+                side=side,
+                price=event.level_price,
+                source_identity=source_identity,
+                level_id=level_id,
+                host=host,
+                known_from_utc=event.availability_time_utc,
+                reason=reason,
+            )
+        )
+
+    if kind is SweepReferenceKind.RANGE_BOUNDARY:
+        range_id, _, boundary = level_id.rpartition(":")
+        return _reference((range_id, boundary), "CONFIRMED_RANGE_BOUNDARY")
+
+    identity = level_id[1:]
+
+    if kind is SweepReferenceKind.EQUAL_HIGH_LOW:
+        return _reference((identity,), "EQUAL_LEVEL_POOL")
+
+    if kind is SweepReferenceKind.STRUCTURAL_SWING:
+        swing = (swings_by_id or {}).get(identity)
+        entry = ledger.swing_role(swing.record_id) if swing is not None else None
+        if entry is None or not entry.is_meaningful:
+            return Qualification(None, RejectionReason.TEXTURE_SWING)
+        return _reference((identity,), str(entry.role))
+
+    if kind is SweepReferenceKind.TRENDLINE:
+        line = (trendlines_by_id or {}).get(identity)
+        if line is None:
+            return Qualification(None, RejectionReason.UNKNOWN_LEVEL)
+        anchors = (line.anchor_1_swing_record_id, line.anchor_2_swing_record_id)
+        facts = [ledger.swing_role(a) for a in anchors]
+        if not all(f is not None and f.is_meaningful for f in facts):
+            return Qualification(None, RejectionReason.TRENDLINE_ANCHORS_NOT_MEANINGFUL)
+        return _reference(tuple(str(a) for a in anchors), "BOTH_ANCHORS_MEANINGFUL")
+
+    return Qualification(None, RejectionReason.UNKNOWN_LEVEL)
