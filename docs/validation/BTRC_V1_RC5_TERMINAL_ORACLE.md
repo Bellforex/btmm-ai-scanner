@@ -1,6 +1,7 @@
 # BTRC-V1 RC5 — Terminal oracle: proving POI_TERMINAL independently
 
-Status: host matrix in progress. H3 and M45 complete and clean.
+Status: **CLOSED**. All five hosts clean on the corrected path, after one real
+defect was found and fixed.
 
 ## Why an oracle at all
 
@@ -112,13 +113,19 @@ suite, against the real breach walk — and the real M45 capture shows one.
 
 ## Host matrix (corrected path only)
 
+Final, after the fix below. **All five hosts clean.**
+
 | Host | bars | expected | suppressed | observable | actual | matched | missing | extra | dup | post | time | reason | clean |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| M5 | 2000 | 122 | 6 | 116 | 116 | 116 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
-| M15 | 2000 | 103 | 12 | 91 | 91 | 91 | 0 | 0 | 0 | 0 | **1** | 0 | no |
-| H3 | 300 | 14 | 0 | 14 | 14 | 14 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
-| H4 | 2000 | 122 | 9 | 113 | 113 | 113 | 0 | 0 | 0 | 0 | **2** | 0 | no |
-| M45 *(diag)* | 529 | 20 | 1 | 19 | 19 | 19 | 0 | 0 | 0 | 0 | 0 | 0 | yes |
+| M5 | 2000 | 122 | 6 | 116 | 116 | 116 | 0 | 0 | 0 | 0 | 0 | 0 | **yes** |
+| M15 | 2000 | 103 | 12 | 91 | 91 | 91 | 0 | 0 | 0 | 0 | 0 | 0 | **yes** |
+| H3 | 300 | 14 | 0 | 14 | 14 | 14 | 0 | 0 | 0 | 0 | 0 | 0 | **yes** |
+| H4 | 2000 | 122 | 9 | 113 | 113 | 113 | 0 | 0 | 0 | 0 | 0 | 0 | **yes** |
+| M45 *(diag)* | 529 | 20 | 1 | 19 | 19 | 19 | 0 | 0 | 0 | 0 | 0 | 0 | **yes** |
+
+Before the fix M15 had 1 and H4 had 2 time mismatches; every other figure in
+this table is unchanged by it. The fix moved three terminals onto the correct
+bar and altered nothing else — M5, H3 and M45 re-ran to identical counts.
 
 Every unobservable record on every host is `AUTHORITY_SUPPRESSED` — a
 same-origin subordinate, owed no event of its own. H3 has no suppression at
@@ -127,7 +134,7 @@ all, so its expected and observable counts coincide.
 All five coverage classes are exercised on every 2000-bar host, including real
 false-break reclaims (M5 24, M15 15, H4 4, M45 1).
 
-### Open: three terminals fired EARLY
+### Closed: three terminals fired EARLY
 
 `missing`, `extra`, `duplicate`, `post-terminal` and `non-invalidation` are
 **zero on all five hosts**. The only failures are timing, and they are the
@@ -142,21 +149,57 @@ failures the set-only comparison used to hide: the right POI, the wrong bar.
 P8 fires EARLIER than the lifecycle transition in every case — 3 of 204
 observable terminals (1.5%).
 
-**Under trace. No classification is recorded here until the trace proves one.**
-The working hypothesis, from code reading only, is that the two failure
-detectors behind `rc5_is_terminal` use different TRIGGERS with identical 3-bar
-windows:
+### Traced, and the first hypothesis was wrong
 
-* framework `true_failure` starts its clock on a **wick** —
-  `framework/engine.py:605`, `c.low < zone_bottom - tolerance`
-* lifecycle `_is_breach` requires a **close** — `poi/lifecycle.py:99`,
-  `(zone_bottom - candle.close) > overshoot_tolerance`
+The working hypothesis from code reading — a wick-started framework clock
+versus a close-started lifecycle clock — was **disproved** by the trace. Wicks
+have nothing to do with it.
 
-A wick-started clock can expire before a close-based confirmation, which would
-bound the gap at `sweep_reclaim_bars + 1` = 4 bars. Both observed gaps are ≤ 4
-bars, which is consistent — and consistency with a hypothesis is not proof of
-it. The earlier `NEVER_ENTERED_THE_EVENT_LOOP` episode is the reason this stays
-open until traced.
+Both H4 cases have an identical shape:
+
+| bar | lifecycle status | episode | evaluated | event |
+| --- | --- | --- | --- | --- |
+| 326 | `CLOSE_BREACH_CANDIDATE` | ACTIVE | yes | — |
+| 327 | `RECLAIM_FAILED` | ACTIVE | yes | — |
+| 328 | `RECLAIM_FAILED` | **FAILED** | yes | **POI_TERMINAL** |
+| 329 | `GENUINE_INVALIDATION_CONFIRMED` | — | **no** | — |
+
+`GENUINE_INVALIDATION_CONFIRMED` requires the full reclaim window, **at least
+two of its three bars closing beyond the far edge, AND the last bar closing
+beyond** (`poi/lifecycle.py:418-432`). A window that merely fails to reclaim
+lands on `RECLAIM_FAILED`, and the walk KEEPS WATCHING — the zone has not
+failed and may still survive. The framework's episode rule has no such test.
+
+So `rc5_is_terminal`'s second branch fired `POI_TERMINAL` on a bar where the
+lifecycle still said `RECLAIM_FAILED` — a status `rc5_validity` reports as
+**VALID**. A POI was simultaneously valid and terminal, which is precisely the
+contradiction the validity / display / actionability split exists to prevent.
+
+It was also **self-concealing**: the POI left the active set, so when `GENUINE`
+arrived it was no longer evaluated and the CORRECT terminal could never fire.
+The false event suppressed the true one.
+
+The M15 trace settles that this was premature rather than merely early. After
+the false terminal at bar 599 the zone was **re-tested** — a fresh
+`CLOSE_BREACH_CANDIDATE` at bar 600, tap count rising to 2 — and only genuinely
+failed at bar 603. It was declared dead while still alive and still being
+traded.
+
+### Resolution
+
+Only the frozen breach walk may declare a zone failed. The FAILED-episode
+branch was removed from `rc5_is_terminal`; `rc4_is_terminal` is untouched, so
+RC4 behaviour is unchanged.
+
+Removing it **loses nothing**, and the matrix proves that rather than asserting
+it: `extra` was 0 on all five hosts, so every terminal P8 emitted already had a
+lifecycle `GENUINE` behind it. The branch never found a failure the breach walk
+missed — it only ever announced one early.
+
+Pinned by three regressions: valid and terminal are mutually exclusive for
+every POI on every bar of a replay; `RECLAIM_FAILED` is valid and not terminal
+under every episode value; and a FAILED episode alone cannot kill a zone in any
+non-`GENUINE` lifecycle state.
 
 **M45 host identity.** M45 has no member in the frozen `Timeframe` enum and
 must not gain one, so it is driven through an M15 carrier. `Rc5HostIdentity`
