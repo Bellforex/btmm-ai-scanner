@@ -40,6 +40,7 @@ __all__ = [
     "DisplayHiddenReason",
     "Rc5PoiSemanticRecord",
     "Rc5SemanticLedger",
+    "Rc5Validity",
     "StablePoiKey",
     "SuppressionTimeline",
     "active_display_pois",
@@ -47,6 +48,8 @@ __all__ = [
     "display_hidden_reason",
     "interaction_count",
     "is_rc5_active_for_display",
+    "rc5_poi_is_valid",
+    "rc5_validity",
     "stable_poi_key",
     "suppressed_record_ids",
     "suppression_timelines",
@@ -392,6 +395,70 @@ def suppressed_record_ids(
     )
 
 
+class Rc5Validity(StrEnum):
+    """Whether the ZONE ITSELF still stands, independent of who may trade it.
+
+    This is the bottom of three nested layers, and keeping them apart is the
+    point:
+
+    * VALIDITY (here) -- a structural fact about price. Does this zone still
+      exist as a level that has not been confirmed broken? It does not care
+      about authority, availability, or whether anyone is allowed to act.
+    * DISPLAY eligibility -- valid AND the authoritative record for its origin.
+      A same-origin subordinate is a perfectly valid zone that simply must not
+      be drawn twice.
+    * P5 ACTIONABILITY -- display-eligible AND available AND admitted by the
+      eligibility algebra.
+
+    Each layer is a subset of the one before it. The author's requirement to
+    SEPARATE OPPORTUNITY EVALUATION FROM TERMINAL MONITORING is exactly this
+    split: terminal monitoring watches VALIDITY, so it keeps watching a POI
+    that is suppressed or not currently actionable, and a zone can therefore
+    die correctly even while nobody was allowed to trade it.
+    """
+
+    VALID = "VALID"
+    INVALIDATED = "INVALIDATED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+def rc5_validity(state: Any | None) -> Rc5Validity:
+    """The canonical validity of one POI, read from the frozen lifecycle only.
+
+    Deliberately takes no ledger and no observation: validity must not depend
+    on authority, or the two could disagree about whether a zone exists.
+
+    MITIGATION IS NOT TERMINATION. ``terminal_reason = MITIGATED`` is set at
+    the FIRST TOUCH and says only that price has been in the zone. A zone dies
+    on confirmed failure through its FAR side
+    (``GENUINE_INVALIDATION_CONFIRMED``); a far-side break that was reclaimed
+    lands on ``FALSE_INVALIDATION_CONFIRMED`` and stays VALID.
+    """
+    if state is None:
+        return Rc5Validity.VALID
+    if (
+        getattr(state, "poi_lifecycle_status", None)
+        is PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
+    ):
+        return Rc5Validity.INVALIDATED
+    reason = getattr(state, "terminal_reason", None)
+    if reason is not None:
+        name = reason.value
+        if name == "INVALIDATED":
+            return Rc5Validity.INVALIDATED
+        if name == "PROMOTED_TO_ORDER_BLOCK":
+            # not a failure: the formation now exists as a better POI, and the
+            # ORDER BLOCK carries the zone from here on.
+            return Rc5Validity.SUPERSEDED
+        # MITIGATED and anything else coarse: the zone was used, not broken.
+    return Rc5Validity.VALID
+
+
+def rc5_poi_is_valid(state: Any | None) -> bool:
+    """The zone still stands. This is what TERMINAL MONITORING watches."""
+    return rc5_validity(state) is Rc5Validity.VALID
+
+
 class DisplayHiddenReason(StrEnum):
     """Why a POI is not drawn as an active zone. Forensic only -- the record
     itself is never removed from history."""
@@ -429,27 +496,21 @@ def display_hidden_reason(
     invalidated. There is no time expiry.
 
     This reads the frozen records without mutating them, so RC4 is untouched.
+
+    DISPLAY IS VALIDITY PLUS AUTHORITY, and it is computed that way rather
+    than re-derived, so the drawn set can never disagree with the set terminal
+    monitoring is watching. Authority is checked FIRST: a subordinate is not a
+    separate opportunity however healthy its own lifecycle is.
     """
     record = ledger.get(stable_poi_key(observation))
     if record is not None and record.is_suppressed:
         return DisplayHiddenReason.AUTHORITY_SUPPRESSED
-    if state is None:
-        return None
-    if (
-        getattr(state, "poi_lifecycle_status", None)
-        is PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
-    ):
+    validity = rc5_validity(state)
+    if validity is Rc5Validity.INVALIDATED:
         return DisplayHiddenReason.INVALIDATED
-    reason = getattr(state, "terminal_reason", None)
-    if reason is not None:
-        name = reason.value
-        if name == "INVALIDATED":
-            return DisplayHiddenReason.INVALIDATED
-        if name == "PROMOTED_TO_ORDER_BLOCK":
-            # not a failure: the formation now exists as a better POI, and
-            # drawing both would duplicate one zone.
-            return DisplayHiddenReason.SUPERSEDED
-        # MITIGATED and anything else coarse: the zone was used, not broken.
+    if validity is Rc5Validity.SUPERSEDED:
+        # drawing both this and the ORDER BLOCK would duplicate one zone.
+        return DisplayHiddenReason.SUPERSEDED
     return None
 
 
