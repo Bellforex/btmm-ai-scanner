@@ -400,7 +400,6 @@ def _detect_bundle_candidates(
     bundle: PoiTimeframeInput,
     configuration: PoiConfiguration,
     identity_provider: DerivedOutputIdentityProvider,
-    rc5_ledger: Rc5SemanticLedger | None = None,
 ) -> list[Any]:
     measurement_configuration = MarketMeasurementConfiguration(
         minimum_price_tick=configuration.minimum_price_tick
@@ -444,7 +443,6 @@ def _detect_bundle_candidates(
         bundle.measurement_analysis.confirmed_swings,
         measurement_configuration,
         rc5_structural_origin=configuration.rc5_structural_origin,
-        ledger=rc5_ledger,
     )
     if configuration.rc4_fvg_quality:
         # RC4: an FVG whose imbalance was already fully consumed by the time its
@@ -588,10 +586,15 @@ def analyze_pois(
     identity_provider: DerivedOutputIdentityProvider,
     rc5_ledger: Rc5SemanticLedger | None = None,
 ) -> PoiAnalysis:
-    """``rc5_ledger``, when supplied, collects the RC5 semantic sidecar: the
-    structural provenance that caused each POI to qualify, keyed by stable POI
-    identity. It is purely additive -- the returned :class:`PoiAnalysis` and
-    every frozen record in it are byte-identical whether or not it is passed."""
+    """``rc5_ledger``, when supplied, is filled with the RC5 semantic sidecar.
+
+    The batch observation path below is untouched and stays optimized. The
+    sidecar is produced separately by the CANONICAL causal frontier replay --
+    the same machinery live incremental execution runs -- because provenance is
+    event history and must never be reconstructed from final state. The two are
+    joined on ``_formation_key``. Purely additive: the returned
+    :class:`PoiAnalysis` is byte-identical whether or not a ledger is passed.
+    """
     validate_configuration(configuration)
 
     if len(timeframe_inputs) == 0:
@@ -619,10 +622,22 @@ def analyze_pois(
     all_candidates: list[Any] = []
     for bundle in timeframe_inputs:
         all_candidates.extend(
-            _detect_bundle_candidates(
-                bundle, configuration, identity_provider, rc5_ledger
-            )
+            _detect_bundle_candidates(bundle, configuration, identity_provider)
         )
+
+    if rc5_ledger is not None:
+        # Canonical provenance: replay each host through the same causal
+        # frontier live execution uses. Never derived from the batch gate.
+        from btmm_ai_scanner.poi.rc5_semantics import (
+            replay_rc5_semantic_provenance,
+        )
+
+        for bundle in timeframe_inputs:
+            produced = replay_rc5_semantic_provenance(
+                bundle.candles, configuration, identity_provider
+            )
+            for entry in produced.records.values():
+                rc5_ledger.record(entry)
 
     observations_list: list[PoiObservation] = []
     for candidate in all_candidates:

@@ -196,3 +196,100 @@ def assign_origin_authority(
             )
         multi[cluster] = [stable_poi_key(m) for m in members]
     return multi
+
+
+def replay_rc5_semantic_provenance(
+    candles: Any,
+    configuration: Any,
+    identity_provider: Any,
+) -> Rc5SemanticLedger:
+    """Replay ``candles`` through the canonical causal frontier and return the
+    provenance it records.
+
+    Author decision, 2026-09-21 (option A). RC5 provenance is **event history**:
+    it is recorded when the causal event happens and never reconstructed from
+    final state. Three separate defects came from deriving it from the final
+    structural context -- a lapsing role, a role upgrade moving ``since`` later,
+    and defended levels dated from swing confirmation moving it earlier -- so
+    the frontier replay, which is also what live execution runs, is now the one
+    producer.
+
+    This reuses the existing incremental primitives exactly: the same
+    measurement replay, the same detector frontier, the same leg-origin
+    frontier. There is no second detector and no second structure walk here.
+
+    Batch keeps its optimized frozen-observation path untouched; only the RC5
+    sidecar comes from here, and the two are joined on ``_formation_key``.
+    """
+    from btmm_ai_scanner.domain.analyzer import (
+        _advance_measurement_replay_state,
+        _create_initial_measurement_replay_state,
+        _measurement_replay_state_to_view,
+    )
+    from btmm_ai_scanner.domain.configuration import MarketMeasurementConfiguration
+    from btmm_ai_scanner.poi.analyzer import (
+        _advance_poi_replay_state,
+        _create_initial_poi_replay_state,
+    )
+
+    ledger = Rc5SemanticLedger()
+    measurement_configuration = MarketMeasurementConfiguration(
+        minimum_price_tick=configuration.minimum_price_tick
+    )
+    measurement_state = _create_initial_measurement_replay_state(
+        identity_provider, measurement_configuration
+    )
+    poi_state = _create_initial_poi_replay_state(identity_provider, configuration)
+    for candle in candles:
+        measurement_state = _advance_measurement_replay_state(
+            measurement_state, candle, measurement_configuration
+        )
+        poi_state = _advance_poi_replay_state(
+            poi_state,
+            candle,
+            _measurement_replay_state_to_view(measurement_state),
+            configuration,
+            ledger,
+        )
+    return ledger
+
+
+class Rc5MissingProvenanceError(RuntimeError):
+    """An authority-relevant POI has no canonical semantic record.
+
+    Loud by design. The whole point of option A is that there is no silent
+    fallback to final-context reconstruction, so a join failure must stop RC5
+    analysis rather than quietly produce path-dependent authority.
+    """
+
+
+def join_semantic_records(
+    observations: Any,
+    ledger: Rc5SemanticLedger,
+    *,
+    required_types: Any,
+) -> dict[StablePoiKey, Rc5PoiSemanticRecord]:
+    """Join frozen observations to canonical provenance on ``_formation_key``.
+
+    ``required_types`` are the families authority actually ranks. Context-only
+    records -- period levels, equal-level liquidity, structural zones -- never
+    pass the structural gate and so legitimately have no reversal provenance;
+    they are excluded rather than faked.
+    """
+    joined: dict[StablePoiKey, Rc5PoiSemanticRecord] = {}
+    missing: list[StablePoiKey] = []
+    for observation in observations:
+        if observation.poi_type not in required_types:
+            continue
+        key = stable_poi_key(observation)
+        record = ledger.get(key)
+        if record is None:
+            missing.append(key)
+            continue
+        joined[key] = record
+    if missing:
+        raise Rc5MissingProvenanceError(
+            f"{len(missing)} authority-relevant POIs have no canonical semantic"
+            f" record; first: {missing[0][0]}"
+        )
+    return joined

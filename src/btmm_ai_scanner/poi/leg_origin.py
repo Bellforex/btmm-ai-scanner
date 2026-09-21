@@ -834,13 +834,17 @@ def immutable_structure_gate(
     measurement_configuration: MarketMeasurementConfiguration,
     *,
     rc5_structural_origin: bool = False,
-    ledger: Rc5SemanticLedger | None = None,
 ) -> tuple[tuple[OrderBlockCandidate, ...], tuple[Any, ...], StructuralContext]:
     """Batch ORDER BLOCKs and context-mapped candidates = the union, over every
     prefix, of the structure gate on that prefix, each snapshotted when it first
     appears. Identical to what ``advance_leg_origin_frontier`` has locked after
-    the last candle. The third element is the final-prefix structural context,
-    for RC5 promotion decisions (see :class:`StructuralContext`)."""
+    the last candle. The third element is the final-prefix structural context.
+
+    This path deliberately records NO RC5 provenance. The final gate knows the
+    FINAL role, and roles get upgraded, so writing provenance here would be
+    reconstructing qualification history from final state -- the exact thing
+    that produced three separate path-dependence defects. RC5 provenance comes
+    only from ``replay_rc5_semantic_provenance``."""
     formations = tuple(formations)
     candidates = tuple(candidates)
     final_swings = tuple(confirmed_swings)
@@ -874,12 +878,6 @@ def immutable_structure_gate(
 
     locked: dict[tuple[Any, ...], Any] = {}
     order: list[tuple[Any, ...]] = []
-    # Provenance as of the prefix currently being replayed. Seeded from the
-    # final gate and replaced whenever a prefix is actually recomputed, so a
-    # candidate locked on a recomputed prefix records THAT prefix's facts.
-    provenance: dict[tuple[Any, ...], ContextDecision] = {
-        _formation_key(d.candidate): d for d in final_decisions
-    }
 
     def lock(candidate: Any, now: datetime) -> None:
         key = _formation_key(candidate)
@@ -892,10 +890,6 @@ def immutable_structure_gate(
             )
         locked[key] = candidate
         order.append(key)
-        if ledger is not None:
-            ledger.record(
-                _semantic_record(candidate, provenance.get(key), final_context)
-            )
 
     key_text: dict[Any, str] = {}
     built: dict[Any, ConfirmedSwing] = {}
@@ -972,8 +966,6 @@ def immutable_structure_gate(
                     candidates_by_time[:candidate_pointer],
                     rc5_structural_origin=rc5_structural_origin,
                 )
-                for decision in decisions:
-                    provenance[_formation_key(decision.candidate)] = decision
                 for candidate in gated:
                     lock(candidate, now)
                 for decision in decisions:
