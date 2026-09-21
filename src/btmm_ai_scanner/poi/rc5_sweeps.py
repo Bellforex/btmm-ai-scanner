@@ -185,9 +185,22 @@ def deduplicate_sweep_candidates(
         for component in _merge_groups(members):
             group = sorted((members[i] for i in component), key=_order_key)
             primary = group[0]
-            corroborating = tuple(
-                (other.kind, tuple(other.reference_id)) for other in group[1:]
-            )
+            # Corroboration is OTHER references that independently named this
+            # level. The same reference reaching here through two pipelines is
+            # not corroboration: an equal-level pool arrives both as the
+            # framework's "E" level and as a reference-zone POI carrying the
+            # SAME cluster id, and listing it twice would overstate the
+            # evidence behind the event.
+            primary_identity = (primary.kind, tuple(primary.reference_id))
+            seen: set[tuple[Any, ...]] = {primary_identity}
+            corroborating: list[tuple[SweepReferenceKind, tuple[Any, ...]]] = []
+            for other in group[1:]:
+                identity = (other.kind, tuple(other.reference_id))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                corroborating.append(identity)
+            corroborating_final = tuple(corroborating)
             events.append(
                 QualifiedSweepEvent(
                     host=primary.host,
@@ -198,7 +211,7 @@ def deduplicate_sweep_candidates(
                     reference_price=primary.price,
                     raw_sweep_type=primary.raw_sweep_type,
                     raw_level_id=primary.raw_level_id,
-                    corroborating=corroborating,
+                    corroborating=corroborating_final,
                     why_qualified=primary.why_qualified,
                 )
             )

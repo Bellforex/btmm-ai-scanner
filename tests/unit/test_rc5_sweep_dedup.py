@@ -382,3 +382,61 @@ def test_no_price_tolerance_exists_in_the_module() -> None:
         ]
     )
     assert len(events) == 2, "a price tolerance has been introduced"
+
+
+def test_the_same_reference_arriving_twice_is_not_corroboration() -> None:
+    """An equal-level pool reaches dedup TWICE -- once as the framework's "E"
+    level and once as a reference-zone POI carrying the SAME cluster id.
+    Measured on M15: primary and "corroborating" held identical ids.
+
+    Listing it would claim two independent references behind the event when
+    there is one, which matters because corroboration is the forensic answer
+    to "what else confirmed this?".
+    """
+    events = deduplicate_sweep_candidates(
+        [
+            _candidate(
+                SweepReferenceKind.EQUAL_HIGH_LOW,
+                ("cluster-1",),
+                "4532.94",
+                {"cluster-1", "swing-2"},
+            ),
+            _candidate(
+                SweepReferenceKind.EQUAL_HIGH_LOW,
+                ("cluster-1",),
+                "4532.94",
+                {"cluster-1", "swing-2"},
+            ),
+        ]
+    )
+    assert len(events) == 1
+    assert events[0].corroborating == ()
+
+
+def test_genuine_corroboration_is_still_reported() -> None:
+    events = deduplicate_sweep_candidates(
+        [
+            _candidate(
+                SweepReferenceKind.EQUAL_HIGH_LOW,
+                ("cluster-1",),
+                "4680.89",
+                {"cluster-1", "swing-1"},
+            ),
+            _candidate(
+                SweepReferenceKind.EQUAL_HIGH_LOW,
+                ("cluster-1",),
+                "4680.89",
+                {"cluster-1", "swing-1"},
+            ),
+            _candidate(
+                SweepReferenceKind.STRUCTURAL_SWING,
+                ("swing-1",),
+                "4680.89",
+                {"swing-1"},
+            ),
+        ]
+    )
+    assert len(events) == 1
+    assert events[0].corroborating == (
+        (SweepReferenceKind.STRUCTURAL_SWING, ("swing-1",)),
+    )
