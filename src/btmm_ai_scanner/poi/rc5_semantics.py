@@ -29,18 +29,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from enum import StrEnum
 from typing import Any
 
 from btmm_ai_scanner.poi.authority import AuthorityReason, OriginClusterKey
-from btmm_ai_scanner.poi.enums import PoiType
+from btmm_ai_scanner.poi.enums import PoiLifecycleStatus, PoiType
 from btmm_ai_scanner.poi.structural_role import StructuralRole
 
 __all__ = [
+    "DisplayHiddenReason",
     "Rc5PoiSemanticRecord",
     "Rc5SemanticLedger",
     "StablePoiKey",
     "SuppressionTimeline",
+    "active_display_pois",
     "authoritative_rc5_pois",
+    "display_hidden_reason",
+    "is_rc5_active_for_display",
     "stable_poi_key",
     "suppressed_record_ids",
     "suppression_timelines",
@@ -383,4 +388,77 @@ def suppressed_record_ids(
     suppressed = ledger.suppressed_keys()
     return frozenset(
         o.record_id for o in observations if stable_poi_key(o) in suppressed
+    )
+
+
+class DisplayHiddenReason(StrEnum):
+    """Why a POI is not drawn as an active zone. Forensic only -- the record
+    itself is never removed from history."""
+
+    AUTHORITY_SUPPRESSED = "AUTHORITY_SUPPRESSED"
+    MITIGATED = "MITIGATED"
+    INVALIDATED = "INVALIDATED"
+    TERMINAL = "TERMINAL"
+
+
+def display_hidden_reason(
+    observation: Any,
+    state: Any | None,
+    ledger: Rc5SemanticLedger,
+) -> DisplayHiddenReason | None:
+    """Why this POI should not render as an active zone, or ``None`` if it
+    should.
+
+    The author's complaint was that dead zones still look tradeable, so this is
+    deliberately one predicate for every lifecycle-eligible family rather than
+    a per-type rule, and it is meant to govern the zone box, the POI label and
+    the active table row together -- hiding a label while leaving the rectangle
+    is exactly the failure being fixed.
+
+    A POI with no lifecycle state yet has not been interacted with, so it shows.
+    History is untouched: this is a view.
+    """
+    record = ledger.get(stable_poi_key(observation))
+    if record is not None and record.is_suppressed:
+        return DisplayHiddenReason.AUTHORITY_SUPPRESSED
+    if state is None:
+        return None
+    reason = getattr(state, "terminal_reason", None)
+    if reason is not None:
+        # MITIGATED means price used the zone; INVALIDATED means it failed.
+        return (
+            DisplayHiddenReason.MITIGATED
+            if reason.value == "MITIGATED"
+            else DisplayHiddenReason.INVALIDATED
+        )
+    if (
+        getattr(state, "poi_lifecycle_status", None)
+        is PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED
+    ):
+        return DisplayHiddenReason.INVALIDATED
+    if getattr(state, "terminal_time_utc", None) is not None:
+        return DisplayHiddenReason.TERMINAL
+    # Everything else is either fresh or inside an open interaction episode,
+    # both of which the author wants visible.
+    return None
+
+
+def is_rc5_active_for_display(
+    observation: Any,
+    state: Any | None,
+    ledger: Rc5SemanticLedger,
+) -> bool:
+    return display_hidden_reason(observation, state, ledger) is None
+
+
+def active_display_pois(
+    observations: Any,
+    states_by_poi_id: Any,
+    ledger: Rc5SemanticLedger,
+) -> tuple[Any, ...]:
+    """The POIs a student should see as live zones right now."""
+    return tuple(
+        o
+        for o in observations
+        if is_rc5_active_for_display(o, states_by_poi_id.get(o.record_id), ledger)
     )
