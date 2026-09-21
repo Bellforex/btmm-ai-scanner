@@ -260,13 +260,23 @@ def run_active_poi_loop(
         # RC4 interaction episode: a POI mitigated by its first touch stays in
         # the active universe while its BTMM episode is still running, and
         # leaves the NEXT bar after the episode ends (terminal-bar rule kept).
+        #
+        # RC5 must NOT use that rule here. rc4_is_terminal keys off
+        # fresh_active, which the frozen lifecycle clears on the FIRST TOUCH,
+        # so this block was silently overriding the RC5 eligibility chosen
+        # above and dropping a still-valid POI from the CARRIED set the bar
+        # after it was touched. It was then never in previously_active when it
+        # later genuinely invalidated, so it was never evaluated on its
+        # terminal bar and POI_TERMINAL never fired -- 20 real invalidations
+        # on M45 produced 0 events.
         state_by_id = {
             st.poi_record_id: st for st in analysis.poi_analysis.current_poi_states
         }
+        is_terminal = rc5_is_terminal if rc5_validity else rc4_is_terminal
         next_active = frozenset(
             poi_id
             for poi_id in eligible_ids
-            if not rc4_is_terminal(state_by_id.get(poi_id), decisions[poi_id])
+            if not is_terminal(state_by_id.get(poi_id), decisions[poi_id])
         )
 
     return ActiveLoopResult(
