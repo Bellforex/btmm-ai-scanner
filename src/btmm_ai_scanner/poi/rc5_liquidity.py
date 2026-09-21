@@ -39,8 +39,10 @@ from btmm_ai_scanner.poi.rc5_host_identity import Rc5HostIdentity
 
 __all__ = [
     "KIND_TO_REFERENCE",
+    "PoiBoundary",
     "QualifiedLiquidityReference",
     "SweepReferenceKind",
+    "poi_boundary_liquidity",
     "reference_kind_of_level_id",
     "side_of_reference",
 ]
@@ -172,3 +174,57 @@ def side_of_reference(kind: LiquidityKind) -> LiquiditySide:
         f"{kind.value} has no side that follows from its kind alone; read it "
         "from the level the framework built"
     )
+
+
+@dataclass(frozen=True)
+class PoiBoundary:
+    """The one edge of a POI that is a liquidity reference, and its side."""
+
+    price: Decimal
+    side: LiquiditySide
+    #: "zone_top" or "zone_bottom" -- which edge this was, for forensics.
+    edge: str
+
+    @property
+    def label(self) -> str:
+        return "BSL" if self.side is LiquiditySide.BUY_SIDE else "SSL"
+
+
+def poi_boundary_liquidity(
+    direction: Any,
+    zone_top: Decimal,
+    zone_bottom: Decimal,
+) -> PoiBoundary:
+    """The FAR edge of a POI, which is the edge that holds liquidity.
+
+    NOT "top is BSL, bottom is SSL". That mapping is true of a level, and a POI
+    is not a level -- it is a directional zone with a proximal edge price
+    enters through and a distal edge beyond which the idea is wrong. Only the
+    far edge is a liquidity reference, and which edge that is depends on the
+    POI's direction.
+
+    Derived from the frozen lifecycle rather than asserted. ``poi/lifecycle.py``
+    breaches a BULLISH zone on ``close < zone_bottom`` and a BEARISH zone on
+    ``close > zone_top``, so the far edge IS the invalidation boundary. That is
+    also why it is the meaningful liquidity: protective orders for anyone
+    working the zone rest beyond it, and a sweep of that level is precisely the
+    event that would invalidate the POI if it were not reclaimed.
+
+    So:
+
+    * BULLISH POI -- far edge is the BOTTOM. Liquidity rests BELOW price, which
+      is SELL_SIDE, shown as SSL.
+    * BEARISH POI -- far edge is the TOP. Liquidity rests ABOVE price, which is
+      BUY_SIDE, shown as BSL.
+
+    The proximal edge is deliberately not a reference. Price trading through it
+    is mitigation -- the zone being used -- and mitigation is not a sweep.
+    """
+    name = getattr(direction, "value", direction)
+    if name == "BULLISH":
+        return PoiBoundary(
+            price=zone_bottom, side=LiquiditySide.SELL_SIDE, edge="zone_bottom"
+        )
+    if name == "BEARISH":
+        return PoiBoundary(price=zone_top, side=LiquiditySide.BUY_SIDE, edge="zone_top")
+    raise ValueError(f"POI direction {name!r} has no far edge")

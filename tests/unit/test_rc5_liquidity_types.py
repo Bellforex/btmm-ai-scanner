@@ -159,3 +159,74 @@ def test_two_references_to_the_same_source_share_a_key() -> None:
     second = _reference(price=Decimal("4500.25"))
     assert first.key == second.key
     assert first.price != second.price
+
+
+# ---------------------------------------------------------------------------
+# POI boundaries -- the far edge, derived not assumed
+# ---------------------------------------------------------------------------
+
+
+def test_a_bullish_poi_offers_its_bottom_as_sell_side_liquidity() -> None:
+    from btmm_ai_scanner.poi.enums import PoiDirection
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_liquidity
+
+    boundary = poi_boundary_liquidity(
+        PoiDirection.BULLISH, Decimal("102.00"), Decimal("100.00")
+    )
+    assert boundary.price == Decimal("100.00")
+    assert boundary.edge == "zone_bottom"
+    assert boundary.side is LiquiditySide.SELL_SIDE
+    assert boundary.label == "SSL"
+
+
+def test_a_bearish_poi_offers_its_top_as_buy_side_liquidity() -> None:
+    from btmm_ai_scanner.poi.enums import PoiDirection
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_liquidity
+
+    boundary = poi_boundary_liquidity(
+        PoiDirection.BEARISH, Decimal("102.00"), Decimal("100.00")
+    )
+    assert boundary.price == Decimal("102.00")
+    assert boundary.edge == "zone_top"
+    assert boundary.side is LiquiditySide.BUY_SIDE
+    assert boundary.label == "BSL"
+
+
+def test_the_far_edge_is_the_lifecycle_invalidation_boundary() -> None:
+    """The derivation, asserted against the frozen breach rule rather than
+    restated. lifecycle._is_breach uses close < zone_bottom for BULLISH and
+    close > zone_top for BEARISH, so the edge this function returns must be
+    the edge that actually breaches."""
+    from btmm_ai_scanner.poi.enums import PoiDirection
+    from btmm_ai_scanner.poi.lifecycle import _is_breach
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_liquidity
+
+    top, bottom = Decimal("102.00"), Decimal("100.00")
+    zero = Decimal("0")
+    for direction in (PoiDirection.BULLISH, PoiDirection.BEARISH):
+        boundary = poi_boundary_liquidity(direction, top, bottom)
+        beyond = (
+            boundary.price - Decimal("1")
+            if direction is PoiDirection.BULLISH
+            else boundary.price + Decimal("1")
+        )
+        assert _is_breach(_Candle(beyond), direction, top, bottom, zero)
+        # and the PROXIMAL edge does not breach: being used is not failing
+        inside = (
+            bottom + Decimal("0.5")
+            if direction is PoiDirection.BULLISH
+            else top - Decimal("0.5")
+        )
+        assert not _is_breach(_Candle(inside), direction, top, bottom, zero)
+
+
+class _Candle:
+    def __init__(self, close: Decimal) -> None:
+        self.close = close
+
+
+def test_an_unknown_direction_is_refused() -> None:
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_liquidity
+
+    with pytest.raises(ValueError, match="no far edge"):
+        poi_boundary_liquidity("SIDEWAYS", Decimal("2"), Decimal("1"))
