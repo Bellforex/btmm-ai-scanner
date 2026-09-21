@@ -70,6 +70,7 @@ __all__ = [
     "arbitrate_cluster",
     "contains_zone",
     "ladder_rank",
+    "zones_overlap",
 ]
 
 
@@ -161,12 +162,33 @@ def ladder_rank(poi_type: PoiType) -> int:
 
 
 def contains_zone(outer: Any, inner: Any) -> bool:
-    """Is ``inner``'s zone wholly inside ``outer``'s? The formation
-    relationship requirement -- geometry alone never clusters, but a cluster
-    member must be geometrically subordinate."""
+    """Is ``inner``'s zone wholly inside ``outer``'s? The strict relationship,
+    required before an FVG may be called a by-product: an imbalance that is not
+    wholly inside the reversal still contributes an imbalance region of its own.
+    """
     return Decimal(inner.zone_bottom) >= Decimal(outer.zone_bottom) and Decimal(
         inner.zone_top
     ) <= Decimal(outer.zone_top)
+
+
+def zones_overlap(a: Any, b: Any) -> bool:
+    """Do the two zones share any price? The relationship used between reversal
+    synonyms at one structural origin.
+
+    Containment is too strict here, and the author's M45 case is exactly why:
+    the BEARISH PRESSURE WICK sits on the swing that COMPLETES the reversal
+    (4485.61-4490.85), whose high is above the B2S zone top (4486.42). The two
+    describe one decision and overlap, but neither contains the other. The same
+    geometry that made source-candle matching fail for B2S makes containment
+    fail here.
+
+    Geometry still never clusters on its own -- the members must already share
+    a structural origin. This only decides whether two co-origin formations are
+    describing the same decision or two separate ones.
+    """
+    return Decimal(a.zone_bottom) <= Decimal(b.zone_top) and Decimal(
+        b.zone_bottom
+    ) <= Decimal(a.zone_top)
 
 
 def _order(candidate: Any) -> tuple[int, str, str]:
@@ -205,7 +227,9 @@ def arbitrate_cluster(
     decisions.append(AuthorityDecision(primary, AuthorityReason.PRIMARY, cluster))
 
     for candidate in reversals[1:]:
-        subordinate = candidate.direction is primary.direction and contains_zone(
+        # Same origin AND overlapping price: one decision described twice.
+        # Same origin but spatially separate: two decisions, both survive.
+        subordinate = candidate.direction is primary.direction and zones_overlap(
             primary, candidate
         )
         decisions.append(

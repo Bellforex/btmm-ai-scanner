@@ -134,14 +134,31 @@ def test_b2s_suppresses_a_subordinate_same_formation_fvg() -> None:
     assert got[PoiType.SELL_FAIR_VALUE_GAP] is AuthorityReason.SUBORDINATE_IMBALANCE
 
 
-def test_two_shooting_stars_at_separate_origins_both_remain() -> None:
-    """Separate origins never reach one cluster; within a cluster a member that
-    is not geometrically subordinate is still independent."""
-    first = _c(PoiType.SHOOTING_STAR, "4416.51", "4448.92")
+def test_two_spatially_separate_reversals_in_one_cluster_both_remain() -> None:
+    """Author rule: a structurally/spatially separate reversal survives even at
+    a shared origin. Sharing an origin swing is not enough -- the two must also
+    describe the same price decision, which here they do not."""
+    first = _c(PoiType.SHOOTING_STAR, "4430.00", "4448.92")
     second = _c(PoiType.SHOOTING_STAR, "4406.95", "4419.56", minutes=4320)
     got = [d.reason for d in arbitrate_cluster([first, second], CLUSTER)]
     assert got[0] is AuthorityReason.PRIMARY
     assert got[1] is AuthorityReason.INDEPENDENT
+
+
+def test_an_overlapping_reversal_that_is_not_contained_is_still_subordinate() -> None:
+    """The author's real M45 shape, which strict containment gets wrong.
+
+    The BEARISH PRESSURE WICK sits on the swing that COMPLETES the reversal, so
+    its top (4490.85) is ABOVE the B2S zone top (4486.42). Neither zone contains
+    the other, yet they overlap and describe one decision.
+    """
+    b2s = _c(PoiType.BUY_TO_SELL_CANDLE, "4461.42", "4486.42")
+    wick = _c(PoiType.BEARISH_PRESSURE_WICK, "4485.61", "4490.85", minutes=45)
+    got = _by_type(arbitrate_cluster([b2s, wick], CLUSTER))
+    assert got[PoiType.BUY_TO_SELL_CANDLE] is AuthorityReason.PRIMARY
+    assert got[PoiType.BEARISH_PRESSURE_WICK] is (
+        AuthorityReason.SAME_ORIGIN_SUBORDINATE
+    )
 
 
 def test_two_shooting_stars_in_one_cluster_leave_one_primary() -> None:

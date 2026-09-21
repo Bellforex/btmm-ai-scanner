@@ -72,6 +72,10 @@ from btmm_ai_scanner.domain.swings import (
 from btmm_ai_scanner.poi.authority import REVERSAL_TYPES
 from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
 from btmm_ai_scanner.poi.order_blocks import OrderBlockCandidate
+from btmm_ai_scanner.poi.rc5_semantics import (
+    Rc5PoiSemanticRecord,
+    Rc5SemanticLedger,
+)
 from btmm_ai_scanner.poi.structural_role import StructuralRole
 from btmm_ai_scanner.structure.configuration import StructureConfiguration
 from btmm_ai_scanner.structure.enums import (
@@ -335,6 +339,47 @@ def _structural_context(
             for swing_id, fact in role_by_swing.items()
             if fact.role in (StructuralRole.PULLBACK_HIGH, StructuralRole.PULLBACK_LOW)
         ),
+    )
+
+
+def _semantic_record(
+    candidate: Any,
+    decision: ContextDecision | None,
+    context: StructuralContext,
+) -> Rc5PoiSemanticRecord:
+    """The provenance to persist for ``candidate`` at the moment it locks.
+
+    Prefers what the gate actually decided on this prefix. Falls back to
+    resolving the role against ``context`` only for candidates the gate placed
+    directly -- ORDER BLOCKS, which the leg-origin rule anchors on a leg origin
+    by construction and which carry no ``ContextDecision``.
+    """
+    role = decision.structural_role if decision is not None else None
+    origin = decision.origin_swing_id if decision is not None else None
+    broken = decision.broken_swing_id if decision is not None else None
+    brk = decision.break_candle_id if decision is not None else None
+    if role is None:
+        fact = structural_role_of(candidate, context)
+        if fact is not None:
+            role, origin, broken, brk = (
+                fact.role,
+                fact.origin_swing_id,
+                fact.broken_swing_id,
+                fact.break_candle_id,
+            )
+    since = (
+        context.role_by_swing[origin].since if origin in context.role_by_swing else None
+    )
+    return Rc5PoiSemanticRecord(
+        stable_poi_key=_formation_key(candidate),
+        poi_type=candidate.poi_type,
+        source_time_utc=candidate.candidate_event_time_utc,
+        availability_time_utc=candidate.availability_time_utc,
+        structural_role=role,
+        origin_swing_id=origin,
+        broken_swing_id=broken,
+        break_candle_id=brk,
+        structural_since_utc=since,
     )
 
 
@@ -761,6 +806,7 @@ def immutable_structure_gate(
     measurement_configuration: MarketMeasurementConfiguration,
     *,
     rc5_structural_origin: bool = False,
+    ledger: Rc5SemanticLedger | None = None,
 ) -> tuple[tuple[OrderBlockCandidate, ...], tuple[Any, ...], StructuralContext]:
     """Batch ORDER BLOCKs and context-mapped candidates = the union, over every
     prefix, of the structure gate on that prefix, each snapshotted when it first
@@ -800,6 +846,12 @@ def immutable_structure_gate(
 
     locked: dict[tuple[Any, ...], Any] = {}
     order: list[tuple[Any, ...]] = []
+    # Provenance as of the prefix currently being replayed. Seeded from the
+    # final gate and replaced whenever a prefix is actually recomputed, so a
+    # candidate locked on a recomputed prefix records THAT prefix's facts.
+    provenance: dict[tuple[Any, ...], ContextDecision] = {
+        _formation_key(d.candidate): d for d in final_decisions
+    }
 
     def lock(candidate: Any, now: datetime) -> None:
         key = _formation_key(candidate)
@@ -812,6 +864,10 @@ def immutable_structure_gate(
             )
         locked[key] = candidate
         order.append(key)
+        if ledger is not None:
+            ledger.record(
+                _semantic_record(candidate, provenance.get(key), final_context)
+            )
 
     key_text: dict[Any, str] = {}
     built: dict[Any, ConfirmedSwing] = {}
@@ -888,6 +944,8 @@ def immutable_structure_gate(
                     candidates_by_time[:candidate_pointer],
                     rc5_structural_origin=rc5_structural_origin,
                 )
+                for decision in decisions:
+                    provenance[_formation_key(decision.candidate)] = decision
                 for candidate in gated:
                     lock(candidate, now)
                 for decision in decisions:
@@ -980,6 +1038,7 @@ def advance_leg_origin_frontier(
     new_candidates: Sequence[Any] = (),
     *,
     rc5_structural_origin: bool = False,
+    ledger: Rc5SemanticLedger | None = None,
 ) -> LegOriginFrontier:
     """Lock the ORDER BLOCKs and context-mapped candidates the gate produces on
     this prefix. The structure walk is recomputed only when the swing inputs
@@ -995,6 +1054,12 @@ def advance_leg_origin_frontier(
     mapped = list(state.mapped)
     mapped_keys = set(state.mapped_keys)
     newly: list[Any] = []
+    # Provenance for this prefix. The fast path has no decisions -- nothing
+    # structural changed, so the carried context already IS this prefix's and
+    # _semantic_record resolves the role from it. The slow path fills these in
+    # from the gate it just ran.
+    decision_by_key: dict[tuple[Any, ...], ContextDecision] = {}
+    prefix_context: list[StructuralContext] = [state.context]
 
     def lock_candidate(candidate: Any) -> None:
         key = _formation_key(candidate)
@@ -1008,6 +1073,10 @@ def advance_leg_origin_frontier(
         mapped.append(candidate)
         newly.append(candidate)
         mapped_keys.add(key)
+        if ledger is not None:
+            ledger.record(
+                _semantic_record(candidate, decision_by_key.get(key), prefix_context[0])
+            )
 
     if signature == state.swing_signature and not _may_break(state.walk, candle.close):
         for candidate in new_candidates:
@@ -1054,6 +1123,12 @@ def advance_leg_origin_frontier(
             )
         )
         keys.add(key)
+    prefix_context[0] = context
+    for decision in decisions:
+        decision_by_key[_formation_key(decision.candidate)] = decision
+    for candidate in gated:
+        if ledger is not None and _formation_key(candidate) in keys:
+            ledger.record(_semantic_record(candidate, None, context))
     for decision in decisions:
         if decision.mapped is not None:
             lock_candidate(decision.mapped)

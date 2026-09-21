@@ -79,6 +79,7 @@ from btmm_ai_scanner.poi.qualification import (
     fvg_pre_availability_consumed,
     qualify_candidates,
 )
+from btmm_ai_scanner.poi.rc5_semantics import Rc5SemanticLedger
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.scheduler_walk import cursor_walk_result
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -399,6 +400,7 @@ def _detect_bundle_candidates(
     bundle: PoiTimeframeInput,
     configuration: PoiConfiguration,
     identity_provider: DerivedOutputIdentityProvider,
+    rc5_ledger: Rc5SemanticLedger | None = None,
 ) -> list[Any]:
     measurement_configuration = MarketMeasurementConfiguration(
         minimum_price_tick=configuration.minimum_price_tick
@@ -442,6 +444,7 @@ def _detect_bundle_candidates(
         bundle.measurement_analysis.confirmed_swings,
         measurement_configuration,
         rc5_structural_origin=configuration.rc5_structural_origin,
+        ledger=rc5_ledger,
     )
     if configuration.rc4_fvg_quality:
         # RC4: an FVG whose imbalance was already fully consumed by the time its
@@ -583,7 +586,12 @@ def analyze_pois(
     timeframe_inputs: tuple[PoiTimeframeInput, ...],
     configuration: PoiConfiguration,
     identity_provider: DerivedOutputIdentityProvider,
+    rc5_ledger: Rc5SemanticLedger | None = None,
 ) -> PoiAnalysis:
+    """``rc5_ledger``, when supplied, collects the RC5 semantic sidecar: the
+    structural provenance that caused each POI to qualify, keyed by stable POI
+    identity. It is purely additive -- the returned :class:`PoiAnalysis` and
+    every frozen record in it are byte-identical whether or not it is passed."""
     validate_configuration(configuration)
 
     if len(timeframe_inputs) == 0:
@@ -611,7 +619,9 @@ def analyze_pois(
     all_candidates: list[Any] = []
     for bundle in timeframe_inputs:
         all_candidates.extend(
-            _detect_bundle_candidates(bundle, configuration, identity_provider)
+            _detect_bundle_candidates(
+                bundle, configuration, identity_provider, rc5_ledger
+            )
         )
 
     observations_list: list[PoiObservation] = []
