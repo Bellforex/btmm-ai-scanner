@@ -14,6 +14,7 @@ from btmm_ai_scanner.domain.analyzer import (
 )
 from btmm_ai_scanner.poi.analyzer import PoiAnalysis, PoiTimeframeInput, analyze_pois
 from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
+from btmm_ai_scanner.poi.rc5_semantics import Rc5SemanticLedger
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis, ScannerSetupSummary
 from btmm_ai_scanner.scanner.configuration import (
     ScannerConfiguration,
@@ -195,6 +196,7 @@ def scan_market(
     reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
     configuration: ScannerConfiguration,
     identity_provider: DerivedOutputIdentityProvider,
+    semantic_ledger: Rc5SemanticLedger | None = None,
 ) -> ScannerAnalysis:
     validate_configuration(configuration)
 
@@ -247,6 +249,7 @@ def scan_market(
         tuple(poi_timeframe_inputs),
         configuration.poi_configuration,
         identity_provider,
+        semantic_ledger,
     )
 
     btmm_eligible_timeframes = (

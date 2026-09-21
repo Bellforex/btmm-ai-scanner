@@ -230,7 +230,11 @@ def _structural_context(
     leg_origin_candle_ids: dict[Any, Any] = {}
     leg_id_by_origin_swing: dict[Any, Any] = {}
     broken_swing_by_origin: dict[Any, Any] = {}
-    role_by_swing: dict[Any, StructuralRoleFact] = {}
+    #: every role a swing holds, before precedence is applied
+    claims: dict[Any, list[StructuralRoleFact]] = {}
+
+    def _claim(fact: StructuralRoleFact) -> None:
+        claims.setdefault(fact.origin_swing_id, []).append(fact)
 
     # The first break to name a swing owns it; later breaks that reach back to
     # the same swing do not re-date the leg.
@@ -241,46 +245,35 @@ def _structural_context(
         broken_swing_by_origin[origin.record_id] = transition.broken_swing_id
         for candle_id in origin.pivot_candle_record_ids:
             leg_origin_candle_ids.setdefault(candle_id, origin.record_id)
-        role_by_swing[origin.record_id] = StructuralRoleFact(
-            StructuralRole.LEG_ORIGIN,
-            transition.availability_time_utc,
-            origin.record_id,
-            transition.broken_swing_id,
-            transition.break_candle_id,
+        _claim(
+            StructuralRoleFact(
+                StructuralRole.LEG_ORIGIN,
+                transition.availability_time_utc,
+                origin.record_id,
+                transition.broken_swing_id,
+                transition.break_candle_id,
+            )
         )
 
     by_id = {s.record_id: s for s in swings}
     # A swing a break TOOK held real liquidity. Available from that break.
     for transition in walk.transitions:
         broken = by_id.get(transition.broken_swing_id)
-        if broken is None or broken.record_id in role_by_swing:
+        if broken is None:
             continue
-        role_by_swing[broken.record_id] = StructuralRoleFact(
-            StructuralRole.SWING_HIGH_ORIGIN
-            if broken.swing_type == SwingType.SWING_HIGH
-            else StructuralRole.SWING_LOW_ORIGIN,
-            transition.availability_time_utc,
-            broken.record_id,
-            broken.record_id,
-            transition.break_candle_id,
+        _claim(
+            StructuralRoleFact(
+                StructuralRole.SWING_HIGH_ORIGIN
+                if broken.swing_type == SwingType.SWING_HIGH
+                else StructuralRole.SWING_LOW_ORIGIN,
+                transition.availability_time_utc,
+                broken.record_id,
+                broken.record_id,
+                transition.break_candle_id,
+            )
         )
 
-    # The levels the walk DEFENDS -- unbroken, but load-bearing, unlike the rest
-    # of the unbroken swings, which are leg texture.
-    #
-    # MONOTONICITY. "Currently protected" is not usable here: the walk stops
-    # defending a level when structure moves on, so a role read from the final
-    # prefix could be ABSENT where an earlier prefix had it. Every other part of
-    # this engine relies on the final gate output being a superset of every
-    # prefix's -- that is how ``immutable_structure_gate`` avoids replaying the
-    # walk on most bars -- and a lapsing role silently breaks it, which showed
-    # up as the M45 B2S being locked at an arbitrary much later bar.
-    #
-    # A swing the walk EVER defended was meaningful at the time it defended it,
-    # and this engine never retracts what was once true. Each transition records
-    # the level it protected and the weak level it armed, so the whole history
-    # is available from the final walk and accumulates monotonically. ``since``
-    # stays the moment that fact became true, so availability stays causal.
+    # The levels the walk HAS DEFENDED -- see the monotonicity note above.
     defended: list[tuple[Any, datetime]] = []
     for transition in walk.transitions:
         defended.append(
@@ -290,28 +283,63 @@ def _structural_context(
             defended.append(
                 (transition.weak_swing_id, transition.availability_time_utc)
             )
+    # The levels the walk defends RIGHT NOW. A level becomes defended when the
+    # walk says so, which is the last transition -- not when the swing was
+    # confirmed. Dating these from the swing's own confirmation lets `since`
+    # DECREASE as bars arrive (a swing acquires a defended claim older than any
+    # transition-based one), and the final context then qualifies a candidate
+    # earlier than the prefix that actually published it. On real M15 that put
+    # one BULLISH PRESSURE WICK two hours apart in batch and incremental.
+    last_transition = (
+        max(t.availability_time_utc for t in walk.transitions)
+        if walk.transitions
+        else None
+    )
     for swing in (
         walk.protected_high,
         walk.protected_low,
         walk.weak_high,
         walk.weak_low,
     ):
-        if swing is not None:
-            defended.append((swing.record_id, swing.meaningful_confirmation_time_utc))
-
+        if swing is None:
+            continue
+        known_from = swing.meaningful_confirmation_time_utc
+        if last_transition is not None:
+            known_from = max(known_from, last_transition)
+        defended.append((swing.record_id, known_from))
     for swing_id, since in defended:
         swing = by_id.get(swing_id)
-        if swing is None or swing_id in role_by_swing:
+        if swing is None:
             continue
-        role_by_swing[swing_id] = StructuralRoleFact(
-            StructuralRole.PULLBACK_HIGH
-            if swing.swing_type == SwingType.SWING_HIGH
-            else StructuralRole.PULLBACK_LOW,
-            max(since, swing.meaningful_confirmation_time_utc),
-            swing_id,
-            None,
-            None,
+        _claim(
+            StructuralRoleFact(
+                StructuralRole.PULLBACK_HIGH
+                if swing.swing_type == SwingType.SWING_HIGH
+                else StructuralRole.PULLBACK_LOW,
+                max(since, swing.meaningful_confirmation_time_utc),
+                swing_id,
+                None,
+                None,
+            )
         )
+
+    # A swing keeps the role it held when it FIRST became meaningful, not the
+    # highest-ranked role it ever acquires.
+    #
+    # Roles get upgraded: a swing defended early can later be named a leg
+    # origin, and that break's availability is LATER. Reporting the upgraded
+    # role moves the swing's qualifying time forward as more bars arrive, which
+    # is non-monotone in the one field that feeds availability. On the real M45
+    # capture that published the same BEARISH ENGULFING two days apart in batch
+    # and incremental, because only the batch replay ever sees the upgrade.
+    #
+    # Earliest-first also matches what the qualification actually was: when the
+    # POI qualified, the swing was a defended level, so that is the provenance
+    # worth recording. Rank only breaks ties at one instant.
+    role_by_swing: dict[Any, StructuralRoleFact] = {
+        swing_id: min(facts, key=lambda f: (f.since, f.rank))
+        for swing_id, facts in claims.items()
+    }
 
     swing_high_candle_ids: dict[Any, Any] = {}
     swing_low_candle_ids: dict[Any, Any] = {}

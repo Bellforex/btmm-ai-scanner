@@ -1284,6 +1284,7 @@ def _advance_poi_replay_state(
     candle: NormalizedCandle,
     measurement_analysis: MarketMeasurementAnalysis,
     configuration: PoiConfiguration,
+    semantic_ledger: Rc5SemanticLedger | None = None,
 ) -> _PoiReplayState:
     """Advance the incremental POI state by exactly one new candle plus the
     current single-timeframe measurement analysis (from the 2b measurement
@@ -1316,6 +1317,7 @@ def _advance_poi_replay_state(
         measurement_analysis,
         configuration,
         candles_so_far=new_candles,
+        semantic_ledger=semantic_ledger,
     )
     enabled = configuration.enabled_poi_types
     prior_bounded = state.bounded_cache

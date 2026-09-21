@@ -73,6 +73,7 @@ from btmm_ai_scanner.poi.qualification import (
     origin_key,
     qualify_candidates,
 )
+from btmm_ai_scanner.poi.rc5_semantics import Rc5SemanticLedger
 from btmm_ai_scanner.poi.reference_zones import detect_reference_zones
 from btmm_ai_scanner.poi.reversal_candles import detect_reversal_candles
 from btmm_ai_scanner.poi.single_candle_reversals import detect_single_candle_reversals
@@ -577,6 +578,7 @@ def advance_detector_frontier(
     configuration: PoiConfiguration,
     *,
     candles_so_far: tuple[NormalizedCandle, ...],
+    semantic_ledger: Rc5SemanticLedger | None = None,
 ) -> tuple[_DetectorFrontierState, list[Any], tuple[Decimal | None, ...]]:
     """Advance the detection frontier by one candle. Returns the new frontier
     state, the full current candidate universe (identical set to
@@ -629,6 +631,7 @@ def advance_detector_frontier(
         measurement_analysis.confirmed_swings,
         step_candidates,
         rc5_structural_origin=configuration.rc5_structural_origin,
+        ledger=semantic_ledger,
     )
     step_candidates = list(new_leg_origin.newly_mapped)
     if configuration.rc4_fvg_quality:

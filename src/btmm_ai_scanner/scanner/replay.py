@@ -48,6 +48,7 @@ from btmm_ai_scanner.poi.analyzer import (
 )
 from btmm_ai_scanner.poi.lifecycle import PoiLifecycleTransition
 from btmm_ai_scanner.poi.observation import PoiObservation
+from btmm_ai_scanner.poi.rc5_semantics import Rc5SemanticLedger
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis
 from btmm_ai_scanner.scanner.analyzer import (
     _all_symbol,
@@ -497,7 +498,11 @@ class IncrementalReplayKernel:
         scanner_configuration: ScannerConfiguration,
         identity_provider: DerivedOutputIdentityProvider,
         reviewed_evidence: tuple[BtmmReviewedEvidence, ...],
+        semantic_ledger: Rc5SemanticLedger | None = None,
     ) -> None:
+        # RC5 provenance collector. Optional and purely additive: with None the
+        # kernel behaves exactly as before, which is what keeps RC4 frozen.
+        self._semantic_ledger = semantic_ledger
         self._config = scanner_configuration
         self._identity_provider = identity_provider
         self._tracked = tracked_timeframes
@@ -623,7 +628,7 @@ class IncrementalReplayKernel:
                     structure_state, candle, measurement.confirmed_swings, structure_cfg
                 )
                 poi_state = _advance_poi_replay_state(
-                    poi_state, candle, measurement, poi_cfg
+                    poi_state, candle, measurement, poi_cfg, self._semantic_ledger
                 )
                 visible = (*visible, candle)
                 if is_btmm_timeframe:
