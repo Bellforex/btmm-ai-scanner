@@ -28,7 +28,7 @@ produce it identically, which is what makes the two paths comparable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from btmm_ai_scanner.poi.authority import AuthorityReason, OriginClusterKey
@@ -39,7 +39,11 @@ __all__ = [
     "Rc5PoiSemanticRecord",
     "Rc5SemanticLedger",
     "StablePoiKey",
+    "SuppressionTimeline",
+    "authoritative_rc5_pois",
     "stable_poi_key",
+    "suppressed_record_ids",
+    "suppression_timelines",
 ]
 
 #: ``(poi_type, source_candle_record_ids)``.
@@ -293,3 +297,90 @@ def join_semantic_records(
             f" record; first: {missing[0][0]}"
         )
     return joined
+
+
+def authoritative_rc5_pois(
+    observations: Any, ledger: Rc5SemanticLedger
+) -> tuple[Any, ...]:
+    """The normal scanner-facing RC5 population.
+
+    Qualified POIs minus same-origin detector synonyms. A POI with no ledger
+    record is kept: context records (period levels, equal-level liquidity,
+    structural zones) never enter authority, and authority only ever *removes*
+    standing from something it ranked.
+
+    The frozen observations are untouched and the suppressed records stay in
+    the ledger for forensics -- this is a view, not a deletion.
+    """
+    suppressed = ledger.suppressed_keys()
+    return tuple(o for o in observations if stable_poi_key(o) not in suppressed)
+
+
+@dataclass(frozen=True)
+class SuppressionTimeline:
+    """Evidence that one suppression used no future information."""
+
+    subordinate_key: StablePoiKey
+    winner_key: StablePoiKey
+    subordinate_source_utc: datetime
+    subordinate_available_utc: datetime
+    winner_source_utc: datetime
+    winner_available_utc: datetime
+
+    @property
+    def resolvable_utc(self) -> datetime:
+        """The first moment both members exist, i.e. when the cluster can be
+        arbitrated at all."""
+        return max(self.subordinate_available_utc, self.winner_available_utc)
+
+    @property
+    def is_causal(self) -> bool:
+        """True when the winner was already available as soon as the
+        subordinate was, so suppression never rewrites a period in which the
+        subordinate was legitimately actionable and the winner did not exist."""
+        return self.winner_available_utc <= self.subordinate_available_utc
+
+    @property
+    def actionable_window(self) -> timedelta:
+        """How long the subordinate stood alone before its winner existed.
+        Zero for a causal suppression."""
+        if self.is_causal:
+            return timedelta(0)
+        return self.winner_available_utc - self.subordinate_available_utc
+
+
+def suppression_timelines(ledger: Rc5SemanticLedger) -> list[SuppressionTimeline]:
+    """One timeline per suppression, for the causality audit."""
+    out: list[SuppressionTimeline] = []
+    for key in sorted(ledger.suppressed_keys(), key=str):
+        record = ledger.records[key]
+        winner_key = record.authority_winner_key
+        winner = ledger.records.get(winner_key) if winner_key else None
+        if winner is None or winner_key is None:
+            continue
+        out.append(
+            SuppressionTimeline(
+                subordinate_key=key,
+                winner_key=winner_key,
+                subordinate_source_utc=record.source_time_utc,
+                subordinate_available_utc=record.availability_time_utc,
+                winner_source_utc=winner.source_time_utc,
+                winner_available_utc=winner.availability_time_utc,
+            )
+        )
+    return out
+
+
+def suppressed_record_ids(
+    observations: Any, ledger: Rc5SemanticLedger
+) -> frozenset[Any]:
+    """The ``PoiObservation.record_id`` of every same-origin subordinate.
+
+    The ledger is keyed by ``_formation_key`` because that is stable at
+    qualification time, before a record id exists. Downstream layers key by
+    ``record_id``, so this bridges the two using the observations themselves.
+    """
+    suppressed = ledger.suppressed_keys()
+    return frozenset(
+        o.record_id for o in observations if stable_poi_key(o) in suppressed
+    )

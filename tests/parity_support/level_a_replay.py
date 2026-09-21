@@ -93,6 +93,11 @@ from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.current_state import CurrentPoiState
 from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
 from btmm_ai_scanner.poi.observation import PoiObservation
+from btmm_ai_scanner.poi.rc5_semantics import (
+    Rc5SemanticLedger,
+    assign_origin_authority,
+    suppressed_record_ids,
+)
 from btmm_ai_scanner.scanner.analysis import ScannerAnalysis, ScannerSetupSummary
 from btmm_ai_scanner.scanner.configuration import ScannerConfiguration
 from btmm_ai_scanner.scanner.replay import IncrementalReplayKernel
@@ -250,6 +255,7 @@ def iter_level_a_bars(
     rc3_freshness: bool,
     warmup_feed_policy: WarmupFeedPolicy = WarmupFeedPolicy.AVAILABILITY,
     rc4_framework: bool = False,
+    rc5_authority: bool = False,
 ) -> Iterator[LevelABar]:
     """Walk ``host_series`` one confirmed bar at a time and yield a
     ``LevelABar`` per bar.
@@ -294,8 +300,15 @@ def iter_level_a_bars(
             return candle.availability_time_utc < first_availability
         return candle.event_time_utc < window_start_event
 
+    # RC5 provenance accumulates across the whole walk: the kernel records each
+    # POI's qualifying facts once, at the bar that qualified it.
+    rc5_ledger = Rc5SemanticLedger()
     kernel = IncrementalReplayKernel(
-        tracked, configuration, ContentAddressedIdentityProvider(), ()
+        tracked,
+        configuration,
+        ContentAddressedIdentityProvider(),
+        (),
+        rc5_ledger if rc5_authority else None,
     )
 
     # --- warm-up: feed the pre-window context in availability order, one
@@ -340,6 +353,17 @@ def iter_level_a_bars(
             visible[timeframe].extend(new_candles)
 
         analysis = kernel.finalize()
+        if rc5_authority:
+            # RC5: arbitrate same-origin synonyms BEFORE the opportunity loop.
+            # A subordinate must not be an independent opportunity, so it is
+            # removed here rather than filtered out of the results -- that also
+            # keeps it out of the P8 stream, which is derived from this loop.
+            assign_origin_authority(analysis.poi_analysis.poi_observations, rc5_ledger)
+            suppressed = suppressed_record_ids(
+                analysis.poi_analysis.poi_observations, rc5_ledger
+            )
+        else:
+            suppressed = frozenset()
         loop = run_active_poi_loop(
             analysis,
             previously_active,
@@ -348,6 +372,7 @@ def iter_level_a_bars(
             rc3_freshness=rc3_freshness,
             framework_timeframe=host_timeframe if rc4_framework else None,
             framework_trackers=framework_trackers,
+            suppressed_poi_ids=suppressed,
         )
 
         observation_by_id = {

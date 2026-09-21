@@ -177,6 +177,7 @@ def run_active_poi_loop(
     rc3_freshness: bool = False,
     framework_timeframe: Timeframe | None = None,
     framework_trackers: dict[Timeframe, FrameworkTracker] | None = None,
+    suppressed_poi_ids: frozenset[UUID] = frozenset(),
 ) -> ActiveLoopResult:
     """Evaluate every eligible POI for one confirmed bar's `ScannerAnalysis`,
     using `resolve_eligible_and_next` for the set algebra and calling the
@@ -190,6 +191,12 @@ def run_active_poi_loop(
     matching the scanner's own pure-function-of-inputs discipline.
     """
     obs_by_id = _observation_by_id(analysis)
+    if suppressed_poi_ids:
+        # RC5: a same-origin subordinate is not an independent opportunity, so
+        # it never reaches confluence scoring at all. Removing it here rather
+        # than filtering the result keeps it out of the eligibility algebra and
+        # out of the carried-forward active set.
+        obs_by_id = {k: v for k, v in obs_by_id.items() if k not in suppressed_poi_ids}
     if rc3_freshness:
         eligible_ids, next_active = resolve_eligible_and_next_rc3(
             {
