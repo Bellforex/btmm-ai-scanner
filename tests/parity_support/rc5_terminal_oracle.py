@@ -150,6 +150,13 @@ class TerminalComparison:
     extra_poi_idx: list[int]
     duplicated_poi_idx: list[int]
     post_terminal_violations: list[tuple[int, str]]
+    #: ``(poi_idx, expected_bar_ms, actual_bar_ms)`` where P8 fired on a
+    #: different bar than the lifecycle transition. Set membership agreeing
+    #: while the timing differs would be a silent defect, so it is separate.
+    time_mismatches: list[tuple[int, int, int]]
+    #: Terminal events whose reported reason is not an invalidation. RC5 has no
+    #: terminal-by-mitigation, so this must always be empty.
+    non_invalidation_reasons: list[tuple[int, str]]
 
     @property
     def is_clean(self) -> bool:
@@ -158,6 +165,8 @@ class TerminalComparison:
             and not self.extra_poi_idx
             and not self.duplicated_poi_idx
             and not self.post_terminal_violations
+            and not self.time_mismatches
+            and not self.non_invalidation_reasons
         )
 
 
@@ -204,6 +213,28 @@ def compare_terminals(
             if event.bar_ms > bar:
                 violations.append((event.poi_idx, event.event_type.value))
 
+    # EXACTNESS: the same bar, not merely the same POI. The oracle's
+    # ``terminal_time_utc`` is the prefix's availability time, and P8's
+    # ``bar_ms`` is that same instant in milliseconds (level_a_replay derives
+    # it as ``availability_time_utc.timestamp() * 1000``), so they compare
+    # directly without re-deriving either.
+    time_mismatches: list[tuple[int, int, int]] = []
+    for entry in observable:
+        idx = poi_idx_by_id.get(entry.poi_record_id)
+        actual_ms = terminal_bar_by_idx.get(idx) if idx is not None else None
+        if actual_ms is None:
+            continue
+        expected_ms = int(entry.terminal_time_utc.timestamp() * 1000)
+        if expected_ms != actual_ms:
+            time_mismatches.append((idx, expected_ms, actual_ms))
+
+    non_invalidation_reasons: list[tuple[int, str]] = []
+    for event in terminals:
+        reason = getattr(event, "terminal_reason", None)
+        name = getattr(reason, "value", None)
+        if name != "INVALIDATED":
+            non_invalidation_reasons.append((event.poi_idx, str(name)))
+
     counts: dict[str, int] = {}
     for entry in oracle.expected():
         if entry.unobservable is not None:
@@ -220,4 +251,6 @@ def compare_terminals(
         extra_poi_idx=extra,
         duplicated_poi_idx=duplicated,
         post_terminal_violations=violations,
+        time_mismatches=time_mismatches,
+        non_invalidation_reasons=non_invalidation_reasons,
     )

@@ -447,8 +447,14 @@ def rc5_validity(state: Any | None) -> Rc5Validity:
         if name == "INVALIDATED":
             return Rc5Validity.INVALIDATED
         if name == "PROMOTED_TO_ORDER_BLOCK":
-            # not a failure: the formation now exists as a better POI, and the
-            # ORDER BLOCK carries the zone from here on.
+            # NOT a failure, and NOT merely a display preference. The frozen
+            # RC3 rule (poi/enums.py) is explicit: the engulfing record of a
+            # formation confirmed as a leg origin ENDS when its ORDER BLOCK
+            # record becomes available, "so one formation never has two live
+            # records". The promoted record therefore ceases to be a standalone
+            # lifecycle entity -- the ORDER BLOCK is the live record of that
+            # same formation from here on. It stays in history; it is not a
+            # live zone, so it is not VALID.
             return Rc5Validity.SUPERSEDED
         # MITIGATED and anything else coarse: the zone was used, not broken.
     return Rc5Validity.VALID
