@@ -373,16 +373,24 @@ _POI_CARRIER_KIND = {
 def poi_boundary_level_id(observation: Any) -> str:
     """Stable, host-independent identity for a POI far-edge level.
 
-    Built from the POI's ``_formation_key`` and the boundary side, never from a
-    runtime index. The "P" prefix keeps it outside the framework's own
-    S / E / T / range namespaces.
-    """
-    from btmm_ai_scanner.poi.rc5_semantics import stable_poi_key
+    Built from stable provenance, never from a runtime index. The "P" prefix
+    keeps it outside the framework's own S / E / T / range namespaces.
 
-    key = stable_poi_key(observation)
-    poi_type = getattr(key[0], "value", key[0])
-    sources = "+".join(str(c) for c in key[1])
-    return f"P{poi_type}:{sources}"
+    NOT the formation key alone. Reference-zone POIs -- support/resistance
+    zones and equal-level pools -- have an EMPTY
+    ``source_candle_record_ids``: their provenance is the zone or cluster they
+    came from, which lives in ``source_measurement_record_ids``. Keying on
+    formation alone gave every equal-low pool the same id,
+    ``PEQUAL_LOWS_LIQUIDITY:``, so they all collapsed onto one level and only
+    the first ever registered. Measured on M5, where two distinct pools
+    surfaced as an unexplained same-price collision.
+
+    ``poi_reference_source_identity`` already picks the right provenance per
+    family, so this reuses it rather than repeating the choice.
+    """
+    poi_type = getattr(getattr(observation, "poi_type", None), "value", "POI")
+    identity = "+".join(str(p) for p in poi_reference_source_identity(observation))
+    return f"P{poi_type}:{identity}"
 
 
 def poi_reference_is_active(
@@ -494,3 +502,48 @@ def poi_boundary_sweeps(
         active = advance_levels(still_live, index, candle, None, configuration, events)
 
     return tuple(events)
+
+
+#: Reference-zone POI types carry a level that ALREADY has a reference kind of
+#: its own. ``poi/reference_zones.py`` turns support/resistance zones and
+#: equal-level clusters into POIs, keeping the producing record in
+#: ``source_measurement_record_ids``, so those far edges are not generic POI
+#: boundaries -- they ARE the S/R zone and the equal pool.
+#:
+#: Naming them correctly matters for two reasons: SUPPORT_RESISTANCE would
+#: otherwise never appear at all, and an equal pool would be counted once as a
+#: framework "E" level and again as an unrelated-looking POI boundary instead
+#: of being visible as the same liquidity described twice.
+_REFERENCE_ZONE_KINDS: dict[str, SweepReferenceKind] = {
+    "SUPPORT_ZONE": SweepReferenceKind.SUPPORT_RESISTANCE,
+    "RESISTANCE_ZONE": SweepReferenceKind.SUPPORT_RESISTANCE,
+    "EQUAL_HIGHS_LIQUIDITY": SweepReferenceKind.EQUAL_HIGH_LOW,
+    "EQUAL_LOWS_LIQUIDITY": SweepReferenceKind.EQUAL_HIGH_LOW,
+}
+
+
+def reference_kind_of_poi(observation: Any) -> SweepReferenceKind:
+    """The reference kind a POI's far edge represents."""
+    name = getattr(getattr(observation, "poi_type", None), "value", None)
+    return _REFERENCE_ZONE_KINDS.get(str(name), SweepReferenceKind.POI_BOUNDARY)
+
+
+def poi_reference_source_identity(observation: Any) -> tuple[Any, ...]:
+    """Stable identity for a POI far-edge reference.
+
+    A reference-zone POI is identified by the record it came FROM -- the S/R
+    zone or the equal-level cluster -- because that is the identity the
+    framework's own level for the same liquidity uses. Sharing it is what lets
+    deduplication link the two without comparing prices.
+
+    Every other POI is identified by its formation key.
+    """
+    from btmm_ai_scanner.poi.rc5_semantics import stable_poi_key
+
+    sources = getattr(observation, "source_measurement_record_ids", ())
+    if reference_kind_of_poi(observation) is not SweepReferenceKind.POI_BOUNDARY:
+        if sources:
+            return (str(sources[0]),)
+    key = stable_poi_key(observation)
+    poi_type = getattr(key[0], "value", key[0])
+    return (str(poi_type), *(str(c) for c in key[1]))

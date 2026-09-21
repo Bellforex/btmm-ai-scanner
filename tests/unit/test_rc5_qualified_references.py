@@ -396,3 +396,84 @@ def test_a_suppressed_poi_has_no_independent_far_edge(tmp_path: Path) -> None:
         FrameworkConfiguration(minimum_price_tick=_TICK),
     )
     assert events == ()
+
+
+def test_reference_zone_pois_get_distinct_level_ids() -> None:
+    """The defect that hid the whole SUPPORT_RESISTANCE family.
+
+    Reference-zone POIs -- S/R zones and equal-level pools -- have an EMPTY
+    source_candle_record_ids; their provenance lives in
+    source_measurement_record_ids. Keying the level id on the formation alone
+    gave every equal-low pool the id "PEQUAL_LOWS_LIQUIDITY:", so they all
+    collapsed onto ONE level and only the first ever registered.
+
+    It surfaced on M5 as two same-price collisions with no semantic link --
+    i.e. as a missing relationship, which is exactly the shape of a problem
+    that invites inventing a price tolerance to paper over.
+    """
+    from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_level_id
+
+    class _Zone:
+        source_candle_record_ids = ()
+
+        def __init__(self, zone_id) -> None:
+            self.poi_type = PoiType.EQUAL_LOWS_LIQUIDITY
+            self.direction = PoiDirection.BULLISH
+            self.source_measurement_record_ids = (zone_id,)
+
+    first = poi_boundary_level_id(_Zone("cluster-a"))
+    second = poi_boundary_level_id(_Zone("cluster-b"))
+    assert first != second
+    assert "cluster-a" in first and "cluster-b" in second
+    assert first.startswith("P")
+
+
+def test_a_reference_zone_poi_reports_its_real_reference_kind() -> None:
+    """Otherwise SUPPORT_RESISTANCE never appears at all, and an equal pool
+    looks like an unrelated POI boundary rather than the same liquidity the
+    framework already describes as an "E" level."""
+    from btmm_ai_scanner.poi.enums import PoiType
+    from btmm_ai_scanner.poi.rc5_liquidity import reference_kind_of_poi
+
+    class _P:
+        def __init__(self, poi_type) -> None:
+            self.poi_type = poi_type
+
+    assert (
+        reference_kind_of_poi(_P(PoiType.SUPPORT_ZONE))
+        is SweepReferenceKind.SUPPORT_RESISTANCE
+    )
+    assert (
+        reference_kind_of_poi(_P(PoiType.RESISTANCE_ZONE))
+        is SweepReferenceKind.SUPPORT_RESISTANCE
+    )
+    assert (
+        reference_kind_of_poi(_P(PoiType.EQUAL_HIGHS_LIQUIDITY))
+        is SweepReferenceKind.EQUAL_HIGH_LOW
+    )
+    assert (
+        reference_kind_of_poi(_P(PoiType.BUY_ORDER_BLOCK))
+        is SweepReferenceKind.POI_BOUNDARY
+    )
+
+
+def test_the_borrowed_liquidity_kind_is_never_the_semantic_authority() -> None:
+    """A POI level carries an existing LiquidityKind purely so the shared
+    stepper can build its event. Nothing may read it as the POI's kind: the
+    "P" prefix on level_id is the authority, and it resolves FIRST."""
+    from btmm_ai_scanner.framework.model import LiquidityKind
+    from btmm_ai_scanner.poi.rc5_liquidity import _POI_CARRIER_KIND
+
+    for side, borrowed in _POI_CARRIER_KIND.items():
+        # the borrowed kind would map to a DIFFERENT reference kind
+        from btmm_ai_scanner.poi.rc5_liquidity import KIND_TO_REFERENCE
+
+        assert KIND_TO_REFERENCE[borrowed] is SweepReferenceKind.STRUCTURAL_SWING
+        assert borrowed in set(LiquidityKind)
+        assert side is not None
+    # but the level_id wins
+    assert (
+        reference_kind_of_level_id("PBUY_ORDER_BLOCK:abc")
+        is SweepReferenceKind.POI_BOUNDARY
+    )
