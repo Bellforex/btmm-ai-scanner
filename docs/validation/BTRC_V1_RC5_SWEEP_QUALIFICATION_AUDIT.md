@@ -197,3 +197,24 @@ one every 16–27.
   `SweepEvent` and requiring it there is the minimal change that satisfies Part
   R while leaving DELAY / WIPEOUT / MULTIPLE untouched and keeping internal
   liquidity available. The before/after counts have not been measured yet.
+
+---
+
+# SUPERSEDED, 2026-09-22
+
+Everything above is a PROVISIONAL AUDIT measured through the final-state
+framework route. That route was later proven causally lossy and is no longer
+RC5 sweep authority.
+
+The retention figures in this document (M5 585→123, M15 580→116, M45 102→27,
+H3 51→11, H4 558→94) were measured from FINAL structural context. They
+undercount because roles lapse in final state, and they miss transient levels
+entirely.
+
+Current authority is `replay_rc5_qualified_sweeps` — per-bar causal history.
+See `BTRC_V1_RC5_CAUSAL_LIQUIDITY.md` for the evidence and the closure matrix.
+
+Keep this document for its INPUT analysis, which stands: the trendline
+touch-count finding (`qualifying_touch_swing_record_ids` is length 1 for all
+437 trendlines on M15 and H4, so touch count carries no information) is what
+established that anchors, not counts, decide trendline qualification.
