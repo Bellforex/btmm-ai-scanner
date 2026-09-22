@@ -354,6 +354,14 @@ class FrameworkBarContext:
     event_times: tuple[datetime, ...]
     availability_index: tuple[datetime, ...]
     config: FrameworkConfiguration
+    #: RC5 ONLY. ``(raw_level_id, availability_time)`` of every sweep that
+    #: survived causal qualification and deduplication. ``None`` means RC4,
+    #: which keeps consuming raw sweeps exactly as before.
+    #:
+    #: Deduplication is inherited rather than re-done: a merged group keeps
+    #: only its PRIMARY raw level, so one physical liquidity action contributes
+    #: once and corroborating references cannot multiply the evidence.
+    rc5_qualified_sweeps: frozenset[tuple[str, datetime]] | None = None
 
 
 def build_framework_bar_context(
@@ -581,6 +589,13 @@ def evaluate_poi_framework(
         )
         and e.side is approach_side
         and (e.level_price > zone_top if bullish else e.level_price < zone_bottom)
+        # RC5: only a causally qualified, deduplicated sweep is inducement. A
+        # texture swing or an unqualified trendline being clipped is not.
+        # RC4 passes None here and is unaffected.
+        and (
+            context.rc5_qualified_sweeps is None
+            or (e.level_id, e.availability_time_utc) in context.rc5_qualified_sweeps
+        )
     ]
     distraction = bool(pre_touch)
     if distraction:

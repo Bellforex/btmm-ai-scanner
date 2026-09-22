@@ -42,6 +42,7 @@ __all__ = [
     "build_sweep_candidates",
     "deduplicate_sweep_candidates",
     "generating_candle",
+    "qualified_sweep_keys",
     "replay_rc5_qualified_sweeps",
     "sweep_touched_the_level",
 ]
@@ -613,3 +614,14 @@ def sweep_touched_the_level(event: Any, candle: Any) -> bool:
     if event.side is LiquiditySide.BUY_SIDE:
         return candle.high > event.reference_price
     return candle.low < event.reference_price
+
+
+def qualified_sweep_keys(events: Any) -> frozenset:
+    """``(raw_level_id, event_time)`` for every qualified sweep.
+
+    This is what RC5 hands the framework so DISTRACTION consumes qualified
+    liquidity only. Because a merged group keeps only its PRIMARY raw level,
+    one physical action contributes once and corroborating references cannot
+    multiply the evidence -- deduplication is inherited, not re-done.
+    """
+    return frozenset((e.raw_level_id, e.event_time_utc) for e in events)
