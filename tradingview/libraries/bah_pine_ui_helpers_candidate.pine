@@ -368,3 +368,78 @@ export drawTagLabel(array<label> sink, int x, float y, string txt, int side) =>
 // @returns see description
 export drawSweepMarker(array<label> sink, int t, float y, int side) =>
     array.push(sink, label.new(t, y, "SWEEP", xloc.bar_time, color = color(na), textcolor = color.yellow, style = side > 0 ? label.style_label_down : label.style_label_up, size = size.tiny))
+
+// =============================================================================
+// SURFACE B -- GENERIC DISPLAY DTOs AND BULK RENDERING
+// -----------------------------------------------------------------------------
+// Generic rendering utilities only. No market-decision or strategy logic.
+//
+// The DTOs below carry ONLY already-decided presentation primitives: two
+// coordinates, a slope, two opaque integer codes and a finished string. The
+// caller decides entirely on its own side WHAT exists, WHETHER it is shown and
+// WHAT it is called; these functions decide only HOW it is drawn.
+//
+// `style` and `side` are OPAQUE. Their values are not interpreted here beyond
+// selecting a colour, a line style and an anchor direction, and this file
+// documents no meaning for any particular value. An empty `tag` simply means
+// no text is drawn.
+// =============================================================================
+
+// @field ax anchor x, in bar index units
+// @field ay anchor y, a price
+// @field slope y change per one x step; 0 draws a horizontal line
+// @field styleCode opaque style selector
+// @field side opaque side selector
+// @field tag finished text to show, or "" for none
+export type DisplayLevel
+    int    ax
+    float  ay
+    float  slope
+    int    styleCode
+    int    side
+    string tag
+
+// @field at x position, in bar time
+// @field y a price
+// @field side opaque side selector
+// @field txt finished text to show
+export type DisplayMarker
+    int    at
+    float  y
+    int    side
+    string txt
+
+// @function draw a list of levels, newest first, under two independent draw
+//           budgets so that one style cannot crowd out the others.
+// @param lineSink array the created lines are appended to
+// @param labelSink array the created labels are appended to
+// @param items the levels to draw, in the order the caller wants them drawn
+// @param nowX current x in the same units as DisplayLevel.ax
+// @param nowBar current bar index, where the lines end
+// @param budget how many items each of the two budgets may draw
+// @param budgetStyle the styleCode value that draws from the second budget
+// @returns see description
+export drawLevels(array<line> lineSink, array<label> labelSink, array<DisplayLevel> items, int nowX, int nowBar, int budget, int budgetStyle) =>
+    int usedA = 0
+    int usedB = 0
+    for item in items
+        bool second = item.styleCode == budgetStyle
+        if second ? usedB < budget : usedA < budget
+            usedB += second ? 1 : 0
+            usedA += second ? 0 : 1
+            int x1 = second ? nowBar - nowX + item.ax : nowBar - 10
+            array.push(lineSink, line.new(x1, item.ay + item.slope * (x1 - nowBar + nowX - item.ax), nowBar, item.ay + item.slope * (nowX - item.ax), extend = extend.right, color = second ? color.purple : item.side > 0 ? color.orange : color.teal, style = second ? line.style_solid : line.style_dashed))
+            if str.length(item.tag) > 0
+                array.push(labelSink, label.new(nowBar + 2, item.ay, item.tag, color = color(na), textcolor = item.side > 0 ? color.orange : color.teal, style = label.style_label_left, size = size.tiny))
+
+// @function draw the last `budget` markers of a list.
+// @param sink array the created labels are appended to
+// @param items the markers to draw
+// @param budget how many of the most recent items to draw
+// @returns see description
+export drawMarkers(array<label> sink, array<DisplayMarker> items, int budget) =>
+    int n = array.size(items)
+    if n > 0
+        for i = math.max(0, n - budget) to n - 1
+            DisplayMarker m = array.get(items, i)
+            array.push(sink, label.new(m.at, m.y, m.txt, xloc.bar_time, color = color(na), textcolor = color.yellow, style = m.side > 0 ? label.style_label_down : label.style_label_up, size = size.tiny))

@@ -269,3 +269,166 @@ deletion and are NOT recoveries:
 
 Extrapolating e1's ratio to everything would be as unsound as extrapolating the
 old 70-80%. e2 and e3 must be measured, not assumed.
+
+
+---
+
+# Surface B measured — and the extraction campaign's answer
+
+Built privately. **Nothing published.** BAH v1 is untouched; the candidate is
+`tradingview/libraries/bah_pine_ui_helpers_candidate.pine`.
+
+## Oracle formula, locked
+
+```
+BASE = CE10117_TOTAL - (97 x N) - 41
+```
+
+The 41 is the fixed one-off cost of introducing the first pad block. Every
+figure below uses it, and every variant was validated at three pad points.
+
+## Field classification, done before any DTO was designed
+
+Exporting `FwLv` verbatim would have leaked two fields. This is why the DTO
+route was taken rather than moving the internal type:
+
+| field | meaning | classification |
+| --- | --- | --- |
+| `FwLv.p` | price at anchor | PUBLIC-SAFE — a y coordinate |
+| `FwLv.s` | price change per bar | PUBLIC-SAFE — slope, pure drawing geometry |
+| `FwLv.a` | anchor bar index | PUBLIC-SAFE — an x coordinate |
+| `FwLv.d` | buy-side / sell-side | PUBLIC-SAFE **only as an opaque side code** |
+| `FwLv.k` | known-from / availability | **PRIVATE** — when the scanner treats a level as available |
+| `FwLv.x` | bar of a pending close-through | **PRIVATE** — retire / reclaim mechanics |
+| `FwLv.t` | level family | PUBLIC-SAFE **only as an opaque style code**, meanings undocumented publicly |
+| `FwEv.t` / `.d` / `.p` / `.o` | time, side, price, bar open | PUBLIC-SAFE — coordinates and an opaque code |
+
+`k` and `x` never cross the boundary. Visibility is resolved on the RC5 side
+and only a finished coordinate set, two opaque codes and a finished string are
+handed over.
+
+## The three variants
+
+Decomposed so the surfaces do not overlap and cannot be double counted:
+
+- **A-only** — band, ray, tag and marker each via a Surface-A primitive.
+- **B-only** — band left INLINE; levels and markers through the DTO bulk
+  renderers. Isolates B's own contribution.
+- **A+B** — the band additionally moves via `drawPriceBand`, on top of B.
+
+| variant | N=60 | N=80 | N=100 | linear | **BASE** | vs clean | headroom |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| clean RC5 | — | — | — | — | **96,376** | — | 3,880 |
+| A-only | 102,094 | 104,034 | 105,974 | yes | **96,233** | **+143** | 4,023 |
+| B-only | 102,290 | 104,230 | 106,170 | yes | **96,429** | **-53** | 3,827 |
+| A+B | 102,182 | 104,122 | 106,062 | yes | **96,321** | **+55** | 3,935 |
+
+Every interval is exactly `97 x 20 = 1,940`; all three bases within each
+variant are identical.
+
+## Two results that matter
+
+**Surface B is a net LOSS of 53 tokens.** Moving the draw loop behind generic
+DTOs costs more than it saves. Constructing `DisplayLevel.new(...)` with six
+arguments plus the tag ternary costs about as much as the two draw calls it
+replaced, and the RC5 side still pays for the iteration, the `na` guard, the
+availability check and now two array allocations as well.
+
+**A+B (+55) is WORSE than A alone (+143).** Arithmetic on the individual
+recoveries would predict +90; the combined build measures +55. The surfaces are
+not additive, and adding B to A actively destroys value.
+
+**The best measured configuration is Surface A alone: 96,233, headroom 4,023.**
+
+## Capacity ledger at the best configuration
+
+| item | tokens | basis |
+| --- | --- | --- |
+| base (A-only) | 96,233 | measured |
+| **headroom** | **4,023** | |
+| Stage D — structural origin, blocking | 2,068 | **measured prototype** |
+| Stage G — qualified liquidity + sweeps + DISTRACTION | 4,029 | **measured prototype** |
+| Stage E — authority | 600–1,000 | estimate |
+| Stage F — P5/P8 terminal | 50–150 | estimate |
+| Stage H — HH/HL/LH/LL | 400–800 | estimate |
+| POI anchoring correction | unmeasured | new work item |
+| required final reserve | 1,000 | author requirement |
+| **total required** | **8,147–9,047** plus the anchor fix | |
+| **SHORTFALL** | **4,124–5,024** plus the anchor fix | |
+
+## The campaign's verdict
+
+The remaining presentation deletion ceilings are e2 P7 tables 2,684 and e3 P7-Z
+4,542, totalling 7,226. But **deletion ceilings are not recoveries**: e1's
+ceiling was 1,340 and its best real extraction yielded 143 — **10.7%**. e2 is
+structurally more favourable (it is `table.cell` calls over primitive
+arguments, the same shape as the existing `renderRow` export) so its ratio
+should be higher, but even a generous 40% across e2 and e3 gives roughly 2,900
+— still short of 4,124–5,024, and that assumes e3's zone selection can move,
+which it cannot without taking semantics with it.
+
+**Library extraction cannot close this gap.** That is now measured on two
+independent surfaces rather than argued.
+
+## What remains, stated without weakening semantics
+
+The author's constraints rule out the semantic escapes, and section 9 already
+ruled out the two-script split on structural grounds. What is left is the one
+lever the author explicitly allowed: **reduce the DRAWN surface, not the
+computed semantics.** Measured prices for that are already in hand:
+
+| drawing feature | measured cost | what is lost | semantics affected |
+| --- | --- | --- | --- |
+| RC4 framework display layer (e1) — range lines, level rays, BSL/SSL tags, SWEEP markers | **1,340** | the RC4-era raw-level picture | **none** — RC5's qualified liquidity is computed either way |
+| P7-Z visual group projection (part of e3) — interval merge, nearest-first selection, per-group capacity | up to **4,542** for the whole block | grouped/merged zone boxes; a simpler nearest-N renderer keeps the locked gray boxes | **none** — POI eligibility is decided before this runs |
+
+Dropping e1 alone (1,340 measured) plus a simplified zone renderer would close
+the shortfall using numbers already measured, and neither touches detection,
+authority, lifecycle, validity, qualified liquidity, dedup, DISTRACTION or
+HH/HL/LH/LL.
+
+## Security review — Surface B
+
+Scanned across code, comments, type names, field names, parameter names and
+docs. The only vocabulary hits were two substrings of `color.orange`.
+
+| public symbol | purpose | public-safe | why |
+| --- | --- | --- | --- |
+| `DisplayLevel` | a drawable line | **Yes** | coordinates and opaque codes only |
+| `DisplayMarker` | a drawable marker | **Yes** | coordinates and opaque codes only |
+| `drawLevels` | draw a list under two draw budgets | **Yes** | iterates finished data; decides nothing |
+| `drawMarkers` | draw the last N markers | **Yes** | iterates finished data |
+
+| field | type | why public-safe |
+| --- | --- | --- |
+| `DisplayLevel.ax` | int | an x coordinate |
+| `DisplayLevel.ay` | float | a y coordinate |
+| `DisplayLevel.slope` | float | y change per x step; drawing geometry |
+| `DisplayLevel.styleCode` | int | opaque; no meaning documented publicly |
+| `DisplayLevel.side` | int | opaque; selects a colour and an anchor direction |
+| `DisplayLevel.tag` | string | text the caller already composed; `""` means draw none |
+| `DisplayMarker.at` | int | an x coordinate, in bar time |
+| `DisplayMarker.y` | float | a y coordinate |
+| `DisplayMarker.side` | int | opaque; selects which way the marker points |
+| `DisplayMarker.txt` | string | text the caller already composed |
+
+Surface B contains **no string literal at all** except `""`. It is on that axis
+cleaner than Surface A, which still hardcodes `"SWEEP"` inside
+`drawSweepMarker`; under B that word is supplied by the caller.
+
+Two naming corrections were forced by the compiler and are worth recording:
+`text` and `style` are reserved in Pine and cannot be field names. They are
+`txt` and `styleCode`.
+
+## Recommendation
+
+1. **Do not publish BAH v2.** Surface A's 143 tokens do not justify a public
+   version change, Surface B is a net loss, and A+B is worse than A. Both
+   candidates stay private.
+2. **Stop the extraction campaign here.** Two measured surfaces on the same
+   block returned 10.7% and a negative yield. Spending more cycles on e2/e3 to
+   chase roughly 2,900 against a 4,124–5,024 shortfall is not a good use of the
+   remaining budget, and the arithmetic does not close even if it succeeds.
+3. **Bring the drawn surface to the author as the decision**, priced with the
+   measurements already taken. This is the only remaining lever that costs no
+   semantics.
