@@ -512,3 +512,104 @@ The simplified renderer draws every zone with `left = poiAvailTime` under
 layer removed in V3 was the only drawing in the file anchored to `bar_index`,
 which makes V4 the correct place to have fixed the coordinate path rather than
 maintaining two renderers.
+
+---
+
+# Addendum work: overlap arbitration, and the trendline disappearance
+
+## Overlap arbitration — measured
+
+| variant | pad points | **BASE** | delta |
+| --- | --- | --- | --- |
+| V4 both simplifications | 80 / 90 / 100 | 92,611 | — |
+| **V5 = V4 + one visible winner per overlap** | 80 / 90 / 100 → 101,124 / 102,094 / 103,064 | **93,323** | **+712** |
+
+All three points identical.
+
+**Where it lives: the renderer, and nowhere else.** Authority resolves
+SAME-ORIGIN duplicates; POIs that merely overlap in price generally come from
+different origins and are semantically independent, so suppressing them in the
+authority or validity layer would destroy real information. Overlap is a
+geometric, presentation-only concern.
+
+**Precedence, using the existing frozen ranking rather than a new heuristic:**
+`f_rc5LadderRank` ports `ladder_rank` from `poi/authority.py` — the author's
+own reversal ladder (B2S/S2B 1, ORDER BLOCK 2, stars 3, engulfing 4,
+hammer/shooting star 5, DOJI 6, pressure wicks 7) including its
+`REVERSAL_LADDER.get(type, 99)` "unranked sorts last" rule. Ties break on
+STRONG before STANDARD, then on the MOST RECENT availability.
+
+On the author's reported cluster — SELL FVG + RESISTANCE ZONE + SHOOTING STAR
++ BEARISH PRESSURE WICK — the winner is the **SHOOTING STAR** (rank 5), because
+the pressure wick is rank 7 and the FVG and the reference zone are both
+unranked 99.
+
+**Nothing is destroyed.** Suppressed POIs keep their registry record, their P5
+row, their P8 events and their place in the P7 table. A diagnostic counter
+`p7zOverlapHidden` reports how many lost. Only the drawing hides them.
+
+**One open question for the author.** The rule currently suppresses across
+DIRECTIONS: a bullish zone overlapping a bearish one can be hidden. That
+follows "same price area" literally, but hiding a bullish ORDER BLOCK because a
+bearish wick overlaps it may be worse than the clutter. Making the rule
+per-direction is a one-token change and is offered as a decision, not taken
+unilaterally.
+
+## Trendline disappearance — ROOT CAUSE FOUND
+
+**Source: RC4.** The trendline on the chart is drawn by the legacy RC4 display
+layer, from `fwLv` entries with family code 2.
+
+**Why it vanished, exactly.** In the framework level step:
+
+```
+bool ev = na(l.x) ? not bc and (l.d > 0 ? high > p : low < p) : not bc
+if ev
+    array.push(fwEv, ...)
+if ev or (not na(l.x) and bc and fwNow - l.x >= 3)
+    array.remove(fwLv, j)
+```
+
+`ev` is true when price did NOT close through the level but DID wick through it
+— which is precisely "price touched the trendline and rejected". The very next
+statement removes that level from `fwLv`. Because the display draws from
+`fwLv`, **the trendline disappears from the chart on the exact bar price
+respects it.**
+
+This is not object-limit pruning, not a repaint artefact, not layout drift, and
+not hidden-vs-deleted confusion. It is a real display defect with a single
+cause.
+
+**Is the removal itself wrong? No — but the drawing source is.** Consuming the
+level is correct liquidity doctrine: a framework level fires at most one sweep
+in its life and then retires, which is what lets a raw sweep prove its level
+was live. What is wrong is drawing a *structural trendline* from a *consumable
+liquidity level*. They are different objects with different lifetimes.
+
+**The fix, which changes no semantics.** Draw trendlines from `fwTls`, the
+detected trendline collection (declared line 575, populated line 2138), not
+from `fwLv`. The sweep still fires, RC5 Stage G still qualifies it, and the
+trendline stays visible for as long as it is a detected trendline. Display-only.
+
+This also tells us what the RC5 replacement layer must do: the V3/V4 prototypes
+remove the RC4 display layer entirely, so the RC5 trendline layer that replaces
+it must read `fwTls`, not `fwLv`, or it would reproduce the same defect.
+
+## Ledger including the overlap fix
+
+| item | tokens |
+| --- | --- |
+| V5 base (both simplifications + overlap winner) | 93,323 |
+| + Stage D (measured) | 2,068 |
+| + Stage G (measured) | 4,029 |
+| + Stage E / F / H (estimates) | 1,050–1,950 |
+| **projected final RC5** | **100,470 – 101,370** |
+| hard limit | 100,256 |
+| **OVER by** | **214 – 1,114** |
+
+Plus an RC5 trendline layer reading `fwTls`, not yet measured.
+
+Unspent levers: Surface A (143, measured) and the P7 summary + POI table
+(2,684 deletion ceiling, a simplification rather than a deletion). The
+remaining gap is smaller than that ceiling, so a single indicator still looks
+reachable — but that is a projection and the P7 table is the author's to spend.
