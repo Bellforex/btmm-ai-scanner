@@ -853,3 +853,116 @@ per-object. That remains owed.
 
 Plus the POI anchoring fix. The P7 summary and POI table (2,684 ceiling) is the
 next surface and is now mandatory.
+
+---
+
+# P7 table: T1 audit, T2 compaction, T3 measured as futile
+
+Base for everything below is the accepted V9 prototype, **94,139**.
+
+## T1 — measured sub-costs
+
+| surface | **tokens** | how measured |
+| --- | --- | --- |
+| whole table block | **2,747** | deleted, recompiled |
+| — summary table (top left) | **975** | deleted alone |
+| — POI table (bottom right) | **1,772** | by difference |
+| row-string construction, in the P5 loop and NOT in the block | **221** | replaced with a placeholder |
+| **total table-related surface** | **2,968** | |
+
+The 2,747 independently reproduces the earlier 2,684 ceiling that was measured
+on a different base.
+
+## The T1 finding that decides the phase
+
+**The table is already compacted.** The optimisations T2 was asked to attempt
+are, with one exception, already in the code and carry RC3 compaction notes
+saying so:
+
+| proposed T2 idea | status |
+| --- | --- |
+| one loop for summary rows instead of nine writes | **already done** |
+| header written by one loop | **already done** |
+| row cells written by one loop over a pre-composed string | **already done** |
+| blank rows written by one loop | **already done** |
+| `bahui.renderRow` reused for the summary | **already done** |
+| row string composed once, in the P5 loop | **already done** |
+| occupied-row and blank-row writes merged into ONE loop | the only remaining idea |
+| footer text and its eight blanks merged into ONE loop | the only remaining idea |
+
+## T2 — zero-information-loss compaction, measured
+
+Implemented both remaining ideas. Every column, value, colour, the proximity
+ordering and the footer text are unchanged; a row with no POI yields an empty
+string and the default colour, exactly as the old blank branch wrote.
+
+| variant | pad points | **BASE** | recovery |
+| --- | --- | --- | --- |
+| V9 | — | 94,139 | — |
+| **T2 compact** | 80 / 90 / 100 -> 101,830 / 102,800 / 103,770 | **94,029** | **110** |
+
+**110 tokens.** Against a 1,920-2,820 shortfall that is not material.
+
+## T3 — measured, and it does NOT work
+
+T3 assumed removing columns saves tokens. **It does not, and this is measured
+rather than argued.**
+
+Cells are written by a single `for c = 0 to 8` loop, so a column is not a piece
+of code — it is one entry in a header string, one field in the composed row
+string, and a higher loop bound. Removing one removes no statement.
+
+| variant | **BASE** | saving |
+| --- | --- | --- |
+| T2 compact, 9 columns | 94,029 | — |
+| T2 compact, **7 columns** (Align and State dropped) | **93,962** | **67, i.e. ~33 per column** |
+
+Dropping **all nine** columns would recover roughly 300 tokens and leave no
+table at all. **T3 is therefore not worth presenting as a choice**, and no
+column-removal menu is offered: the information loss would be total and the
+gain negligible. The table's cost is its construction, its proximity ordering
+and its cell-write machinery, not its column count.
+
+## POI anchor defect — ROOT CAUSE FOUND, and the fix is already paid for
+
+Audited every drawing call for its coordinate space.
+
+**Current production source:** exactly **two** `bar_index`-anchored drawings,
+both in the legacy RC4 framework display layer — the level rays and their
+BSL/SSL tags. `bar_index` is a positional index, not market time, so those
+objects do not stay attached to price and time when the chart moves.
+
+**V9 prototype:** **zero** `bar_index` in any drawing. Every object is
+`xloc.bar_time` with market timestamps — market-structure lines and labels on
+`brokenSwingKey` / `breakTime` / `pivotEndTime`, trendlines on their anchor
+times, POI boxes on `poiAvailTime`.
+
+**So the anchor fix costs 0 additional tokens.** It is already contained in the
+V3/V4 simplification that removed the RC4 display layer.
+
+One honest qualification. POI BOXES were always `xloc.bar_time`, in both
+builds, so the two `bar_index` objects do not by themselves explain a POI box
+appearing to detach. There is a second, POI-specific candidate with code
+evidence: the OLD renderer anchored each box to its GROUP's `left`
+(`p7zGs[g].left`), and a group's membership — and therefore its left edge —
+could change as price moved, so a box could jump without its POI changing. The
+simplified renderer anchors every box to its OWN `poiAvailTime`, which removes
+that class of movement. This is a strong hypothesis, not yet a proven
+reproduction, and the pan/zoom/reload matrix on POI boxes is still owed.
+
+## Ledger
+
+| item | tokens |
+| --- | --- |
+| T2 base | 94,029 |
+| + Stage D (measured) 2,068, + Stage G (measured) 4,029 | 100,126 |
+| + Stage E / F / H (estimates) | **101,176 – 102,076** |
+| + anchor fix | **0 — already included** |
+| strict target | 99,256 |
+| **SHORTFALL** | **1,920 – 2,820** |
+
+The presentation campaign is now essentially exhausted: e1, P7-Z, overlap, the
+trendline layer and the table have all been measured, and the table returned
+110. What remains unspent is Surface A (143) and the E/F/H estimate band itself,
+which spans 900 tokens and could be narrowed by measuring those three stages
+rather than estimating them.
