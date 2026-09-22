@@ -315,3 +315,53 @@ port's cost is dominated by inline expansion rather than by source length, so
 the remaining budget cannot be allocated from Python line counts. It is
 measured stage by stage, and where a stage does not fit, that is reported as a
 measured wall rather than absorbed by quietly dropping semantics.
+
+## Stage D — the structural-origin gate: a measured architectural fork
+
+Stage D refuses a reversal-family candidate that does not sit at a structural
+extreme in the direction it claims (`poi/structural_role.py`). The algorithm is
+self-contained and every primitive it needs already exists in the Pine build --
+confirmed swings, break events with their broken swing, the framework range,
+liquidity levels, trendlines.
+
+The problem is not the algorithm. It is WHERE it has to run.
+
+In Python the gate runs at `lock_candidate`: a refused candidate is never
+mapped, so it produces NO `PoiObservation`, no P5 row and no P8 event. The
+measured POI counts in `BTRC_V1_RC5_FINAL_PYTHON_IMPACT.md` (M15 218, M5 249)
+are POST-gate.
+
+The Pine equivalent of `lock_candidate` is the emission path, and Stage C
+established what that costs: **Pine inlines user functions**, so anything added
+to `f_poiEmit` is paid at all nine call sites and anything added to
+`f_poiAppend` at each of its expansions. Stage C's threaded triple -- three
+ints -- cost 2,038 tokens there. The role computation is far larger than three
+ints: a per-side pivot lookup across the source candles and formation span,
+then three `zone_reaches` sweeps over range, liquidity and trendline levels.
+
+Two designs, and they are NOT semantically equal:
+
+**(a) Block at emission, as Python does.** Faithful: refused candidates never
+enter the registry, so POI counts match Python exactly. Estimated at roughly
+1,200-1,800 tokens of the 3,733 remaining, and the estimate is soft precisely
+because inline expansion -- not source length -- dominates.
+
+**(b) Refuse by suppression in one per-bar pass.** The candidate is appended,
+then a single pass over the registry marks it structurally refused, and
+validity/display, the authority set and P5/P8 all honour the mark. Cheap,
+because it runs once per bar rather than at nine inlined sites. But the record
+still EXISTS, so Pine's raw POI count exceeds Python's, and "Python-to-Pine
+parity" would have to be defined on the authoritative set rather than on the
+registry. That is a change to what parity means, not an implementation detail.
+
+### Why this is reported rather than decided
+
+Even under (a), the remaining budget after D and E is very unlikely to hold
+Stage G -- the causal qualified liquidity, the six reference families, semantic
+deduplication and the per-bar sweep producer, which in Python is
+`poi/rc5_liquidity.py` plus `poi/rc5_sweeps.py`. Spending the rest of a
+hard-capped 3,733 tokens on D and E and only then discovering G does not fit
+would waste the budget on the wrong stages.
+
+The honest position: the full RC5 semantic set does not obviously fit in one
+Pine script, and the allocation of what remains is an author decision.
