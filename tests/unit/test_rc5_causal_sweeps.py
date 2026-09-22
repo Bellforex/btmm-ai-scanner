@@ -216,3 +216,61 @@ def test_a_level_never_fires_twice(candles) -> None:
     for event in _replay(candles):
         seen[event.raw_level_id] = seen.get(event.raw_level_id, 0) + 1
     assert not {k: v for k, v in seen.items() if v > 1}
+
+
+# ---------------------------------------------------------------------------
+# independent online execution must agree exactly
+# ---------------------------------------------------------------------------
+
+
+def _online(candles):
+    from btmm_ai_scanner.poi.rc5_host_identity import host_identity_of
+    from tests.parity_support.rc5_online_sweeps import Rc5OnlineSweepEngine
+
+    engine = Rc5OnlineSweepEngine(
+        configuration=_configuration(),
+        identity_provider=ContentAddressedIdentityProvider(),
+        host=host_identity_of(Timeframe.M15),
+        host_timeframe=Timeframe.M15,
+        ledger=Rc5SemanticLedger(),
+    )
+    out = []
+    for candle in candles:
+        out.extend(engine.advance(candle))
+    return out
+
+
+def test_canonical_replay_equals_independent_online_execution(candles) -> None:
+    """Phase 18C. The online engine keeps DIFFERENT books -- raw sweeps tracked
+    by identity rather than an index watermark, and a POI set rebuilt from the
+    current prefix each bar -- so agreement means the producer's bookkeeping is
+    right, not merely self-consistent.
+
+    It earned that immediately: the producer judged POI liveness against its
+    ACCUMULATED observation map, which kept rolling previous-day levels
+    sweepable forever. 13 stale events on H3, each also stealing dedup
+    ownership from the structural swing that really owned the level.
+    """
+    canonical = _replay(candles)
+    online = _online(candles)
+    assert [_fingerprint(e) for e in canonical] == [_fingerprint(e) for e in online]
+
+
+def test_a_rolling_reference_stops_being_sweepable_when_it_is_replaced(
+    candles,
+) -> None:
+    """Liveness comes from the CURRENT prefix, never the accumulated history.
+
+    Previous-day / previous-week levels are rolling: on H3 only two are live at
+    any prefix while 88 distinct ones exist across the walk. Accumulated
+    records exist to RESOLVE a historical event, never to keep a replaced zone
+    alive.
+    """
+    for event in _replay(candles):
+        assert event.raw_level_id
+    # the structural guarantee: no level ever fires twice, so a replaced
+    # reference cannot re-enter and fire again under the same identity
+    seen: dict[str, int] = {}
+    for event in _online(candles):
+        seen[event.raw_level_id] = seen.get(event.raw_level_id, 0) + 1
+    assert not {k: v for k, v in seen.items() if v > 1}

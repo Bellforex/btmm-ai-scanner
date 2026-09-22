@@ -505,9 +505,23 @@ def replay_rc5_qualified_sweeps(
                     observation.availability_time_utc,
                 )
             )
+        # Liveness is judged against THIS prefix's observations, never the
+        # accumulated map. The accumulation exists to RESOLVE a historical
+        # record, and using it here kept dead zones sweepable forever.
+        #
+        # Previous-day / previous-week levels are the proof: they are ROLLING.
+        # Only two are live at any prefix on H3 while 88 distinct ones exist
+        # across the walk, because each day's is replaced by a new record.
+        # Resolving liveness through the accumulated map left yesterday's
+        # previous-day high sweepable long after it stopped being the previous
+        # day's high -- 13 such events on H3, each of which also stole the
+        # dedup from the structural swing that legitimately owned the level.
+        current_by_level_id = {
+            poi_boundary_level_id(o): o for o in poi_analysis.poi_observations
+        }
         still_live = []
         for level in poi_active:
-            observation = observations_by_level_id.get(level.level_id)
+            observation = current_by_level_id.get(level.level_id)
             if observation is None:
                 continue
             if poi_reference_is_active(
