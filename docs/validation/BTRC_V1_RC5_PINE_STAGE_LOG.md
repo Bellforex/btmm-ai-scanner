@@ -365,3 +365,109 @@ would waste the budget on the wrong stages.
 
 The honest position: the full RC5 semantic set does not obviously fit in one
 Pine script, and the allocation of what remains is an author decision.
+
+
+## Phase V1 — the neutral POI visual contract (presentation only)
+
+Author requirement: every visible POI zone is drawn NEUTRAL GRAY with BLACK
+annotation text at size 31, whatever its direction.
+
+### What changed
+
+One block, in the single POI drawing path:
+
+| | before | after |
+| --- | --- | --- |
+| fill | `color.new(bullish ? green : red, 90)` | `color.new(color.gray, 60)` |
+| border | `color.new(hue, 25)` | `color.new(color.gray, 20)` |
+| text | `color.new(hue, 10)` | `color.black` |
+| text size | `size.auto` | `31` |
+
+The direction local that fed the hue was deleted, because the hue was its only
+reader. That is what makes the contract structural rather than a style tweak:
+there is now NO direction branch anywhere in the zone drawing, so bullish,
+bearish, DOJI, FVG, engulfing, pressure wick, star, B2S/S2B and reference-zone
+families cannot diverge in colour. They share one `box.new`.
+
+**Direction is not lost.** It remains in the engine, the P7 table's Dir column,
+P5 permissions, P8 events and every RC5 semantic layer. It simply stops being
+carried by colour.
+
+### No semantic drift
+
+The diff touches 24 lines, all inside the box construction. Detection,
+authority, lifecycle, suppression, validity and sweep semantics are untouched,
+and so is the Stage-B visibility gate: only valid, display-eligible POIs render,
+mitigated-but-still-valid zones stay visible, and genuinely invalidated or
+superseded ones stay hidden.
+
+### Token delta
+
+| N | reported | `C - 97N` |
+| --- | --- | --- |
+| 60 | 102,237 | 96,417 |
+| 80 | 104,177 | 96,417 |
+| 100 | 106,117 | 96,417 |
+
+Both intervals exactly `97 x 20`; all three bases identical.
+
+| | |
+| --- | --- |
+| Stage C true | 96,482 |
+| **Stage C + visual contract, true** | **96,376** |
+| **delta** | **-106, a SAVING** |
+| **headroom** | **3,880** (was 3,774) |
+
+Deleting the direction branch and three `color.new` tints costs less than the
+two gray literals it leaves behind, so the visual contract IMPROVES the budget.
+
+**No BAH helper change was required.** The edit is entirely local to the
+scanner: `box.new` arguments only. The public library was not touched, and no
+proprietary logic moved anywhere.
+
+### Source identity
+
+| | |
+| --- | --- |
+| lines | 6,873 |
+| raw SHA-256 | `4a300e8e40cf333c81c09f44ee0fe8c5bbf883f4c9e902cb7eb9c5caa33c2dbd` |
+| LF SHA-256 | `4c6451cae185265efc0911bab1e2f12e495e835bac087f67e8fdf727fbabd052` |
+| saved version | **12.0** |
+
+### Phase V2 — proof, and the trap that nearly faked it
+
+Verified live on `BAH-RC5-LAB` (`fn3ash9L`), account `bellcare1994`, M15
+FX:EURUSD, RC4 hidden so every drawn object is unambiguously RC5's: gray boxes,
+black labels, large fixed text, across SELL FVG, RESISTANCE ZONE and BEARISH
+PRESSURE WICK.
+
+**The trap.** The first three attempts showed RED zones and looked like a
+failed patch. They were not. The tab was `document.hidden`, so TradingView
+never repainted and every canvas sat at its 300x150 default — the screenshots
+were a STALE FRAME from before the patch. At one point the DOM legend still
+listed a study the chart model had already removed.
+
+Two things were needed, and both are worth keeping:
+
+1. the recorded renderer recovery (`resetLayoutSizes` / `resize` / `_adjustSize`
+   / `paint`) to size the canvases;
+2. spoofing `document.hidden` and `document.visibilityState` so TradingView's
+   own render loop runs at all.
+
+**Never verify a visual change from a screenshot without first confirming the
+canvas is not 300x150 and `document.hidden` is false.** The chart model
+(`dataSources()`, `properties().visible`) is the reliable source of truth; the
+legend DOM and the painted canvas both lie when the tab is hidden.
+
+Re-attaching the study from Indicators is what forced the new version to
+compile; a reload alone did not, because the hidden tab served cached output.
+
+### Known consequence, reported not hidden
+
+Size 31 is fixed, so where several zones stack closely their labels overlap.
+`size.auto` previously avoided this by shrinking text to fit. The author's
+contract specifies 31, so this is accepted and flagged for the review pass; it
+is a legibility question, not a semantic one.
+
+The symbol was also restored to FXCM (`FX:EURUSD`) on the scratch layout, which
+had drifted to an Eightcap feed. `bellforex` was never opened.

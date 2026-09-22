@@ -6619,7 +6619,6 @@ if barstate.isconfirmed
                 int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
                 // group geometry, not the representative POI's own geometry
                 bool p7zIsTerminal = array.get(p7zGs, p7zG).term
-                bool p7zBullish = array.get(p7zGs, p7zG).bull
                 float p7zTop = array.get(p7zGs, p7zG).top
                 float p7zBottom = array.get(p7zGs, p7zG).bot
                 // RC1-POI-V2 (Phase 16): 85% fill stacked into a solid green wall
@@ -6637,12 +6636,21 @@ if barstate.isconfirmed
                 // colour itself; freshness filtering now also means far fewer
                 // zones overlap, so 90% green/red keeps candles legible while
                 // direction reads at a glance.
-                // Compaction (RC3): the hue is chosen once; the three tints are
-                // the same colour values as before.
-                color p7zHue = p7zBullish ? color.green : color.red
-                color p7zFillColor = color.new(p7zHue, 90)
-                color p7zBorderColor = color.new(p7zHue, 25)
-                color p7zTextColor = color.new(p7zHue, 10)
+                // ---- RC5 VISUAL CONTRACT (presentation only) --------------
+                // EVERY POI zone is drawn NEUTRAL GRAY with BLACK annotation
+                // text, whatever its direction: bullish, bearish, DOJI, FVG,
+                // engulfing, pressure wick, star, B2S/S2B and order-block
+                // families alike. RC3/RC4 encoded direction as a green/red
+                // hue; that encoding is withdrawn from the zone drawing.
+                //
+                // DIRECTION IS NOT LOST. It remains in the engine, the P7
+                // table's Dir column, P5 permissions, P8 events and every RC5
+                // semantic layer -- it simply stops being carried by colour.
+                // Nothing about detection, authority, lifecycle, suppression,
+                // validity or sweeps is touched here.
+                color p7zFillColor = color.new(color.gray, 60)
+                color p7zBorderColor = color.new(color.gray, 20)
+                color p7zTextColor = color.black
                 // Compaction (RC3): the annotation text is built once and shared
                 // by the create and the extend paths, which built it identically.
                 string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + array.get(p7zGs, p7zG).names : ""
@@ -6689,10 +6697,15 @@ if barstate.isconfirmed
                     box p7zNewBox = box.new(left = p7zAvailTime, top = p7zTop, right = p7zRightEdge, bottom = p7zBottom,
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
                       extend = extend.right, border_style = str.contains(array.get(p7zGs, p7zG).names, "ZONE") ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
-                      text_valign = text.align_center, text_color = p7zTextColor, text_size = size.auto)
-                    // size.auto: TradingView fits the name inside the box at every
-                    // zoom. A fixed size overflowed the zone when the chart was
-                    // compressed horizontally or vertically (live zoom test).
+                      text_valign = text.align_center, text_color = p7zTextColor, text_size = 31)
+                    // RC5 VISUAL CONTRACT: the annotation is a FIXED size 31,
+                    // replacing size.auto. size.auto let TradingView shrink the
+                    // name to fit at every zoom, which is why it was chosen --
+                    // a fixed size can overflow a thin zone on a horizontally
+                    // or vertically compressed chart. That trade is accepted
+                    // deliberately: the author's contract is a readable, black,
+                    // size-31 label, and overflow is a legibility question for
+                    // the scratch-layout review, not a semantic one.
                     // RC3 creates no label object at all: the annotation is
                     // the box's own centered text. One drawing object per zone
                     // instead of two, and the text can no longer drift away
