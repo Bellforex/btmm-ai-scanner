@@ -613,3 +613,88 @@ Unspent levers: Surface A (143, measured) and the P7 summary + POI table
 (2,684 deletion ceiling, a simplification rather than a deletion). The
 remaining gap is smaller than that ceiling, so a single indicator still looks
 reachable — but that is a projection and the P7 table is the author's to spend.
+
+---
+
+# Corrected display-overlap arbitration
+
+The first prototype (V5) used the reversal authority ladder as a global display
+rank. **Withdrawn.** That ladder ranks SAME-ORIGIN competitors; used globally it
+silently becomes a POI-quality ranking and lets a weak reversal outrank a strong
+imbalance purely because imbalances are unranked in it.
+
+## The corrected rule
+
+- **Same direction only.** Bullish competes with bullish, bearish with bearish.
+  A bearish wick can no longer hide a bullish order block; opposite-direction
+  overlap carries real conflict information and stays visible.
+- **Winner by already-computed facts only**, in order: the P5 weighted
+  confluence score, then STRONG ahead of STANDARD, then the more recent
+  availability, then the registry index so a full tie is still deterministic.
+  The renderer computes no market quality of its own.
+- **Chained overlap is one cluster** (A-B, B-C travel together), via a sort by
+  lower edge and a sweep on a running maximum upper edge. Nothing is merged,
+  renamed or counted.
+- **No new tolerance.** The existing exact interval relation decides.
+
+The P5 score was computed but never stored, so `FwPoi` gains one `scr` field
+written beside the `perm` assignment that already happens. A POI the P5 loop has
+not scored carries 0 and loses on quality, which is correct.
+
+## Measurements
+
+| variant | pad points | **BASE** | delta vs V4 |
+| --- | --- | --- | --- |
+| V4 both simplifications | — | 92,611 | — |
+| V5 ladder-based overlap (**withdrawn**) | 80/90/100 | 93,323 | +712 |
+| **V6 corrected overlap** | 80/90/100 → 101,631 / 102,601 / 103,571 | **93,830** | **+1,219** |
+| V7 single-sweep optimisation attempt | 80 | 93,863 | +1,252 |
+
+The correction costs 507 more than the withdrawn version — direction
+partitioning, the comparator, and array-held cluster state (a scalar mutated
+across a Pine for-loop reads back as its initial value, the defect that once
+left every FVG undrawn).
+
+**The optimisation attempt failed and is reported as such.** Folding direction
+into the sort key to replace the two-pass partition with one sweep measured
+**33 tokens worse**, because the extra key array and direction tracker cost more
+than the partition they removed. V6 stands.
+
+## Visual proof — and what it actually showed
+
+Deployed to `BAH-RC5-LAB` as **v13.0**, confirmed running via the study's own
+`pine.version`, with RC4 hidden so every drawn object is RC5's.
+
+The zones render gray with black size-31 text and no `xN` suffixes. But the
+capture also shows **three bullish labels colliding** near 1.1640-1.1660 — and
+that is NOT an arbitration failure. The arbitration kept all three, which under
+exact interval geometry means their ZONES do not overlap. What collides is the
+TEXT: at size 31 a label is far taller than these thin zone boxes, so
+annotations from disjoint zones still print over one another.
+
+**There are two separate clutter problems, and the overlap rule only solves
+one:**
+
+| problem | cause | status |
+| --- | --- | --- |
+| overlapping ZONES drawn on top of each other | several eligible POIs sharing a price interval | **solved** by the corrected arbitration |
+| colliding LABELS on NON-overlapping zones | size-31 text is taller than a thin zone box | **not solved** — this is what the removed annotation-collision pass used to handle |
+
+The author's reported cluster (SELL FVG + RESISTANCE ZONE + SHOOTING STAR +
+BEARISH PRESSURE WICK) is the first kind and is addressed. The bullish trio in
+this capture is the second kind and needs a separate decision, because the only
+honest fixes are a label-collision pass (tokens) or a smaller text size (which
+is currently locked at 31).
+
+## Ledger with the corrected overlap
+
+| item | tokens |
+| --- | --- |
+| V6 base | 93,830 |
+| + Stage D (measured) 2,068, + Stage G (measured) 4,029 | 99,927 |
+| + Stage E / F / H (estimates) | **100,977 – 101,877** |
+| hard limit | 100,256 |
+| **OVER by** | **721 – 1,621** |
+
+Before the trendline layer and the anchoring fix. The P7 summary and POI table
+(2,684 deletion ceiling) remain the next unspent target.
