@@ -212,6 +212,106 @@ stage, not asserted from a picture.
 
 ### Correction to the Stage-A record
 
-Stage A also cleared `[RC4 MARKET FRAMEWORK]`'s runtime error. It did not
-reappear after the reload, on either M15 or M5, so it was a stale-state
-artifact of the three-study overload rather than a defect in RC4.
+Stage A recorded `[RC4 MARKET FRAMEWORK]`'s historical-buffer runtime error as
+a stale-state artifact because it did not return after that reload. That was
+wrong, and Stage C's cold load shows it: the error RECURS on a cold load and
+clears once the chart settles. It remains an RC4 issue, not an RC5 one, and
+still belongs to the RC4-to-BAH parity stage — but it is a real recurring
+condition, not a one-off.
+
+## Stage C — structural provenance
+
+Ports the structural half of `Rc5PoiSemanticRecord`: the `OriginClusterKey`
+STRUCTURAL triple — (confirming transition break candle, broken swing, origin
+swing) — written once when the formation locks and never rewritten from later
+structure. It is the input Stage E arbitrates on.
+
+It is a sidecar for the same reason it is one in Python: structural facts are
+PER PREFIX, so asking the final context "what is this POI's origin?" gives the
+wrong answer. Only recording it as it happens answers the right question.
+
+### The design that had to be thrown away — measured, not guessed
+
+The obvious port threads the triple through `f_poiEmit` and pushes three
+parallel arrays in `f_poiAppend`, mirroring the existing registry. It was built
+and MEASURED:
+
+| design | base tokens | delta vs Stage B |
+| --- | --- | --- |
+| triple threaded through `f_poiEmit` / `f_poiAppend` | 98,081 | **+2,038** |
+| triple in three maps, written at the two sites that know it | **96,523** | **+480** |
+
+**Pine inlines user functions.** `f_poiEmit` has nine call sites and
+`f_poiAppend` is inlined inside it, so each added parameter and each added
+`array.push` is paid again at every expansion. Against a 4,213-token budget,
++2,038 for provenance alone was not affordable. The map design carries the same
+facts for 480 and leaves 3,733.
+
+Only two sites in the engine ever know a structural origin — the ORDER BLOCK
+emission and the counter-trend release, both inside `f_poiGateOrderBlocks`'s
+`if not na(best)` — so a map keyed by registry index is the natural shape. The
+registry is append-only ("emitted POIs are never removed"), which is what makes
+the index a stable key.
+
+The +2,038 measurement was taken at a single pad point and is reported here as
+the reason a design was rejected. It is NOT an accepted stage count and was
+never three-point validated; only the design that ships is.
+
+### Write-once, and what absence means
+
+`f_rc5Provenance` refuses to overwrite an existing entry, because the Python
+record is immutable historical evidence. A negative index means the emission
+deduplicated against an existing POI, whose provenance was already recorded at
+ITS qualifying prefix — so skipping is correct, not a dropped write.
+
+A POI ABSENT from these maps carries no structural origin. Stage E must then
+use the weaker FORMATION_CANDLE key, which `poi/authority.py` restricts to
+reversal synonyms and forbids from touching an FVG. Absence must never be read
+as "origin unknown, cluster anyway".
+
+### Token measurement
+
+| N | reported `outputILLength` | `C - 97N` |
+| --- | --- | --- |
+| 60 | 102,343 | 96,523 |
+| 80 | 104,283 | 96,523 |
+| 100 | 106,223 | 96,523 |
+
+Both intervals exactly `97 x 20`; all three bases identical.
+
+| | |
+| --- | --- |
+| **Stage-C tokens** | **96,523** |
+| delta vs Stage B | **+480** |
+| **headroom** | **3,733** |
+
+### Source identity and runtime
+
+| | |
+| --- | --- |
+| lines | 6,860 |
+| raw SHA-256 | `804b47383228963092c59aaa6decef80867dba9e6ae831ad18b9d0d1e793624a` |
+| LF-normalised SHA-256 | `7c0e5045974977a41e57837f8108a9e3706bea08cd0a2a339627d6d1709564d1` |
+| saved version | **11.0** |
+| deployed == local | yes, LF SHA equal, zero pads |
+| compiles | pass at pad 0 |
+| M15 attach after cold reload | pass, no error on `[RC5 USER]`, renders |
+
+## Headroom trajectory
+
+| stage | tokens | headroom | delta |
+| --- | --- | --- | --- |
+| A — DOJI | 96,007 | 4,249 | — |
+| B — validity / display | 96,043 | 4,213 | +36 |
+| C — structural provenance | 96,523 | 3,733 | +480 |
+
+Remaining: D structural origin, E authority, F P5/P8 terminal, G causal
+qualified liquidity + sweeps + DISTRACTION, H structure labels + readability.
+
+**G is the risk.** In Python it is `poi/rc5_liquidity.py` plus
+`poi/rc5_sweeps.py` — six reference families, POI far edges, semantic
+deduplication and a per-bar causal producer. Stage C's lesson is that a Pine
+port's cost is dominated by inline expansion rather than by source length, so
+the remaining budget cannot be allocated from Python line counts. It is
+measured stage by stage, and where a stage does not fit, that is reported as a
+measured wall rather than absorbed by quietly dropping semantics.

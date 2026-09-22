@@ -2490,6 +2490,44 @@ var array<int>  obPromoEng      = array.new<int>()   // engulfing indices promot
 var array<int>  obPromoT        = array.new<int>()   // their promotion times
 var array<bool> poiFreshActive  = array.new<bool>()  // still a future opportunity
 
+// ---- RC5 STAGE C: STRUCTURAL PROVENANCE ---------------------------------
+// Ports the structural half of `Rc5PoiSemanticRecord` (poi/rc5_semantics.py):
+// WHAT WAS TRUE ABOUT A POI'S STRUCTURE WHEN IT QUALIFIED, written once at the
+// moment the formation locks and never rewritten from later structure.
+//
+// It is a SIDECAR for the same reason it is one in Python: structural facts are
+// PER PREFIX, so asking the final structural context "what is this POI's
+// origin?" is the wrong question and gives the wrong answer. The right question
+// is "what caused this POI to qualify, and when?", and only recording it as it
+// happens can answer that.
+//
+// The triple is the STRUCTURAL `OriginClusterKey` Stage E arbitrates on --
+// (confirming transition break candle, broken swing, origin swing) -- exactly
+// as `poi/authority.py` defines it. A POI ABSENT from these maps carries no
+// structural origin, and Stage E must fall back to the weaker FORMATION_CANDLE
+// key rather than inventing one.
+//
+// MAPS, NOT PARALLEL ARRAYS, AND DELIBERATELY NOT A `f_poiEmit` PARAMETER.
+// Pine INLINES user functions, so every parameter threaded through `f_poiEmit`
+// is paid again at each of its nine call sites, and every `array.push` added to
+// `f_poiAppend` is paid at each inline expansion of that too. Threading the
+// triple through the emission path was MEASURED at +2,038 tokens against a
+// 4,213-token budget. Only the two sites that actually know a structural origin
+// write it, so a map keyed by registry index -- append-only, so the index is
+// stable -- costs a fraction of that and carries the same facts.
+var map<int, int> poiOrigSwing  = map.new<int, int>()   // origin swing's pivot-end time
+var map<int, int> poiOrigBreak  = map.new<int, int>()   // confirming transition's break candle
+var map<int, int> poiOrigBroken = map.new<int, int>()   // the swing that transition broke
+
+// Write-once, exactly as the Python record is immutable historical evidence.
+// A negative index means the emission deduplicated against an existing POI,
+// whose provenance was already recorded at ITS qualifying prefix.
+f_rc5Provenance(int i, int swingT, int breakT, int brokenT) =>
+    if i >= 0 and not map.contains(poiOrigSwing, i)
+        map.put(poiOrigSwing, i, swingT)
+        map.put(poiOrigBreak, i, breakT)
+        map.put(poiOrigBroken, i, brokenT)
+
 // ---- RC5 STAGE B: MITIGATION IS NOT TERMINATION --------------------------
 // `poiFreshActive` above is the RC4 rule and keeps its frozen meaning: it
 // drops on the FIRST TOUCH. RC5 does not change it and does not read it for
@@ -3156,6 +3194,7 @@ f_poiGateOrderBlocks() =>
                                     cpOk := false
                         if cpOk and f_poiFind(cp.poiType, cp.srcFirstTime, cp.srcCount, cp.srcLastTime, f_poiTicks(cp.zoneBottom), f_poiTicks(cp.zoneTop)) == -1
                             f_poiAppend(PoiRec.new(cp.poiType, cp.direction, cp.zoneTop, cp.zoneBottom, cp.candidateTime, ca, ca, cp.strengthTier, cp.srcFirstTime, cp.srcCount, cp.srcLastTime))
+                            f_rc5Provenance(array.size(poiType) - 1, oEnd, ev.breakTime, ev.brokenSwingKey)
                     if not take
                         k2 += 1
             if not na(best) and not map.contains(obSwingUsed, oEnd + want)
@@ -3166,8 +3205,10 @@ f_poiGateOrderBlocks() =>
                 if pick >= 0
                     map.put(obSwingUsed, oEnd + want, true)
                     PoiRec ob = array.remove(obPending, pick)
+                    int obBefore = array.size(poiType)
                     int avail = math.max(math.max(ob.availTime, oConf), math.max(ev.availabilityTime, nowT))
                     f_poiEmit(ob.poiType, ob.direction, ob.zoneTop, ob.zoneBottom, ob.strengthTier, ob.srcFirstTime, 2, ob.srcLastTime, ob.candidateTime, avail)
+                    f_rc5Provenance(array.size(poiType) > obBefore ? array.size(poiType) - 1 : -1, oEnd, ev.breakTime, ev.brokenSwingKey)
                     // engulfing code of the same formation = OB code + 10 (1 -> 11, 2 -> 12)
                     array.push(obPromoEng, f_poiFind(ob.poiType + 10, ob.srcFirstTime, 2, ob.srcLastTime, f_poiTicks(ob.zoneBottom), f_poiTicks(ob.zoneTop)))
                     array.push(obPromoT, avail)
