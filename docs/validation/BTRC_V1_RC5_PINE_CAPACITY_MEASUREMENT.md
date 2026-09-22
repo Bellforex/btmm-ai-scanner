@@ -183,3 +183,89 @@ two indicators per chart, so two RC5 scripts leave no slot for
 Measurement builds are disposable and live in the session scratchpad, not in the
 repository. The production `[RC5 USER]` script is unchanged at v11.0 (Stage C,
 LF SHA `7c0e5045974977a41e57837f8108a9e3706bea08cd0a2a339627d6d1709564d1`).
+
+
+---
+
+# E1-A — Surface A measured
+
+Built privately. **Nothing was published**; the currently published BAH v1 is
+untouched. The candidate lives at
+`tradingview/libraries/bah_pine_ui_helpers_candidate.pine`, beside the
+unmodified published source.
+
+## The four exports
+
+| export | arguments | what crosses the boundary |
+| --- | --- | --- |
+| `drawPriceBand(sink, leftTime, rightTime, hi, lo, col)` | 6 | three lines, midline dotted |
+| `drawLevelRay(sink, x1, y1, x2, y2, family, side)` | 7 | one ray; `family`/`side` select colour and style |
+| `drawTagLabel(sink, x, y, txt, side)` | 5 | one left-anchored text tag |
+| `drawSweepMarker(sink, t, y, side)` | 4 | one marker, pointing by `side` |
+
+`family` and `side` are opaque integers. The library is told WHICH style to
+draw and can derive nothing about what a level is or how it was arrived at.
+
+## Measured recovery
+
+| N | reported | `C - 97N` |
+| --- | --- | --- |
+| 60 | 102,094 | 96,274 |
+| 80 | 104,034 | 96,274 |
+| 100 | 105,974 | 96,274 |
+
+Both intervals exactly `97 x 20`; all three bases identical.
+
+| | tokens |
+| --- | --- |
+| RC5 before Surface A | 96,376 |
+| **RC5 after Surface A** | **96,233** |
+| **recovered, measured** | **143** |
+| recovered, scaffold-adjusted | **~209** |
+| new headroom | 4,023 (was 3,880) |
+| BAH library impact | +4 exports, +58 lines; not published, so no compiled-token figure exists for it |
+
+The measurement build keeps the call sites but replaces the four bodies with
+local stubs that consume every argument. It therefore carries roughly 66 tokens
+of scaffolding a real library call would not have (the stub bodies, the
+`_xs := _xs +` accumulation at four call sites, and one liveness statement), so
+the true recovery is about 209 rather than 143. Both figures are reported; the
+conservative one is the measurement.
+
+**Dead-code self-check.** A full deletion of the block would land at 95,036.
+The measured build is 96,233 — 1,197 ABOVE that — so Pine did not optimise the
+argument expressions away and the measurement is valid rather than silently
+collapsing to the deletion ceiling.
+
+## The correction this confirms, with a number
+
+| | |
+| --- | --- |
+| e1 deletion ceiling | 1,340 |
+| e1 actual library yield | **143 - 209** |
+| **yield ratio** | **11% - 16%** |
+
+The capacity report assumed 70-80%, carried over from the earlier BAH
+extraction. **That assumption is now measured and wrong for this surface.** The
+earlier extraction moved helpers taking strings, numbers and colours. e1 is
+mostly a LOOP over script-local UDTs (`FwLv`, `FwEv`) with the geometry
+computed inline; a library cannot consume a private UDT, so the loops, the
+`na` guards, the per-family caps and every coordinate expression stay in the
+scanner. Only four object constructors and their style ternaries left.
+
+## What this means for the campaign
+
+Surface A closes about **4-5%** of the 4,373-5,273 token gap (faithful D-H plus
+the 1,000 reserve). It is not close to sufficient on its own.
+
+It also forces a re-reading of the remaining ceilings, which were measured by
+deletion and are NOT recoveries:
+
+| surface | deletion ceiling | expected yield character |
+| --- | --- | --- |
+| e1 RC4 display layer | 1,340 | **measured 143-209** — UDT-bound loop, little moves |
+| e2 P7 tables | 2,684 | likely the BEST ratio: `table.cell` calls with primitive args, the same shape as the existing `renderRow` export |
+| e3 P7-Z zones | 4,542 | mixed — box construction is primitive-friendly, but the grouping pass walks script-local `P7zG`, so it hits e1's wall unless the type moves |
+
+Extrapolating e1's ratio to everything would be as unsound as extrapolating the
+old 70-80%. e2 and e3 must be measured, not assumed.
