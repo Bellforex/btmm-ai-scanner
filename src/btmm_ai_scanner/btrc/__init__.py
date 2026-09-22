@@ -54,7 +54,10 @@ from btmm_ai_scanner.btrc.trend_assessment import (
     TrendAssessment,
 )
 from btmm_ai_scanner.btrc.trend_configuration import TrendEngineConfiguration
-from btmm_ai_scanner.btrc.trend_engine import assess_trend
+from btmm_ai_scanner.btrc.trend_engine import (
+    assess_supplied_timeframe_trend,
+    assess_trend,
+)
 
 __all__ = [
     "AnalyticalPermission",
@@ -93,6 +96,7 @@ __all__ = [
     "assess_pullback",
     "assess_regime",
     "assess_session",
+    "assess_supplied_timeframe_trend",
     "assess_trend",
     "assess_volatility",
     "latest_poi",

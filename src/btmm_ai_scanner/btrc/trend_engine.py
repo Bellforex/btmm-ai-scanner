@@ -274,6 +274,60 @@ def _resolve_global(
     return Direction.NEUTRAL
 
 
+def assess_supplied_timeframe_trend(
+    analysis: ScannerAnalysis,
+    timeframe: Timeframe,
+    configuration: TrendEngineConfiguration | None = None,
+) -> TimeframeTrendAssessment | None:
+    """Public, pure per-timeframe trend assessment for ANY timeframe present in
+    ``analysis`` — including timeframes outside T1's ``_AUTHORITY_TIMEFRAMES``
+    set (H2, H6, H9, H12, MN1, and any future addition). This calls the exact
+    same per-timeframe assessment logic ``assess_trend()`` uses internally
+    (``_assess_timeframe``), so a timeframe that IS in the authority set
+    produces a bit-identical result here and inside ``assess_trend()`` — this
+    function does not change ``assess_trend()``'s own six-timeframe authority
+    resolution or its ``global_direction``/``macro_context``/
+    ``operational_context`` semantics in any way; it is purely additive.
+
+    Built for ``btmm_ai_scanner.correlation`` (the web top-down correlation
+    layer), which needs a direction/state assessment for every mode-relevant
+    supplied timeframe, not just T1's fixed authority set. Returns ``None``
+    when ``timeframe`` has no measurement or structure data in ``analysis``
+    (i.e. it was not supplied to ``scan_market()``), exactly like
+    ``assess_trend()`` silently skips such a timeframe.
+
+    Deliberately does NOT share a helper with ``assess_trend()`` below, even
+    though the indexing logic is the same few lines duplicated: a frozen T0
+    contract test (``tests/unit/test_p6_mtf_contract.py``) inspects
+    ``assess_trend()``'s own source text for the literal presence of
+    ``confirmed_swings``/``structure_transitions``/``current_state`` as proof
+    T1 itself consumes them directly — extracting a shared private helper
+    would move those references out of ``assess_trend()``'s own source and
+    silently break that frozen contract without changing any real behavior.
+    Duplicating ~10 lines here is the safe, zero-risk choice.
+    """
+    config = configuration or TrendEngineConfiguration()
+    swings_by_tf: dict[Timeframe, tuple[ConfirmedSwing, ...]] = {}
+    for measurement in analysis.measurement_analyses:
+        if measurement.timeframe is not None:
+            swings_by_tf[measurement.timeframe] = measurement.confirmed_swings
+    transitions_by_tf: dict[Timeframe, tuple[StructureTransition, ...]] = {}
+    state_by_tf: dict[Timeframe, CurrentStructureState | None] = {}
+    for structure in analysis.structure_analyses:
+        if structure.timeframe is not None:
+            transitions_by_tf[structure.timeframe] = structure.structure_transitions
+            state_by_tf[structure.timeframe] = structure.current_state
+    if timeframe not in swings_by_tf and timeframe not in state_by_tf:
+        return None
+    return _assess_timeframe(
+        timeframe,
+        swings_by_tf.get(timeframe, ()),
+        transitions_by_tf.get(timeframe, ()),
+        state_by_tf.get(timeframe),
+        config,
+    )
+
+
 def assess_trend(
     analysis: ScannerAnalysis,
     configuration: TrendEngineConfiguration | None = None,
