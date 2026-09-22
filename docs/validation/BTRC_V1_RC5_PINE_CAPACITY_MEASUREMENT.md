@@ -786,3 +786,70 @@ Plus the POI anchoring fix, still unmeasured.
 The P7 summary and POI table remain the largest unspent surface at a 2,684
 deletion ceiling. At the optimistic end that would just close the gap; at the
 pessimistic end it would not, and a further decision would be needed.
+
+---
+
+# Stabilised display rank, and trendline live QA
+
+## 1. Display winner stabilised — measured at **-14 tokens**
+
+New order: **tier > score > recency > stable id**.
+
+| variant | pad points | **BASE** | delta |
+| --- | --- | --- | --- |
+| V8 (score-first) | — | 94,153 | — |
+| **V9 (tier-first)** | 80/90/100 -> 101,940 / 102,910 / 103,880 | **94,139** | **-14** |
+
+It costs nothing because the tier constants are ordered `NA 0 < STANDARD 1 <
+STRONG 2` and now compare directly, replacing two ternaries. That is also **more
+correct** than the previous test, which asked only "is it STRONG?" and therefore
+treated STANDARD and NA as equal.
+
+Applied to the V6 base the same change gives 93,816, by arithmetic; the -14 is
+the measured quantity.
+
+## 2. Trendline live QA — PAN, ZOOM and RELOAD verified
+
+Deployed as **v14.0** and confirmed running via the study's own `pine.version`,
+on `BAH-RC5-LAB`, RC4 hidden, `document.hidden = false`, canvas 1408x788.
+
+| step | result |
+| --- | --- |
+| trendlines render from `fwTls` | **pass** |
+| price has traded through several drawn lines | **pass** — visible on the 17th, where a large drop cuts across multiple lines that remain drawn |
+| **PAN** | **pass** — lines move WITH the candles, not with the viewport |
+| **ZOOM** | **pass** — lines stay on their anchors |
+| **RELOAD** | **pass** — after a full reload the layout returns at v14.0 with trendlines on and the lines redrawn |
+
+The "price traded through and the line survived" observation is the direct
+refutation of the old defect: under the previous coupling any line price wicked
+through without closing through was removed from the level collection on that
+very bar, and therefore vanished.
+
+**Not claimed:** a controlled single-trendline before/after through one
+identified respect event, with its anchor swing ids and prices recorded. Pine
+drawing objects cannot be enumerated from the page, so the anchors could not be
+read back programmatically, and the evidence above is positional rather than
+per-object. That remains owed.
+
+### Two operational findings worth keeping
+
+* **A chart layout PINS the study version.** After saving a new script version,
+  a reload restores the pinned one — the study must be removed and re-added
+  AFTER the reload, and then the layout saved, or the next reload reverts it.
+  This cost two invalid test runs before it was understood.
+* Trendline display is off by default (`in_3`, "Show Trendlines" = false), so an
+  empty chart is not evidence of a rendering failure.
+
+## 3. Ledger
+
+| item | tokens |
+| --- | --- |
+| V9 base (simplification + corrected overlap + tier-first rank + trendlines) | 94,139 |
+| + Stage D 2,068, + Stage G 4,029 | 100,236 |
+| + Stage E / F / H | **101,286 – 102,186** |
+| strict target | 99,256 |
+| **SHORTFALL** | **2,030 – 2,930** |
+
+Plus the POI anchoring fix. The P7 summary and POI table (2,684 ceiling) is the
+next surface and is now mandatory.
