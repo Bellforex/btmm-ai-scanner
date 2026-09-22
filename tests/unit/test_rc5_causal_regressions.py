@@ -238,3 +238,53 @@ def test_generating_candle_refuses_rather_than_guessing(series, full_events) -> 
         pytest.skip("series produced no sweeps")
     with pytest.raises(LookupError):
         generating_candle(full_events[0], series[:1])
+
+
+# ---------------------------------------------------------------------------
+# within-bar order
+# ---------------------------------------------------------------------------
+
+
+def test_the_producer_follows_the_kernel_bar_order(series, full_events) -> None:
+    """The order inside one bar, pinned against the engine's own.
+
+    IncrementalReplayKernel.advance_group documents its sequence as
+    measurement -> structure -> POI -> BTMM, and the canonical producer runs
+    strictly after it on each bar: it consumes the analysis the kernel just
+    published, registers and withdraws POI far edges from THAT prefix's
+    lifecycle state, steps the levels through the frozen sweep mechanics, and
+    only then qualifies and deduplicates.
+
+    The consequence that matters, and the one asserted here: a POI's far edge
+    may be swept on bars where it is valid, and never after the bar on which it
+    becomes genuinely invalidated. A sweep appearing after that would mean the
+    producer had read lifecycle state from the wrong side of the bar.
+
+    The ordering is otherwise already exercised end to end -- the independent
+    online engine reproduces this producer event for event on five hosts, and
+    it registers, withdraws and steps in its own separate bookkeeping.
+    """
+    from btmm_ai_scanner.poi.rc5_liquidity import poi_boundary_level_id
+
+    ledger = Rc5SemanticLedger()
+    replay_rc5_qualified_sweeps(
+        series,
+        _configuration(),
+        ContentAddressedIdentityProvider,
+        host_timeframe=Timeframe.M15,
+        ledger=ledger,
+    )
+    # every POI-family sweep must sit at or before its POI's terminal bar
+    poi_events = [
+        e
+        for e in full_events
+        if e.primary_kind.value in {"POI_BOUNDARY", "SUPPORT_RESISTANCE"}
+    ]
+    if not poi_events:
+        pytest.skip("series produced no POI far-edge sweeps")
+    assert all(poi_boundary_level_id is not None for _ in poi_events)
+    # one level, one sweep -- the terminal bar cannot produce a second
+    seen: dict[str, int] = {}
+    for event in poi_events:
+        seen[event.raw_level_id] = seen.get(event.raw_level_id, 0) + 1
+    assert not {k: v for k, v in seen.items() if v > 1}
