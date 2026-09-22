@@ -283,6 +283,7 @@ def build_sweep_candidates(
         if not verdict.is_qualified:
             continue
         reference = verdict.reference
+        assert reference is not None  # is_qualified guarantees it
         identity = tuple(str(p) for p in reference.source_identity)
         sources: set[Any] = set(identity)
 
@@ -524,18 +525,17 @@ def replay_rc5_qualified_sweeps(
         }
         still_live = []
         for level in poi_active:
-            observation = current_by_level_id.get(level.level_id)
-            if observation is None:
+            live = current_by_level_id.get(level.level_id)
+            if live is None:
                 continue
-            if poi_reference_is_active(
-                observation, states.get(observation.record_id), ledger
-            ):
+            if poi_reference_is_active(live, states.get(live.record_id), ledger):
                 still_live.append(level)
         poi_active = advance_levels(
             still_live, index, candle, None, framework_configuration, poi_raw
         )
 
         # -- qualify everything NEW on this bar ----------------------------
+        assert context is not None
         new_framework = context.events[framework_seen:]
         framework_seen = len(context.events)
 
@@ -612,11 +612,11 @@ def sweep_touched_the_level(event: Any, candle: Any) -> bool:
     already decided.
     """
     if event.side is LiquiditySide.BUY_SIDE:
-        return candle.high > event.reference_price
-    return candle.low < event.reference_price
+        return bool(candle.high > event.reference_price)
+    return bool(candle.low < event.reference_price)
 
 
-def qualified_sweep_keys(events: Any) -> frozenset:
+def qualified_sweep_keys(events: Any) -> frozenset[tuple[str, Any]]:
     """``(raw_level_id, event_time)`` for every qualified sweep.
 
     This is what RC5 hands the framework so DISTRACTION consumes qualified
