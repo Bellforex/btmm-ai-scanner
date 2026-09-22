@@ -432,3 +432,83 @@ Two naming corrections were forced by the compiler and are worth recording:
 3. **Bring the drawn surface to the author as the decision**, priced with the
    measurements already taken. This is the only remaining lever that costs no
    semantics.
+
+---
+
+# Presentation simplification measured — four variants
+
+Author-approved prototypes. Nothing applied to the live build; nothing published.
+
+## Oracle refinement found during this run
+
+`BASE = TOTAL - 97N - 41` held at N = 60/80/90/100 but BROKE at N = 120:
+N=120 gave a base 20 higher than N=80/90/100. The cause is the pad label
+itself — at N >= 101 the indices become three digits (`pad100`), and a longer
+string literal costs one more token, which is exactly the +20 observed across
+twenty such pads.
+
+**Keep N <= 100 so pad indices stay at two digits.** Outside that range the
+97-token constant is wrong and the derived base drifts upward.
+
+## Results
+
+| variant | pad points | reported | **BASE** | recovery | headroom |
+| --- | --- | --- | --- | --- | --- |
+| V1 current clean | — | — | **96,376** | — | 3,880 |
+| V2 simplified P7-Z | 80 / 90 / 100 | 101,752 / 102,722 / 103,692 | **93,951** | **2,425** | 6,305 |
+| V3 legacy RC4 display removed | 60 / 80 / 100 | 100,897 / 102,837 / 104,777 | **95,036** | **1,340** | 5,220 |
+| V4 both | 80 / 90 / 100 | 100,412 / 101,382 / 102,352 | **92,611** | **3,765** | **7,645** |
+
+All three points within each variant give an identical base.
+
+**The two surfaces ARE additive here**: 2,425 + 1,340 = 3,765, and the combined
+build measures exactly 3,765. That is the opposite of Surfaces A and B, and it
+holds because the two blocks share no code.
+
+V3's 1,340 independently reproduces the e1 deletion ceiling measured earlier on
+the Stage-C+G build — two different bases, same number.
+
+## Capacity ledger from the combined prototype
+
+| item | tokens | basis |
+| --- | --- | --- |
+| base after presentation simplification | **92,611** | measured |
+| + Stage D | 2,068 | measured prototype |
+| + Stage G | 4,029 | measured prototype |
+| + Stage E | 600–1,000 | estimate |
+| + Stage F | 50–150 | estimate |
+| + Stage H | 400–800 | estimate |
+| **projected final RC5** | **99,758 – 100,658** | |
+| author target (<= 99,256, i.e. 1,000 reserve) | | |
+| **SHORTFALL against the target** | **502 – 1,402** | |
+| vs the hard 100,256 limit | +498 to **-402** | |
+
+So the combined simplification closes most of the gap — from a 4,124–5,024
+shortfall down to 502–1,402 — but does **not** reach the 1,000-token reserve,
+and in the pessimistic case does not fit at all.
+
+Per the author's instruction the campaign stops here and returns the exact
+shortfall rather than proceeding into Stage D.
+
+## What is left, and why the remainder looks reachable
+
+Not yet spent, all measured or bounded:
+
+| lever | tokens | note |
+| --- | --- | --- |
+| Surface A library extraction | 143 | measured, private, not published |
+| P7 summary + POI table (e2) | up to 2,684 deletion ceiling | user-facing; a simplification rather than a deletion |
+| tightening E / F / H | up to 900 | they are estimates spanning 900 tokens; measuring them may remove most of the uncertainty |
+
+The shortfall is 502–1,402 against an unspent e2 ceiling of 2,684, so the
+single-indicator architecture is probably still reachable — but that is a
+projection, not a measurement, and it is the author's call whether to spend the
+P7 table to buy it.
+
+## Anchoring
+
+The simplified renderer draws every zone with `left = poiAvailTime` under
+`xloc.bar_time` and uses **no `bar_index` anywhere**. The legacy RC4 display
+layer removed in V3 was the only drawing in the file anchored to `bar_index`,
+which makes V4 the correct place to have fixed the coordinate path rather than
+maintaining two renderers.
