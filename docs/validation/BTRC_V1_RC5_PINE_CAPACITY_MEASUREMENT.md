@@ -698,3 +698,91 @@ is currently locked at 31).
 
 Before the trendline layer and the anchoring fix. The P7 summary and POI table
 (2,684 deletion ceiling) remain the next unspent target.
+
+---
+
+# FwPoi.scr audit, and the structural trendline layer
+
+## 1. What `FwPoi.scr` actually is — answer: B, DYNAMIC
+
+`scr` stores the P5 weighted confluence score. Its eight components and weights:
+
+| component | weight | per-POI? | stable? |
+| --- | --- | --- | --- |
+| btmmScore | 3 | **yes** | **no** — BTMM validity and direction match move per bar |
+| poiScore | 3 | **yes** | **YES** — a pure function of the frozen tier |
+| trendScore | 2 | only via direction | no, but identical across a same-direction cluster |
+| regimeScore | 1 | no — global | no |
+| momentumScore | 1 | only via direction | no, but identical across a same-direction cluster |
+| breakoutScore | 1 | no — global | no |
+| liquidityScore | 1 | **yes** | **no** — framework location / BTMM validity |
+| volatilityScore | 1 | no — global | no |
+
+So **10 of 13 weight is dynamic context**, and only 3 of 13 is static formation
+quality.
+
+**But the consequence for the display winner is narrower than that, and this is
+the part that matters.** The arbitration only ever compares POIs inside one
+SAME-DIRECTION cluster. Within such a cluster, `trendScore`, `regimeScore`,
+`momentumScore`, `breakoutScore` and `volatilityScore` are IDENTICAL for every
+member — they are global per bar, or depend only on direction. They shift every
+member's score by the same amount and therefore **cannot change the ordering**.
+
+The only components that differentiate a cluster are:
+
+| differentiator | weight | stability |
+| --- | --- | --- |
+| poiScore (tier) | 3 | static |
+| btmmScore | 3 | dynamic |
+| liquidityScore | 1 | dynamic |
+
+**Reported honestly: the visible winner CAN switch while the underlying POIs
+are unchanged.** It happens when a member's BTMM cycle validity flips, or its
+framework-location band changes. It does NOT happen from general market
+movement, because that moves the whole cluster together.
+
+Whether that is acceptable is an author decision. Two observations to inform it:
+
+* a winner change driven by BTMM validity is arguably a real change in which
+  POI is currently the better representative, not noise;
+* `poiTier` is currently counted TWICE — once inside the score at weight 3, and
+  again as the explicit secondary tie-break. If a more static winner is wanted,
+  the cheapest faithful change is to rank on the tier FIRST and use the score
+  only to break tier ties, which inverts the current order and costs nothing.
+
+No redesign was performed; this is the proof that was asked for.
+
+## 2. Structural trendline layer — measured
+
+Trendlines are now drawn from `fwTls`, the DETECTED TRENDLINE collection, and
+never from the consumable framework level. Both endpoints are anchor TIMES
+under `xloc.bar_time`, so the line is market-anchored and uses no `bar_index`.
+
+No expiry, touch-count or slope rule was introduced. Only the trendline engine
+can end a trendline; a liquidity sweep consumes the liquidity representation and
+leaves the structure alone.
+
+| variant | pad points | **BASE** | delta |
+| --- | --- | --- | --- |
+| V6 corrected overlap | — | 93,830 | — |
+| **V8 = V6 + fwTls trendline layer** | 80/90/100 → 101,954 / 102,924 / 103,894 | **94,153** | **+323** |
+
+Reported separately and NOT folded into the Stage-H estimate.
+
+## 3. Capacity ledger against the strict target
+
+| item | tokens |
+| --- | --- |
+| V8 base (simplified P7-Z + RC4 display removed + corrected overlap + trendline) | 94,153 |
+| + Stage D (measured) | 2,068 |
+| + Stage G (measured) | 4,029 |
+| + Stage E / F / H (estimates) | 1,050–1,950 |
+| **projected final RC5** | **101,300 – 102,200** |
+| strict target (1,000 reserve) | 99,256 |
+| **SHORTFALL** | **2,044 – 2,944** |
+
+Plus the POI anchoring fix, still unmeasured.
+
+The P7 summary and POI table remain the largest unspent surface at a 2,684
+deletion ceiling. At the optimistic end that would just close the gap; at the
+pessimistic end it would not, and a further decision would be needed.
