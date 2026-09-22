@@ -41,7 +41,9 @@ __all__ = [
     "QualifiedSweepEvent",
     "build_sweep_candidates",
     "deduplicate_sweep_candidates",
+    "generating_candle",
     "replay_rc5_qualified_sweeps",
+    "sweep_touched_the_level",
 ]
 
 #: Which reference owns the label when several describe one liquidity action.
@@ -570,3 +572,44 @@ def replay_rc5_qualified_sweeps(
             events.extend(deduplicate_sweep_candidates(bar_candidates))
 
     return tuple(events)
+
+
+#: WHICH TIMESTAMP MEANS WHAT, so forensic code never guesses again.
+#:
+#: ``QualifiedSweepEvent.event_time_utc`` is the generating candle's
+#: ``availability_time_utc`` -- the instant the bar CLOSED and the sweep became
+#: knowable. It is NOT the candle's ``event_time_utc`` (its open), and it is not
+#: the reference's own source or pivot time.
+#:
+#: Indexing candles by ``event_time_utc`` and looking a sweep up by its
+#: ``event_time_utc`` therefore lands on the NEIGHBOURING bar and invents
+#: failures -- it produced a false "22 of 56 events did not wick through"
+#: reading during verification. Use this helper instead of hand-rolling the
+#: lookup.
+def generating_candle(event: Any, candles: Any) -> Any:
+    """The exact host candle whose price action produced ``event``.
+
+    Raises rather than returning ``None``: a sweep that cannot be tied to a
+    candle is a defect, not a missing optional.
+    """
+    for candle in candles:
+        if candle.availability_time_utc == event.event_time_utc:
+            return candle
+    raise LookupError(
+        f"no host candle closes at {event.event_time_utc.isoformat()} for "
+        f"sweep of {event.raw_level_id}"
+    )
+
+
+def sweep_touched_the_level(event: Any, candle: Any) -> bool:
+    """Did this candle actually trade through the reference?
+
+    True for both frozen sweep types. A WICK_SWEEP fires on the bar that traded
+    through; a CLOSE_THROUGH_RECLAIM fires on the RECLAIM bar, which in this
+    engine is also a bar that traded beyond the level, so the same test holds
+    for each. No custom mechanics -- this only reads what the frozen stepper
+    already decided.
+    """
+    if event.side is LiquiditySide.BUY_SIDE:
+        return candle.high > event.reference_price
+    return candle.low < event.reference_price
