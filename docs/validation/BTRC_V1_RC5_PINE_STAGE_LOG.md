@@ -565,3 +565,67 @@ do.
 Regenerated from CORE by `tools/rc5_compose.py` (6,800 lines, was 6,804). Not
 hand-edited. `test_rc5_panel_composition` and
 `test_pine_line_ending_contract` pass.
+
+## Stage P2 — CAUSAL BASE ARRIVAL: design finding, NOT implemented
+
+Investigated before writing code, and it changes the staging.
+
+### What Pine already has
+
+`f_p2StructureWalk` returns `p2bEvents`, held as `p3Events`
+(`array<StructEventRec>`, CORE 514/2042). Each record carries
+`transitionCode` (`C_ST_TR_*`) and `availabilityTime`, so the direction after
+any transition is derivable and a "direction at instant t" lookup is a small
+scan over state that ALREADY exists — no second structure engine, exactly as
+the port plan requires.
+
+### What Pine does NOT have
+
+1. **`p2Direction` is current-only.** It is a single `var int` (CORE 489),
+   assigned once per bar from the walk. A Base is emitted when its DEPARTURE
+   closes, so reading `p2Direction` there gives the direction at the departure,
+   NOT at the Base's first candle, which is what Python reads. Those coincide
+   often and are not the same rule; using the current value would be a silent
+   approximation and is refused.
+
+2. **No bootstrap entry.** Python's `_direction_timeline` seeds from the first
+   HH+HL / LH+LL relationship pair BEFORE any transition exists. `p3Events`
+   holds transitions only. A Base whose first candle falls after the bootstrap
+   but before the first transition would therefore be `UNDETERMINED` in Pine
+   and a real family in Python.
+
+   On the M15 forensic capture this happens to bite nothing — the bootstrap is
+   2026-09-18 18:30, the first transition 19:15, and the three Bases in that
+   region all start before 18:30 — but that is a property of one capture, not
+   of the rule.
+
+### Why P2 is not independently measurable
+
+Dead code costs **0 tokens** on this compiler (measured in the RC4 work). A
+`BaseFamily` that nothing consumes is eliminated, so porting P2 alone would
+report a ~0 delta and prove nothing. The family's only consumer is the
+standard-family gate, and that gate's only consumer is formation ownership —
+P3.
+
+**P2 and P3 must therefore land and be measured together.** Splitting them as
+originally staged would produce a meaningless measurement for P2 and load its
+entire real cost onto P3.
+
+### Author decision required before P2/P3
+
+Port the bootstrap seed as well (faithful to Python, costs tokens), or accept
+`UNDETERMINED` before the first transition and disclose the divergence. The
+second is cheaper and is a real semantic difference, so it is not taken here.
+
+### Capacity context for that decision
+
+| | |
+| --- | --- |
+| Stage P1 CORE | 99,371 |
+| hard headroom remaining | **885** |
+| strict reserve deficit | 115 |
+
+P2+P3+P4 must all fit inside 885 tokens. The earlier RC5 capacity measurement
+put the full set of RC5 additions at 3.4-4.3k tokens over budget, and P1
+recovered 15. That gap is the binding risk on this port and is flagged now,
+before stages are spent, rather than discovered at the hard stop.
