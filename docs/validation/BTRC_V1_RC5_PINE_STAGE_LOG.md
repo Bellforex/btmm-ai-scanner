@@ -1010,3 +1010,67 @@ needs to change.
 
 VIEW therefore remains **NOT ACCEPTED**: it has passed compile, dependency,
 capacity and anti-drift; runtime and visual parity are untested.
+
+## Runtime gates — still BLOCKED (re-checked), and the revised matrix
+
+Re-checked at `2f41f06` with all three artifact hashes verified MATCH:
+
+| guard | value |
+| --- | --- |
+| account | `bellcare1994` — pass |
+| `document.hidden` | **true** |
+| laid-out canvases | **0 of 7** (all `300x150`) |
+| chart legend rows | **0** |
+
+The UI guard fails, so runtime and visual evidence stay unavailable. Nothing in
+the repo needs to change; the Chrome window needs to be visible on screen.
+
+Revised matrix, per the author's architecture change — **CORE + VIEW is the
+production pair, PANEL is optional diagnostics**:
+
+| gate | status |
+| --- | --- |
+| G1 VIEW alone | blocked |
+| G2 CORE alone | blocked |
+| G3 **CORE + VIEW** (production) | blocked |
+| G4 CORE + PANEL (diagnostics) | blocked |
+| G5 VIEW + PANEL (optional) | blocked |
+
+`CORE + VIEW + PANEL` is no longer an acceptance requirement, which removes the
+2-indicator plan cap as a blocker for acceptance.
+
+## P2 bootstrap — Pine already has every ingredient
+
+Done while the UI was unavailable, because it is the piece of P2 that looked
+most expensive.
+
+**Python, frozen at `28d432e`** (`leg_origin._direction_timeline`): walk the
+relationships sorted by `(availability_time_utc, current_swing.pivot_bar_index,
+str(record_id))`, keeping the latest HIGH label and latest LOW label; the first
+prefix where `HH and HL` holds emits BULLISH at THAT relationship's
+availability, `LH and LL` emits BEARISH, then stop. Transitions follow.
+
+**Pine already carries all three parts:**
+
+| Python part | Pine equivalent | status |
+| --- | --- | --- |
+| the relationship sort | `f_p2OrderRelationships` | present, and documented as reproducing Python's key exactly — including why the `record_id` leg is unreachable |
+| high/low side of a label | `f_p2RelIsHigh` | present |
+| the relationship list | `p2Rels` | present |
+| transition history | `p3Events` (`transitionCode` + `availabilityTime`) | present |
+
+`f_p2StructureWalk` even computes the bootstrap instant internally — the two
+`lastChange := r.availabilityTime` assignments are its two bootstrap branches —
+but it is exposed only as `lastChange`, which later transitions overwrite. So
+the bootstrap moment is computed and then lost.
+
+**Consequence for P2:** no new structure engine, no new detector, and no change
+to the walk's return tuple (which the 127-slot cap makes risky). A small loop
+over `p2Rels` in the existing order reproduces the bootstrap pair, and
+`f_directionAtTime(t)` is then: last `p3Events` entry with
+`availabilityTime <= t`, else the bootstrap if its time `<= t`, else
+UNDETERMINED.
+
+That is a far cheaper port than the earlier "Pine has no timeline" reading
+suggested, which matters against 1,921 hard headroom. Not implemented here:
+P2+P3 remain gated behind runtime acceptance.
