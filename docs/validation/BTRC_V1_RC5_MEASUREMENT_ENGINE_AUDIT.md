@@ -356,3 +356,72 @@ and RBD candidates are still produced and still carry their family — but
 formation ownership now only accepts a standard-family Base as an owner, so a
 non-standard Base can subordinate nothing. A Base whose arrival is unknown
 (`None`) is likewise not authoritative: unverifiable is not authoritative.
+
+---
+
+# THE AUTHOR'S M15 REGION — THE EXACT GATE, FOUND
+
+`artifacts/rc5_m15_screenshot_capture/rc5_ohlc_m15_eurusd.csv`, 300 FX:EURUSD
+M15 bars, 2026-09-18 09:45 → 2026-09-23 12:30 UTC, sha256 `2c482f01…`. Read
+from the chart model read-only under `bellcare1994` on BAH-RC5-LAB; `bellforex`
+was not opened and the red reference line was not touched.
+
+Bases the current standard finds in this window: **4**
+(1 × RALLY_BASE_RALLY, 2 × DROP_BASE_DROP, 1 with no arrival candle available).
+
+**Near-miss windows — every Base gate passes except the small-candle /
+departure-ratio pair: 3, and 2 of them carry a candle-pattern detection.**
+
+## The case, bar by bar
+
+**2026-09-21 19:15 UTC**, two compact bars into a bearish departure:
+
+| idx | time (UTC) | open | high | low | close | body | range | body/range | RC5 emits |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 134 | 09-21 19:15 | 1.14673 | 1.14688 | 1.14673 | 1.14679 | 0.00006 | 0.00015 | 0.40 | **BEARISH_PRESSURE_WICK, EVENING_STAR** |
+| 135 | 09-21 19:30 | 1.14679 | 1.14693 | 1.14672 | 1.14678 | **0.00001** | 0.00021 | **0.05** | EVENING_STAR |
+| dep | 09-21 19:45 | 1.14678 | 1.14678 | 1.14643 | 1.14644 | 0.00034 | 0.00035 | — | — |
+
+base height 0.00021 · ATR gate PASS · height/departure PASS · midpoint drift
+PASS · pairwise overlap PASS · departure direction PASS (bearish, closes below
+the base) · arrival direction bearish → would be **DROP_BASE_DROP**, a standard
+family.
+
+**departure / max_base_range = 1.667, and the gate requires ≥ 2.0.**
+
+## Item 17 — the exact gate that rejects the author's Base
+
+**The small-candle ratio** (identically, the departure ratio — they are the same
+condition expressed as reciprocals). Nothing else fails.
+
+**And the mechanism is exactly the wick hypothesis.** Bar 135 has a body of
+0.00001 against a range of 0.00021: it is **95% wick**. By body it is an
+extremely compact base candle — by total range, which is what the gate measures,
+it is 0.60 × the departure and so breaches the 0.50 limit.
+
+So the author sees a Base; the engine sees a BEARISH_PRESSURE_WICK and an
+EVENING_STAR over those same two bars and **no Base at all** — because the base
+candles' WICKS carry them over the size threshold while their BODIES are tiny.
+This is the "Shooting Star where a Base should be" class, reproduced from real
+bars.
+
+## Item 19 — does the Base detector require correction?
+
+**The implementation does not. The standard's measurement basis is the open
+question, and it is an author decision.**
+
+The code faithfully implements Base Formation Standard V1, which explicitly
+mandates Total Range (High − Low) "without modification". The standard is also
+explicitly **provisional, pending calibration against expert-approved
+examples** — and this capture is precisely such an example.
+
+The question the evidence raises, stated without acting on it:
+
+> Should the base-candle size test measure **total range** (current, approved,
+> wick-inclusive) or the **body**, given that a base candle's defining quality
+> is a compact body and that on these hosts the median candle is 53–54% wick?
+
+No constant has been changed. Changing this one would alter the Base population
+on every host and must not be done to "make more bases" — but it is the single
+lever the data points at, and the author's own example is now a fixture that can
+adjudicate it.
