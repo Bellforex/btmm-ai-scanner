@@ -25,7 +25,7 @@ from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolum
 from btmm_ai_scanner.measurements.candle_metrics import body, total_range
 from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
-from btmm_ai_scanner.poi.enums import BaseFamily, PoiType
+from btmm_ai_scanner.poi.enums import PoiStrengthTier, PoiType
 
 _CSV = (
     Path(__file__).resolve().parents[2]
@@ -150,19 +150,20 @@ def test_the_experiment_never_shrinks_the_base_population() -> None:
     assert a <= b
 
 
-def test_the_family_is_rally_base_drop_not_drop_base_drop() -> None:
-    """The finding that stops this being a fix on its own.
+def test_the_two_candle_bounce_that_broke_the_single_candle_arrival_rule() -> None:
+    """Why detecting the Base was necessary but not sufficient.
 
-    The candle immediately before the base (2026-09-21 19:00) closes UP, so the
-    single-candle arrival proxy reads RALLY_BASE_DROP -- a family the approved
-    standard does not recognise, which therefore gets no ownership. The wider
-    move into the area is bearish (18:15 and 18:30 both close down), so a human
-    reading "after an existing bearish move" would likely call this DROP_BASE_
-    DROP. Detecting the Base is necessary but not sufficient.
+    The candle immediately before the base (2026-09-21 19:00) closes UP, while
+    18:15 and 18:30 both close down -- a two-candle bounce inside a bearish
+    move. The retired single-candle proxy read that bounce as the arrival leg
+    and labelled the formation RALLY_BASE_DROP, which carries no authority.
+
+    The bars are pinned here; `test_base_arrival_structural` proves what the
+    structure timeline makes of them.
     """
     candles = _candles()
     arrival = candles[_BASE_START - 1]
-    assert arrival.close > arrival.open  # the proxy sees a rally
+    assert arrival.close > arrival.open  # the proxy saw a rally
     assert candles[_BASE_START - 4].close < candles[_BASE_START - 4].open
     assert candles[_BASE_START - 3].close < candles[_BASE_START - 3].open
 
@@ -171,7 +172,8 @@ def test_the_family_is_rally_base_drop_not_drop_base_drop() -> None:
         for b in detect_bases(candles, _B)
         if candles[_BASE_START].record_id in b.source_candle_record_ids
     )
-    assert found.base_family is BaseFamily.RALLY_BASE_DROP
+    # the detector reports geometry and leaves the arrival to structure
+    assert found.base_family is None
 
 
 def test_zero_body_is_maximal_compactness_not_a_rejection() -> None:
@@ -179,3 +181,30 @@ def test_zero_body_is_maximal_compactness_not_a_rejection() -> None:
     candles = _candles()
     # the flag path must never raise on any window of the real capture
     assert detect_bases(candles, _B) is not None
+
+
+def test_the_experiment_also_re_tiers_bases_it_did_not_newly_admit() -> None:
+    """Not only a population effect -- a STRENGTH effect on existing Bases.
+
+    `strength_tier` is computed from the same size basis, so switching it
+    promotes already-accepted Bases from STANDARD to STRONG without moving the
+    zone or the identity. Pinned because the earlier reading of this experiment
+    ("it can only ever admit more") described the identity set and missed this.
+    """
+    candles = _candles()
+    a = {(b.poi_type, b.source_candle_record_ids): b for b in detect_bases(candles, _A)}
+    b = {(x.poi_type, x.source_candle_record_ids): x for x in detect_bases(candles, _B)}
+    assert set(a) <= set(b)
+
+    promoted = [
+        key
+        for key, before in a.items()
+        if before.strength_tier is not b[key].strength_tier
+    ]
+    assert promoted, "no re-tiering observed; this fixture no longer shows the effect"
+    for key in promoted:
+        assert a[key].strength_tier is PoiStrengthTier.STANDARD
+        assert b[key].strength_tier is PoiStrengthTier.STRONG
+        # the territory is untouched: only the qualification changed
+        assert a[key].zone_top == b[key].zone_top
+        assert a[key].zone_bottom == b[key].zone_bottom

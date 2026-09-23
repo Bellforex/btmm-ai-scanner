@@ -538,6 +538,17 @@ def _direction_at(
     return dirs[k - 1] if k else StructureDirection.UNDETERMINED
 
 
+#: Public names for the one causal structural-direction mechanism in the engine.
+#:
+#: Layers that need "which way was the market going at instant t" MUST reuse
+#: these rather than grow a second opinion. ``structure_direction_at`` reads the
+#: timeline with ``bisect_right``, so it can only ever see changes whose
+#: availability is <= t: it is causal by construction, and it returns
+#: ``StructureDirection.UNDETERMINED`` when no leg has been established yet.
+structure_direction_timeline = _direction_timeline
+structure_direction_at = _direction_at
+
+
 def _classify_aligned(candidate: Any, direction: StructureDirection) -> ContextReason:
     if direction is StructureDirection.UNDETERMINED:
         return ContextReason.CONTEXT_REJECT_NEUTRAL

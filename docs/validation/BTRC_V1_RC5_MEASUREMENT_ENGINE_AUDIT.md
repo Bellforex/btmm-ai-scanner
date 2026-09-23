@@ -527,3 +527,161 @@ are reviewed.
 
 **BODY-SIZE RULE: remains EXPERIMENTAL.** Criterion 1 fails, and it fails for a
 reason outside the body rule itself.
+
+---
+
+# Unit 12 — the arrival leg is STRUCTURAL
+
+The acceptance table above closed with criterion 1 failing "for a reason
+outside the body rule itself". That reason is now fixed.
+
+## What was wrong
+
+`classify_base_family` read the **single candle before the base** and called it
+bullish when `close >= open`. That is the displacement engine's per-candle
+test, applied to a question that is not per-candle. A Base is the middle of
+`arrival leg -> base -> departure leg`, and a leg is a multi-candle structural
+fact.
+
+The detector cannot see it. `detect_bases` scans a window of
+`base_min_candles .. base_max_candles + 1` bars; the leg that brought price to
+the area is usually outside it entirely.
+
+## What replaced it
+
+Nothing new was built. The engine already maintains exactly one causal
+structural-direction mechanism, in `poi/leg_origin.py`:
+
+| item | answer |
+| --- | --- |
+| producer | `_direction_timeline(walk, relationships)`, built inside `_gate` |
+| upstream | `structure.relationships.detect_swing_relationships` -> `structure.transitions.run_structure_walk` |
+| direction field | `StructureTransitionCandidate.direction_after` (plus the walk bootstrap: first HH+HL / LH+LL pair) |
+| availability | every entry keyed by `availability_time_utc`; `_direction_at` uses `bisect_right`, so direction at *t* is the last change **<= t** |
+| batch | `_gate` line 566 builds it, line 615 reads it per candidate |
+| incremental | the slow path calls the SAME `_gate` and stores the result in `LegOriginFrontier.timeline`; the fast path reads `state.timeline`, and is only taken when the swing signature is unchanged **and** `_may_break` is false — i.e. when no transition can appear, so the carried timeline is provably the same one |
+| prefix stability | transitions are append-only along the frozen walk; a later prefix can append later entries but cannot alter an earlier one |
+
+Both functions are now exported as `structure_direction_timeline` /
+`structure_direction_at`. No new structure walk, no new constant, no new
+detector.
+
+`poi/base_arrival.py` assigns the family from that timeline, read at the Base's
+**own first candle's event time** — the instant price arrived:
+
+```
+BaseArrivalFact(base_key, arrival_reference_utc, arrival_direction,
+                arrival_leg_id, arrival_known_from_utc, family)
+```
+
+`arrival_known_from_utc <= arrival_reference_utc` always. That is the causality
+receipt, and it is asserted on all three captures.
+
+`detect_bases` and `_evaluate_new_bases` now both emit `base_family=None`.
+`None` means *not yet resolved*, and an unresolved arrival is never
+authoritative (`is_standard_base_family(None)` is False). **There is no
+last-candle fallback anywhere.**
+
+## The author's formation, resolved
+
+FX:EURUSD M15, base starting 2026-09-21 19:15:
+
+| reading | arrival | family | authoritative |
+| --- | --- | --- | --- |
+| retired single-candle proxy (19:00 closes up) | "rally" | RALLY_BASE_DROP | no |
+| structural leg | **BEARISH** | **DROP_BASE_DROP** | **yes** |
+
+The establishing leg is a `BEARISH_BOS` available **2026-09-21 18:00**, which
+broke 1.14665 on a 1.14663 close. Nothing changed direction between then and
+19:15.
+
+And the original complaint closes with it. Those bars emit a
+`BEARISH_PRESSURE_WICK` (19:15) and a `DOJI` (19:30). Under the proxy the Base
+had no authority, so those two fragments were the only things on the chart —
+"I see a Base, RC5 shows a Shooting Star". Under the structural arrival the
+Base **owns both**, from 2026-09-21 20:00.
+
+## It matters with the experiment OFF
+
+The proxy also failed in the opposite direction — it **granted** authority it
+should not have:
+
+> **H3 2026-08-20 04:00**, approved size basis, no experiment flag. The candle
+> before the base closes down, so the proxy returned DROP_BASE_DROP:
+> authoritative. The structural leg into the area is **BULLISH**, making it
+> RALLY_BASE_DROP — a counter-trend pause the approved standard does not
+> recognise as a Base at all.
+
+## Populations, all four arms
+
+Arms: size basis (range | body) x arrival (retired proxy | structural).
+A = range+proxy, B = body+proxy, C = range+structural, D = body+structural.
+Arm A is byte-identical to RC4 (`2f1d2b9`) — verified by running the RC4
+detector over the same bars: 4/4 bases, identical geometry tuples.
+
+| capture | arm | bases | families | ownership subordinations |
+| --- | --- | --- | --- | --- |
+| M15 EURUSD | A | 4 | DBD 2, RBR 1, UNKNOWN 1 | 0 |
+| | B | 7 | DBD 3, RBD 2, RBR 1, UNKNOWN 1 | 0 |
+| | C | 4 | DBD 1, UNKNOWN 3 | 0 |
+| | **D** | **7** | **DBD 4, UNKNOWN 3** | **2** (BEARISH_PRESSURE_WICK, DOJI) |
+| M45 XAUUSD | A | 4 | DBD 1, DBR 2, RBD 1 | 0 |
+| | B | 10 | DBD 4, DBR 3, RBD 1, RBR 1, UNKNOWN 1 | 1 (HAMMER) |
+| | C | 4 | DBD 2, DBR 2 | 0 |
+| | D | 10 | DBD 4, DBR 4, RBD 1, UNKNOWN 1 | 0 |
+| H3 XAUUSD | A | 6 | DBD 3, RBD 1, RBR 1, UNKNOWN 1 | 0 |
+| | B | 9 | DBD 4, DBR 2, RBD 1, RBR 1, UNKNOWN 1 | 0 |
+| | C | 6 | DBD 3, RBD 1, UNKNOWN 2 | 0 |
+| | D | 9 | DBD 3, RBD 2, RBR 2, UNKNOWN 2 | 0 |
+
+Two things to read carefully here:
+
+1. **UNKNOWN goes up** under the structural arms. That is correct, not a
+   regression: early bars of a capture have no established leg, and the proxy
+   was manufacturing an authoritative family out of nothing there (H3
+   2026-07-31 16:00 became RALLY_BASE_RALLY on zero structural evidence).
+2. **Ownership only becomes live on M15 arm D.** The body basis alone did not
+   make it live (measured 0/1/0 previously), and the structural arrival alone
+   does not either. Both switches are required for the author's formation.
+
+## A correction to my own earlier reading
+
+I previously reported that the body basis "can only ever admit more". That is
+true of the **identity** set and incomplete about the record: `strength_tier`
+is computed from the same size basis, so the switch also **re-tiers Bases it
+did not newly admit** — 7 of the 14 arm-A bases across the three captures go
+STANDARD -> STRONG. The zone and identity never move. Pinned by
+`test_the_experiment_also_re_tiers_bases_it_did_not_newly_admit`.
+
+## The >80%-wick watch item, re-read
+
+> **H3 2026-08-26 16:00** — base candles 88.2% and 91.6% wick, max body 2.25
+> against ranges of 19.08 / 17.57, departure 34.72. Zone height **20.57**.
+
+Under the structural arrival this is `RALLY_BASE_RALLY` with a BULLISH leg
+established 2026-08-21 04:00 — i.e. **standard, and now authoritative**. The
+unchanged gates are therefore *not* sufficient protection against this shape;
+the structural arrival did not catch it and was never going to, because the
+arrival here is genuinely bullish. The tiny-body/huge-wick question is a
+**size** question and remains open. No wick threshold has been invented.
+
+## Acceptance status, revised
+
+| criterion | result |
+| --- | --- |
+| 1. author's M15 formation becomes the expected DBD | **YES** — DROP_BASE_DROP, owning both contained patterns |
+| 2. geometry remains correct | YES — zone wick-inclusive, identity preserved across assignment |
+| 3. false-positive review acceptable | **UNPROVEN** — the >80%-wick case is now authoritative |
+| 4. ownership behaves causally | YES — activation at max(base, pattern) availability |
+| 5. batch == incremental | **YES** — arms A/B at the detector, arms C/D on real structure incl. arrival leg id, direction, known-from, family and ownership activation |
+| 6. type/geometry invariants green | YES |
+| 7. full suite green | YES |
+| 8. impact understood | YES — four arms measured on three captures |
+
+**STRUCTURAL ARRIVAL: adopted.** It is not an experiment — the proxy it
+replaces was measurably wrong in both directions, including under the approved
+size basis.
+
+**BODY-SIZE RULE: remains EXPERIMENTAL** (`base_size_uses_body` default False).
+Criterion 3 is still unproven and has got sharper, not softer: the one shape
+that worried the author is now authoritative rather than merely detected.

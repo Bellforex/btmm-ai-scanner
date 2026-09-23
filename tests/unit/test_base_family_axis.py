@@ -4,9 +4,13 @@
 Rally-Base-Rally together with Drop-Base-Rally, and `BASE_DROP` collapsed
 Rally-Base-Drop with Drop-Base-Drop. The arrival leg was not modelled at all.
 
-`BaseFamily` restores it as RC5 semantic metadata. The frozen transport codes
-are deliberately untouched, so these tests assert BOTH halves: the family is
-correct, AND the `PoiType` it transports as has not moved.
+`BaseFamily` restores it as RC5 semantic metadata, and the frozen transport
+codes are deliberately untouched.
+
+This module owns the TRANSPORT half and the population half: the detector sees
+only the base and the departure, it must emit every candidate it used to, and
+the family must never change the code a candidate travels as. The arrival leg
+itself is structural and is proved in `test_base_arrival_structural`.
 """
 
 from __future__ import annotations
@@ -18,9 +22,11 @@ from uuid import UUID
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.contracts.raw_candle import CandleCompleteness, CandleVolumeKind
-from btmm_ai_scanner.poi.bases import classify_base_family, detect_bases
+from btmm_ai_scanner.poi.base_arrival import assign_base_arrival
+from btmm_ai_scanner.poi.bases import detect_bases
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import BASE_FAMILY_TRANSPORT, BaseFamily, PoiType
+from btmm_ai_scanner.structure.enums import StructureDirection
 
 _RAW_CANDLE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdaa")
 _PROVENANCE_ID = UUID("0193f450-1234-7abc-8def-abcdefabcdff")
@@ -97,47 +103,43 @@ def _only_base(arrival_up: bool, departure_up: bool):
 
 
 # --------------------------------------------------------------------------
-# 1-4: the four families, and the transport code each must still carry
+# the detector emits geometry, and only geometry
 # --------------------------------------------------------------------------
 
 
-def test_rally_base_rally() -> None:
-    base = _only_base(arrival_up=True, departure_up=True)
-    assert base.base_family is BaseFamily.RALLY_BASE_RALLY
-    assert base.poi_type is PoiType.BASE_RALLY
+def test_the_departure_still_decides_the_transport_code() -> None:
+    """The half of the formation the detector CAN see, unchanged."""
+    for arrival_up in (True, False):
+        assert _only_base(arrival_up, departure_up=True).poi_type is PoiType.BASE_RALLY
+        assert _only_base(arrival_up, departure_up=False).poi_type is PoiType.BASE_DROP
 
 
-def test_drop_base_rally() -> None:
-    base = _only_base(arrival_up=False, departure_up=True)
-    assert base.base_family is BaseFamily.DROP_BASE_RALLY
-    assert base.poi_type is PoiType.BASE_RALLY
+def test_the_detector_emits_no_family_whatever_the_preceding_candle_does() -> None:
+    """The collapse that lost the arrival leg is NOT repaired by looking at one
+    candle. These four series differ only in the candle before the base, and
+    the detector must be blind to it -- that candle is not the arrival leg."""
+    families = {
+        _only_base(arrival_up, departure_up).base_family
+        for arrival_up in (True, False)
+        for departure_up in (True, False)
+    }
+    assert families == {None}
 
 
-def test_rally_base_drop() -> None:
-    base = _only_base(arrival_up=True, departure_up=False)
-    assert base.base_family is BaseFamily.RALLY_BASE_DROP
-    assert base.poi_type is PoiType.BASE_DROP
-
-
-def test_drop_base_drop() -> None:
-    base = _only_base(arrival_up=False, departure_up=False)
-    assert base.base_family is BaseFamily.DROP_BASE_DROP
-    assert base.poi_type is PoiType.BASE_DROP
-
-
-def test_the_two_rally_families_are_distinguishable_but_transport_identically() -> None:
-    """The exact collapse that lost the arrival leg, now visible and still safe."""
-    rbr = _only_base(arrival_up=True, departure_up=True)
-    dbr = _only_base(arrival_up=False, departure_up=True)
-    assert rbr.base_family is not dbr.base_family
-    assert rbr.poi_type is dbr.poi_type is PoiType.BASE_RALLY
-
-
-def test_the_two_drop_families_are_distinguishable_but_transport_identically() -> None:
-    rbd = _only_base(arrival_up=True, departure_up=False)
-    dbd = _only_base(arrival_up=False, departure_up=False)
-    assert rbd.base_family is not dbd.base_family
-    assert rbd.poi_type is dbd.poi_type is PoiType.BASE_DROP
+def test_a_series_with_no_structure_yields_no_family() -> None:
+    """Four candles establish no leg, so the arrival is UNDETERMINED and the
+    family stays unknown. Assigning one here would be the fallback the author
+    refused."""
+    series = _series(arrival_up=True, departure_up=False)
+    assigned, facts = assign_base_arrival(detect_bases(series, _CONFIG), ([], []), None)
+    assert len(assigned) == 1
+    assert assigned[0].base_family is None
+    fact = next(iter(facts.values()))
+    assert fact.arrival_direction is StructureDirection.UNDETERMINED
+    assert fact.arrival_known_from_utc is None
+    assert fact.arrival_leg_id is None
+    # the reference instant is still recorded, so the gap is explicit
+    assert fact.arrival_reference_utc == assigned[0].candidate_event_time_utc
 
 
 def test_transport_mapping_is_total_and_matches_the_frozen_codes() -> None:
@@ -166,20 +168,3 @@ def test_the_family_axis_does_not_change_the_base_population() -> None:
         for departure_up in (True, False):
             series = _series(arrival_up, departure_up)
             assert len(detect_bases(series, _CONFIG)) == 1
-
-
-def test_family_is_none_when_no_arrival_candle_exists() -> None:
-    """Unknown, not assumed. A base starting at the first candle of the series
-    has no arrival leg to read."""
-    assert classify_base_family(None, PoiType.BASE_RALLY) is None
-    assert classify_base_family(None, PoiType.BASE_DROP) is None
-
-
-def test_arrival_direction_reuses_the_displacement_engine_definition() -> None:
-    """`detect_displacement_observations` calls a candle BULLISH when
-    ``close >= open``. The same test decides the arrival leg, so no new
-    threshold enters the Base rule -- including the doji-ish boundary case,
-    which that engine also treats as bullish."""
-    flat = _candle(0, "100.00", "100.50", "99.50", "100.00")
-    assert flat.close == flat.open
-    assert classify_base_family(flat, PoiType.BASE_RALLY) is BaseFamily.RALLY_BASE_RALLY
