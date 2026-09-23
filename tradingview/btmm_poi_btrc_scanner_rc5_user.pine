@@ -6877,7 +6877,19 @@ if barstate.isconfirmed
             k -= 1
 
         if p7zShown > 0
-            for [_si, p7zPoiI] in p7zSelected
+            // `bahui.nearestFirst` returns ROW POSITIONS into the array it was
+            // given, not the values in it -- which is exactly how the P7 table
+            // consumes it (`array.get(p7PoiIdx, array.get(p7RowOrder, ...))`).
+            // Reading a position as if it were a registry index selected POIs
+            // 0..n-1: the OLDEST records in the registry, off the left edge of
+            // the loaded window. Measured live on FX:EURUSD M15 with 190
+            // registered, 62 valid and 36 display-eligible POIs, eight boxes
+            // were created every bar and not one of them was on screen.
+            //
+            // This is the RC1-POI corrective applied to the zone renderer: the
+            // author's standing rule is the entries NEAREST CURRENT PRICE.
+            for [_si, p7zSelPos] in p7zSelected
+                int p7zPoiI = array.get(p7zVisibleIdx, p7zSelPos)
                 int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
                 int ty2 = array.get(poiType, p7zPoiI)
                 string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + (ty2 == C_POI_DOJI ? "DOJI" : bahui.poiTypeLabel(ty2)) : ""

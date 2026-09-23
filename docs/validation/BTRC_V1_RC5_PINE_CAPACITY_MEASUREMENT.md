@@ -1272,3 +1272,112 @@ while the dominance map suppresses on shared candle time and direction
 regardless of geometry. They are different rules, so deleting the map would make
 some currently hidden FVGs visible. That is a display change the author should
 decide; the rule is kept and the comment flagged.
+
+---
+
+# LIVE ON BAH-RC5-LAB — what the chart actually does
+
+RC5 USER was saved as **v15.0** from the exact committed LF bytes (in-page
+SHA-256 `c5f0fb85…`, verified against the file on disk before the save), the
+study was removed and re-added, the layout was saved, the page was reloaded,
+and the pinned version was confirmed as **15.0**.
+
+One trap is worth recording because it cost two full cycles: **the page caches
+the script list at load.** Saving a new version and then adding the script from
+"My scripts" in the same page session attaches the OLD version. The chart
+reported `version 14.0` after a remove/re-add that looked correct. A page
+reload between the save and the add is mandatory, and the version must be read
+from the chart model, never inferred from the picture.
+
+A second: **a freshly added study uses the SOURCE's input defaults, not the
+settings the previous instance had.** `dspMs`, `dspTl` and `dspBtmm` all default
+to `false`, so the first correct v15 attach drew nothing at all and looked like
+a dead build. It was not.
+
+## Census, measured live (FX:EURUSD M15, host 1,800 bars)
+
+Published as data-window plots, read off the chart model:
+
+| | |
+| --- | --- |
+| POI registry | 190 |
+| RC5-valid | 62 |
+| of which subordinate under Stage E | 26 |
+| refused by the 18 type toggles | 0 |
+| display-eligible | 36 |
+
+Same-origin authority therefore suppresses **42% of valid POIs** on this host.
+
+## Trendline clutter audit
+
+| | |
+| --- | --- |
+| raw `fwTls` | **21** |
+| both anchors structurally meaningful | **16** |
+| one or more anchors meaningful | 16 |
+| exact-anchor duplicates removed | **0** |
+| displayed | **16** |
+| hidden | **5** |
+
+Every hidden line has the same reason: **at least one defining anchor is a
+texture pivot, not a swing the structural walk used.** No line was hidden for
+angle, distance, touch count or slope, because no such rule exists.
+
+**This is an honest partial result against the author's complaint.** The filter
+removes 5 of 21, a 24% reduction. Whether 16 lines is still "too many
+trendlines" is the author's call; nothing further may be invented here without a
+decision, and the instruction was explicit that if both-anchors-meaningful
+cleans the chart sufficiently, stop there.
+
+## A real defect the live run found: no zone was ever on screen
+
+With 36 POIs display-eligible, `p7zShown` = 8, `p7zSelected` = 8 and
+`array.size(p7zBoxes)` = 8 — **eight boxes were created every bar, and not one
+of them was visible.**
+
+`bahui.nearestFirst` returns ROW POSITIONS into the array it is given, not the
+values in it. The P7 table consumes it correctly
+(`array.get(p7PoiIdx, array.get(p7RowOrder, rowIdx))`). The zone renderer used
+the returned position directly as a POI registry index, so it drew registry
+entries 0..7 — the OLDEST records, off the left edge of the loaded window.
+
+This is the RC1-POI defect — *"display drew the OLDEST POIs, not the nearest"* —
+reappearing in the zone path through a different mechanism. The author's
+standing rule is the entries NEAREST CURRENT PRICE, so the fix restores an
+accepted decision rather than introducing one. It is one line:
+
+```pine
+for [_si, p7zSelPos] in p7zSelected
+    int p7zPoiI = array.get(p7zVisibleIdx, p7zSelPos)
+```
+
+PANEL is unaffected: the composer cuts the zone renderer out of it entirely, so
+the composed PANEL is byte-identical before and after this fix.
+
+## CORE + PANEL attached together
+
+Both ran on the same chart at the same time. CORE drew trendlines, BOS/CHOCH
+lines, HH/HL/LH/LL labels and the BTMM cycle markers; PANEL drew the global
+summary and the active-POI table and nothing in market space. **No drawing
+appeared twice.** Tested on M15; the remaining timeframes are still owed.
+
+## The corrected CORE, re-measured
+
+The zone-selection fix was measured, not assumed:
+
+| N | reported total | derived BASE |
+| --- | --- | --- |
+| 98 | 108,296 | **98,749** |
+| 99 | 108,393 | **98,749** |
+| 100 | 108,490 | **98,749** |
+
+| | |
+| --- | --- |
+| **RC5 CORE (corrected)** | **98,749** |
+| hard limit 100,256 | **1,507 under** |
+| strict target 99,256 | **507 under** |
+| cost of the fix | **+23** |
+
+RC5 PANEL is unchanged at **97,056**: the composer removes the zone renderer
+from it, so the corrected line never reaches PANEL and the composed bytes are
+identical.
