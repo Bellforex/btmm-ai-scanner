@@ -20,8 +20,18 @@ class PoiConfiguration(ContractModel):
         {InternalSymbol.XAUUSD, InternalSymbol.EURUSD, InternalSymbol.GBPUSD}
     )
 
+    #: ORDER BLOCK / ENGULFING displacement ratios. Shared by `order_blocks.py`
+    #: and `engulfing.py`; NOT a Base rule and deliberately untouched by the
+    #: Arm E calibration below.
     order_block_size_ratio_standard: Decimal = Decimal("2.0")
     order_block_size_ratio_strong: Decimal = Decimal("3.0")
+
+    #: FROZEN P3-ERA CONSTANTS. Nothing in the Base path reads these any more --
+    #: `test_base_candle_size_doctrine` asserts that. They are retained solely
+    #: because the closed P3 Pine appendix carries
+    #: `C_POI_SMALL_CANDLE_STANDARD = 0.50` and its parity test pins the two
+    #: together. Changing them would silently break a closed phase's parity, and
+    #: they are NOT the RC5 Base rule.
     small_candle_ratio_standard: Decimal = Decimal("0.50")
     small_candle_ratio_strong: Decimal = Decimal("0.3333")
 
@@ -32,21 +42,44 @@ class PoiConfiguration(ContractModel):
     base_midpoint_drift_ratio: Decimal = Decimal("0.25")
     base_overlap_ratio_minimum: Decimal = Decimal("0.50")
 
-    #: RC5 EXPERIMENT (default OFF -- flipping it changes the Base population).
+    #: THE ONE canonical Base-candle size rule (author decision, Arm E).
     #:
-    #: Base Formation Standard V1 measures base-candle SIZE with Candle Total
-    #: Range (high - low), wicks included. The M15 golden fixture shows why that
-    #: is contested: at 2026-09-21 19:30 a base candle has a body of 0.00001
-    #: against a range of 0.00021 -- 95% wick -- so a visually compact pause
-    #: candle is judged oversized and the Drop-Base-Drop is never detected.
+    #:     max base candle Total Range <= base_candle_size_ratio_standard x
+    #:                                    departure Total Range
     #:
-    #: When True, and ONLY for the base-candle size qualification, size is
-    #: measured as abs(close - open). Nothing else moves: the POI zone stays
-    #: wick-inclusive (base high/low are real market extremes), and the ATR
-    #: height, height/departure, midpoint drift and pairwise overlap gates are
-    #: untouched. The 2.0 / 3.0 / 0.50 / 0.3333 thresholds are unchanged; this
-    #: is a measurement-basis switch, not a threshold change.
-    base_size_uses_body: bool = False
+    #: Basis: Candle Total Range, wicks included -- the basis the source
+    #: material specifies ("Base = 2+ candles, short, small RANGE";
+    #: `knowledge/POI_MASTER_CATALOG.md` SS1.4, which also records that those
+    #: words carry "no numeric thresholds"). Body is deliberately NOT used: the
+    #: source reserves body language for Pressure Wick.
+    #:
+    #: The value is 0.60, calibrated from the provisional 0.50. It is not a new
+    #: number -- `base_height_departure_multiplier` is already 0.60 in the same
+    #: approved standard, and because Base Height >= every base candle's Total
+    #: Range, that gate ALREADY implied this bound. Arm E makes the implication
+    #: explicit instead of enforcing a stricter, unsourced 0.50 on top of it.
+    #:
+    #: There is deliberately no second, separately-configured reciprocal form.
+    #: `max_base <= k x departure` and `departure / max_base >= 1 / k` are the
+    #: same statement, and configuring both is how 0.60 and 2.0 drift apart.
+    #: Read the reciprocal from `base_departure_ratio_standard` instead.
+    base_candle_size_ratio_standard: Decimal = Decimal("0.60")
+    #: Strong Base. Unchanged in value from the approved standard.
+    base_candle_size_ratio_strong: Decimal = Decimal("0.3333")
+
+    @property
+    def base_departure_ratio_standard(self) -> Decimal:
+        """The same rule written the other way up, DERIVED not configured.
+
+        Documentation and the Pine port both want the `departure / base >= N`
+        form. Computing it here means there is no second constant to fall out of
+        step with `base_candle_size_ratio_standard`.
+        """
+        return Decimal(1) / self.base_candle_size_ratio_standard
+
+    @property
+    def base_departure_ratio_strong(self) -> Decimal:
+        return Decimal(1) / self.base_candle_size_ratio_strong
 
     pressure_wick_share_standard: Decimal = Decimal("0.40")
     pressure_wick_body_efficiency_standard: Decimal = Decimal("0.25")
@@ -120,6 +153,8 @@ _POSITIVE_DECIMAL_FIELDS: tuple[str, ...] = (
     "order_block_size_ratio_strong",
     "small_candle_ratio_standard",
     "small_candle_ratio_strong",
+    "base_candle_size_ratio_standard",
+    "base_candle_size_ratio_strong",
     "base_height_atr_multiplier",
     "base_height_departure_multiplier",
     "base_midpoint_drift_ratio",

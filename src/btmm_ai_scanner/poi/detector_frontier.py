@@ -43,7 +43,7 @@ from btmm_ai_scanner.measurements.atr import (
     advance_incremental_atr,
     initial_incremental_atr_state,
 )
-from btmm_ai_scanner.measurements.candle_metrics import body, total_range
+from btmm_ai_scanner.measurements.candle_metrics import total_range
 from btmm_ai_scanner.poi.bases import BaseCandidate
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.confirmed_zones import (
@@ -238,19 +238,13 @@ def _evaluate_new_bases(
         max_base_range = max(total_range(c) for c in base_candles)
         if max_base_range == 0:
             continue
-        # Identical size-basis switch to detect_bases; the two must never
-        # disagree, and test_base_family_ownership_incremental_equality proves
-        # they do not at every prefix.
-        max_base_size = (
-            max(body(c) for c in base_candles)
-            if configuration.base_size_uses_body
-            else max_base_range
-        )
-        if max_base_size > configuration.small_candle_ratio_standard * departure_range:
-            continue
-
-        ratio = None if max_base_size == 0 else departure_range / max_base_size
-        if ratio is not None and ratio < configuration.order_block_size_ratio_standard:
+        # THE ONE Base-candle size rule, identical to detect_bases. The two must
+        # never disagree, and test_base_family_ownership_incremental_equality
+        # proves they do not at every prefix.
+        if (
+            max_base_range
+            > configuration.base_candle_size_ratio_standard * departure_range
+        ):
             continue
 
         base_high = max(c.high for c in base_candles)
@@ -313,9 +307,8 @@ def _evaluate_new_bases(
             continue
 
         strong = (
-            ratio is None or ratio >= configuration.order_block_size_ratio_strong
-        ) and (
-            max_base_size <= configuration.small_candle_ratio_strong * departure_range
+            max_base_range
+            <= configuration.base_candle_size_ratio_strong * departure_range
         )
 
         results.append(

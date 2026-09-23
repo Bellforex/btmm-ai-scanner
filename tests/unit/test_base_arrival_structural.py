@@ -45,14 +45,11 @@ pytestmark = pytest.mark.skipif(
     reason="RC5 forensic captures not present",
 )
 
+#: Production RC5 (Arm E): Total Range basis, 0.60 cap. The earlier "_BODY"
+#: arm is gone -- Arm E admits the same Bases, so these tests now exercise
+#: production doctrine rather than an experiment.
 _FX = PoiConfiguration(minimum_price_tick=Decimal("0.00001"))
-_FX_BODY = PoiConfiguration(
-    minimum_price_tick=Decimal("0.00001"), base_size_uses_body=True
-)
 _XAU = PoiConfiguration(minimum_price_tick=Decimal("0.01"))
-_XAU_BODY = PoiConfiguration(
-    minimum_price_tick=Decimal("0.01"), base_size_uses_body=True
-)
 _M_FX = MarketMeasurementConfiguration(minimum_price_tick=Decimal("0.00001"))
 _M_XAU = MarketMeasurementConfiguration(minimum_price_tick=Decimal("0.01"))
 
@@ -99,9 +96,9 @@ def test_the_raw_detector_never_assigns_a_family() -> None:
     """The arrival leg is not in the window the detector scans, so the honest
     output is "not resolved" -- on every capture, on every base."""
     for candles, config in (
-        (m15_eurusd(), _FX_BODY),
-        (m45_xauusd(), _XAU_BODY),
-        (h3_xauusd(), _XAU_BODY),
+        (m15_eurusd(), _FX),
+        (m45_xauusd(), _XAU),
+        (h3_xauusd(), _XAU),
     ):
         found = detect_bases(candles, config)
         assert found, "fixture produced no bases; the assertion would be vacuous"
@@ -112,8 +109,8 @@ def test_assignment_preserves_formation_identity() -> None:
     """The family is metadata. It must not move the POI type, the zone or the
     source candles, because the ownership layer keys on those."""
     candles = m15_eurusd()
-    raw = detect_bases(candles, _FX_BODY)
-    assigned, facts = _bases(candles, _FX_BODY, _M_FX)
+    raw = detect_bases(candles, _FX)
+    assigned, facts = _bases(candles, _FX, _M_FX)
     assert len(assigned) == len(raw)
     for before, after in zip(raw, assigned, strict=True):
         assert formation_key(before) == formation_key(after)
@@ -183,7 +180,7 @@ def test_golden_m15_proxy_says_rally_structure_says_drop() -> None:
     changed direction since. DROP_BASE_DROP.
     """
     candles = m15_eurusd()
-    bases, facts = _bases(candles, _FX_BODY, _M_FX)
+    bases, facts = _bases(candles, _FX, _M_FX)
     base = _at(bases, "2026-09-21 19:15")
 
     assert base.poi_type is PoiType.BASE_DROP
@@ -204,14 +201,16 @@ def test_golden_m15_proxy_says_rally_structure_says_drop() -> None:
 def test_golden_m15_base_now_owns_the_patterns_that_were_drawn_instead_of_it() -> None:
     """The original complaint, closed.
 
-    Those bars emit a BEARISH_PRESSURE_WICK and a DOJI. With the Base denied
-    authority they were the only things on the chart. With the structural
-    arrival the Base owns both, so the display has one formation to draw
-    rather than two fragments of it.
+    Those bars emit a BEARISH_PRESSURE_WICK, a DOJI and an EVENING_STAR. With
+    the Base denied authority they were the only things on the chart. With the
+    structural arrival the Base owns all three -- the wick and the doji sit
+    INSIDE the consolidation, and the Evening Star is exactly CO-EXTENSIVE with
+    the complete Base formation. The display has one formation to draw rather
+    than three fragments of it.
     """
     candles = m15_eurusd()
     timeline, walk = structure_of(candles, _M_FX)
-    universe = poi_universe(candles, _FX_BODY, _M_FX)
+    universe = poi_universe(candles, _FX, _M_FX)
     bases = [c for c in universe if c.poi_type in _BASE_TYPES]
     rest = [c for c in universe if c.poi_type not in _BASE_TYPES]
     assigned, _ = assign_base_arrival(bases, timeline, walk)
@@ -222,7 +221,11 @@ def test_golden_m15_base_now_owns_the_patterns_that_were_drawn_instead_of_it() -
     ]
     golden = formation_key(_at(assigned, "2026-09-21 19:15"))
     owned = {r.member_key[0] for r in subordinate if r.owner_key == golden}
-    assert owned == {PoiType.BEARISH_PRESSURE_WICK, PoiType.DOJI}
+    assert owned == {
+        PoiType.BEARISH_PRESSURE_WICK,
+        PoiType.DOJI,
+        PoiType.EVENING_STAR,
+    }
 
     # and under the retired proxy the same formation owned nothing
     proxied = [b._replace(base_family=_candle_proxy(candles, b)) for b in bases]
@@ -246,8 +249,8 @@ def test_h3_rally_base_drop_the_proxy_would_have_granted_authority_wrongly() -> 
     area is BULLISH, which makes it RALLY_BASE_DROP: a counter-trend pause the
     approved standard does not recognise as a Base at all.
 
-    This one needs no experiment flag, so the structural arrival matters even
-    with `base_size_uses_body` off.
+    This one is admitted by the size rule either side of the Arm E
+    calibration, so the structural arrival matters independently of it.
     """
     candles = h3_xauusd()
     bases, facts = _bases(candles, _XAU, _M_XAU)
@@ -279,7 +282,7 @@ def test_h3_genuine_rally_base_rally_where_the_proxy_read_a_drop() -> None:
     """RBR is standard, and the proxy would have thrown it away: the candle
     before the base closes DOWN, which the proxy called DROP_BASE_RALLY."""
     candles = h3_xauusd()
-    bases, _ = _bases(candles, _XAU_BODY, _M_XAU)
+    bases, _ = _bases(candles, _XAU, _M_XAU)
     base = _at(bases, "2026-08-11 19:00")
 
     assert _candle_proxy(candles, base) is BaseFamily.DROP_BASE_RALLY
@@ -306,9 +309,9 @@ def test_the_arrival_fact_is_never_known_after_the_instant_it_describes() -> Non
     """The causality receipt. `structure_direction_at` bisects on availability,
     so a leg confirmed after price arrived cannot classify the arrival."""
     for candles, config, measurement in (
-        (m15_eurusd(), _FX_BODY, _M_FX),
-        (m45_xauusd(), _XAU_BODY, _M_XAU),
-        (h3_xauusd(), _XAU_BODY, _M_XAU),
+        (m15_eurusd(), _FX, _M_FX),
+        (m45_xauusd(), _XAU, _M_XAU),
+        (h3_xauusd(), _XAU, _M_XAU),
     ):
         _, facts = _bases(candles, config, measurement)
         assert facts
@@ -332,9 +335,7 @@ def test_the_family_never_changes_once_the_prefix_reaches_the_base() -> None:
     for end in range(40, len(candles) + 1, 4):
         prefix = candles[:end]
         timeline, walk = structure_of(prefix, _M_FX)
-        assigned, facts = assign_base_arrival(
-            detect_bases(prefix, _FX_BODY), timeline, walk
-        )
+        assigned, facts = assign_base_arrival(detect_bases(prefix, _FX), timeline, walk)
         for base in assigned:
             key = formation_key(base)
             fact = facts[key]
@@ -354,7 +355,7 @@ def test_the_family_never_changes_once_the_prefix_reaches_the_base() -> None:
 def test_resolve_and_assign_agree() -> None:
     candles = m45_xauusd()
     timeline, walk = structure_of(candles, _M_XAU)
-    raw = detect_bases(candles, _XAU_BODY)
+    raw = detect_bases(candles, _XAU)
     facts = resolve_base_arrival(raw, timeline, walk)
     assigned, assigned_facts = assign_base_arrival(raw, timeline, walk)
     assert facts == assigned_facts

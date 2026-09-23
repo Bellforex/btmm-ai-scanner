@@ -64,14 +64,8 @@ _SHAPE = [
 ]
 
 
-#: Arm B of the size-basis experiment. Batch and frontier must agree under
-#: BOTH bases -- a switch implemented in only one path would be worse than no
-#: switch at all.
-_PCONFIG_BODY = _PCONFIG.model_copy(update={"base_size_uses_body": True})
-
 #: FX-tick twins for the real M15 capture (arms C and D, and the bundle path).
 _M15_PCONFIG = _PCONFIG.model_copy(update={"minimum_price_tick": Decimal("0.00001")})
-_M15_PCONFIG_BODY = _M15_PCONFIG.model_copy(update={"base_size_uses_body": True})
 _M15_MCONFIG = _MCONFIG.model_copy(update={"minimum_price_tick": Decimal("0.00001")})
 
 #: Arms C and D, and the bundle path, need the real capture: a structural
@@ -137,7 +131,7 @@ def _assert_paths_agree(cfg) -> set:
 
 def test_batch_equals_incremental_under_the_body_size_basis() -> None:
     """Arm B: the experimental size basis must be identical in both paths."""
-    rows = _assert_paths_agree(_PCONFIG_BODY)
+    rows = _assert_paths_agree(_PCONFIG)
     assert rows, "arm B produced no Base; the assertions were vacuous"
     assert {row[1] for row in rows} == {None}, "the detector invented an arrival"
 
@@ -308,7 +302,7 @@ def test_arm_d_batch_equals_incremental_with_body_size_and_structural_arrival() 
     Families must actually be resolved here, or the equality is only proving
     that two paths agree about nothing.
     """
-    rows = _assert_structural_arms_agree(_M15_PCONFIG_BODY)
+    rows = _assert_structural_arms_agree(_M15_PCONFIG)
     assert rows, "arm D produced no Base; the assertions were vacuous"
     families = {row[4] for row in rows}
     assert families - {None}, f"no family was ever resolved: {families}"

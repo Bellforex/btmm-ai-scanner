@@ -16,6 +16,19 @@ instead of silently passing.
 
 Every emitted field is compared: type, direction, both bounds, strength tier,
 the identity triple, and all three timestamps.
+
+DOCTRINE VERSION SKEW (RC5 Arm E, 2026-09-23). The P3 Pine appendix is CLOSED
+and carries `C_POI_SMALL_CANDLE_STANDARD = 0.50`. Production Python has since
+been calibrated to `base_candle_size_ratio_standard = 0.60` (author decision:
+one canonical Base-size rule on the Total Range basis). So the two now
+implement different Base doctrine versions, and comparing them at production's
+default would be comparing two different rules rather than testing the port.
+
+`_CONFIG` therefore pins the Base constant to the P3-era 0.50. What this file
+proves is unchanged and still worth proving: the Pine transcription reproduces
+the Python detector EXACTLY under the doctrine that Pine actually implements.
+Carrying Arm E into Pine is the pending port work, and when it lands this pin
+is what must be removed.
 """
 
 from __future__ import annotations
@@ -61,7 +74,12 @@ def _load(name: str, relpath: str) -> ModuleType:
 
 M = _load("_p3_pine_model", "tests/parity_support/p3_pine_model.py")
 
-_CONFIG = PoiConfiguration(minimum_price_tick=Decimal("0.01"))
+#: P3-era Base size doctrine -- see "DOCTRINE VERSION SKEW" above. Every
+#: other field is production default.
+_CONFIG = PoiConfiguration(
+    minimum_price_tick=Decimal("0.01"),
+    base_candle_size_ratio_standard=Decimal("0.50"),
+)
 _BASE_TIME = datetime(2026, 1, 1, tzinfo=UTC)
 _RAW_CANDLE_ID = UUID("0193f480-1234-7abc-8def-abcdefabcdaa")
 _PROVENANCE_ID = UUID("0193f480-1234-7abc-8def-abcdefabcdff")

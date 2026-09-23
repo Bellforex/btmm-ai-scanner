@@ -11,6 +11,7 @@ Standing changes; identity never does.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, NamedTuple
 from uuid import UUID
 
@@ -42,6 +43,10 @@ class _Cand(NamedTuple):
     #: Only Bases carry one; patterns leave it None, exactly as the real
     #: candidates do.
     base_family: BaseFamily | None = None
+    #: The co-extensive path compares BOTH zone edges exactly. Defaults differ
+    #: between `_base` and `_pattern` so nothing is accidentally co-extensive.
+    zone_top: Decimal = Decimal("10")
+    zone_bottom: Decimal = Decimal("9")
 
 
 def _base(
@@ -52,6 +57,8 @@ def _base(
     direction: PoiDirection = PoiDirection.BEARISH,
     minutes: int = 5,
     base_family: BaseFamily | None = BaseFamily.DROP_BASE_DROP,
+    zone_top: Decimal = Decimal("10"),
+    zone_bottom: Decimal = Decimal("9"),
 ) -> _Cand:
     return _Cand(
         poi_type=poi_type,
@@ -62,6 +69,8 @@ def _base(
         ),
         availability_time_utc=_T0 + timedelta(minutes=minutes),
         base_family=base_family,
+        zone_top=zone_top,
+        zone_bottom=zone_bottom,
     )
 
 
@@ -70,12 +79,16 @@ def _pattern(
     indices: tuple[int, ...],
     direction: PoiDirection = PoiDirection.BEARISH,
     minutes: int = 5,
+    zone_top: Decimal = Decimal("8"),
+    zone_bottom: Decimal = Decimal("7"),
 ) -> _Cand:
     return _Cand(
         poi_type=poi_type,
         direction=direction,
         source_candle_record_ids=tuple(_cid(i) for i in indices),
         availability_time_utc=_T0 + timedelta(minutes=minutes),
+        zone_top=zone_top,
+        zone_bottom=zone_bottom,
     )
 
 
@@ -300,3 +313,121 @@ def test_a_base_with_no_known_arrival_owns_nothing() -> None:
     base = _base(base_family=None)
     star = _pattern(PoiType.SHOOTING_STAR, (2,))
     assert resolve_formation_ownership([base, star]) == ()
+
+
+# ---------------------------------------------------------------------------
+# CO-EXTENSIVE OWNERSHIP (author decision, 2026-09-23)
+#
+# A second path to subordination, for a pattern that IS the Base rather than
+# one INSIDE it. Exact only: same complete formation span, same zone on both
+# edges. The negative cases below are the whole safety of the rule.
+# ---------------------------------------------------------------------------
+
+
+def _co_extensive_star(base: _Cand, **overrides) -> _Cand:
+    """An EVENING_STAR occupying the Base's COMPLETE span, zones matching."""
+    fields = {
+        "poi_type": PoiType.EVENING_STAR,
+        "direction": base.direction,
+        "source_candle_record_ids": base.source_candle_record_ids,
+        "availability_time_utc": base.availability_time_utc,
+        "zone_top": base.zone_top,
+        "zone_bottom": base.zone_bottom,
+    }
+    fields.update(overrides)
+    return _Cand(**fields)
+
+
+def test_an_exactly_co_extensive_pattern_is_subordinate() -> None:
+    base = _base()
+    star = _co_extensive_star(base)
+    records = resolve_formation_ownership([base, star])
+    member = [r for r in records if r.relationship is OwnershipRelationship.SUBORDINATE]
+    assert len(member) == 1
+    assert member[0].member_key == formation_key(star)
+    assert member[0].reason is OwnershipReason.CO_EXTENSIVE_FORMATION
+    assert member[0].active_from_utc == max(
+        base.availability_time_utc, star.availability_time_utc
+    )
+
+
+def test_the_complete_span_and_the_base_candles_are_different_concepts() -> None:
+    """The co-extensive member includes the departure; a contained member must
+    not. Mutating one concept into the other would collapse both rules."""
+    base = _base()
+    star = _co_extensive_star(base)
+    assert star.source_candle_record_ids == base.source_candle_record_ids
+    # the departure is in the complete span and NOT in the base candles
+    assert star.source_candle_record_ids[-1] not in base.source_candle_record_ids[:-1]
+
+    inside = _pattern(PoiType.DOJI, (2,))
+    records = {
+        r.member_key: r.reason
+        for r in resolve_formation_ownership([base, star, inside])
+    }
+    assert records[formation_key(star)] is OwnershipReason.CO_EXTENSIVE_FORMATION
+    assert records[formation_key(inside)] is OwnershipReason.CONTAINED_CANDLE_PATTERN
+
+
+def test_same_geometry_but_a_different_source_formation_is_not_subordinate() -> None:
+    """Directive case 5. Identical zone, different candles -- two decisions that
+    look alike, which is precisely what must NOT be merged."""
+    base = _base()
+    elsewhere = _Cand(
+        poi_type=PoiType.EVENING_STAR,
+        direction=base.direction,
+        source_candle_record_ids=(_cid(11), _cid(12), _cid(13)),
+        availability_time_utc=base.availability_time_utc,
+        zone_top=base.zone_top,
+        zone_bottom=base.zone_bottom,
+    )
+    assert not resolve_formation_ownership([base, elsewhere])
+
+
+def test_same_source_span_but_a_different_zone_is_not_subordinate() -> None:
+    """Directive case 6. No tolerance: one tick of difference on either edge is
+    a different zone."""
+    base = _base()
+    for shifted in (
+        _co_extensive_star(base, zone_top=base.zone_top + Decimal("0.00001")),
+        _co_extensive_star(base, zone_bottom=base.zone_bottom - Decimal("0.00001")),
+    ):
+        assert not resolve_formation_ownership([base, shifted])
+
+
+def test_a_co_extensive_pattern_of_the_wrong_direction_is_not_subordinate() -> None:
+    base = _base()
+    opposed = _co_extensive_star(base, direction=PoiDirection.BULLISH)
+    assert not resolve_formation_ownership([base, opposed])
+
+
+def test_a_non_standard_family_base_owns_nothing_co_extensive_either() -> None:
+    base = _base(base_family=BaseFamily.RALLY_BASE_DROP)
+    assert not resolve_formation_ownership([base, _co_extensive_star(base)])
+
+
+def test_an_independent_fvg_stays_independent_even_when_co_extensive() -> None:
+    """Directive case 7. FVG is not an ownable pattern type: a Base departure
+    legitimately creates an imbalance, and that imbalance is its own region."""
+    base = _base()
+    for fvg_type in (PoiType.BUY_FAIR_VALUE_GAP, PoiType.SELL_FAIR_VALUE_GAP):
+        fvg = _co_extensive_star(base, poi_type=fvg_type)
+        assert not resolve_formation_ownership([base, fvg])
+
+
+def test_order_block_and_b2s_s2b_are_untouched_pending_doctrine() -> None:
+    """Directive cases 8 and 9. Precedence against a Base is not established in
+    either direction, so neither path may claim them -- not by omission and not
+    by guess."""
+    base = _base()
+    for poi_type in (
+        PoiType.BUY_ORDER_BLOCK,
+        PoiType.SELL_ORDER_BLOCK,
+        PoiType.BUY_TO_SELL_CANDLE,
+        PoiType.SELL_TO_BUY_CANDLE,
+    ):
+        assert poi_type not in OWNABLE_PATTERN_TYPES
+        assert not resolve_formation_ownership(
+            [base, _co_extensive_star(base, poi_type=poi_type)]
+        )
+        assert not resolve_formation_ownership([base, _pattern(poi_type, (2,))])

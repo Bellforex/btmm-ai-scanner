@@ -72,7 +72,6 @@ def _scan(*, structural_origin: bool):
             "poi_configuration": PoiConfiguration(
                 minimum_price_tick=_TICK,
                 rc5_structural_origin=structural_origin,
-                base_size_uses_body=True,
             )
         }
     )
@@ -241,35 +240,80 @@ def test_sidecar_subordinations_equal_final_authority_suppressions() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_pattern_spanning_the_departure_candle_is_not_contained() -> None:
-    """OPEN AUTHOR DECISION, recorded as measured fact.
+def test_a_co_extensive_pattern_is_owned_through_the_second_path() -> None:
+    """AUTHOR DECISION (2026-09-23): a valid standard Base OWNS an exactly
+    co-extensive candle-pattern formation.
 
-    The EVENING_STAR on the same bars spans 134-136. `_base_candle_ids`
-    deliberately excludes the departure (136) because the departure is the
-    impulse that confirms the base, not part of the pause -- so containment
-    fails by exactly one bar and the Evening Star keeps full standing.
+    The EVENING_STAR on these bars spans 134-136 -- identical to the Base's
+    COMPLETE formation span, and with an identical zone. It is not contained in
+    the consolidation (`_base_candle_ids` excludes the departure 136,
+    deliberately), so the containment path cannot see it. It is the SAME market
+    decision carried by a second semantic description, which is what the
+    co-extensive path is for.
 
-    Whether a Base should also own a pattern that ENDS on its departure is a
-    doctrine question. This test pins today's behaviour so a change is
-    deliberate, and asserts nothing about which answer is right.
+    Identity is preserved: it stays PoiType.EVENING_STAR. Only standing moves.
+    """
+    analysis, ledger = _scan(structural_origin=False)
+    observations = analysis.poi_observations
+    applied = assign_formation_ownership_authority(observations, ledger)
+
+    base = _at(observations, _GOLDEN, PoiType.BASE_DROP)
+    star = _at(observations, _GOLDEN, PoiType.EVENING_STAR)
+
+    # co-extensive, exactly: same complete span AND both zone edges
+    assert star.source_candle_record_ids == base.source_candle_record_ids
+    assert star.zone_top == base.zone_top
+    assert star.zone_bottom == base.zone_bottom
+    # and NOT contained -- the two paths are distinct concepts
+    assert star.source_candle_record_ids[-1] not in base.source_candle_record_ids[:-1]
+
+    record = ledger.get(stable_poi_key(star))
+    assert record.authority_status is AuthorityReason.FORMATION_SUBORDINATE
+    assert record.formation_owner_key == stable_poi_key(base)
+    assert record.poi_type is PoiType.EVENING_STAR  # identity preserved
+
+    reason = next(
+        r.reason for r in applied if r.member_key == stable_poi_key(star)
+    ).value
+    assert reason == "CO_EXTENSIVE_FORMATION"
+    contained = next(
+        r.reason
+        for r in applied
+        if r.member_key
+        == stable_poi_key(_at(observations, _GOLDEN, PoiType.BEARISH_PRESSURE_WICK))
+    ).value
+    assert contained == "CONTAINED_CANDLE_PATTERN"
+
+    authoritative = {
+        stable_poi_key(o) for o in authoritative_rc5_pois(observations, ledger)
+    }
+    assert stable_poi_key(base) in authoritative
+    assert stable_poi_key(star) not in authoritative
+
+
+def test_a_co_extensive_member_that_confirms_with_its_owner_never_stood_alone() -> None:
+    """Causality still holds, and gives a different answer here than for the
+    contained wick.
+
+    The Evening Star and the Base both confirm on the departure close, so
+    ownership activates at the very instant the Evening Star becomes available:
+    it never had an independent window. The Pressure Wick did. Both are correct
+    and both follow from the same rule.
     """
     analysis, ledger = _scan(structural_origin=False)
     observations = analysis.poi_observations
     assign_formation_ownership_authority(observations, ledger)
 
-    base = _at(observations, _GOLDEN, PoiType.BASE_DROP)
-    star = _at(observations, _GOLDEN, PoiType.EVENING_STAR)
-
-    assert len(star.source_candle_record_ids) == 3
-    assert star.source_candle_record_ids == base.source_candle_record_ids
-    # identical source candles, yet not contained: the last one is the departure
-    assert ledger.get(stable_poi_key(star)).authority_status is not (
-        AuthorityReason.FORMATION_SUBORDINATE
+    star = ledger.get(stable_poi_key(_at(observations, _GOLDEN, PoiType.EVENING_STAR)))
+    wick = ledger.get(
+        stable_poi_key(_at(observations, _GOLDEN, PoiType.BEARISH_PRESSURE_WICK))
     )
-    authoritative = {
-        stable_poi_key(o) for o in authoritative_rc5_pois(observations, ledger)
-    }
-    assert stable_poi_key(star) in authoritative
+
+    assert star.formation_subordinate_since_utc == star.availability_time_utc
+    assert star.is_actionable_at(star.availability_time_utc) is False
+
+    assert wick.availability_time_utc < wick.formation_subordinate_since_utc
+    assert wick.is_actionable_at(wick.availability_time_utc) is True
 
 
 # ---------------------------------------------------------------------------
@@ -321,12 +365,11 @@ def test_the_corrected_base_reproduces_rc4s_zone_exactly() -> None:
     1.14672-1.14693. The corrected RC5 Base covers the SAME candles with the
     SAME zone and is labelled BASE_DROP / DROP_BASE_DROP.
 
-    So the author was seeing the right rectangle under the wrong name. That is
-    also why ownership cannot subordinate this Evening Star: it is not a
-    pattern CONTAINED in the Base, it is co-extensive with it -- identical
-    source candles, identical geometry. Containment is the wrong tool for a
-    duplicate, and inventing a containment rule that swallowed it would have
-    hidden that.
+    So the author was seeing the right rectangle under the wrong name: RC4
+    often had the right AREA under the wrong FORMATION identity. RC5 must keep
+    the geometry and correct the identity, which is exactly what the
+    co-extensive ownership path does -- the Base is primary and the Evening
+    Star keeps its own PoiType as subordinate evidence.
     """
     analysis, ledger = _scan(structural_origin=False)
     observations = analysis.poi_observations
@@ -373,7 +416,6 @@ def test_a_formation_subordinate_stops_emitting_but_keeps_its_history() -> None:
             "poi_configuration": PoiConfiguration(
                 minimum_price_tick=_TICK,
                 rc5_structural_origin=False,
-                base_size_uses_body=True,
             )
         }
     )
@@ -429,3 +471,51 @@ def test_a_formation_subordinate_stops_emitting_but_keeps_its_history() -> None:
     for poi_id in first_suppressed:
         assert evaluated_while_suppressed.get(poi_id, 0) == 0
         assert events_after_suppression.get(poi_id, 0) == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. structural-origin compatibility, where provenance exists
+# ---------------------------------------------------------------------------
+
+
+def test_ownership_is_refused_when_the_two_formations_have_different_origins() -> None:
+    """ "Structural origin compatible / same WHERE PROVENANCE EXISTS".
+
+    Geometry alone must not merge two formations the structure walk assigned to
+    different leg origins. On the real captures used here both records carry no
+    origin (the structural-origin gate is off), so the clause is vacuous there
+    and this exercises it directly on the ledger instead -- otherwise the guard
+    would be untested code.
+    """
+    from dataclasses import replace as _replace
+
+    analysis, ledger = _scan(structural_origin=False)
+    observations = analysis.poi_observations
+
+    base_key = stable_poi_key(_at(observations, _GOLDEN, PoiType.BASE_DROP))
+    wick_key = stable_poi_key(_at(observations, _GOLDEN, PoiType.BEARISH_PRESSURE_WICK))
+
+    # baseline: with no provenance recorded, ownership applies
+    assert any(
+        r.member_key == wick_key
+        for r in assign_formation_ownership_authority(observations, ledger)
+    )
+
+    # now give the two formations DIFFERENT origins and rebuild the standing
+    fresh = _scan(structural_origin=False)[1]
+    fresh.records[base_key] = _replace(fresh.records[base_key], origin_swing_id="A")
+    fresh.records[wick_key] = _replace(fresh.records[wick_key], origin_swing_id="B")
+    applied = assign_formation_ownership_authority(observations, fresh)
+    assert not any(r.member_key == wick_key for r in applied)
+    assert fresh.get(wick_key).authority_status is not (
+        AuthorityReason.FORMATION_SUBORDINATE
+    )
+
+    # and the SAME origin is compatible
+    same = _scan(structural_origin=False)[1]
+    same.records[base_key] = _replace(same.records[base_key], origin_swing_id="A")
+    same.records[wick_key] = _replace(same.records[wick_key], origin_swing_id="A")
+    assert any(
+        r.member_key == wick_key
+        for r in assign_formation_ownership_authority(observations, same)
+    )

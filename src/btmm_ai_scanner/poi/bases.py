@@ -7,7 +7,7 @@ from uuid import UUID
 from btmm_ai_scanner.config.enums import InternalSymbol, Timeframe
 from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.measurements.atr import compute_atr_series
-from btmm_ai_scanner.measurements.candle_metrics import body, total_range
+from btmm_ai_scanner.measurements.candle_metrics import total_range
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.enums import (
     BaseFamily,
@@ -70,28 +70,14 @@ def detect_bases(
             max_base_range = max(total_range(c) for c in base_candles)
             if max_base_range == 0:
                 continue
-            # RC5 EXPERIMENT: the SIZE basis, and only the size basis. When the
-            # flag is off this is max_base_range and every comparison below is
-            # byte-identical to the approved standard.
-            max_base_size = (
-                max(body(c) for c in base_candles)
-                if configuration.base_size_uses_body
-                else max_base_range
-            )
+            # THE ONE Base-candle size rule (Arm E). Total Range, wicks
+            # included, against a single constant. The reciprocal form
+            # (departure / base >= 1.666...) is the SAME statement and is
+            # derived from this constant, never configured separately -- that
+            # duplication is exactly how 0.60 and 2.0 drifted apart before.
             if (
-                max_base_size
-                > configuration.small_candle_ratio_standard * departure_range
-            ):
-                continue
-
-            # A zero body is maximal compactness, not a degenerate case. It is
-            # only reachable under the body basis (max_base_range is already
-            # guarded non-zero), so no new numeric convention enters the
-            # approved path, and no minimum doji body is invented.
-            ratio = None if max_base_size == 0 else departure_range / max_base_size
-            if (
-                ratio is not None
-                and ratio < configuration.order_block_size_ratio_standard
+                max_base_range
+                > configuration.base_candle_size_ratio_standard * departure_range
             ):
                 continue
 
@@ -151,11 +137,10 @@ def detect_bases(
             else:
                 continue
 
+            # Strong Base: the same rule, the same basis, the stricter cap.
             strong = (
-                ratio is None or ratio >= configuration.order_block_size_ratio_strong
-            ) and (
-                max_base_size
-                <= configuration.small_candle_ratio_strong * departure_range
+                max_base_range
+                <= configuration.base_candle_size_ratio_strong * departure_range
             )
 
             results.append(

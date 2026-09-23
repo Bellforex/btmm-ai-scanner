@@ -13,6 +13,7 @@ a formation ownership both need real structure to exist at all.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
@@ -41,9 +42,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 _TICK = Decimal("0.00001")
-_POI = PoiConfiguration(
-    minimum_price_tick=_TICK, rc5_structural_origin=False, base_size_uses_body=True
-)
+_POI = PoiConfiguration(minimum_price_tick=_TICK, rc5_structural_origin=False)
 
 #: Prefixes are expensive here (both producers run the whole pipeline), so they
 #: are sampled rather than exhaustive. The first Base lands well before 140.
@@ -141,7 +140,15 @@ def test_batch_and_incremental_agree_on_arrival_and_ownership() -> None:
 
 
 def test_ownership_activation_is_never_earlier_than_either_member() -> None:
-    """The causality guarantee, on whatever the real capture produces."""
+    """The causality guarantee, on whatever the real capture produces.
+
+    The invariant is about the WINDOW BEFORE activation, not about the member's
+    own availability instant. A co-extensive member confirms at the same moment
+    as its owner, so it has no such window and is subordinate immediately -- a
+    contained member that confirmed earlier does have one. Both follow from the
+    same rule; asserting "actionable at its own availability" would only be
+    true of the second kind.
+    """
     candles = m15_eurusd()
     analysis, ledger = _batch(candles)
     observations = analysis.poi_observations
@@ -153,5 +160,9 @@ def test_ownership_activation_is_never_earlier_than_either_member() -> None:
         member = ledger.get(relationship.member_key)
         assert relationship.active_from_utc >= owner.availability_time_utc
         assert relationship.active_from_utc >= member.availability_time_utc
-        assert member.is_actionable_at(member.availability_time_utc) is True
-        assert member.is_actionable_at(relationship.active_from_utc) is False
+        since = relationship.active_from_utc
+        assert member.is_actionable_at(since) is False
+        # everything strictly before activation is still independent
+        assert member.is_actionable_at(since - timedelta(microseconds=1)) is True
+        if member.availability_time_utc < since:
+            assert member.is_actionable_at(member.availability_time_utc) is True

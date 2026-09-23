@@ -983,3 +983,216 @@ two everywhere it differs.
 **BODY-SIZE BASIS: `default remains FALSE`.** Gates 1–8 pass, but gate 6 rests
 on an absent corpus and Part C shows the switch contradicts §2 as written. That
 is an author decision, not one to take by passing a checklist.
+
+---
+
+# Unit 14 — three author decisions locked; Python frozen
+
+## Decision 1 — co-extensive ownership
+
+A valid STANDARD Base now owns an exactly co-extensive candle-pattern
+formation, as a second ownership path beside containment.
+
+Two deliberately separate concepts, in two separate functions so neither can
+quietly become the other:
+
+| concept | function | question |
+| --- | --- | --- |
+| BASE CANDLE SET | `_base_candle_ids` | is this pattern INSIDE the pause? |
+| COMPLETE BASE FORMATION SPAN | `_complete_formation_span_ids` | is this pattern the SAME formation? |
+
+`_is_co_extensive` is **exact**: identical complete source span **and**
+identical `zone_top` **and** identical `zone_bottom`. No tolerance, no ATR
+band, no fuzzy overlap — a one-tick difference on either edge is a different
+zone and keeps its independence. Direction must agree, the owner must be a
+standard family (RBR/DBD), and where BOTH records carry a structural origin the
+origins must match.
+
+New reason code `OwnershipReason.CO_EXTENSIVE_FORMATION`, distinct from
+`CONTAINED_CANDLE_PATTERN`, so forensics can always tell which path applied.
+
+### Golden M15 result
+
+| POI | standing | path |
+| --- | --- | --- |
+| `BASE_DROP` / DBD | **PRIMARY** | — |
+| `BEARISH_PRESSURE_WICK` 19:15 | SUBORDINATE | `CONTAINED_CANDLE_PATTERN` |
+| `DOJI` 19:30 | SUBORDINATE | `CONTAINED_CANDLE_PATTERN` |
+| `EVENING_STAR` 19:15 | **SUBORDINATE** | **`CO_EXTENSIVE_FORMATION`** |
+
+Every subordinate keeps its own `PoiType` in the ledger. Nothing is relabelled
+as a Base; only standing moves.
+
+### Causality gives two different, correct answers
+
+| member | available | subordinate since | independent window |
+| --- | --- | --- | --- |
+| `BEARISH_PRESSURE_WICK` | 19:30 | 20:00 | **0:30:00** — preserved |
+| `EVENING_STAR` | 20:00 | 20:00 | **none** — it confirms with its owner |
+
+The Evening Star never stood alone, because it and the Base both confirm on the
+departure close. That is not a special case: it falls out of
+`active_from = max(owner, member)` unchanged.
+
+## Decision 2 — the H3 huge-wick case is ACCEPTED
+
+`2026-08-26 16:00` is now a permanent calibration-watch fixture
+(`test_the_h3_huge_wick_case_is_accepted_under_current_doctrine`), asserting it
+**passes** and is **not** a false positive.
+
+Pinned evidence: base candles 88.2% / 91.6% wick, max body 2.25 against ranges
+19.08 / 17.57, departure 34.72, `Base Height / departure = 0.592 ≤ 0.60`,
+`h/ATR = 0.658 ≤ 0.75`, `min overlap = 0.915 ≥ 0.50`, `drift/h = 0.073 ≤ 0.25`.
+
+Also pinned: it outscores the author's own approved M15 example on **both**
+bases, so no size threshold separates them.
+
+**No wick rule was introduced.** No maximum wick %, no wick/body threshold, no
+body/range threshold, no ATR wick cap, no fixed pip limit.
+
+## Decision 3 — Arm E is production
+
+### The canonical rule
+
+```
+max base candle Total Range  <=  base_candle_size_ratio_standard x departure Total Range
+                             <=  0.60 x departure Total Range
+```
+
+Basis: Candle Total Range, wicks included — the basis the source specifies.
+`knowledge/POI_MASTER_CATALOG.md` §1.4 describes a Base as "2+ candles, short,
+**small range**" and records that those words carry "**no numeric
+thresholds**"; the source reserves body language for Pressure Wick.
+
+0.60 introduces no new number: `base_height_departure_multiplier` is already
+0.60, and since Base Height ≥ every base candle's Total Range, that gate
+**already implied this bound**. The calibration makes the implication explicit
+instead of enforcing a stricter, unsourced 0.50 on top of it.
+
+### Duplicate-gate cleanup
+
+Before, the Base applied **two** separately-configured expressions of one rule:
+
+| | |
+| --- | --- |
+| `small_candle_ratio_standard` | 0.50 |
+| `order_block_size_ratio_standard` | 2.0 |
+
+exact reciprocals, free to drift apart. Now there is **one** constant and the
+reciprocal is a derived property:
+
+```python
+base_candle_size_ratio_standard = Decimal("0.60")   # configured
+base_departure_ratio_standard   -> 1 / 0.60         # derived, not settable
+```
+
+The Base path no longer reads `small_candle_ratio_*` **or**
+`order_block_size_ratio_*` at all — asserted by source inspection in
+`test_the_base_path_no_longer_reads_the_frozen_p3_constants`.
+
+`order_block_size_ratio_*` is untouched because `order_blocks.py` and
+`engulfing.py` share it; changing it would have silently moved two other
+detectors. `small_candle_ratio_*` survives **only** because the closed P3 Pine
+appendix pins `C_POI_SMALL_CANDLE_STANDARD = 0.50` in its parity test; it is
+documented as a frozen P3-era constant and is not the RC5 Base rule.
+
+**The strong gate collapsed too, provably without effect.** It required
+`ratio >= 3.0` AND `max_base <= 0.3333 x dep`; since `0.3333 < 1/3`, the second
+implies the first, so dropping the first changes nothing.
+
+### The collapse is behaviour-preserving
+
+Pinning the new single constant to the old 0.50 reproduces the pre-Arm-E
+detector **exactly** — identical POI type, source ids, zone and strength tier —
+on all three captures (4/4, 4/4, 6/6). Only the constant moved.
+
+### Populations
+
+| capture | A (0.50) | **E (0.60, production)** | E ⊇ A | E members also passing body ≥ 2.0 |
+| --- | --- | --- | --- | --- |
+| M15 EURUSD | 4 | **7** | yes | 7 |
+| M45 XAUUSD | 4 | **10** | yes | 10 |
+| H3 XAUUSD | 6 | **9** | yes | 9 |
+
+Arm E reproduces the body-basis population exactly, as predicted — every Arm E
+member also satisfies the body test, and the counts match. The extra population
+is confined to `0.50 < max range / departure ≤ 0.60`, asserted by
+`test_the_calibration_only_ever_admits_more_and_only_in_a_bounded_band`.
+
+One difference, favouring E: the golden formation is **STANDARD** under Arm E
+and would have been **STRONG** under the body basis, because the strong rule is
+still measured on Total Range.
+
+### Body experiment disposition
+
+`base_size_uses_body` is **deleted from `PoiConfiguration`** — no product
+configuration knob survives. Its evidence is kept as measurement in
+`test_base_candle_size_doctrine` (renamed from
+`test_base_size_body_experiment`): the golden formation's body ratio 5.83 vs
+range ratio 1.667, and the assertion that the knob no longer exists on the
+contract.
+
+## Ownership under Arm E
+
+| capture | observations | Bases | standard | families | groups | side-car | FINAL | agree |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M15 | 94 | 4 | 4 | DBD 4 | 1 | **2** | **2** | yes |
+| M45 | 111 | 6 | 4 | DBD 4, DBR 2 | 0 | 0 | 0 | yes |
+| H3 | 85 | 6 | 5 | DBD 3, RBR 2, RBD 1 | 0 | 0 | 0 | yes |
+
+M15 subordinations: 1 `CONTAINED_CANDLE_PATTERN` + 1 `CO_EXTENSIVE_FORMATION`.
+
+## RC4 geometry — pinned as a permanent regression
+
+`test_the_corrected_base_reproduces_rc4s_zone_exactly` asserts RC4's
+`EVENING_STAR` zone 1.14672–1.14693 on bars [134,135,136] equals the corrected
+RC5 `BASE_DROP`. RC4 often had the right **area** under the wrong **formation
+identity**; RC5 keeps the geometry and corrects the identity.
+
+## Arm E put Python ahead of every deployed Pine script
+
+The full suite caught this, and it is a real consequence rather than a test
+nuisance: **27 P3 detector-parity failures**.
+
+`tests/parity_support/p3_pine_model.py` transcribes
+`tradingview/btmm_poi_btrc_scanner_p3_dev.pine`, which carries
+`C_POI_SMALL_CANDLE_STANDARD = 0.50` and the reciprocal
+`ratio < C_POI_OB_RATIO_STANDARD` gate. Production Python now carries 0.60 with
+the reciprocal collapsed away, so the parity run was comparing two different
+doctrine versions rather than testing the port.
+
+Resolved honestly rather than papered over: `test_p3_detector_parity` pins its
+`_CONFIG` to the P3-era 0.50 and documents why. The claim it makes is unchanged
+and still worth making — the Pine transcription reproduces the Python detector
+exactly **under the doctrine Pine actually implements**. All 104 pass again.
+
+`test_the_pine_port_backlog_is_explicit_not_forgotten` then asserts the skew
+out loud: every `.pine` carrying the constant still has 0.50, production Python
+has 0.60. When the port lands that test fails and is the checklist.
+
+## Projected Pine semantic changes (for the port plan, not done here)
+
+| # | change | Pine site |
+| --- | --- | --- |
+| 1 | Base size constant 0.50 → 0.60 | `C_POI_SMALL_CANDLE_STANDARD` (CORE 2389) — introduce a Base-specific constant rather than moving the shared one |
+| 2 | delete the reciprocal Base gate | CORE 3320–3321 (`ratio < C_POI_OB_RATIO_STANDARD`) |
+| 3 | simplify the strong gate | CORE 3367 — drop `ratio >= C_POI_OB_RATIO_STRONG`, keep `<= C_POI_SMALL_CANDLE_STRONG` |
+| 4 | Base arrival family from the causal direction timeline | new; Pine already keeps the P2 walk direction, so this reads existing state at the Base's first-candle time |
+| 5 | `BaseFamily` metadata + standard-family gate (RBR/DBD) | new small map |
+| 6 | formation ownership: contained **and** co-extensive, with activation instant | new |
+| 7 | `FORMATION_SUBORDINATE` consumed before same-origin arbitration | new ordering in the authority pass |
+
+Changes 2 and 3 **remove** code. Changes 4–7 add. Net token impact is not
+estimated here: the only trustworthy number comes from the CE10117 oracle, and
+running it is Pine work, which is gated. Current CORE is 99,386 with 870 hard
+headroom and a 130 strict-reserve shortfall, so the port plan must budget
+capacity recovery before 4–7 land.
+
+## Still open, tracked, not touched
+
+* HH/HL/LH/LL draw at `pivotEndTime` instead of the canonical pivot event.
+* BOS/CHOCH connector left endpoint uses a broken-swing identity key as a
+  drawing coordinate.
+* Trendline anchor semantics — separate audit.
+* ORDER BLOCK and B2S/S2B precedence against a Base — deliberately unowned by
+  either path, pending forensics, and asserted as such.

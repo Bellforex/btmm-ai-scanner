@@ -96,6 +96,10 @@ class OwnershipRelationship(StrEnum):
 class OwnershipReason(StrEnum):
     #: The member's complete source span lies inside the owner's base candles.
     CONTAINED_CANDLE_PATTERN = "CONTAINED_CANDLE_PATTERN"
+    #: The member describes the SAME formation as the Base: identical complete
+    #: formation span and identical zone. Not overlap -- one market decision
+    #: carrying two semantic descriptions (author decision, 2026-09-23).
+    CO_EXTENSIVE_FORMATION = "CO_EXTENSIVE_FORMATION"
     #: The owning Base formation itself.
     OWNS_CONTAINED_EVIDENCE = "OWNS_CONTAINED_EVIDENCE"
 
@@ -133,6 +137,37 @@ def _base_candle_ids(base: Any) -> tuple[UUID, ...]:
     its independence.
     """
     return tuple(base.source_candle_record_ids[:-1])
+
+
+def _complete_formation_span_ids(base: Any) -> tuple[UUID, ...]:
+    """The COMPLETE Base formation: consolidation candles AND the confirming
+    departure.
+
+    Deliberately a different concept from `_base_candle_ids`, and deliberately a
+    separate function so neither can quietly become the other:
+
+    * `_base_candle_ids` answers "is this pattern INSIDE the pause?"
+    * this answers "is this pattern the SAME formation as the whole Base?"
+
+    A pattern that ends on the departure candle is not inside the pause, so the
+    containment rule cannot see it -- which is exactly the Evening Star case on
+    the author's M15 formation.
+    """
+    return tuple(base.source_candle_record_ids)
+
+
+def _is_co_extensive(member: Any, base: Any) -> bool:
+    """EXACT equality, with no tolerance anywhere.
+
+    The same complete formation span AND the same zone on both edges. No fuzzy
+    price overlap, no ATR tolerance, no "almost the same zone" -- a near miss is
+    two different reads of the market and keeps its independence.
+    """
+    if tuple(member.source_candle_record_ids) != _complete_formation_span_ids(base):
+        return False
+    return bool(
+        member.zone_top == base.zone_top and member.zone_bottom == base.zone_bottom
+    )
 
 
 def _is_contained(member: Any, base_candle_ids: frozenset[UUID]) -> bool:
@@ -189,14 +224,18 @@ def resolve_formation_ownership(
                 # opposite side inside the same candles is a different read of
                 # the market, not the same decision restated.
                 continue
-            if not _is_contained(pattern, base_ids):
+            if _is_contained(pattern, base_ids):
+                reason = OwnershipReason.CONTAINED_CANDLE_PATTERN
+            elif _is_co_extensive(pattern, base):
+                reason = OwnershipReason.CO_EXTENSIVE_FORMATION
+            else:
                 continue
             records.append(
                 FormationOwnership(
                     owner_key=owner_key,
                     member_key=formation_key(pattern),
                     relationship=OwnershipRelationship.SUBORDINATE,
-                    reason=OwnershipReason.CONTAINED_CANDLE_PATTERN,
+                    reason=reason,
                     active_from_utc=max(
                         base.availability_time_utc, pattern.availability_time_utc
                     ),

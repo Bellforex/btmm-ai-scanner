@@ -353,7 +353,21 @@ def assign_formation_ownership_authority(
     for relationship in relationships:
         if relationship.relationship is not OwnershipRelationship.SUBORDINATE:
             continue
-        if ledger.get(relationship.member_key) is None:
+        member = ledger.get(relationship.member_key)
+        owner = ledger.get(relationship.owner_key)
+        if member is None or owner is None:
+            continue
+        # Structural origin must be COMPATIBLE where provenance exists. Two
+        # formations the walk assigned to different leg origins are two
+        # decisions that happen to share candles, not one decision described
+        # twice -- geometry alone must not merge them. Where either side has no
+        # recorded origin the question cannot be asked and the geometric
+        # evidence stands on its own.
+        if (
+            owner.origin_swing_id is not None
+            and member.origin_swing_id is not None
+            and owner.origin_swing_id != member.origin_swing_id
+        ):
             continue
         ledger.assign_formation_subordinate(
             relationship.member_key,
