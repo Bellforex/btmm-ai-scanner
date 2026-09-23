@@ -719,3 +719,73 @@ the structure+trendline scope it is also **sufficient**. It is NOT implemented
 here: pricing it was the authorised step, and standing up a third generated
 artifact (composer support, anti-drift tests, and a runtime check that VIEW
 recomputes only the minimum structural subset) is its own unit.
+
+## VIEW dependency closure — evidence, and what it does NOT prove
+
+The port plan requires an EXECUTABLE dependency report before VIEW is built, not
+a comment. `tools/rc5_view_closure.py` is that report. Its history matters as
+much as its output.
+
+### Direct inspection: the two renderer dependencies are structural
+
+This part is solid, and was obtained by reading the actual producers rather than
+by any tool:
+
+| renderer needs | produced by | verdict |
+| --- | --- | --- |
+| `rc5SwingRole` | `f_rc5MarkSwing` called only from `p3Events` (transitions) and `p3Swings` (confirmed swings), CORE 6326/6338 | structural |
+| `fwTls` | `fwTls := tls` where `tls = f_detectTrendlines(wClose, wAtr, swings, scTlAtr)`, CORE 2179-2181 | P1 only — closes, ATR, swings |
+
+Neither reaches POI analysis, authority, ownership, P5, P8 or BTMM. The
+architecture is not obviously wrong, which is what allows the build to proceed.
+
+### Two unsound analyser attempts, reported rather than shipped
+
+**Attempt 1** indexed only top-level declarations and reported a closure of
+**20 symbols with no forbidden hits**. That was FALSE and reassuring, which is
+the worst combination. This file does not encapsulate the structure engine in
+functions: it fills state from the per-bar flow, so `fwTls := tls` was invisible.
+
+**Attempt 2** added assignment producers and still reported 20, because the
+producing statement's right-hand side (`tls`) is an INDENTED local that a
+top-level index does not contain either.
+
+**Attempt 3** indexes definitions at any indentation. Scope-blind by design, so
+it over-approximates — the safe direction for a "reaches nothing forbidden"
+claim.
+
+### What attempt 3 actually says
+
+| | |
+| --- | --- |
+| definitions indexed | 1,449 |
+| reachable from the two render roots | **320** |
+| excluded | 1,129 |
+
+**22% of the file.** That supports the claim VIEW is a genuine subset rather
+than the whole scanner — which is the question the runtime gate cares about.
+
+Two flags it raised, both examined rather than waved through:
+
+* `f_poiRange`, `f_poiBody`, `f_poiUpperWick`, `f_poiLowerWick`, `f_poiBodyEff`,
+  `f_poiBullClosePos`, `f_poiBearClosePos` — these are `high - low` and
+  `abs(close - open)`. **Candle arithmetic wearing a POI prefix**, legitimately
+  needed by the structure engine. The `f_poi` forbidden-prefix rule was too
+  blunt and has been narrowed to `f_poiDetect` plus the registry functions by
+  name.
+* `poiType`, `poiDirection`, `f_rc5PoiKind` — reached ONLY through single-letter
+  in-flow locals (`ti`, `ty`, `di`, `on`) that collide across scopes. Reported
+  as **INCONCLUSIVE**, not as pass and not as fail.
+
+### The honest limit
+
+A scope-blind analyser cannot settle those three. The definitive dependency
+check is the Pine compiler on a constructed VIEW: if VIEW compiles without the
+POI registry, it does not depend on it. That is the next step, and it is why
+VIEW was not built on the strength of this tool alone.
+
+### Not done in this unit
+
+VIEW composer, anti-drift tests, real generated-CORE measurement, VIEW token
+count, and the runtime gates (VIEW alone, CORE+VIEW, CORE+VIEW+PANEL). P2+P3
+remain blocked behind them, as the plan requires.
