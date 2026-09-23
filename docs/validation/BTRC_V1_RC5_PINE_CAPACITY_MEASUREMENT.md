@@ -1381,3 +1381,57 @@ The zone-selection fix was measured, not assumed:
 RC5 PANEL is unchanged at **97,056**: the composer removes the zone renderer
 from it, so the corrected line never reaches PANEL and the composed bytes are
 identical.
+
+## After the fix — the zones are on the chart
+
+RC5 USER **v16.0** attached on BAH-RC5-LAB, FX:EURUSD M15. Six zones draw at
+current price, gray fill, gray border, black text, size 31:
+
+| label | band |
+| --- | --- |
+| M15 • SHOOTING STAR | ~1.1490 |
+| M15 • SELL FVG | ~1.1472 |
+| M15 • RESISTANCE ZONE | ~1.1462 |
+| M15 • BEARISH PRESSURE WICK | ~1.1445 |
+| M15 • SELL … | ~1.1440 |
+| M15 • SELL … | ~1.1435 |
+
+**A reliable way to load a new version.** Adding from "My scripts" kept serving
+the cached version even after a hard reload. What works every time is the Pine
+Editor: open the script from the editor's script menu (its status bar states the
+version), then press **Add to chart**. That attached v16.0 first try.
+
+### Anchor QA
+
+| test | result |
+| --- | --- |
+| PAN (drag 300px) | **PASS** — every zone moved with its candles; price band and geometry unchanged |
+| ZOOM OUT (5 ticks) | **PASS** — boxes narrowed in proportion with the bars, same band, same formation |
+| RELOAD | **PASS** — pinned version read back as 16.0, all six zones identical |
+| M45 | **PASS** — labels re-prefix to `M45 •`, zones anchored to M45 candles |
+| H4 | **PASS** — `H4 • BEARISH …`, `H4 • BULLISH PRESSURE WICK`, correctly anchored |
+
+No zone drifted relative to its bars on any host. That is what the static audit
+predicted: the renderer contains **zero** `xloc.bar_index` occurrences.
+
+M5, M30, H1 and H3 are still owed.
+
+### Bearish overlap fixture
+
+The cluster the author asked for is live on M15 right now: **SELL FVG,
+RESISTANCE ZONE, SHOOTING STAR and BEARISH PRESSURE WICK**, all bearish, all
+within ~45 pips of price — and **all four are visible**.
+
+That is the correct outcome, not a failure of the one-winner rule. Their bands
+(1.1490 / 1.1472 / 1.1462 / 1.1445) do not intersect, so they are not an overlap
+cluster: they are four independent bearish decision points. The display rule
+hides a member only when zones actually overlap in the same direction. Per-POI
+tier, score and source time still need the PANEL table attached beside CORE.
+
+### Runtime warning — new, and it should be recorded
+
+With v16 attached the Pine Editor shows: *"Heavy script. This script is close to
+your plan's runtime limit (20s)."* It appeared on M15, M45 and H4. No runtime
+error, no timeout, no missing output — but this is the first build to raise it,
+and Stage E's authority pass is O(n²) over the registry on every bar (190 POIs
+here). It is a measurement to watch, not yet a failure.
