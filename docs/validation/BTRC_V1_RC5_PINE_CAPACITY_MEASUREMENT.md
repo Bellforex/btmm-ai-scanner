@@ -1560,3 +1560,98 @@ author asked for this to be measured rather than asserted, and it has not been:
 the probe that counts winner changes per bar (`core_tlwin_probe.pine`, twelve
 data-window plots including `tlFlips` and `tlBars`) is written but has not run.
 Until it does, "no flicker" is a claim I have not earned.
+
+---
+
+# "OUTER" WAS WRONG — the corrected external-structure rule
+
+## The audit the author demanded, answered
+
+**Q1. The old winner's anchors.** 2026-09-21 08:30 UTC and 2026-09-21 10:30 UTC
+— **8 M15 bars apart**, confirmed 2026-09-22 03:15 UTC, bearish/resistance,
+projected 1.14457, 27.6 pips above close, **no** qualified TREND reaction.
+
+**Q2. Their structural roles.** Both were in `rc5SwingRole`, so each was BROKEN
+or PROTECTED — the old gate collapsed the two into "present". Which one each
+carried was never read, and I have not measured it per anchor; the probe that
+would is written but the session's browser became unresponsive before it ran.
+Stated as inference, not measurement.
+
+**Q3. Internal or texture?** Neither was texture. That is the point: the old
+rule filtered texture and then happily picked *internal* structure.
+
+**Q4. Why the algorithm called it outer.** Its projection was the furthest
+above price of 11 direction-aligned candidates. Nothing else.
+
+**Q5. Why the author's red line lost — and this is the real finding.** The old
+rule did not merely fail to exclude internal lines, **it preferred them**. A
+steep diagonal between two nearby swings, extended to the right, diverges from
+price faster than the true boundary does. Maximising distance therefore
+*selects for steepness*, which is exactly selecting for internal structure. The
+8-bar span of the winner is that mechanism showing its work.
+
+**Q6. The distinguishing fact — already computed, then discarded.** The P2
+walk classifies every swing:
+
+* **PROTECTED** — the level the walk DEFENDS. Closing through it is a **CHOCH**,
+  a change of character. It is the boundary of the current move: **external**.
+* **WEAK / BROKEN** — the level whose break is a **BOS**, a continuation; and
+  `brokenKeys` are levels price has already traded through: **internal**.
+
+G1 already stores this per swing as `rc5SwingRole` (`C_RC5_ROLE_PROTECTED` /
+`C_RC5_ROLE_BROKEN`), and `f_rc5SwingMeaningful` asked only whether the key was
+*present*, throwing the distinction away. The fix reads the role it already had.
+
+## The corrected rule
+
+An external trendline is one whose **BOTH anchors are PROTECTED** swings.
+Direction alignment, the defending-side test and market-space projection are
+unchanged. **No angle, slope, span, ATR or bar-count threshold** — steepness was
+a symptom of choosing internal structure, and a genuinely external pair may be
+steep and still win.
+
+**Persistence.** The held winner is redrawn while it still exists and still
+qualifies; only losing eligibility — its structure broke, direction changed, or
+the engine dropped it — forces re-selection. A newly detected minor swing cannot
+displace it. Flicker is prevented by construction rather than by scoring.
+
+## Tokens
+
+| build | BASE | vs strict 99,256 | vs hard 100,256 |
+| --- | --- | --- | --- |
+| merged CORE (before any trendline work) | 98,749 | 507 under | 1,507 under |
+| distance rule, 3-point validated | **99,286** | 30 over | 970 under |
+| external-structure rule, 3-point validated | 99,414 | 158 over | 842 under |
+| **+ POI text locked to 16, selector removed** | **99,386** | **130 over** | **870 under** |
+
+Every figure is three oracle points with equal derived bases. The selector
+removal recovered **28**, not the ~30–60 hoped for; measured, not assumed.
+
+The remaining 130 is a reserve overrun, not a limit breach. The one candidate
+left is the per-candidate reaction key, which builds a four-part string. The
+author's identity preference #2 — the exact anchor pair — **is** collision-safe
+here (`detect_trendlines` emits one candidate per anchor pair and orientation
+follows from the anchor swing types), but the writer side currently only has
+the full level id, so using it needs two int fields on `RcCand`. Offered, not
+taken.
+
+## Live, FX:EURUSD M15
+
+Distance-rule build: raw `fwTls` **19**, meaningful anchors **15**,
+direction-aligned **11**, outer-valid **11**, previously reacted **4**,
+**visible 1**.
+
+The corrected build deployed as RC5 USER **v18.0** drew **exactly one** purple
+line, running closely alongside the author's own manually drawn red reference
+(a `trend_line` shape from 2026-09-21 11:30 @ 1.14962). POI text at **16** is
+proportionate and readable; on the narrowest zones a long name still overflows
+its box, which is a typography limit, not an anchoring fault — and the box is
+not widened to fit text.
+
+## Still owed
+
+The winner fact sheet for the CORRECTED rule (anchors, roles, projection,
+reaction) and the flicker count both need the probe that was built but never
+ran. **Flicker cannot be measured through the renderer at all** — it executes
+only under `bar_index >= last_bar_index - 1`, so its counters see two bars; the
+per-bar evaluation probe exists for exactly that reason.

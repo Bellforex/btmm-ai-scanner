@@ -62,7 +62,7 @@ CHART_RENDERERS: list[tuple[str, str, str]] = [
     ),
     (
         "    // ---- RC5 STRUCTURAL TRENDLINE LAYER",
-        "                array.push(fwLines, line.new(tw.anchor1Time",
+        "                tlKeepA2 := 0",
         "structural trendline layer",
     ),
     (
