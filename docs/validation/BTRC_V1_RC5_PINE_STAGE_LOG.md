@@ -931,3 +931,82 @@ of work, not done here rather than guessed.
 Runtime gates (VIEW alone, CORE alone, CORE+VIEW, CORE+VIEW+PANEL), extraction
 visual parity, and P2+P3. VIEW is therefore **not yet accepted** — it has passed
 the compile, capacity and anti-drift gates, and not the runtime or visual ones.
+
+## VIEW exact token count — 10,792, and a new pad family to get it
+
+The standard 97-token pad cannot measure VIEW: `CE10117` only reports a count
+ABOVE the limit, and VIEW is so far below it that enough padding trips a
+STRUCTURAL limit first. Two of them, in order:
+
+| attempt | pad shape | result |
+| --- | --- | --- |
+| 950 blocks of `if barstate.islast` + 1 `log.info` | many top-level blocks | **CE10295** "The main body of the script is too long. Try wrapping code in functions" |
+| 50 blocks x 20 `log.info` | fewer blocks, same statements | **CE10295** again — the limit counts statements inside top-level `if`s too |
+| 1 function of 900 `log.info` | one huge function | **CE10296** — function body limit |
+| **F functions x 100 `log.info`, called once each** | spread across functions | **works** |
+
+The last shape clears both limits: the main body gains F calls, and no function
+body approaches its own ceiling.
+
+### Calibration and result
+
+| F (x100 `log.info`) | `ctx.outputILLength` | `C - 7,610F` |
+| --- | --- | --- |
+| 50 | 391,292 | **10,792** |
+| 60 | 467,392 | **10,792** |
+| 70 | 543,492 | **10,792** |
+
+`467,392 - 391,292 = 76,100 = 7,610 x 10` — exact.
+`543,492 - 467,392 = 76,100 = 7,610 x 10` — exact.
+
+The pad family costs **7,610 tokens per 100-statement function**, calibrated
+from the failing points themselves rather than assumed, and all three derive the
+same base.
+
+| | |
+| --- | --- |
+| **RC5 VIEW** | **10,792 tokens** |
+| hard limit | 100,256 |
+| **hard headroom** | **89,464** |
+| utilisation | **10.76%** |
+
+VIEW is 11% of CORE's 98,335. That is the quantitative answer to "is VIEW a
+minimum structural subset or a second scanner": it is a subset.
+
+## Runtime gates — BLOCKED, environmentally
+
+Not run, and not faked. The Chrome window this session drives is not visible:
+
+| check | value |
+| --- | --- |
+| `document.hidden` | **true** (also true in a tab opened with `foreground: true`) |
+| canvases | all `300x150` — the unlaid-out default |
+| chart legend rows | **0** — the widget never laid out |
+
+The account guard passed (`bellcare1994`) and the facade POSTs worked
+throughout, because those are network calls and do not need a rendered page.
+But every visual and runtime signal the gates ask for — Heavy Script warning,
+object limits, responsiveness, "HH/HL/LH/LL appear", "no POI boxes in VIEW" —
+requires a laid-out chart. With a hidden window those readings would be stale
+pixels and an empty DOM, which the port plan explicitly forbids treating as
+evidence.
+
+Deploying VIEW as its own script is blocked by the same thing: creating a new
+script needs the Pine Editor UI, and the editor cannot lay out in a hidden
+window.
+
+**To unblock:** the Chrome window needs to be visible on screen (restored, not
+minimised, and on the active desktop). Nothing in the repo or the artifacts
+needs to change.
+
+### Gate status
+
+| gate | status |
+| --- | --- |
+| 1. VIEW alone | **BLOCKED** — window hidden |
+| 2. CORE alone | **BLOCKED** |
+| 3. CORE + VIEW | **BLOCKED** |
+| 4. CORE + VIEW + PANEL | **BLOCKED**, and flagged: the Basic plan caps 2 indicators per chart, so this gate may be impossible on this account regardless of visibility |
+
+VIEW therefore remains **NOT ACCEPTED**: it has passed compile, dependency,
+capacity and anti-drift; runtime and visual parity are untested.
