@@ -471,3 +471,97 @@ is a legibility question, not a semantic one.
 
 The symbol was also restored to FXCM (`FX:EURUSD`) on the scratch layout, which
 had drifted to an Eightcap feed. `bellforex` was never opened.
+
+## Stage P1 — ARM E BASE SIZE (Python freeze `28d432e`)
+
+The first stage of the RC5 semantic port. Deliberately code-REMOVING and
+nothing else: no `BaseFamily`, no arrival classification, no formation
+ownership. Those land in P2-P4 only after this is measured.
+
+### What changed
+
+| # | change | site |
+| --- | --- | --- |
+| 1 | `C_POI_SMALL_CANDLE_STANDARD = 0.50` -> `C_POI_BASE_SIZE_STANDARD = 0.60` | CORE 2389 |
+| 2 | `C_POI_SMALL_CANDLE_STRONG` -> `C_POI_BASE_SIZE_STRONG` (value unchanged) | CORE 2390 |
+| 3 | **deleted** the reciprocal Base gate and the now-unused `ratio` variable | CORE 3320-3322 |
+| 4 | **deleted** the redundant `ratio >= C_POI_OB_RATIO_STRONG` from the strong Base gate | CORE 3367 |
+
+Renaming is token-neutral (an identifier is one token whatever its length); the
+saving comes entirely from 3 and 4.
+
+**`C_POI_OB_RATIO_STANDARD` and `C_POI_OB_RATIO_STRONG` are UNTOUCHED** — still
+`2.0` / `3.0`, still read at the four ORDER BLOCK and ENGULFING sites (CORE
+3027, 3037, 3087, 3097) and nowhere else. The shared constant was never
+modified, which is what keeps those two detectors provably unchanged: the only
+edited region is inside `f_poiDetectBases`.
+
+Deleting `ratio >= C_POI_OB_RATIO_STRONG` is provably a no-op: the surviving
+condition `maxBaseRange <= 0.3333 * departureRange` implies it, because
+`0.3333 < 1/3`.
+
+### Source identity
+
+| | |
+| --- | --- |
+| file | `tradingview/btmm_poi_btrc_scanner_rc5_user.pine` |
+| lines | 7,006 (was 7,010) |
+| raw SHA-256 (LF) | `21aae4b3ae5f13108177be4ff7bbf2d3de8dd97d2a3b654191d9dbcdeeb69950` |
+| oracle script | `USER;a35251d296f64495a173d66a2e55ea9f` (disposable) |
+| account | `bellcare1994` (id 57555264), verified before every POST |
+| layout | `BAH-RC5-LAB` (`fn3ash9L`) |
+
+Exact source transfer was proven per POST: the clipboard text was hashed
+IN-PAGE with `crypto.subtle` and compared to the on-disk SHA-256. All four
+transfers matched exactly, and none carried CRLF.
+
+### Token measurement
+
+`MAX_IL_LENGTH` read back from the error ctx: **100,256**.
+
+| N | reported `ctx.outputILLength` | `C - 97N` |
+| --- | --- | --- |
+| 10 | 100,341 | **99,371** |
+| 12 | 100,535 | **99,371** |
+| 14 | 100,729 | **99,371** |
+
+`100,535 - 100,341 = 194 = 97 x 2` — exact.
+`100,729 - 100,535 = 194 = 97 x 2` — exact.
+All three derive the same base. No averaging, no rounding.
+
+| | |
+| --- | --- |
+| previous merged CORE | 99,386 |
+| **Stage P1 CORE** | **99,371** |
+| **delta** | **-15** |
+| hard ceiling | 100,256 |
+| **hard headroom** | **885** (was 870) |
+| strict engineering target | 99,256 |
+| **strict reserve deficit** | **115** (was 130) |
+
+### Compile gate
+
+The unpadded P1 source returns `success: true` with no `CE10117`.
+
+### Acceptance, honestly scoped
+
+| check | result |
+| --- | --- |
+| compiles on TradingView | **pass** |
+| exact token delta measured, 3 points agreeing | **pass**, -15 |
+| Order Block constant unmodified | **pass** — static proof, `C_POI_OB_RATIO_*` unchanged and read only at OB/Engulfing sites |
+| Engulfing constant unmodified | **pass**, same proof |
+| strong-gate simplification is a no-op | **pass** — algebraic, `0.3333 < 1/3` |
+| golden Base satisfies Arm E *on Pine* | **NOT YET PROVEN HERE** |
+
+The last row is stated plainly rather than implied. Proving the golden Base on
+the Pine side needs record-level Python-Pine parity on the frozen M15 capture,
+which the port plan schedules after the semantic stages. A compile and a token
+count do not demonstrate detector behaviour, and this stage does not claim they
+do.
+
+### PANEL
+
+Regenerated from CORE by `tools/rc5_compose.py` (6,800 lines, was 6,804). Not
+hand-edited. `test_rc5_panel_composition` and
+`test_pine_line_ending_contract` pass.

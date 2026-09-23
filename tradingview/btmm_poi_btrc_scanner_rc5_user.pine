@@ -2386,8 +2386,8 @@ f_poiIsDownstreamRelevant(int code) =>
 // ---- production POI configuration (poi/configuration.py, verbatim) ---------
 float C_POI_OB_RATIO_STANDARD        = 2.0
 float C_POI_OB_RATIO_STRONG          = 3.0
-float C_POI_SMALL_CANDLE_STANDARD    = 0.50
-float C_POI_SMALL_CANDLE_STRONG      = 0.3333
+float C_POI_BASE_SIZE_STANDARD       = 0.60
+float C_POI_BASE_SIZE_STRONG         = 0.3333
 int   C_POI_BASE_MIN_CANDLES         = 2
 int   C_POI_BASE_MAX_CANDLES         = 6
 float C_POI_BASE_HEIGHT_ATR_MULT     = 0.75
@@ -3314,11 +3314,7 @@ f_poiDetectBases(int wn) =>
                         baseLow := math.min(baseLow, array.get(wLow, b))
 
                     bool ok = maxBaseRange > 0
-                    if ok and maxBaseRange > C_POI_SMALL_CANDLE_STANDARD * departureRange
-                        ok := false
-
-                    float ratio = ok ? departureRange / maxBaseRange : 0.0
-                    if ok and ratio < C_POI_OB_RATIO_STANDARD
+                    if ok and maxBaseRange > C_POI_BASE_SIZE_STANDARD * departureRange
                         ok := false
 
                     float baseHeight = baseHigh - baseLow
@@ -3364,7 +3360,7 @@ f_poiDetectBases(int wn) =>
                             typeCode := C_POI_BASE_DROP
                             direction := C_POI_DIR_BEARISH
                         if typeCode != 0
-                            bool strong = ratio >= C_POI_OB_RATIO_STRONG and maxBaseRange <= C_POI_SMALL_CANDLE_STRONG * departureRange
+                            bool strong = maxBaseRange <= C_POI_BASE_SIZE_STRONG * departureRange
                             f_poiEmit(typeCode, direction, baseHigh, baseLow, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, si), length + 1, array.get(wOpenT, di), array.get(wOpenT, si), array.get(wAvailT, di))
 
 // =============================================================================
