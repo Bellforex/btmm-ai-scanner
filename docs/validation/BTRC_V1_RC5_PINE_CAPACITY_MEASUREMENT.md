@@ -966,3 +966,105 @@ trendline layer and the table have all been measured, and the table returned
 110. What remains unspent is Surface A (143) and the E/F/H estimate band itself,
 which spans 900 tokens and could be narrowed by measuring those three stages
 rather than estimating them.
+
+---
+
+# E, F and H measured exactly — the capacity decision
+
+Every stage is now a compiler measurement. **No estimate remains in the ledger.**
+
+## Base discipline
+
+| base | tokens | what it is |
+| --- | --- | --- |
+| T2 | 94,029 | simplification + overlap + tier-first + trendlines + compact table |
+| B1 = T2 + G1 | 94,386 | G1 is the meaningful-swing map |
+
+G1 measures **+357 here, identical to its +357 on the Stage-C base** — two
+unrelated bases, same number, which validates the whole measurement chain.
+
+E and H are measured against **B1** because both consume G1, and G1 is already
+inside G's 4,029. Measuring them on B1 is what stops G1 being counted twice.
+F needs no swing roles and is measured against T2.
+
+## The three measurements
+
+| stage | measured on | base after | **delta** | vs the old estimate |
+| --- | --- | --- | --- | --- |
+| **E** same-origin authority | B1 94,386 | 95,756 | **+1,370** | estimate was 600–1,000 — **under-estimated** |
+| **F** P5/P8 terminal | T2 94,029 | 93,999 | **-30** | estimate was 50–150 — it is a SAVING |
+| **H** HH/HL/LH/LL | B1 94,386 | 94,677 | **+291** | estimate was 400–800 — cheaper |
+
+F saves tokens because `f_rc5Validity(i) != C_RC5_VALID` is shorter than the
+compound `poiFreshActive` condition it replaces — the faithful rule is also the
+cheaper one.
+
+E is the surprise. The cluster test is a per-bar pass, so it is not
+inline-multiplied, but it needs a ladder rank, a three-field origin comparison,
+a zone-overlap test and a containment test, and it runs them pairwise.
+
+## The exact final ledger
+
+| step | running total | delta |
+| --- | --- | --- |
+| T2 base | 94,029 | — |
+| + D structural origin | 96,097 | +2,068 |
+| + G qualified liquidity (includes G1) | 100,126 | +4,029 |
+| + E same-origin authority | 101,496 | +1,370 |
+| + F P5/P8 terminal | 101,466 | **-30** |
+| + H HH/HL/LH/LL | **101,757** | +291 |
+| anchor correction | **+0** | already contained in the V3/V4 removal |
+| trendline layer | **+0** | already inside T2, not double counted |
+
+| | |
+| --- | --- |
+| **FINAL PROJECTED** | **101,757** |
+| hard TradingView limit | 100,256 — **OVER by 1,501** |
+| strict target (1,000 reserve) | 99,256 — **OVER by 2,501** |
+
+## Summary-table audit — it is NOT redundant
+
+The 975-token summary table was the last hoped-for free saving. Row by row:
+
+| row | value | source | unique? |
+| --- | --- | --- | --- |
+| 0 | "P7 — BTRC Scanner" | title | chrome |
+| 1 | Feed | `syminfo.prefix + ticker` | **duplicated** — the chart header shows it |
+| 2 | Host TF | `timeframe.period` | **duplicated** — the chart header shows it |
+| 3 | Global direction | `p7LastGlobalDir` | **UNIQUE** |
+| 4 | Regime | `p7LastRegime` | **UNIQUE** |
+| 5 | Momentum | `p7LastMomDir` | **UNIQUE** |
+| 6 | Breakout | `p7LastBrk` | **UNIQUE** |
+| 7 | Volatility | `p7LastVol` + abnormal flag | **UNIQUE** |
+| 8 | Active POIs | `array.size(p7PoiIdx)` | **duplicated** — the POI table footer prints "N shown / M active" |
+| 9 | Market framework | range high/low, or TREND | **UNIQUE** |
+
+**Six of ten rows are unique, and there is no second dashboard to fold them
+into.** The summary table is the ONLY place the global BTRC context appears, so
+removing it is an information loss, not a redundancy cleanup. S2 as conceived
+has no destination.
+
+Even so, the arithmetic is worth stating:
+
+| scenario | total | vs hard limit |
+| --- | --- | --- |
+| everything, faithful | 101,757 | OVER 1,501 |
+| minus the summary table (losing six unique rows) | 100,782 | **still OVER 526** |
+| minus summary AND Surface A | 100,639 | **still OVER 383** |
+
+## Verdict: faithful single-indicator RC5 does NOT fit
+
+This is now measured, not projected. Stripping the entire global-context
+dashboard AND spending the private Surface-A extraction still leaves the build
+**383 tokens over the hard compiler limit**, and 1,383 over the reserve target.
+
+The presentation campaign is exhausted: gray styling, P7-Z simplification,
+legacy framework removal, overlap arbitration, the trendline layer, table
+compaction, column probes, Surface A and Surface B have all been measured. The
+remaining semantic stages are all measured too. There is no unspent surface
+large enough.
+
+Per the author's CASE 3, work stops here and the exact shortfall is returned:
+
+> **2,501 tokens to the strict target, 1,501 to the hard limit, with every
+> figure a compiler measurement.**
