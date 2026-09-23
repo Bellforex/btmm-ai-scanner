@@ -1068,3 +1068,85 @@ Per the author's CASE 3, work stops here and the exact shortfall is returned:
 
 > **2,501 tokens to the strict target, 1,501 to the hard limit, with every
 > figure a compiler measurement.**
+
+---
+
+# CORE / PANEL split: the CORE fits
+
+## CORE without the diagnostic tables — measured
+
+Removed, and only these: the summary table, the POI table, the row-string
+construction whose sole consumer was that table, and the display-only location
+strings (`lt`, `f.txt`) that fed it. **`loc` itself is KEPT** — it is the
+framework location score feeding `liquidityScore`, so it is semantics, not
+presentation. Every semantic field in the engine survives.
+
+| variant | pad points | **BASE** | recovery |
+| --- | --- | --- | --- |
+| T2 | — | 94,029 | — |
+| **CORE no-table** | 98 / 99 / 100 -> 100,338 / 100,435 / 100,532 | **90,791** | **3,238** |
+
+**3,238, not the 2,968 the parts predicted** — exactly why the author said not
+to trust the arithmetic. The extra 270 is the `lt` / `f.txt` display strings,
+which were never counted in the earlier sub-costs because they live in
+`f_fwPoi`, not in the table block.
+
+A precision note worth recording: at N=97 the build was predicted to land at
+100,241 against a 100,256 limit and therefore to COMPILE. It compiled. The
+oracle is accurate to within 15 tokens at this scale.
+
+## Trendline display filter — measured
+
+Semantics untouched. Every `fwTls` record is kept, the persistence fix stands,
+and a displayed line still survives touch, respect, wick-through and a
+qualified sweep. Only DISPLAY ELIGIBILITY is added.
+
+**The rule invents nothing.** It is the trendline qualification Stage G already
+applies to liquidity — BOTH defining anchors must be swings the structural walk
+actually used — applied to drawing. A line built from texture pivots is not a
+structural trendline, so it is not drawn. Plus an exact-anchor-pair guard so one
+relationship cannot print twice; lines sharing only ONE anchor describe
+different relationships and both survive. No angle, touch-count, distance or
+price tolerance. No forced maximum, and bullish and bearish remain independent.
+
+| variant | **BASE** | delta |
+| --- | --- | --- |
+| CORE + G1 | 91,149 | — |
+| **CORE + G1 + trendline filter** | **91,403** | **+254** |
+
+## The CORE candidate
+
+| step | running total | delta |
+| --- | --- | --- |
+| CORE no-table | 90,791 | — |
+| + D structural origin | 92,859 | +2,068 |
+| + G qualified liquidity (includes G1) | 96,888 | +4,029 |
+| + E same-origin authority | 98,258 | +1,370 |
+| + F P5/P8 terminal | 98,228 | **-30** |
+| + H HH/HL/LH/LL | 98,519 | +291 |
+| + trendline display filter | **98,773** | +254 |
+| anchor correction | **+0** | already contained in the V3/V4 removal |
+
+| | |
+| --- | --- |
+| **CORE CANDIDATE** | **98,773** |
+| hard limit 100,256 | **1,483 under** |
+| strict target 99,256 | **483 under** |
+
+**The split works.** The same faithful semantics that were 1,501 OVER the hard
+limit as one script are 1,483 UNDER it once the diagnostic tables move out —
+and they clear the 1,000-token reserve target as well, with 483 to spare.
+
+Nothing was weakened to achieve this. D, E, F, G and H are the same measured
+faithful implementations; only table RENDERING moved.
+
+## Honest status of the composition
+
+The stage deltas are each a compiler measurement, but the CORE candidate is
+their composition, not yet a single compiled artifact: D and G were prototyped
+on the Stage-C lineage while E/F/H/T2 descend from the live-file lineage, so a
+merged build has still to be assembled. Two things make the composition
+trustworthy rather than hopeful — G1 measured 357, 357 and 358 on three
+unrelated bases, and the N=97 boundary prediction held to 15 tokens — but the
+merged CORE must still be built and measured before the architecture is frozen.
+That is the next step, and it is the honest caveat on the 98,773.
