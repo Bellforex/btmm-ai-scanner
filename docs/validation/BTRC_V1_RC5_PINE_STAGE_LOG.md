@@ -629,3 +629,93 @@ P2+P3+P4 must all fit inside 885 tokens. The earlier RC5 capacity measurement
 put the full set of RC5 additions at 3.4-4.3k tokens over budget, and P1
 recovered 15. That gap is the binding risk on this port and is flagged now,
 before stages are spent, rather than discovered at the hard stop.
+
+## Capacity recovery audit (author decision 2) — MEASURED
+
+Every number below is a real `CE10117` reading on the disposable oracle
+`USER;a35251d296f64495a173d66a2e55ea9f`, account `bellcare1994`, layout
+`BAH-RC5-LAB`. Each probe's clipboard text was SHA-256 hashed in-page and
+compared to the on-disk digest before the POST; every transfer matched.
+
+### Method, and its one shortcut stated plainly
+
+The pad arithmetic (`BASE = C - 97N`) was validated to three points at Stage P1
+(N=10/12/14, both intervals exactly `97 x 2`). The survey below therefore uses
+ONE point per probe, with an explicit **control**: unchanged P1 CORE re-measured
+at N=50 must return the already-known 99,371.
+
+| control | N | `C` | `C - 97N` |
+| --- | --- | --- | --- |
+| P1 CORE, unchanged | 50 | 104,221 | **99,371** — matches the 3-point result exactly |
+
+The control passes, so single-point survey readings are trustworthy here. A
+build that is actually ADOPTED still gets three points.
+
+### Renderer deletion ceilings
+
+Probes CUT one presentation region and change nothing else. The regions are the
+ones `tools/rc5_compose.py` already knows about, so this measures exactly what a
+CORE/VIEW split could move.
+
+| probe | region | N | `C` | base | **cost** |
+| --- | --- | --- | --- | --- | --- |
+| R1+R2 | structure overlay — BOS/CHOCH **and** HH/HL/LH/LL | 50 | 103,185 | 98,335 | **1,036** |
+| R3 | external structural trendline renderer | 50 | 103,057 | 98,207 | **1,164** |
+| R4 | P7-Z POI zone boxes and labels | 90 | 103,970 | 95,240 | **4,131** |
+| R-ALL | all three together | 90 | 101,779 | 93,049 | **6,322** |
+
+R4 first compiled clean at N=50 — the pad could not reach the ceiling — which
+is itself the finding that it is the dominant block; it was re-probed at N=90.
+
+The individual costs sum to 6,331 against a measured 6,322 for all three: a
+9-token overlap. The regions are effectively independent, which means their
+costs can be added when planning a split.
+
+27 source lines cost 1,036 tokens. That is inlining, and it is why these had to
+be measured rather than estimated from line counts.
+
+### The proposed split, measured as a build
+
+| probe | N | `C` | base |
+| --- | --- | --- | --- |
+| CORE minus structure overlay minus trendline renderer | 60 | 102,991 | **97,171** |
+
+Saving **2,200**, exactly `1,036 + 1,164`.
+
+| | value | target | |
+| --- | --- | --- | --- |
+| CORE after split | **97,171** | <= 97,256 preferred | **met** |
+| hard headroom | **3,085** | >= 3,000 | **met** |
+| strict headroom (vs 99,256) | **2,085** | >= 2,000 | **met** |
+
+**Extracting structure + trendline PRESENTATION alone hits every capacity
+target, and the POI renderer never has to move.** That is the split the port
+plan preferred on architectural grounds — POI rendering depends on authority,
+validity and ownership, so moving it would duplicate far more machinery — and
+the measurement independently says it is also sufficient.
+
+### Local recovery: the flagged duplicate is not a duplicate
+
+`f_rc5IsReversal` and `f_rc5IsReversalE` were recorded as the same family set
+expressed twice. They are not the same implementation:
+
+* `f_rc5IsReversal(ty)` — an explicit 13-term `or` chain (CORE 2666), **one**
+  call site (CORE 3013);
+* `f_rc5IsReversalE(ty)` — `f_rc5LadderRank(ty) < 99` (CORE 2614), two call
+  sites.
+
+Collapsing the chain into the ladder form is plausible and cheap, but it is only
+sound if `REVERSAL_LADDER` contains exactly those 13 types and nothing else —
+a semantic equivalence that must be proven against the frozen Python ladder
+first, not assumed from the names. **Not merged, not measured, and not counted
+toward recovery.** Doing it on resemblance is exactly the refactor the audit
+warned against.
+
+### Conclusion
+
+A third generated VIEW script **is necessary** — local renderer deletion is the
+only place the tokens are, and the semantic engines cannot be touched — and at
+the structure+trendline scope it is also **sufficient**. It is NOT implemented
+here: pricing it was the authorised step, and standing up a third generated
+artifact (composer support, anti-drift tests, and a runtime check that VIEW
+recomputes only the minimum structural subset) is its own unit.
