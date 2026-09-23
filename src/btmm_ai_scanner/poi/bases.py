@@ -9,11 +9,46 @@ from btmm_ai_scanner.contracts.normalized_candle import NormalizedCandle
 from btmm_ai_scanner.measurements.atr import compute_atr_series
 from btmm_ai_scanner.measurements.candle_metrics import total_range
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
-from btmm_ai_scanner.poi.enums import PoiDirection, PoiStrengthTier, PoiType
+from btmm_ai_scanner.poi.enums import (
+    BaseFamily,
+    PoiDirection,
+    PoiStrengthTier,
+    PoiType,
+)
 
 _TWO = Decimal("2")
 _ZERO = Decimal("0")
 _ATR_PERIOD = 14
+
+
+def classify_base_family(
+    arrival: NormalizedCandle | None, poi_type: PoiType
+) -> BaseFamily | None:
+    """The COMPLETE formation: arrival leg + base + departure leg.
+
+    ARRIVAL DIRECTION REUSES AN EXISTING ENGINE'S DEFINITION and introduces no
+    new constant. ``detect_displacement_observations`` classifies a candle as
+    BULLISH when ``close >= open``; that same test is applied here to the candle
+    immediately preceding the base.
+
+    NO ARRIVAL STRENGTH GATE IS APPLIED, deliberately. Nothing in the codebase
+    supplies an impulse qualification for a POI-level arrival: ``measure_leg``
+    measures a span whose direction is handed to it, ``detect_displacement_
+    observations`` is per-candle, and the BTRC impulse leg is a supervisory
+    layer above POI detection. Requiring strength would need a new constant,
+    which was explicitly refused, so the Base population is UNCHANGED by this
+    axis -- it adds semantics, it does not reject candidates.
+
+    Returns ``None`` when no arrival candle exists (the base starts at the very
+    first candle of the series), because the family is then genuinely unknown
+    rather than assumable.
+    """
+    if arrival is None:
+        return None
+    arrival_up = arrival.close >= arrival.open
+    if poi_type is PoiType.BASE_RALLY:
+        return BaseFamily.RALLY_BASE_RALLY if arrival_up else BaseFamily.DROP_BASE_RALLY
+    return BaseFamily.RALLY_BASE_DROP if arrival_up else BaseFamily.DROP_BASE_DROP
 
 
 class BaseCandidate(NamedTuple):
@@ -28,6 +63,8 @@ class BaseCandidate(NamedTuple):
     candidate_event_time_utc: datetime
     confirmation_time_utc: datetime
     availability_time_utc: datetime
+    #: RC5 semantic axis. ``None`` only when no arrival candle exists.
+    base_family: BaseFamily | None
 
 
 def detect_bases(
@@ -148,6 +185,9 @@ def detect_bases(
                     candidate_event_time_utc=base_candles[0].event_time_utc,
                     confirmation_time_utc=departure.availability_time_utc,
                     availability_time_utc=departure.availability_time_utc,
+                    base_family=classify_base_family(
+                        candles[start - 1] if start >= 1 else None, poi_type
+                    ),
                 )
             )
 

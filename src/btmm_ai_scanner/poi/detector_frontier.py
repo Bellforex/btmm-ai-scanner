@@ -44,7 +44,7 @@ from btmm_ai_scanner.measurements.atr import (
     initial_incremental_atr_state,
 )
 from btmm_ai_scanner.measurements.candle_metrics import total_range
-from btmm_ai_scanner.poi.bases import BaseCandidate
+from btmm_ai_scanner.poi.bases import BaseCandidate, classify_base_family
 from btmm_ai_scanner.poi.configuration import PoiConfiguration
 from btmm_ai_scanner.poi.confirmed_zones import (
     LOCKED_REFERENCE_TYPES,
@@ -328,6 +328,15 @@ def _evaluate_new_bases(
                 candidate_event_time_utc=base_candles[0].event_time_utc,
                 confirmation_time_utc=departure.availability_time_utc,
                 availability_time_utc=departure.availability_time_utc,
+                # Same arrival candle the batch detector reads: batch uses
+                # candles[start - 1], and here the base occupies
+                # ring[-(length + 1):-1], so the arrival is ring[-(length + 2)].
+                # Both are available exactly when m >= length + 1, so the
+                # two paths agree at the start of the series as well.
+                base_family=classify_base_family(
+                    ring[-(length + 2)] if length + 2 <= len(ring) else None,
+                    poi_type,
+                ),
             )
         )
 

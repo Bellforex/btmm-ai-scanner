@@ -188,3 +188,32 @@ CURRENT_PERIOD_POI_TYPES: frozenset[PoiType] = frozenset(
         PoiType.CURRENT_MONTH_LOW,
     }
 )
+
+
+class BaseFamily(StrEnum):
+    """The COMPLETE Base formation: arrival leg, base, departure leg.
+
+    RC5 semantic metadata, deliberately NOT a transport code. ``PoiType`` stays
+    frozen at ``BASE_RALLY`` / ``BASE_DROP``, which carry only the DEPARTURE
+    direction and therefore collapse RBR with DBR, and RBD with DBD. That
+    collapse is what lost the arrival leg; this axis restores it without
+    touching the frozen transport contract.
+
+    Transport mapping (many-to-one, by departure):
+        RALLY_BASE_RALLY, DROP_BASE_RALLY -> PoiType.BASE_RALLY
+        RALLY_BASE_DROP,  DROP_BASE_DROP  -> PoiType.BASE_DROP
+    """
+
+    RALLY_BASE_RALLY = "RALLY_BASE_RALLY"
+    DROP_BASE_RALLY = "DROP_BASE_RALLY"
+    RALLY_BASE_DROP = "RALLY_BASE_DROP"
+    DROP_BASE_DROP = "DROP_BASE_DROP"
+
+
+#: Which ``PoiType`` each family transports as. The frozen codes are unchanged.
+BASE_FAMILY_TRANSPORT: dict[BaseFamily, PoiType] = {
+    BaseFamily.RALLY_BASE_RALLY: PoiType.BASE_RALLY,
+    BaseFamily.DROP_BASE_RALLY: PoiType.BASE_RALLY,
+    BaseFamily.RALLY_BASE_DROP: PoiType.BASE_DROP,
+    BaseFamily.DROP_BASE_DROP: PoiType.BASE_DROP,
+}
