@@ -425,3 +425,105 @@ No constant has been changed. Changing this one would alter the Base population
 on every host and must not be done to "make more bases" — but it is the single
 lever the data points at, and the author's own example is now a fixture that can
 adjudicate it.
+
+---
+
+# A/B — BASE-CANDLE SIZE: TOTAL RANGE vs BODY
+
+`PoiConfiguration.base_size_uses_body`, **default OFF**. It switches the size
+basis and nothing else: thresholds stay 2.0 / 3.0 / 0.50 / 0.3333, the POI zone
+stays wick-inclusive, and the ATR height, height/departure, midpoint-drift and
+pairwise-overlap gates are untouched. Implemented identically in `detect_bases`
+and `_evaluate_new_bases`.
+
+A zero body is treated as **maximal compactness**, not a degenerate case: the
+ratio becomes `None` and every ratio test passes. It is only reachable under the
+body basis (`max_base_range == 0` is already guarded), so no new numeric
+convention enters the approved path and no minimum doji body was invented.
+
+## The golden formation — 2026-09-21 19:15 UTC
+
+| | |
+| --- | --- |
+| max base **total range** | 0.00021 |
+| max base **body** | 0.00006 |
+| departure size | 0.00035 |
+| **OLD** ratio dep/range | **1.667 → FAIL** (needs ≥ 2.0) |
+| **NEW** ratio dep/body | **5.833 → PASS** |
+| A result | **no Base on these bars** |
+| B result | **BASE_DROP, zone 1.14672–1.14693** |
+
+The zone is the real market extremes, wicks included — unchanged by the
+experiment, exactly as directed.
+
+## But the family is RALLY_BASE_DROP, and that is the second half of the defect
+
+| bar | time | close vs open |
+| --- | --- | --- |
+| 130 | 18:15 | DOWN |
+| 131 | 18:30 | DOWN |
+| 132 | 18:45 | UP |
+| **133** | **19:00 (arrival)** | **UP** |
+| 134–135 | base | — |
+| 136 | 19:45 (departure) | DOWN |
+
+The arrival proxy reads the **single preceding candle**, which closes UP, so the
+family is **RALLY_BASE_DROP** — not a standard family, therefore gated out of
+Base authority and owning nothing. A human reading the book's *"after an
+existing bearish move"* would see 18:15 and 18:30 both closing down and call
+this **DROP_BASE_DROP**; bars 132–133 are a two-candle bounce inside that move.
+
+**So the body rule fixes DETECTION but the arrival proxy then denies AUTHORITY,
+and the author's visual complaint is still not resolved end-to-end.** The proxy
+is single-candle because no approved multi-bar arrival definition exists —
+Standard V1 §8 leaves it unresolved — so this cannot be corrected without a
+doctrine decision.
+
+## Population change
+
+| host | A bases | B bases | new |
+| --- | --- | --- | --- |
+| M15 EURUSD (300 bars) | 4 | **7** | 3 |
+| M45 bars XAUUSD (529) | 4 | **10** | 6 |
+| H3 XAUUSD (300) | 6 | **9** | 3 |
+
+Ownership subordinations after the change: **M15 0, M45 1 (a HAMMER), H3 0.**
+The body rule alone does **not** make the ownership layer live.
+
+Doji harness corrected — real confirmed swings are now passed, so these are
+engine facts: **M15 8, M45 13, H3 3** Doji detections (previously reported as 0,
+which was a harness artefact).
+
+## False-positive review — and a flaw in my own heuristic
+
+Every one of the 12 newly accepted Bases tripped my `envelope > 0.5 × departure`
+flag. That is **my heuristic being mis-calibrated, not evidence of bad
+geometry**: the approved `base_height_departure_multiplier` already permits up
+to 0.60×, so flagging at 0.50× flags nearly everything that legitimately passes.
+Reported as a defect in the review tool rather than dressed up as a finding.
+
+The one case that is genuinely worth the author's eye:
+
+> **H3 2026-08-26 16:00** — 2 bars, max range 19.08, **max body 2.25**, departure
+> 34.72. Old ratio 1.82, new ratio **15.43**. Both base candles are **>80% wick**.
+
+That is the shape the author warned about: tiny bodies with very large wicks
+producing a wide Base zone. The ATR-height gate did not reject it. It is the
+strongest argument for keeping the body rule experimental until more examples
+are reviewed.
+
+## Acceptance status
+
+| criterion | result |
+| --- | --- |
+| 1. author's M15 formation becomes the expected DBD | **NO** — it becomes a Base, but RALLY_BASE_DROP, not DBD |
+| 2. geometry remains correct | YES — zone wick-inclusive, unchanged |
+| 3. false-positive review acceptable | **UNPROVEN** — one >80%-wick case; my flag was mis-calibrated |
+| 4. ownership behaves causally | YES — unchanged, still causal |
+| 5. batch == incremental | pending re-run |
+| 6. type/geometry invariants green | YES |
+| 7. full suite green | pending |
+| 8. impact understood | partially — populations measured, arrival proxy now the open question |
+
+**BODY-SIZE RULE: remains EXPERIMENTAL.** Criterion 1 fails, and it fails for a
+reason outside the body rule itself.

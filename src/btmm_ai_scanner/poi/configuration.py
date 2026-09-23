@@ -32,6 +32,22 @@ class PoiConfiguration(ContractModel):
     base_midpoint_drift_ratio: Decimal = Decimal("0.25")
     base_overlap_ratio_minimum: Decimal = Decimal("0.50")
 
+    #: RC5 EXPERIMENT (default OFF -- flipping it changes the Base population).
+    #:
+    #: Base Formation Standard V1 measures base-candle SIZE with Candle Total
+    #: Range (high - low), wicks included. The M15 golden fixture shows why that
+    #: is contested: at 2026-09-21 19:30 a base candle has a body of 0.00001
+    #: against a range of 0.00021 -- 95% wick -- so a visually compact pause
+    #: candle is judged oversized and the Drop-Base-Drop is never detected.
+    #:
+    #: When True, and ONLY for the base-candle size qualification, size is
+    #: measured as abs(close - open). Nothing else moves: the POI zone stays
+    #: wick-inclusive (base high/low are real market extremes), and the ATR
+    #: height, height/departure, midpoint drift and pairwise overlap gates are
+    #: untouched. The 2.0 / 3.0 / 0.50 / 0.3333 thresholds are unchanged; this
+    #: is a measurement-basis switch, not a threshold change.
+    base_size_uses_body: bool = False
+
     pressure_wick_share_standard: Decimal = Decimal("0.40")
     pressure_wick_body_efficiency_standard: Decimal = Decimal("0.25")
     pressure_wick_dominance_standard: Decimal = Decimal("2.0")
