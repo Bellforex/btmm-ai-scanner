@@ -259,3 +259,100 @@ Caveat stated rather than buried: the impact harness passes
 `confirmed_swings=()` to `detect_dojis`, so the DOJI population reads 0 on both
 hosts. That is a harness limitation, not an engine fact, and Doji-inside-Base
 remains unmeasured on real data.
+
+---
+
+# BASE DETECTOR FORENSICS — ONE GATE REJECTS 97%
+
+## The exact formulas, as implemented
+
+| gate | formula | units |
+| --- | --- | --- |
+| small candle | `max(total_range(c) for c in base) > 0.50 × total_range(departure)` → reject | **full range, wicks included** |
+| departure ratio | `total_range(departure) / max_base_range < 2.0` → reject | full range |
+| base height vs ATR | `(max(high) − min(low)) > 0.75 × ATR(14)[end-1]` → reject; ATR falls back to the departure range when unavailable | full envelope |
+| base height vs departure | `(max(high) − min(low)) > 0.60 × total_range(departure)` → reject | full envelope |
+| midpoint drift | for every base candle, `abs(((high+low)/2) − base_midpoint) ≤ 0.25 × base_height` | midpoints of full range |
+| pairwise overlap | for each adjacent pair, `max(0, min(h₁,h₂) − max(l₁,l₂)) / min(total_range₁, total_range₂) ≥ 0.50` | **denominator is the smaller candle's full range** |
+| departure direction | bullish: `close > open AND close > base_high`; bearish: `close < open AND close < base_low` | — |
+
+`total_range(c) = high − low`. `body(c) = |close − open|`. **`body` is never used
+by the Base detector.** Every compactness test is wick-inclusive.
+
+**This matches the approved standard, not a misreading of it.** Base Formation
+Standard V1 says the size test "Uses Candle Total Range (`High − Low`) from
+Candle Measurement Standard V1 without modification", and `base_drop.md` states
+"Base High/Low use candle highs/lows (**wicks included**)". So the author's
+hypothesis that the implementation substituted range for body is **disproven** —
+the code is faithful; the question is the standard's calibration, which the
+standard itself flags as "provisional, pending calibration against
+expert-approved examples".
+
+**Two of the listed gates are one gate.** `max_base > 0.50 × departure` and
+`departure / max_base < 2.0` are exact reciprocals, so they can never disagree.
+The ANY-fail columns below confirm it: identical counts, every time.
+
+## Rejection histogram — current constants, nothing changed
+
+| | M45 (529 bars) | H3 (300 bars) |
+| --- | --- | --- |
+| candidate windows | 2,625 | 1,480 |
+| **PASS all gates** | **4 (0.152%)** | **6 (0.405%)** |
+| median wick share of candle range | **0.535** | **0.544** |
+
+FIRST failing gate / ANY failing gate:
+
+| gate | M45 first | M45 any | H3 first | H3 any |
+| --- | --- | --- | --- | --- |
+| **small candle ratio** | **2,550** | 2,550 | **1,428** | 1,428 |
+| departure ratio | 0 | 2,550 | 0 | 1,428 |
+| height vs ATR | 63 | 2,544 | 46 | 1,455 |
+| height vs departure | 0 | 2,559 | 0 | 1,435 |
+| midpoint drift | 5 | 1,728 | 0 | 948 |
+| pairwise overlap | 0 | 1,330 | 0 | 690 |
+| departure direction | 3 | 1,851 | 0 | 1,052 |
+
+**The small-candle ratio is the first failure for 97.3% of M45 rejections and
+96.9% of H3's.** Nothing else is close. The Base population is governed by a
+single provisional constant.
+
+And the mechanism the author suspected is visible in the data: **the median
+candle spends 53–54% of its range in wicks.** Because the gate measures full
+range, a candle with a compact body and ordinary wicks is judged "large", so
+the comparison is dominated by wick noise rather than by body compactness — on
+these hosts, more than half of what the gate measures is wick.
+
+**No constant has been changed, and none should be on this evidence alone.** A
+low count is acceptable if correct; the decisive test is the author's own M15
+region, which is the one fixture that can say whether a formation the author
+reads as a Base fails this gate.
+
+## DBR / RBD vs the existing reversal families
+
+| | RBD (hypothetical) | BUY_TO_SELL (actual) |
+| --- | --- | --- |
+| source span | 2–6 base candles + departure | **1 candle** |
+| zone | base group high → low | that candle's high → low |
+| candle requirement | every base candle **small** | a **strong bullish** candle |
+| confirmation | departure closes beyond the base | subsequent bearish reversal |
+| arrival | existing bullish move | existing bullish move |
+
+**Classification: RELATED BUT DISTINCT.** They describe the same market event —
+an up-move turning down — with incompatible topology: B2S marks one *strong*
+candle, RBD would mark a multi-candle *compact* pause. The candle requirements
+are opposites, so one cannot be the other. DBR vs SELL_TO_BUY is the mirror,
+with the same conclusion.
+
+So DBR/RBD are **not already covered** by B2S/S2B. They remain non-standard
+under the approved Base standard, and that is a doctrine gap rather than a
+duplication.
+
+## How DBR/RBD are gated
+
+The smallest representation that destabilises nothing: `STANDARD_BASE_FAMILIES
+= {RALLY_BASE_RALLY, DROP_BASE_DROP}` plus `is_standard_base_family()`. No
+contract, transport code or record shape changed. Detection is untouched — DBR
+and RBD candidates are still produced and still carry their family — but
+formation ownership now only accepts a standard-family Base as an owner, so a
+non-standard Base can subordinate nothing. A Base whose arrival is unknown
+(`None`) is likewise not authoritative: unverifiable is not authoritative.

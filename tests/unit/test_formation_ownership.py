@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 from uuid import UUID
 
-from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
+from btmm_ai_scanner.poi.enums import BaseFamily, PoiDirection, PoiType
 from btmm_ai_scanner.poi.formation_ownership import (
     OWNABLE_PATTERN_TYPES,
     OwnershipReason,
@@ -39,6 +39,9 @@ class _Cand(NamedTuple):
     direction: PoiDirection
     source_candle_record_ids: tuple[UUID, ...]
     availability_time_utc: datetime
+    #: Only Bases carry one; patterns leave it None, exactly as the real
+    #: candidates do.
+    base_family: BaseFamily | None = None
 
 
 def _base(
@@ -48,6 +51,7 @@ def _base(
     poi_type: PoiType = PoiType.BASE_DROP,
     direction: PoiDirection = PoiDirection.BEARISH,
     minutes: int = 5,
+    base_family: BaseFamily | None = BaseFamily.DROP_BASE_DROP,
 ) -> _Cand:
     return _Cand(
         poi_type=poi_type,
@@ -57,6 +61,7 @@ def _base(
             _cid(departure_index),
         ),
         availability_time_utc=_T0 + timedelta(minutes=minutes),
+        base_family=base_family,
     )
 
 
@@ -261,3 +266,37 @@ def test_resolution_is_deterministic_and_order_independent() -> None:
 def test_no_bases_means_no_records() -> None:
     star = _pattern(PoiType.SHOOTING_STAR, (2,))
     assert resolve_formation_ownership([star]) == ()
+
+
+# --------------------------------------------------------------------------
+# only a STANDARD-direction Base is authoritative
+# --------------------------------------------------------------------------
+
+
+def test_a_non_standard_family_base_owns_nothing() -> None:
+    """RALLY_BASE_DROP is not a Base under the approved standard.
+
+    It is still detected and still present for forensics -- it simply may not
+    subordinate anything, because a formation the standard does not recognise
+    cannot outrank one it does.
+    """
+    base = _base(base_family=BaseFamily.RALLY_BASE_DROP)
+    star = _pattern(PoiType.SHOOTING_STAR, (2,))
+    assert resolve_formation_ownership([base, star]) == ()
+
+
+def test_drop_base_rally_also_owns_nothing() -> None:
+    base = _base(
+        poi_type=PoiType.BASE_RALLY,
+        direction=PoiDirection.BULLISH,
+        base_family=BaseFamily.DROP_BASE_RALLY,
+    )
+    hammer = _pattern(PoiType.HAMMER, (2,), direction=PoiDirection.BULLISH)
+    assert resolve_formation_ownership([base, hammer]) == ()
+
+
+def test_a_base_with_no_known_arrival_owns_nothing() -> None:
+    """Unverifiable is not authoritative."""
+    base = _base(base_family=None)
+    star = _pattern(PoiType.SHOOTING_STAR, (2,))
+    assert resolve_formation_ownership([base, star]) == ()

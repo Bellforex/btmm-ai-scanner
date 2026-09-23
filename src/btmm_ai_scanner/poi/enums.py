@@ -210,6 +210,33 @@ class BaseFamily(StrEnum):
     DROP_BASE_DROP = "DROP_BASE_DROP"
 
 
+#: The ONLY families the approved standard recognises as Bases.
+#:
+#: `knowledge/MEASUREMENT_STANDARDS.md`, Base Formation Standard V1, scopes
+#: itself to "Base Rally (Rally-Base-Rally) and Base Drop (Drop-Base-Drop)", and
+#: its INVALID BASE row includes "direction does not match Base Rally or Base
+#: Drop". Each POI rule file requires the base to be "a distinct
+#: pause/consolidation after an existing bullish/bearish move" -- an arrival in
+#: the SAME direction as the departure.
+#:
+#: DROP_BASE_RALLY and RALLY_BASE_DROP are therefore detected and retained for
+#: forensics but are NOT authoritative Bases. They are held here rather than
+#: deleted because their relationship to SELL_TO_BUY / BUY_TO_SELL is an open
+#: forensic question, and deleting the evidence would close it by accident.
+STANDARD_BASE_FAMILIES: frozenset[BaseFamily] = frozenset(
+    {BaseFamily.RALLY_BASE_RALLY, BaseFamily.DROP_BASE_DROP}
+)
+
+
+def is_standard_base_family(family: BaseFamily | None) -> bool:
+    """True only for an arrival that matches its departure.
+
+    ``None`` (no arrival candle available) is NOT standard: the requirement is
+    unverifiable there, and an unverifiable Base is not an authoritative one.
+    """
+    return family in STANDARD_BASE_FAMILIES
+
+
 #: Which ``PoiType`` each family transports as. The frozen codes are unchanged.
 BASE_FAMILY_TRANSPORT: dict[BaseFamily, PoiType] = {
     BaseFamily.RALLY_BASE_RALLY: PoiType.BASE_RALLY,

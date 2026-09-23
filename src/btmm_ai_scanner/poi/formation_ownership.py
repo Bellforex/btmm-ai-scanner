@@ -44,7 +44,7 @@ from enum import StrEnum
 from typing import Any, NamedTuple
 from uuid import UUID
 
-from btmm_ai_scanner.poi.enums import PoiType
+from btmm_ai_scanner.poi.enums import PoiType, is_standard_base_family
 
 __all__ = [
     "BASE_TYPES",
@@ -150,7 +150,16 @@ def resolve_formation_ownership(
     Deterministic and side-effect free: returns relationship records sorted by
     (owner key, member key) and mutates nothing.
     """
-    bases = [c for c in candidates if c.poi_type in BASE_TYPES]
+    # ONLY standard-direction Bases may own evidence. A DROP_BASE_RALLY or
+    # RALLY_BASE_DROP is not an authoritative Base under the approved
+    # standard, so it must not subordinate anything; it is kept in the
+    # candidate set for forensics and nothing more.
+    bases = [
+        c
+        for c in candidates
+        if c.poi_type in BASE_TYPES
+        and is_standard_base_family(getattr(c, "base_family", None))
+    ]
     if not bases:
         return ()
     patterns = [c for c in candidates if c.poi_type in OWNABLE_PATTERN_TYPES]
