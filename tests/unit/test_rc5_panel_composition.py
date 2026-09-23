@@ -140,6 +140,7 @@ def test_a_renamed_chart_renderer_fails_loudly() -> None:
     """
     core = _read(CORE)
     first_marker = CHART_RENDERERS[0][0]
-    broken = core.replace(first_marker, first_marker.replace("RC3", "RC9"), 1)
+    broken = core.replace(first_marker, first_marker.replace("RC5", "RC9"), 1)
+    assert broken != core, "the marker under test no longer occurs in CORE"
     with pytest.raises(CompositionError):
         compose(broken, _read(PART))

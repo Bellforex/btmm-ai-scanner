@@ -1272,6 +1272,7 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
     int weakLowKey  = weakLowIx  >= 0 ? array.get(views, weakLowIx).stableKey  : C_ST_NA
     [dir, protHighKey, protLowKey, weakHighKey, weakLowKey, lastChange, events, brokenKeys, weakHighBoundaryAbs, weakLowBoundaryAbs, chochAborts]
 
+//#VIEW-CUT-BEGIN NON_STRUCTURAL_ENGINES
 // =============================================================================
 // EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
 // confirmation time (record_id tiebreak replaced by deterministic
@@ -1975,6 +1976,7 @@ f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, 
         code := isBull ? cls : -cls
     [code, ratio]
 
+//#VIEW-CUT-END NON_STRUCTURAL_ENGINES
 // =============================================================================
 // MAIN — advance state ONLY on confirmed/closed bars (non-repaint).
 // =============================================================================
@@ -2013,8 +2015,10 @@ if barstate.isconfirmed
         array.shift(wAvailT)
         array.shift(wAtr)
 
+    //#VIEW-CUT-BEGIN MAIN_DISPLACEMENT
     // ---- displacement (latest confirmed candle) ----
     [dispCode, dispRatio] = f_latestDisplacement(wHigh, wLow, wOpen, wClose, scDispRange)
+    //#VIEW-CUT-END MAIN_DISPLACEMENT
 
     // ---- single-candle pivot frontier: decide ONE new candle, retire stale ----
     int absFirst = confirmedBarCount - array.size(wHigh)
@@ -2041,33 +2045,8 @@ if barstate.isconfirmed
     p2TransCount    := array.size(p2bEvents)
     p3Events := p2bEvents
 
-    // ---- RC3 market-structure overlay (presentation only). Draws the frozen
-    // P2 walk's own BOS / CHOCH events and P1's confirmed swings -- no second
-    // structure algorithm. Rebuilt on the last confirmed bars only, each event
-    // at its own break candle, so history shows real transitions and nothing
-    // is painted before it was available. Bull = green, bear = red.
-    if dspMs and bar_index >= last_bar_index - 1
-        bahui.clearLines(msLines)
-        bahui.clearLabels(msLabels)
-        for [k, ev] in p2bEvents
-            if k >= p2TransCount - maxDrawPerFamily
-                color msC = ev.transitionCode > 0 ? color.green : color.red
-                array.push(msLines, line.new(ev.brokenSwingKey, ev.brokenLevel, ev.breakTime, ev.brokenLevel, xloc.bar_time, color = msC, style = line.style_dotted))
-                array.push(msLabels, label.new(ev.breakTime, ev.brokenLevel, math.abs(ev.transitionCode) == 2 ? "CHOCH" : "BOS", xloc.bar_time, color = color(na), textcolor = msC, style = label.style_label_left, size = size.tiny))
-        for [k, sw] in swings
-            if k >= array.size(swings) - maxDrawPerFamily
-                bool msHigh = sw.swingType == SWING_HIGH
-                // RC5 STAGE H: HH / HL / LH / LL instead of the dense SH / SL
-                // forest. Only swings the walk actually used are labelled;
-                // highs and lows are sequenced INDEPENDENTLY, because a higher
-                // high compares against the previous HIGH, not against
-                // whatever confirmed in between. An equal pivot within the
-                // frozen tie tolerance gets no label rather than a forced one.
-                if f_rc5SwingMeaningful(sw.pivotEndTime)
-                    float prevPx = msHigh ? array.get(msPrevHL, 0) : array.get(msPrevHL, 1)
-                    if not na(prevPx) and math.abs(sw.price - prevPx) > sw.referenceAtr * 0.0
-                        array.push(msLabels, label.new(sw.pivotEndTime, sw.price, msHigh ? (sw.price > prevPx ? "HH" : "LH") : (sw.price > prevPx ? "HL" : "LL"), xloc.bar_time, color = color(na), textcolor = color.gray, style = msHigh ? label.style_label_down : label.style_label_up, size = size.tiny))
-                    array.set(msPrevHL, msHigh ? 0 : 1, sw.price)
+    //#VIEW-RENDER-ANCHOR structure overlay lives in rc5_view_presentation.pine
+    //#VIEW-CUT-BEGIN MAIN_NON_STRUCTURAL
 
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
@@ -2224,6 +2203,8 @@ bool p1HistoryOk   = p1CapacityOk and p1WarmupOk
 // DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
 // -----------------------------------------------------------------------------
 
+    //#VIEW-CUT-END MAIN_NON_STRUCTURAL
+//#VIEW-CUT-BEGIN EVERYTHING_BELOW_STRUCTURE
 // =============================================================================
 // PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
 // =============================================================================
@@ -7004,3 +6985,5 @@ plotshape(dspBtmm and fwCyc > 0, "BTMM cycle valid", shape.diamond, location.bot
 
 // RC5 CORE: the diagnostic tables live in the RC5 PANEL companion.
 // Every semantic field they displayed is still computed here.
+
+//#VIEW-CUT-END EVERYTHING_BELOW_STRUCTURE

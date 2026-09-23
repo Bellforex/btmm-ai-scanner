@@ -1,0 +1,42 @@
+// RC5 VIEW presentation parts — GENERATED INTO VIEW, NEVER INTO CORE.
+//
+// The RC3 market-structure overlay: HH / HL / LH / LL labels and the
+// BOS / CHOCH lines. It lived inline in CORE's per-bar confirmed block and
+// was measured at 1,036 tokens there. It is market-space PRESENTATION with a
+// purely structural dependency -- it reads `p3Swings` and `p3Events` and
+// nothing downstream of them -- so it is the one renderer that can leave CORE
+// without dragging semantics across.
+//
+// The trendline renderer deliberately did NOT come with it: its one-visible-
+// line winner reads `rc5TlHit`, written by the qualified sweep engine from POI
+// references, so a structure-only VIEW cannot reproduce the same winner.
+//
+// `tools/rc5_compose.py` splices this at //#VIEW-RENDER-ANCHOR.
+
+    // ---- RC3 market-structure overlay (presentation only). Draws the frozen
+    // P2 walk's own BOS / CHOCH events and P1's confirmed swings -- no second
+    // structure algorithm. Rebuilt on the last confirmed bars only, each event
+    // at its own break candle, so history shows real transitions and nothing
+    // is painted before it was available. Bull = green, bear = red.
+    if dspMs and bar_index >= last_bar_index - 1
+        bahui.clearLines(msLines)
+        bahui.clearLabels(msLabels)
+        for [k, ev] in p2bEvents
+            if k >= p2TransCount - maxDrawPerFamily
+                color msC = ev.transitionCode > 0 ? color.green : color.red
+                array.push(msLines, line.new(ev.brokenSwingKey, ev.brokenLevel, ev.breakTime, ev.brokenLevel, xloc.bar_time, color = msC, style = line.style_dotted))
+                array.push(msLabels, label.new(ev.breakTime, ev.brokenLevel, math.abs(ev.transitionCode) == 2 ? "CHOCH" : "BOS", xloc.bar_time, color = color(na), textcolor = msC, style = label.style_label_left, size = size.tiny))
+        for [k, sw] in swings
+            if k >= array.size(swings) - maxDrawPerFamily
+                bool msHigh = sw.swingType == SWING_HIGH
+                // RC5 STAGE H: HH / HL / LH / LL instead of the dense SH / SL
+                // forest. Only swings the walk actually used are labelled;
+                // highs and lows are sequenced INDEPENDENTLY, because a higher
+                // high compares against the previous HIGH, not against
+                // whatever confirmed in between. An equal pivot within the
+                // frozen tie tolerance gets no label rather than a forced one.
+                if f_rc5SwingMeaningful(sw.pivotEndTime)
+                    float prevPx = msHigh ? array.get(msPrevHL, 0) : array.get(msPrevHL, 1)
+                    if not na(prevPx) and math.abs(sw.price - prevPx) > sw.referenceAtr * 0.0
+                        array.push(msLabels, label.new(sw.pivotEndTime, sw.price, msHigh ? (sw.price > prevPx ? "HH" : "LH") : (sw.price > prevPx ? "HL" : "LL"), xloc.bar_time, color = color(na), textcolor = color.gray, style = msHigh ? label.style_label_down : label.style_label_up, size = size.tiny))
+                    array.set(msPrevHL, msHigh ? 0 : 1, sw.price)

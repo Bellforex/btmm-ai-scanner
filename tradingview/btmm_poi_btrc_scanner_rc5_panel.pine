@@ -1272,6 +1272,7 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
     int weakLowKey  = weakLowIx  >= 0 ? array.get(views, weakLowIx).stableKey  : C_ST_NA
     [dir, protHighKey, protLowKey, weakHighKey, weakLowKey, lastChange, events, brokenKeys, weakHighBoundaryAbs, weakLowBoundaryAbs, chochAborts]
 
+//#VIEW-CUT-BEGIN NON_STRUCTURAL_ENGINES
 // =============================================================================
 // EQUAL LEVELS — domain/equal_levels.py. Per type, ordered by meaningful
 // confirmation time (record_id tiebreak replaced by deterministic
@@ -1975,6 +1976,7 @@ f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, 
         code := isBull ? cls : -cls
     [code, ratio]
 
+//#VIEW-CUT-END NON_STRUCTURAL_ENGINES
 // =============================================================================
 // MAIN — advance state ONLY on confirmed/closed bars (non-repaint).
 // =============================================================================
@@ -2013,8 +2015,10 @@ if barstate.isconfirmed
         array.shift(wAvailT)
         array.shift(wAtr)
 
+    //#VIEW-CUT-BEGIN MAIN_DISPLACEMENT
     // ---- displacement (latest confirmed candle) ----
     [dispCode, dispRatio] = f_latestDisplacement(wHigh, wLow, wOpen, wClose, scDispRange)
+    //#VIEW-CUT-END MAIN_DISPLACEMENT
 
     // ---- single-candle pivot frontier: decide ONE new candle, retire stale ----
     int absFirst = confirmedBarCount - array.size(wHigh)
@@ -2041,7 +2045,8 @@ if barstate.isconfirmed
     p2TransCount    := array.size(p2bEvents)
     p3Events := p2bEvents
 
-    // RC5 PANEL: structure overlay (BOS/CHOCH + HH/HL/LH/LL) is drawn by RC5 CORE.
+    //#VIEW-RENDER-ANCHOR structure overlay lives in rc5_view_presentation.pine
+    //#VIEW-CUT-BEGIN MAIN_NON_STRUCTURAL
 
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
@@ -2198,6 +2203,8 @@ bool p1HistoryOk   = p1CapacityOk and p1WarmupOk
 // DISPLACEMENT MARKER (per-bar shape; drawn on the confirmed bar only).
 // -----------------------------------------------------------------------------
 
+    //#VIEW-CUT-END MAIN_NON_STRUCTURAL
+//#VIEW-CUT-BEGIN EVERYTHING_BELOW_STRUCTURE
 // =============================================================================
 // PARITY INTERFACE — machine-readable latest-state values (Data Window) + table.
 // =============================================================================
@@ -6798,3 +6805,5 @@ if barstate.islast
         // plus a loop; one loop now writes all nine. Same text, same position.
         for c = 0 to 8
             table.cell(p7Pois, c, p7MaxVisiblePois + 1, c == 0 ? str.tostring(array.size(p7RowOrder)) + " shown / " + str.tostring(p7Active) + " active" : "", text_size = size.tiny, text_color = color.gray, text_halign = text.align_left)
+
+//#VIEW-CUT-END EVERYTHING_BELOW_STRUCTURE

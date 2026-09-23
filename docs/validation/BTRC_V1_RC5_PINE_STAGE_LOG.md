@@ -846,3 +846,88 @@ it is sound. It just is not enough on its own.
 
 VIEW was NOT generated, NOT compiled and NOT measured, because doing so would
 have meant choosing one of these on the author's behalf.
+
+## Stage VIEW — structure-only extraction, generated and measured
+
+Author decision: keep `tlHit` (it is reaction evidence, not display
+convenience), move R1+R2 only, leave the trendline renderer in CORE.
+
+### Architecture
+
+Three artifacts from one canonical source, `tools/rc5_compose.py`:
+
+| artifact | contents |
+| --- | --- |
+| **CORE** | scanner semantics, POI drawing, trendline drawing |
+| **VIEW** | HH/HL/LH/LL + BOS/CHOCH drawing, and the structural subset it needs |
+| **PANEL** | screen-space diagnostics |
+
+The structure overlay was **moved out of CORE entirely** into
+`tradingview/rc5_view_presentation.pine`, so exactly one copy exists in the
+repository and CORE physically cannot draw it. VIEW is CORE minus four
+marker-delimited regions, with that renderer spliced back at
+`//#VIEW-RENDER-ANCHOR`.
+
+Markers, never line numbers:
+`NON_STRUCTURAL_ENGINES`, `MAIN_DISPLACEMENT`, `MAIN_NON_STRUCTURAL`,
+`EVERYTHING_BELOW_STRUCTURE`. Marker comments cost 0 Pine tokens.
+
+### The compiler settled the dependency question
+
+**VIEW compiles: `success: true`.** It contains no POI registry, no POI
+detector, no sweep engine, no authority, no P5, no P8, no BTMM — and the Pine
+compiler accepted it. That is the definitive closure proof the scope-blind
+analyser could not give.
+
+It also resolves the earlier inconclusive symbols honestly: `poiType`,
+`poiDirection` and `f_rc5PoiKind` were reachable **only through the trendline
+renderer**, which stayed in CORE. They were never structure-overlay
+dependencies.
+
+| | |
+| --- | --- |
+| VIEW lines | 1,354 (CORE 6,989) |
+| VIEW bytes | 75,996 (CORE ~378,000) |
+
+### Real generated CORE — three points
+
+| N | `ctx.outputILLength` | `C - 97N` |
+| --- | --- | --- |
+| 22 | 100,469 | **98,335** |
+| 24 | 100,663 | **98,335** |
+| 26 | 100,857 | **98,335** |
+
+Both intervals exactly `97 x 2 = 194`; all three derive the same base.
+
+| | |
+| --- | --- |
+| P1 CORE | 99,371 |
+| **generated CORE** | **98,335** |
+| **saving** | **1,036** |
+| **hard headroom** | **1,921** |
+| strict headroom (vs 99,256) | **921** |
+
+The real generated artifact matched the deletion probe to the token.
+
+### VIEW token count — NOT measured, and why
+
+The oracle only reports a count inside `CE10117`, which fires only ABOVE the
+limit. VIEW plus the maximum permitted padding (N=100, +9,700) is nowhere near
+100,256, so the ceiling cannot be reached within `N <= 100`. What is proven is a
+bound and a compile: **VIEW <= 90,556 and it compiles**. Measuring it exactly
+needs a larger pad block with its own 3-point calibration; that is a small piece
+of work, not done here rather than guessed.
+
+### Hashes
+
+| file | sha256 (first 16) |
+| --- | --- |
+| CORE | `b620971542ab86f4` |
+| VIEW | (regenerated after the renderer move — see repo) |
+| PANEL | (regenerated) |
+
+### Not done in this unit
+
+Runtime gates (VIEW alone, CORE alone, CORE+VIEW, CORE+VIEW+PANEL), extraction
+visual parity, and P2+P3. VIEW is therefore **not yet accepted** — it has passed
+the compile, capacity and anti-drift gates, and not the runtime or visual ones.
