@@ -1435,3 +1435,128 @@ your plan's runtime limit (20s)."* It appeared on M15, M45 and H4. No runtime
 error, no timeout, no missing output — but this is the first build to raise it,
 and Stage E's authority pass is O(n²) over the registry on every bar (190 POIs
 here). It is a measurement to watch, not yet a failure.
+
+---
+
+# ONE OUTER TRENDLINE — the audit the author asked for, then the rule
+
+## 1. Which field actually represents validation / reaction quality
+
+The author asked this to be proven, not assumed. It is worse than "often
+length 1".
+
+`qualifying_touch_swing_record_ids` is **length 1 by construction**, always.
+`detect_trendlines` walks candidate touches, `break`s on the FIRST one that
+qualifies, and stores `qualifying_touch_swing_record_ids=(confirming_touch.record_id,)`
+— a one-element tuple, every time. It is not a touch COUNT; it is the single
+confirming touch that made the line exist at all. It carries **zero ranking
+variation** and cannot be used as "most touches". It is not used.
+
+What the trendline record actually owns (Pine `TrendlineRec`): orientation,
+both anchor prices, both anchor times, `rawSlope`, `normalizedSlope`,
+`confirmationTime`. No touch count, no reaction history, no age beyond
+confirmation.
+
+**The one real reaction fact in the system is Stage G's qualified sweep.** When
+price takes liquidity at a trendline, Stage G records an `RcEv` of kind
+`C_RC5K_TREND` whose `ref` is that line's own level identity. That is genuine,
+already-proven reaction evidence, and it is the only such fact available. A
+one-line sidecar (`rc5TlHit`) records it where it is already produced.
+
+## 2. The frozen display hierarchy, and the existing fact behind each step
+
+| step | rule | fact used |
+| --- | --- | --- |
+| 1 eligibility | both anchors structurally meaningful | G1 `rc5SwingRole` |
+| 2 direction | bullish walk → support line; bearish → resistance | `p2Direction`, `orientation` |
+| 3 outer | project to the current bar; must be on the defending side; furthest from price wins | the line's own equation, `close` |
+| 4 validation | a qualified TREND sweep named this line | `rc5TlHit` from Stage G |
+| 5 relevance | — | **no independent fact exists** |
+| 6 recency | later confirmation | `confirmationTime` |
+| 7 stable id | later anchor1 time | `anchor1Time` |
+
+**Step 5 is deliberately empty, and that is a finding.** Asking "is price
+respecting this line right now" needs a proximity tolerance, and inventing one
+was explicitly refused. The only reaction fact the engine owns is the qualified
+sweep, which step 4 already consumes — so step 5 collapses into step 4 rather
+than being faked.
+
+**Why "outer" needs no threshold.** Project every eligible line to the current
+bar with its own equation. A line is a candidate only if it is on the side it
+defends (resistance at or above `close`, support at or below). Among those, the
+outer one is simply the furthest from price — an interior or steep diagonal sits
+*between* price and the outer boundary, so it loses on that term alone. No
+angle, slope, pip, ATR or bar-count threshold appears anywhere. Market-space
+only: no pixel, no viewport, no `bar_index`, so it survives pan, zoom, resize
+and reload by construction.
+
+**Range / neutral shows nothing.** When `p2Direction` names no side, no line is
+direction-aligned and the chart draws zero. A stale line is worse than no line.
+
+**One bounded pass.** A single best-candidate accumulator over `fwTls`; no
+pairwise comparison, no second trendline engine, and `fwTls` is never mutated —
+every valid record stays for diagnostics, qualified liquidity and sweeps.
+
+## 3. POI text
+
+Size 31 is revoked. `p7zTextSize` is now an input with options 14 / 16 / 18,
+defaulting to the author's preferred **16**, so the readable-inside-the-box
+judgement is made on the chart instead of in a rebuild. Gray box, gray border,
+black text and market-time anchoring are unchanged.
+
+## 4. Static audit of the change
+
+Verified mechanically: exactly one `line.new` in the trendline renderer; the
+old multi-line loop and its `tlSeen` exact-anchor map are **gone**, not left
+beside it; the accumulator, all seven steps, and the reaction sidecar each
+appear once; no ATR/pip/angle/bar-count threshold; no `array.remove(fwTls)`;
+`text_size = 31` absent; POI boxes still anchored on `poiAvailTime`; zero
+`xloc.bar_index` in the file; PANEL still draws nothing in market space.
+
+## 5. Token measurement — INCOMPLETE, one point only
+
+| | |
+| --- | --- |
+| before (merged CORE) | 98,749 |
+| after, from N=98 → 108,833 | **99,286** |
+| delta | **+537** |
+| hard headroom (100,256) | **970 under** |
+| strict headroom (99,256) | **30 OVER** |
+
+**This is a single oracle point, not the required three.** The browser session
+holding the authorised account disconnected before N=99 and N=100 ran, so the
+`BASE1 == BASE2 == BASE3` validation has NOT been performed and this figure is
+provisional.
+
+Against the author's own acceptance rule the result sits in the middle band:
+970 below the hard limit, 30 above the 99,256 strict target — i.e. it consumes
+30 tokens of the 1,000-token reserve. Not a rejection, but reported exactly.
+
+**Where the +537 goes, and the one optimisation identified:** most of it is the
+per-candidate reaction key, which rebuilds a four-part string
+(`"T" + orientation + "|" + a1 + "|" + a2 + "|" + confirmationTime`) for every
+eligible line. Stage G already has the anchor times as integers on the sweep
+event, so the sidecar could be keyed by `anchor1Time` as an int and the string
+disappear entirely. That would very likely recover the 30 and more — but it
+aliases two lines that share `anchor1` and differ in `anchor2`, which would
+weaken a tie-break term. It is offered as an author decision rather than taken
+unilaterally.
+
+## 6. Two consequences that must not be discovered later
+
+**The search is bounded by the analytical window.** Projecting a line needs its
+anchor1 bar, which is found with `array.indexof(wOpenT, ...)`. A line whose
+anchor1 has scrolled out of the 300-bar window cannot be projected and is not a
+display candidate. This is not a new rule: the existing `f_fwAdd` trendline
+registration already requires `array.indexof(wOpenT, t.anchor1Time) >= 0`, so
+display inherits the engine's own horizon rather than inventing one. It does
+mean a very old outer boundary is not eligible — worth the author's eye.
+
+**Flicker is NOT yet measured.** The winner depends on `p2Direction` (which
+changes only on a BOS/CHOCH), on which lines are eligible, and on the ranking
+by projected distance. Distance ranking can in principle reorder as price
+moves, though near-parallel lines over a short span should rarely swap. The
+author asked for this to be measured rather than asserted, and it has not been:
+the probe that counts winner changes per bar (`core_tlwin_probe.pine`, twelve
+data-window plots including `tlFlips` and `tlBars`) is written but has not run.
+Until it does, "no flicker" is a claim I have not earned.

@@ -32,7 +32,9 @@ sys.path.insert(0, str(REPO))
 from tools.rc5_compose import (  # noqa: E402
     CHART_RENDERERS,
     CORE,
+    CORE_TITLE,
     PANEL,
+    PANEL_TITLE,
     PART,
     CompositionError,
     compose,
@@ -82,6 +84,14 @@ def test_every_panel_line_is_either_cores_own_or_declared_presentation() -> None
     composed_notes |= {
         "    // RC5 PANEL: P7-Z zone boxes and labels are drawn by RC5 CORE.",
         "// RC5 PANEL: the BTMM cycle marker is a chart visual and belongs to CORE.",
+    }
+    # PANEL's own study title, so two legend rows on one chart are tellable
+    # apart. Derived from the composer's constants, not retyped, so a change to
+    # either title cannot quietly slip past this check.
+    composed_notes |= {
+        line.replace(CORE_TITLE, PANEL_TITLE)
+        for line in core_lines
+        if CORE_TITLE in line
     }
 
     orphans = [

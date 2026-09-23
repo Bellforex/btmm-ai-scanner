@@ -62,7 +62,7 @@ CHART_RENDERERS: list[tuple[str, str, str]] = [
     ),
     (
         "    // ---- RC5 STRUCTURAL TRENDLINE LAYER",
-        "                        array.push(fwLines, line.new(t2.anchor1Time",
+        "                array.push(fwLines, line.new(tw.anchor1Time",
         "structural trendline layer",
     ),
     (
@@ -71,6 +71,12 @@ CHART_RENDERERS: list[tuple[str, str, str]] = [
         "P7-Z zone boxes and labels",
     ),
 ]
+
+#: PANEL carries its own study title. Both scripts are attached to the same
+#: chart during QA, and two legend rows reading "[RC5 USER]" is a trap: it is
+#: impossible to tell which one drew what, or which version each is on.
+CORE_TITLE = '"BTMM + POI + BTRC Scanner [RC5 USER]"'
+PANEL_TITLE = '"BTMM + POI + BTRC Scanner [RC5 PANEL]"'
 
 #: The BTMM cycle marker is a single chart plot, so it is replaced rather than
 #: cut as a region.
@@ -145,6 +151,10 @@ def compose(core_text: str, part_text: str) -> str:
         "    // RC5 PANEL: P7-Z zone boxes and labels are drawn by RC5 CORE.\n",
         1,
     )
+
+    if panel.count(CORE_TITLE) < 1:
+        raise CompositionError("the CORE study title was not found")
+    panel = panel.replace(CORE_TITLE, PANEL_TITLE, 1)
 
     if panel.count(BTMM_MARKER) != 1:
         raise CompositionError("the BTMM cycle marker did not occur exactly once")

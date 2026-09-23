@@ -42,7 +42,7 @@ import bellcare1994/bah_pine_ui_helpers/1 as bahui
 // analytical window (that is `lookbackWindow`, still 300) and it changes no
 // analytical rule. 1800 is the validated horizon; see C_P1_MIN_CALC_BARS below
 // and docs/architecture/BTRC_V1_P1_PERFORMANCE_OPTIMIZATION.md §18.
-indicator("BTMM + POI + BTRC Scanner [RC5 USER]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, calc_bars_count = 1800)
+indicator("BTMM + POI + BTRC Scanner [RC5 PANEL]", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, calc_bars_count = 1800)
 
 // -----------------------------------------------------------------------------
 // INPUTS — debug/visual controls (client defaults: conservative & clean).
@@ -2680,6 +2680,13 @@ type RcEv
     string why
 
 var array<RcEv>  rc5Ev   = array.new<RcEv>()
+// REACTION EVIDENCE, recorded where it is already proven. A qualified sweep of
+// kind TREND means price actually took liquidity at that trendline -- which is
+// the only reaction fact the engine owns. `qualifying_touch_swing_record_ids`
+// is NOT a touch count: detect_trendlines breaks on the first qualifying touch
+// and stores exactly one id, so it is length 1 by construction and carries no
+// ranking variation at all.
+var map<string, bool> rc5TlHit = map.new<string, bool>()
 var map<int, bool> rc5PoiLv = map.new<int, bool>()   // POI index -> far edge registered
 
 // MERGED CORE: in the single-stage G prototype this was a `true` stub marked
@@ -6020,6 +6027,10 @@ p8EnableTerminal          = input.bool(true, "Alert: POI terminal/invalidated", 
 grpP7Z = "P7-Z — POI Zone Visualization"
 p7zShowZones        = input.bool(true, "Show POI Zones", group = grpP7Z)
 p7zShowLabels       = input.bool(true, "Show POI Text", group = grpP7Z)
+// Size 31 is revoked: it overflowed its own box on the narrower zones. 16 is
+// the author's preferred starting point; 14 and 18 are the other two sizes
+// under test, so the choice is made on the chart rather than in a rebuild.
+p7zTextSize         = input.int(16, "POI text size", options = [14, 16, 18], group = grpP7Z)
 // How far a fresh zone projects past the last close. Presentation only: the
 // semantic end of a POI's life is its first reaction, never a bar count.
 p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minval = 0, maxval = 200, group = grpP7Z)
@@ -6445,6 +6456,8 @@ if barstate.isconfirmed
                     if gm != win and not (cm.kind == pr.kind and cm.ref == pr.ref)
                         corr += 1
                 array.push(rc5Ev, RcEv.new(pr.t, pr.d, pr.p, pr.kind, pr.ref, corr, pr.why))
+                if pr.kind == C_RC5K_TREND
+                    map.put(rc5TlHit, pr.ref, true)
 
     // RC5 PANEL: structural trendline layer is drawn by RC5 CORE.
 

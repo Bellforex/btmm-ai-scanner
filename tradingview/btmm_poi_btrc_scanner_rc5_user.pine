@@ -2706,6 +2706,13 @@ type RcEv
     string why
 
 var array<RcEv>  rc5Ev   = array.new<RcEv>()
+// REACTION EVIDENCE, recorded where it is already proven. A qualified sweep of
+// kind TREND means price actually took liquidity at that trendline -- which is
+// the only reaction fact the engine owns. `qualifying_touch_swing_record_ids`
+// is NOT a touch count: detect_trendlines breaks on the first qualifying touch
+// and stores exactly one id, so it is length 1 by construction and carries no
+// ranking variation at all.
+var map<string, bool> rc5TlHit = map.new<string, bool>()
 var map<int, bool> rc5PoiLv = map.new<int, bool>()   // POI index -> far edge registered
 
 // MERGED CORE: in the single-stage G prototype this was a `true` stub marked
@@ -6046,6 +6053,10 @@ p8EnableTerminal          = input.bool(true, "Alert: POI terminal/invalidated", 
 grpP7Z = "P7-Z — POI Zone Visualization"
 p7zShowZones        = input.bool(true, "Show POI Zones", group = grpP7Z)
 p7zShowLabels       = input.bool(true, "Show POI Text", group = grpP7Z)
+// Size 31 is revoked: it overflowed its own box on the narrower zones. 16 is
+// the author's preferred starting point; 14 and 18 are the other two sizes
+// under test, so the choice is made on the chart rather than in a rebuild.
+p7zTextSize         = input.int(16, "POI text size", options = [14, 16, 18], group = grpP7Z)
 // How far a fresh zone projects past the last close. Presentation only: the
 // semantic end of a POI's life is its first reaction, never a bar count.
 p7zProjectBars      = input.int(12, "Fresh zone future projection (bars)", minval = 0, maxval = 200, group = grpP7Z)
@@ -6466,6 +6477,8 @@ if barstate.isconfirmed
                     if gm != win and not (cm.kind == pr.kind and cm.ref == pr.ref)
                         corr += 1
                 array.push(rc5Ev, RcEv.new(pr.t, pr.d, pr.p, pr.kind, pr.ref, corr, pr.why))
+                if pr.kind == C_RC5K_TREND
+                    map.put(rc5TlHit, pr.ref, true)
 
     // ---- RC5 STRUCTURAL TRENDLINE LAYER ------------------------------------
     // The legacy RC4 picture -- range lines, level rays, BSL/SSL tags and the
@@ -6490,29 +6503,66 @@ if barstate.isconfirmed
     if bar_index >= last_bar_index - 1
         bahui.clearLines(fwLines)
         if dspTl
-            // ---- DISPLAY ELIGIBILITY, not semantic existence --------------
-            // Every fwTls record is kept and the persistence fix is untouched:
-            // a displayed line still survives touch, respect, wick-through and
-            // a qualified sweep. What changes is WHICH of them are drawn.
+            // ---- ONE OUTER TRENDLINE. DISPLAY AUTHORITY, NOT DELETION -----
+            // Every fwTls record is kept, every qualified sweep still reads
+            // them, and the persistence fix is untouched: a line that loses
+            // display authority is HIDDEN, never removed. What changes is that
+            // at most ONE line is drawn -- the outer structural boundary the
+            // market is currently respecting -- because sixteen technically
+            // valid diagonals through price is not a readable chart.
             //
-            // The rule is not new. It is the trendline qualification Stage G
-            // already applies to liquidity -- BOTH defining anchors must be
-            // swings the structural walk actually used -- applied to drawing.
-            // A line built from texture pivots is not structural, so it is not
-            // drawn. No angle, touch-count, distance or price tolerance is
-            // introduced, and no maximum is forced: bullish and bearish lines
-            // are independent and several of each may legitimately survive.
+            // No angle, distance, pip or touch-count threshold is introduced.
+            // Every term below is an existing engine fact:
+            //   * both anchors meaningful          -- the G1 structural roles
+            //   * orientation vs p2Direction       -- the P2 structure walk
+            //   * projection at the current bar    -- the line's own equation
+            //   * qualified TREND sweep            -- Stage G reaction evidence
+            //   * confirmationTime                 -- the trendline engine
             //
-            // The map is an exact-anchor-pair guard, so one structural
-            // relationship cannot print twice. Lines sharing only ONE anchor
-            // describe different relationships and both survive.
-            map<string, bool> tlSeen = map.new<string, bool>()
-            for [_ti, t2] in fwTls
-                if f_rc5SwingMeaningful(t2.anchor1Time) and f_rc5SwingMeaningful(t2.anchor2Time)
-                    string tlKey = str.tostring(t2.anchor1Time) + "|" + str.tostring(t2.anchor2Time)
-                    if not map.contains(tlSeen, tlKey)
-                        map.put(tlSeen, tlKey, true)
-                        array.push(fwLines, line.new(t2.anchor1Time, t2.anchor1Price, t2.anchor2Time, t2.anchor2Price, xloc.bar_time, extend.right, color.purple, line.style_solid))
+            // ONE bounded pass, a single best-candidate accumulator: no
+            // pairwise comparison, no second trendline engine.
+            int tlBestI = -1
+            float tlBestDist = 0.0
+            bool tlBestHit = false
+            int tlBestConf = 0
+            int tlBestA1 = 0
+            int tlWantSide = p2Direction == 1 ? SWING_LOW : p2Direction == -1 ? SWING_HIGH : 0
+            for [ti, t2] in fwTls
+                // STEP 1 structural eligibility, and STEP 2 direction: a
+                // bullish walk is defended from BELOW by a support line, a
+                // bearish walk from ABOVE by a resistance line. In a range
+                // p2Direction names no side, so nothing is direction-aligned
+                // and the chart shows no trendline rather than a stale one.
+                if tlWantSide != 0 and t2.orientation == tlWantSide and f_rc5SwingMeaningful(t2.anchor1Time) and f_rc5SwingMeaningful(t2.anchor2Time)
+                    int tlAi = array.indexof(wOpenT, t2.anchor1Time)
+                    if tlAi >= 0
+                        // STEP 3 OUTER, in MARKET SPACE, never in pixels: the
+                        // line's own equation projected to the current bar.
+                        // `close` decides the side, and among lines on the
+                        // defending side the OUTER one is simply the furthest
+                        // from price -- an interior or steep diagonal sits
+                        // between price and it, so it loses on this term alone.
+                        float tlProj = t2.anchor1Price + t2.rawSlope * (array.size(wHigh) - 1 - tlAi)
+                        float tlDist = t2.orientation == SWING_HIGH ? tlProj - close : close - tlProj
+                        if tlDist >= 0
+                            // STEP 4 validation / reaction, and STEP 5 current
+                            // relevance: these are the SAME fact here. The only
+                            // reaction evidence the engine owns is a qualified
+                            // TREND sweep naming this exact line, and asking
+                            // "is price respecting it now" without that would
+                            // need a new tolerance, which is refused.
+                            bool tlHit = map.contains(rc5TlHit, "T" + str.tostring(t2.orientation) + "|" + str.tostring(t2.anchor1Time) + "|" + str.tostring(t2.anchor2Time) + "|" + str.tostring(t2.confirmationTime))
+                            // STEP 6 recency, then STEP 7 stable id.
+                            bool tlWin = tlBestI == -1 or tlDist > tlBestDist or (tlDist == tlBestDist and (tlHit and not tlBestHit or (tlHit == tlBestHit and (t2.confirmationTime > tlBestConf or (t2.confirmationTime == tlBestConf and t2.anchor1Time > tlBestA1)))))
+                            if tlWin
+                                tlBestI := ti
+                                tlBestDist := tlDist
+                                tlBestHit := tlHit
+                                tlBestConf := t2.confirmationTime
+                                tlBestA1 := t2.anchor1Time
+            if tlBestI >= 0
+                TrendlineRec tw = array.get(fwTls, tlBestI)
+                array.push(fwLines, line.new(tw.anchor1Time, tw.anchor1Price, tw.anchor2Time, tw.anchor2Price, xloc.bar_time, extend.right, color.purple, line.style_solid))
 
 var int fwCyc = 0
 var bool p8Primed = false
@@ -6902,7 +6952,7 @@ if barstate.isconfirmed
                     box p7zNewBox = box.new(left = array.get(poiAvailTime, p7zPoiI), top = array.get(poiZoneTop, p7zPoiI), right = p7zRightEdge, bottom = array.get(poiZoneBottom, p7zPoiI),
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
                       extend = extend.right, border_style = (ty2 == C_POI_SUPPORT_ZONE or ty2 == C_POI_RESISTANCE_ZONE) ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
-                      text_valign = text.align_center, text_color = p7zTextColor, text_size = 31)
+                      text_valign = text.align_center, text_color = p7zTextColor, text_size = p7zTextSize)
                     array.push(p7zBoxPoiIdx, p7zPoiI)
                     array.push(p7zBoxes, p7zNewBox)
                 else
