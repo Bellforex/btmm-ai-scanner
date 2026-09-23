@@ -70,7 +70,11 @@ from btmm_ai_scanner.domain.swings import (
     _supersede_same_direction_runs,
 )
 from btmm_ai_scanner.poi.authority import REVERSAL_TYPES
-from btmm_ai_scanner.poi.enums import PoiDirection, PoiType
+from btmm_ai_scanner.poi.enums import (
+    PoiDirection,
+    PoiType,
+    base_family_for_arrival,
+)
 from btmm_ai_scanner.poi.order_blocks import OrderBlockCandidate
 from btmm_ai_scanner.poi.rc5_semantics import (
     Rc5PoiSemanticRecord,
@@ -105,6 +109,8 @@ __all__ = [
 ]
 
 _STRUCTURE_CONFIGURATION = StructureConfiguration()
+#: The two Base transport codes, the only candidates that carry an arrival.
+_BASE_POI_TYPES = frozenset({PoiType.BASE_RALLY, PoiType.BASE_DROP})
 _OB_TYPES = frozenset({PoiType.BUY_ORDER_BLOCK, PoiType.SELL_ORDER_BLOCK})
 
 
@@ -406,6 +412,7 @@ def _semantic_record(
     candidate: Any,
     decision: ContextDecision | None,
     context: StructuralContext,
+    timeline: tuple[list[datetime], list[StructureDirection]] | None = None,
 ) -> Rc5PoiSemanticRecord:
     """The provenance to persist for ``candidate`` at the moment it locks.
 
@@ -430,6 +437,19 @@ def _semantic_record(
     since = (
         context.role_by_swing[origin].since if origin in context.role_by_swing else None
     )
+    # RC5 BASE ARRIVAL. Recorded HERE because this is the moment the gate locks
+    # the candidate and the causal direction timeline for this prefix is in
+    # hand -- no second structure walk, and the ledger's write-once discipline
+    # then makes the family prefix-stable for free. The reference instant is
+    # the Base's own first candle: the moment price arrived.
+    family = (
+        base_family_for_arrival(
+            structure_direction_at(timeline, candidate.candidate_event_time_utc),
+            candidate.poi_type,
+        )
+        if timeline is not None and candidate.poi_type in _BASE_POI_TYPES
+        else None
+    )
     return Rc5PoiSemanticRecord(
         stable_poi_key=_formation_key(candidate),
         poi_type=candidate.poi_type,
@@ -440,6 +460,7 @@ def _semantic_record(
         broken_swing_id=broken,
         break_candle_id=brk,
         structural_since_utc=since,
+        base_family=family,
     )
 
 
@@ -1123,6 +1144,11 @@ def advance_leg_origin_frontier(
     # from the gate it just ran.
     decision_by_key: dict[tuple[Any, ...], ContextDecision] = {}
     prefix_context: list[StructuralContext] = [state.context]
+    # The direction timeline for THIS prefix. On the fast path nothing
+    # structural changed, so the carried one already is this prefix's.
+    prefix_timeline: list[tuple[list[datetime], list[StructureDirection]]] = [
+        state.timeline
+    ]
 
     def lock_candidate(candidate: Any) -> None:
         key = _formation_key(candidate)
@@ -1138,7 +1164,12 @@ def advance_leg_origin_frontier(
         mapped_keys.add(key)
         if ledger is not None:
             ledger.record(
-                _semantic_record(candidate, decision_by_key.get(key), prefix_context[0])
+                _semantic_record(
+                    candidate,
+                    decision_by_key.get(key),
+                    prefix_context[0],
+                    prefix_timeline[0],
+                )
             )
 
     if signature == state.swing_signature and not _may_break(state.walk, candle.close):
@@ -1187,11 +1218,12 @@ def advance_leg_origin_frontier(
         )
         keys.add(key)
     prefix_context[0] = context
+    prefix_timeline[0] = timeline
     for decision in decisions:
         decision_by_key[_formation_key(decision.candidate)] = decision
     for candidate in gated:
         if ledger is not None and _formation_key(candidate) in keys:
-            ledger.record(_semantic_record(candidate, None, context))
+            ledger.record(_semantic_record(candidate, None, context, timeline))
     if ledger is not None:
         _record_swing_roles(context, confirmed_swings, ledger)
     for decision in decisions:

@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from btmm_ai_scanner.structure.enums import StructureDirection
+
 
 class PoiFamily(StrEnum):
     VOLUME = "VOLUME"
@@ -235,6 +237,32 @@ def is_standard_base_family(family: BaseFamily | None) -> bool:
     unverifiable there, and an unverifiable Base is not an authoritative one.
     """
     return family in STANDARD_BASE_FAMILIES
+
+
+#: (structural arrival, departure) -> family.
+#:
+#: The departure is carried by the ``PoiType`` the detector already assigned, so
+#: this table is total over the four combinations and introduces no new
+#: transport code. It lives here rather than in ``poi.base_arrival`` so the
+#: structural gate can use it without importing that module (which imports the
+#: gate), and so there is exactly ONE table.
+_ARRIVAL_FAMILY: dict[tuple[StructureDirection, PoiType], BaseFamily] = {
+    (StructureDirection.BULLISH, PoiType.BASE_RALLY): BaseFamily.RALLY_BASE_RALLY,
+    (StructureDirection.BEARISH, PoiType.BASE_RALLY): BaseFamily.DROP_BASE_RALLY,
+    (StructureDirection.BULLISH, PoiType.BASE_DROP): BaseFamily.RALLY_BASE_DROP,
+    (StructureDirection.BEARISH, PoiType.BASE_DROP): BaseFamily.DROP_BASE_DROP,
+}
+
+
+def base_family_for_arrival(
+    arrival: StructureDirection, poi_type: PoiType
+) -> BaseFamily | None:
+    """The family, or ``None`` when the arrival leg is not yet established.
+
+    ``UNDETERMINED`` returns ``None`` deliberately: an unestablished leg is
+    unknown, and a last-candle fallback is exactly the defect this replaced.
+    """
+    return _ARRIVAL_FAMILY.get((arrival, poi_type))
 
 
 #: Which ``PoiType`` each family transports as. The frozen codes are unchanged.

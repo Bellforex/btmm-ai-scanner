@@ -102,6 +102,13 @@ class AuthorityReason(StrEnum):
     SAME_ORIGIN_SUBORDINATE = "SAME_ORIGIN_SUBORDINATE"
     SUBORDINATE_IMBALANCE = "SUBORDINATE_IMBALANCE"
     INDEPENDENT = "INDEPENDENT"
+    #: Owned by a Base that CONTAINS it. This is a different question from
+    #: same-origin arbitration and is decided BEFORE it, by
+    #: ``poi.formation_ownership`` -- which is why Base is deliberately absent
+    #: from ``REVERSAL_LADDER`` and must stay absent. A reversal ladder ranks
+    #: synonyms describing one structural event; a Base OWNS the candles that
+    #: form it. Merging the two ranking systems would answer neither.
+    FORMATION_SUBORDINATE = "FORMATION_SUBORDINATE"
 
 
 class ClusterProvenance(StrEnum):

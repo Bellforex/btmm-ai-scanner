@@ -95,6 +95,7 @@ from btmm_ai_scanner.poi.enums import PoiLifecycleStatus
 from btmm_ai_scanner.poi.observation import PoiObservation
 from btmm_ai_scanner.poi.rc5_semantics import (
     Rc5SemanticLedger,
+    assign_formation_ownership_authority,
     assign_origin_authority,
     suppressed_record_ids,
 )
@@ -361,10 +362,20 @@ def iter_level_a_bars(
 
         analysis = kernel.finalize()
         if rc5_authority:
-            # RC5: arbitrate same-origin synonyms BEFORE the opportunity loop.
-            # A subordinate must not be an independent opportunity, so it is
-            # removed here rather than filtered out of the results -- that also
-            # keeps it out of the P8 stream, which is derived from this loop.
+            # RC5 authority, in the frozen order. FORMATION OWNERSHIP FIRST: a
+            # candle pattern that a Base CONTAINS is not an independent
+            # opportunity at all, so it must never reach same-origin ranking.
+            # Then arbitrate the reversal synonyms that remain. Both run BEFORE
+            # the opportunity loop, so a subordinate is removed rather than
+            # filtered out of the results -- which also keeps it out of the P8
+            # stream, since that is derived from this loop.
+            #
+            # This runs per bar, so it is causal by construction: on a prefix
+            # where the owning Base does not exist yet, ownership does not
+            # resolve and the pattern keeps its standing on that bar.
+            assign_formation_ownership_authority(
+                analysis.poi_analysis.poi_observations, rc5_ledger
+            )
             assign_origin_authority(analysis.poi_analysis.poi_observations, rc5_ledger)
             suppressed = suppressed_record_ids(
                 analysis.poi_analysis.poi_observations, rc5_ledger

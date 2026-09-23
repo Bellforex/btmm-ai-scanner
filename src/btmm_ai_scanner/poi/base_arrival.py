@@ -27,7 +27,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
 
-from btmm_ai_scanner.poi.enums import BaseFamily, PoiType
+from btmm_ai_scanner.poi.enums import BaseFamily, base_family_for_arrival
 from btmm_ai_scanner.poi.leg_origin import structure_direction_at
 from btmm_ai_scanner.structure.enums import StructureDirection
 
@@ -43,23 +43,6 @@ __all__ = [
     "base_family_for_arrival",
     "resolve_base_arrival",
 ]
-
-#: (arrival, departure) -> family. The departure is carried by the POI type the
-#: detector already assigned, so this table is total over the four combinations
-#: and introduces no new transport code.
-_FAMILY: dict[tuple[StructureDirection, PoiType], BaseFamily] = {
-    (StructureDirection.BULLISH, PoiType.BASE_RALLY): BaseFamily.RALLY_BASE_RALLY,
-    (StructureDirection.BEARISH, PoiType.BASE_RALLY): BaseFamily.DROP_BASE_RALLY,
-    (StructureDirection.BULLISH, PoiType.BASE_DROP): BaseFamily.RALLY_BASE_DROP,
-    (StructureDirection.BEARISH, PoiType.BASE_DROP): BaseFamily.DROP_BASE_DROP,
-}
-
-
-def base_family_for_arrival(
-    arrival: StructureDirection, poi_type: PoiType
-) -> BaseFamily | None:
-    """The family, or ``None`` when the arrival leg is not yet established."""
-    return _FAMILY.get((arrival, poi_type))
 
 
 class BaseArrivalFact(NamedTuple):

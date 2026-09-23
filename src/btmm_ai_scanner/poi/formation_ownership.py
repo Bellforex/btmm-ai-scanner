@@ -39,6 +39,7 @@ rather than treating ownership as timeless.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, NamedTuple
@@ -144,21 +145,30 @@ def _is_contained(member: Any, base_candle_ids: frozenset[UUID]) -> bool:
 
 def resolve_formation_ownership(
     candidates: list[Any] | tuple[Any, ...],
+    base_families: Mapping[tuple[Any, ...], Any] | None = None,
 ) -> tuple[FormationOwnership, ...]:
     """Decide, for every Base, which candle patterns it owns.
 
     Deterministic and side-effect free: returns relationship records sorted by
     (owner key, member key) and mutates nothing.
     """
+
     # ONLY standard-direction Bases may own evidence. A DROP_BASE_RALLY or
     # RALLY_BASE_DROP is not an authoritative Base under the approved
     # standard, so it must not subordinate anything; it is kept in the
     # candidate set for forensics and nothing more.
+    def _family(candidate: Any) -> Any:
+        # Downstream records (PoiObservation) do not carry the family: the
+        # arrival is structural and is resolved after detection, so callers
+        # working from observations pass the ledger's mapping instead.
+        if base_families is not None:
+            return base_families.get(formation_key(candidate))
+        return getattr(candidate, "base_family", None)
+
     bases = [
         c
         for c in candidates
-        if c.poi_type in BASE_TYPES
-        and is_standard_base_family(getattr(c, "base_family", None))
+        if c.poi_type in BASE_TYPES and is_standard_base_family(_family(c))
     ]
     if not bases:
         return ()

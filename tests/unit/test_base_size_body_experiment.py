@@ -208,3 +208,99 @@ def test_the_experiment_also_re_tiers_bases_it_did_not_newly_admit() -> None:
         # the territory is untouched: only the qualification changed
         assert a[key].zone_top == b[key].zone_top
         assert a[key].zone_bottom == b[key].zone_bottom
+
+
+def test_the_approved_envelope_gate_still_bounds_wick_size_under_the_body_basis() -> (
+    None
+):
+    """The doctrinal answer to "can a Base be tiny-body and huge-wick?".
+
+    Switching the size basis to BODY bypasses Base Formation Standard V1 §2,
+    which caps each base candle's Total Range at 0.50x the departure. It does
+    NOT remove the wick bound, because §3 independently caps Base Height at
+    0.60x the departure -- and Base Height is `max(high) - min(low)` over the
+    base candles, so it is >= the Total Range of every one of them.
+
+    Therefore `max base Total Range <= 0.60 x departure` holds under ANY size
+    basis. The body basis relaxes the wick bound from 0.50 to 0.60; it does not
+    lift it. No new threshold was invented to get this -- it is an existing
+    approved gate, and this test proves the engine actually enforces it.
+    """
+    candles = _candles()
+    by_id = {c.record_id: c for c in candles}
+    found = detect_bases(candles, _B)
+    assert found, "fixture produced no bases; the assertion would be vacuous"
+    for base in found:
+        source = [by_id[r] for r in base.source_candle_record_ids[:-1]]
+        departure = by_id[base.source_candle_record_ids[-1]]
+        widest = max(total_range(c) for c in source)
+        assert widest <= _B.base_height_departure_multiplier * total_range(departure)
+    # and the bound is tight rather than vacuous: something reaches it
+    ratios = [
+        max(total_range(by_id[r]) for r in b.source_candle_record_ids[:-1])
+        / total_range(by_id[b.source_candle_record_ids[-1]])
+        for b in found
+    ]
+    assert max(ratios) > _B.small_candle_ratio_standard
+
+
+def test_calibrating_the_threshold_reaches_the_same_population_as_the_body_basis() -> (
+    None
+):
+    """The alternative the evidence points at, measured rather than argued.
+
+    The source material says a Base is "2+ candles, short, SMALL RANGE" and
+    gives no numeric threshold (`knowledge/POI_MASTER_CATALOG.md` SS1.4: "'Short,'
+    'small,' ... have no numeric thresholds"). So 0.50 is the project's own
+    constant, not the book's -- and it is the only thing rejecting the author's
+    formation.
+
+    Moving SS2 from 0.50 to 0.60 keeps the basis the source specifies and
+    introduces no new number: 0.60 is already SS3's Base Height / departure cap
+    in the same approved standard. By the envelope bound that also makes SS2
+    exactly redundant with SS3 rather than bypassed.
+
+    On this capture it admits EXACTLY the same Bases as the body basis, and is
+    strictly more conservative about strength.
+    """
+    candles = _candles()
+    six = Decimal("0.60")
+    calibrated = PoiConfiguration(
+        minimum_price_tick=_Q,
+        small_candle_ratio_standard=six,
+        order_block_size_ratio_standard=Decimal(1) / six,
+    )
+
+    def keys(config):
+        return {
+            (b.poi_type, b.source_candle_record_ids)
+            for b in detect_bases(candles, config)
+        }
+
+    approved, body_basis, threshold = keys(_A), keys(_B), keys(calibrated)
+    assert approved < body_basis, "fixture no longer shows the experiment's effect"
+    assert threshold == body_basis
+    assert approved < threshold
+
+    # the author's formation is admitted either way, with the same geometry
+    start_id = candles[_BASE_START].record_id
+
+    def golden(config):
+        found = [
+            b
+            for b in detect_bases(candles, config)
+            if start_id in b.source_candle_record_ids
+        ]
+        assert len(found) == 1
+        return found[0]
+
+    by_body, by_threshold = golden(_B), golden(calibrated)
+    assert by_body.zone_top == by_threshold.zone_top
+    assert by_body.zone_bottom == by_threshold.zone_bottom
+    assert by_body.source_candle_record_ids == by_threshold.source_candle_record_ids
+
+    # but NOT the same strength: the body basis calls it STRONG, the calibrated
+    # threshold leaves it STANDARD, because the 3.0 strong ratio is still
+    # measured on Total Range there.
+    assert by_body.strength_tier is PoiStrengthTier.STRONG
+    assert by_threshold.strength_tier is PoiStrengthTier.STANDARD

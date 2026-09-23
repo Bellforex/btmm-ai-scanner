@@ -33,7 +33,7 @@ from enum import StrEnum
 from typing import Any
 
 from btmm_ai_scanner.poi.authority import AuthorityReason, OriginClusterKey
-from btmm_ai_scanner.poi.enums import PoiLifecycleStatus, PoiType
+from btmm_ai_scanner.poi.enums import BaseFamily, PoiLifecycleStatus, PoiType
 from btmm_ai_scanner.poi.structural_role import StructuralRole
 
 __all__ = [
@@ -46,6 +46,7 @@ __all__ = [
     "StablePoiKey",
     "SuppressionTimeline",
     "active_display_pois",
+    "assign_formation_ownership_authority",
     "authoritative_rc5_pois",
     "display_hidden_reason",
     "interaction_count",
@@ -91,17 +92,42 @@ class Rc5PoiSemanticRecord:
     #: when the role became true; always a real structural event's availability
     structural_since_utc: datetime | None = None
 
+    #: RC5 Base arrival, recorded by the gate at the moment this candidate
+    #: locked, from the same causal direction timeline the gate already keeps.
+    #: ``None`` for every non-Base, and for a Base whose arrival leg is not yet
+    #: established -- which is never authoritative.
+    base_family: BaseFamily | None = None
+
     #: filled by arbitration, not by qualification
     origin_cluster: OriginClusterKey | None = None
     authority_status: AuthorityReason | None = None
     authority_winner_key: StablePoiKey | None = None
+    #: the Base that OWNS this formation, and when that became true. Written by
+    #: the formation-ownership pass, which runs BEFORE same-origin arbitration.
+    formation_owner_key: StablePoiKey | None = None
+    formation_subordinate_since_utc: datetime | None = None
 
     @property
     def is_suppressed(self) -> bool:
         return self.authority_status in (
             AuthorityReason.SAME_ORIGIN_SUBORDINATE,
             AuthorityReason.SUBORDINATE_IMBALANCE,
+            AuthorityReason.FORMATION_SUBORDINATE,
         )
+
+    def is_actionable_at(self, moment: datetime) -> bool:
+        """Whether this POI still stands on its own at ``moment``.
+
+        Formation ownership is CAUSAL: a candle pattern inside a Base is
+        genuinely independent until the Base itself is confirmed, because until
+        then the Base does not exist. Suppressing it before
+        ``formation_subordinate_since_utc`` would rewrite a period in which it
+        was legitimately actionable, so this returns True there.
+        """
+        if self.authority_status is AuthorityReason.FORMATION_SUBORDINATE:
+            since = self.formation_subordinate_since_utc
+            return since is not None and moment < since
+        return not self.is_suppressed
 
     @property
     def is_authoritative(self) -> bool:
@@ -180,15 +206,62 @@ class Rc5SemanticLedger:
         cluster: OriginClusterKey | None = None,
         winner_key: StablePoiKey | None = None,
     ) -> None:
-        """Arbitration result. Structural provenance is untouched."""
+        """Arbitration result. Structural provenance is untouched.
+
+        FORMATION OWNERSHIP OUTRANKS THIS and is never overwritten by it. A
+        formation subordinate is not a competitor that lost a ranking; it is a
+        part of something larger, and letting same-origin arbitration hand it
+        PRIMARY back would silently undo that. This is what "ownership precedes
+        reversal authority" means in code, and it is why the two ladders never
+        have to be merged.
+        """
         entry = self.records.get(key)
         if entry is None:
+            return
+        if entry.authority_status is AuthorityReason.FORMATION_SUBORDINATE:
             return
         self.records[key] = replace(
             entry,
             authority_status=reason,
             origin_cluster=cluster if cluster is not None else entry.origin_cluster,
             authority_winner_key=winner_key,
+        )
+
+    def assign_formation_subordinate(
+        self,
+        key: StablePoiKey,
+        *,
+        owner_key: StablePoiKey,
+        since: datetime,
+    ) -> None:
+        """Ownership standing. Runs BEFORE same-origin arbitration and is not
+        overwritten by it: once a Base owns a formation, which reversal synonym
+        that formation would have beaten is not a question worth asking."""
+        entry = self.records.get(key)
+        if entry is None:
+            return
+        self.records[key] = replace(
+            entry,
+            authority_status=AuthorityReason.FORMATION_SUBORDINATE,
+            formation_owner_key=owner_key,
+            formation_subordinate_since_utc=since,
+        )
+
+    def formation_subordinate_keys(self) -> frozenset[StablePoiKey]:
+        return frozenset(
+            k
+            for k, v in self.records.items()
+            if v.authority_status is AuthorityReason.FORMATION_SUBORDINATE
+        )
+
+    def actionable_keys_at(self, moment: datetime) -> frozenset[StablePoiKey]:
+        """The keys that still stand on their own AT ``moment``.
+
+        Differs from ``authoritative_keys`` only for formation subordinates,
+        which were legitimately independent before their owner existed.
+        """
+        return frozenset(
+            k for k, v in self.records.items() if v.is_actionable_at(moment)
         )
 
     def authoritative_keys(self) -> frozenset[StablePoiKey]:
@@ -232,6 +305,63 @@ def _cluster_key(record: Rc5PoiSemanticRecord, direction: Any) -> OriginClusterK
         transition_broken_swing_id=record.broken_swing_id,
         origin_swing_id=record.origin_swing_id,
     )
+
+
+def assign_formation_ownership_authority(
+    observations: Any,
+    ledger: Rc5SemanticLedger,
+) -> tuple[Any, ...]:
+    """Make formation ownership govern authority, BEFORE same-origin ranking.
+
+    The sidecar in ``poi.formation_ownership`` already decides which Base owns
+    which contained candle pattern. Until this pass existed, that decision was
+    a side note: the pattern kept full standing, entered the opportunity loop
+    on its own, drew its own zone, and emitted its own lifecycle events, so a
+    Base containing a Doji still lost the chart to the Doji.
+
+    Two ranking systems, deliberately kept apart:
+
+    * ``REVERSAL_LADDER`` ranks reversal SYNONYMS that describe one structural
+      event. Base is absent from it and MUST stay absent -- a Base is not a
+      synonym for a Shooting Star.
+    * Formation ownership answers CONTAINMENT: this Base is made of those
+      candles, so those candles are not separate opportunities.
+
+    Running ownership first means a subordinate never reaches arbitration, so
+    the two systems never have to agree on a single ordering.
+
+    Nothing is deleted. The observation is untouched, the ledger keeps the
+    record with its own ``PoiType``, and the relationship carries the instant
+    ownership began -- see ``Rc5PoiSemanticRecord.is_actionable_at``.
+
+    Returns the relationships it applied, for forensics.
+    """
+    from btmm_ai_scanner.poi.formation_ownership import (
+        OwnershipRelationship,
+        resolve_formation_ownership,
+    )
+
+    families = {
+        key: record.base_family
+        for key, record in ledger.records.items()
+        if record.base_family is not None
+    }
+    if not families:
+        return ()
+    relationships = resolve_formation_ownership(list(observations), families)
+    applied: list[Any] = []
+    for relationship in relationships:
+        if relationship.relationship is not OwnershipRelationship.SUBORDINATE:
+            continue
+        if ledger.get(relationship.member_key) is None:
+            continue
+        ledger.assign_formation_subordinate(
+            relationship.member_key,
+            owner_key=relationship.owner_key,
+            since=relationship.active_from_utc,
+        )
+        applied.append(relationship)
+    return tuple(applied)
 
 
 def assign_origin_authority(

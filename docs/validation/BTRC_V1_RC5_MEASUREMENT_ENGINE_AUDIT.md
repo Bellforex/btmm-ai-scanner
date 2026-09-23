@@ -685,3 +685,301 @@ size basis.
 **BODY-SIZE RULE: remains EXPERIMENTAL** (`base_size_uses_body` default False).
 Criterion 3 is still unproven and has got sharper, not softer: the one shape
 that worried the author is now authoritative rather than merely detected.
+
+---
+
+# Unit 13 — ownership governs authority, and the body rule is calibrated
+
+## Part A — formation ownership is now FINAL authority
+
+The sidecar decided that a Base owns the patterns it contains. Nothing consumed
+that decision, so the contained pattern kept full standing: it entered the
+opportunity loop on its own, drew its own zone, and emitted its own lifecycle
+events. A Base containing a Pressure Wick still lost the chart to the Pressure
+Wick.
+
+### What was added
+
+`AuthorityReason.FORMATION_SUBORDINATE`, assigned by
+`rc5_semantics.assign_formation_ownership_authority`, which runs **before**
+`assign_origin_authority` at the one call site that drives the opportunity loop
+(`tests/parity_support/level_a_replay.py`).
+
+Base is **NOT** in `REVERSAL_LADDER` and must stay out. The two ranking systems
+answer different questions and are never merged:
+
+| system | question | Base |
+| --- | --- | --- |
+| `REVERSAL_LADDER` | which reversal SYNONYM describes this one structural event best? | absent, deliberately |
+| formation ownership | is this candle pattern PART of something larger? | the owner |
+
+Running ownership first means a subordinate never reaches arbitration, so the
+two never have to agree on a single ordering. `Rc5SemanticLedger.assign_authority`
+now refuses to overwrite a `FORMATION_SUBORDINATE`, so a later arbitration
+cannot hand standing back — the ordering is enforced, not merely scheduled.
+
+### Where the arrival family comes from
+
+Recorded in `leg_origin._semantic_record`, at the moment the gate locks the
+candidate, from the timeline the gate already holds. No second structure walk,
+and the ledger's write-once discipline makes the family prefix-stable for free.
+`PoiObservation` is unchanged — no contract migration was needed.
+
+### Causality: no retroactive erasure
+
+`Rc5PoiSemanticRecord.is_actionable_at(t)` returns **True** before
+`formation_subordinate_since_utc`. The golden Pressure Wick confirms 19:30; its
+owning Base only exists once the departure closes at 20:00. Between those
+instants the wick was a real, independent POI and the record says so.
+
+Because the replay applies ownership **per bar**, this is causal by
+construction: on a prefix where the Base does not exist yet, ownership does not
+resolve and the pattern keeps its standing on that bar.
+
+### Golden M15 final authority
+
+| item | result |
+| --- | --- |
+| `BASE_DROP` 2026-09-21 19:15 | family `DROP_BASE_DROP`, **in** the authoritative set |
+| `BEARISH_PRESSURE_WICK` 19:15 | `FORMATION_SUBORDINATE`, owner = the Base, **not** in the authoritative set |
+| subordinate since | 2026-09-21 20:00 |
+| actionable before that instant | **yes** (history preserved) |
+| actionable at/after | no |
+| reaches `suppressed_record_ids` (the P5/P8 bridge) | yes |
+
+### P5 / P8 consequence, measured bar by bar
+
+Walked through `iter_level_a_bars` with `rc5_authority=True` over the full 300-bar
+M15 capture — the same loop P5 and P8 are derived from:
+
+| | |
+| --- | --- |
+| `BEARISH_PRESSURE_WICK` first P5-evaluated | 2026-09-21 **19:30** |
+| first suppressed | 2026-09-21 **20:00** |
+| independently actionable for | **0:30:00** (2 bars) — history preserved |
+| P5 evaluations while suppressed | **0** |
+| P8 events after suppression | **0** |
+
+A second POI, a `BULLISH_ENGULFING`, is suppressed at 2026-09-22 03:30 by the
+SAME-ORIGIN path rather than by ownership — the two mechanisms coexist in one
+replay without interfering, which is what keeping the ladders separate buys.
+
+### Side-car vs final authority — they agree
+
+Counted through the real scan pipeline, body basis on:
+
+| capture | observations | Bases | standard Bases | ownable patterns | ownership groups | side-car subs | FINAL suppressions | agree |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| M15 EURUSD | 94 | 4 | 4 | 44 | 1 | 1 | 1 | **yes** |
+| M45 XAUUSD | 111 | 6 | 4 | 62 | 0 | 0 | 0 | **yes** |
+| H3 XAUUSD | 85 | 6 | 5 | 41 | 0 | 0 | 0 | **yes** |
+
+The only subordination in the three captures is the M15 `BEARISH_PRESSURE_WICK`.
+
+### A measured distinction that must not be confused with ownership
+
+With `rc5_structural_origin=True` — RC5's own configuration — the contained
+patterns **never reach the observation layer at all**. They are rejected
+upstream as mid-leg texture (`CONTEXT_REJECT_NO_STRUCTURAL_ORIGIN`). On the
+golden bars that leaves `{BASE_DROP}` alone, and ownership therefore applies
+nothing there.
+
+With the gate off, `{BASE_DROP, BEARISH_PRESSURE_WICK, EVENING_STAR}` all
+survive, and ownership is what removes the wick. Two different mechanisms;
+pinned separately so neither is mistaken for the other.
+
+## Part B — RC4 geometry comparison (owed since unit 10)
+
+M15 bars 132–138, frozen capture:
+
+| engine | POI | source bars | source/left time | zone top | zone bottom |
+| --- | --- | --- | --- | --- | --- |
+| RC4 `2f1d2b9` | Base | — | **none detected** | — | — |
+| RC4 `2f1d2b9` | `BEARISH_PRESSURE_WICK` | [134] | 2026-09-21 19:15 | 1.14688 | 1.14679 |
+| RC4 `2f1d2b9` | `EVENING_STAR` | [134,135,136] | 2026-09-21 19:15 | **1.14693** | **1.14672** |
+| corrected RC5 | `BASE_DROP` / DBD, STRONG | [134,135,136] | 2026-09-21 19:15 | **1.14693** | **1.14672** |
+
+**The corrected RC5 Base reproduces RC4's zone exactly** — same source candles,
+same left time, same top, same bottom. The author was seeing the right
+rectangle under the wrong name.
+
+That also explains why ownership does not subordinate the Evening Star: it is
+not *contained* in the Base, it is **co-extensive** with it. `_base_candle_ids`
+excludes the departure candle (136), so containment fails by exactly one bar —
+and widening containment to swallow it would have hidden a duplicate-geometry
+problem rather than solved it.
+
+> **OPEN AUTHOR DECISION 1.** A pattern with the *same* source candles and the
+> *same* zone as a Base is a duplicate, not a contained member. Should that be
+> resolved by same-origin arbitration, by a co-extensive rule in ownership, or
+> at display? Today it keeps full standing. Pinned by
+> `test_a_pattern_spanning_the_departure_candle_is_not_contained`.
+
+## Part C — historical Base-wick evidence
+
+Searched `knowledge/`, `docs/`, the RC3/RC4 notes and the rule files. Exact
+findings, quoted:
+
+**`knowledge/MEASUREMENT_STANDARDS.md` §2 "Base-Candle Size":**
+
+> Uses Candle Total Range (`High − Low`) from Candle Measurement Standard V1
+> **without modification**.
+
+**`knowledge/poi_rules/volume_based/base_rally.md:49` — "Wick treatment":**
+
+> Base High/Low both explicitly use candle highs/lows (wicks included)
+
+**`base_rally.md:53` — "Body treatment":**
+
+> **Not defined as a separate zone-drawing rule** (only Total Range is used for
+> Base High/Low).
+
+`base_drop.md` says the same at the same lines.
+
+**There is no wick threshold in the approved material, and no body measurement
+at all.** Nothing was silently reinterpreted: `base_size_uses_body` contradicts
+§2 as written, rather than filling an unstated gap. It is also true that §2
+declares itself provisional and demands calibration against expert-approved and
+expert-rejected examples — and **no such example corpus exists anywhere in this
+repository**, so that calibration has never been possible.
+
+## Part D — the calibration question, answered by an existing gate
+
+> CAN A VALID BASE HAVE A VERY SMALL BODY AND VERY LARGE WICKS?
+
+**Outcome B — YES, under a condition that is already documented.**
+
+Base Formation Standard V1 **§3** caps `Base Height ≤ 0.60 × departure Total
+Range`. Base Height is `max(high) − min(low)` over the base candles, so it is
+`≥` the Total Range of **every** base candle. Therefore:
+
+```
+max base Total Range ≤ 0.60 × departure Total Range     — under ANY size basis
+```
+
+Switching §2 to the body basis does **not** remove the wick bound. It relaxes it
+from 0.50 to 0.60, and §3 enforces that. Measured across all 26 bases the body
+basis admits on the three captures, the worst observed ratio is **exactly
+0.6000** — the bound is tight and never exceeded. Pinned by
+`test_the_approved_envelope_gate_still_bounds_wick_size_under_the_body_basis`.
+
+No wick threshold was invented. None is needed to bound this.
+
+## Part E — the H3 >80%-wick case, resolved
+
+> H3 2026-08-26 16:00 — base candles 88.2% / 91.6% wick, max body 2.25 against
+> ranges 19.08 / 17.57, departure 34.72, envelope 20.57.
+
+Every approved gate, measured: `h/ATR = 0.658` (≤0.75), `h/departure = 0.592`
+(≤0.60), `min overlap = 0.915` (≥0.50), `drift/h = 0.073` (≤0.25). It sits
+**inside** the approved envelope on every one.
+
+And the decisive measurement — **the two cases are not separable by size**:
+
+| case | wick % | departure / max range | departure / max body |
+| --- | --- | --- | --- |
+| GOLDEN M15 19:15 (author-approved) | **95.2%** | 1.667 | 5.83 |
+| WATCH H3 2026-08-26 16:00 | 91.6% | **1.820** | **15.43** |
+
+The watch case scores **higher than the author's own approved example on both
+bases**. Every threshold that admits the golden formation admits the H3 case
+too, by a wider margin — on the Total Range basis and on the body basis alike.
+
+The author's own marked Base is **more** wick-dominated (95.2%) than the case
+that worried them (91.6%). So "tiny body, huge wicks" is not a false-positive
+signature here; it is the signature of the approved example.
+
+**Conclusion:** the H3 case is not a size false positive and cannot be excluded
+by any size rule without also excluding the author's formation. If it must be
+excluded, the discriminator has to be something other than base-candle size,
+and the approved material supplies none.
+
+> **OPEN AUTHOR DECISION 2.** Accept the H3 case as a valid Base (the evidence
+> says the approved gates already govern it), or name a NON-SIZE discriminator.
+> No threshold should be invented to split two cases the measurements say are
+> not splittable.
+
+## Part F — body-basis sample review
+
+12 newly admitted Bases across the three captures. Every one is 2 candles, and
+every one passes all four unchanged gates. The striking regularity:
+
+| capture | count | `h/departure` range | `R_range` range | tiers |
+| --- | --- | --- | --- | --- |
+| M15 | 3 | 0.579 – 0.600 | 1.67 – 1.73 | 3 STRONG |
+| M45 | 6 | 0.526 – 0.598 | 1.67 – 1.90 | 3 STRONG, 3 STANDARD |
+| H3 | 3 | 0.568 – 0.593 | 1.76 – 1.82 | 2 STRONG, 1 STANDARD |
+
+`R_range` never leaves `(1.667, 1.90]`, i.e. `max range / departure` never
+leaves `(0.526, 0.600]`. That is Part D's bound showing up in the data: the body
+basis admits exactly the narrow band between §2's 0.50 and §3's 0.60, and
+nothing else. It is not an open door.
+
+Classification against historical approved examples: **not possible** — no
+approved/rejected example corpus exists (Part C). Every record is reported with
+its measurements instead, and none is claimed as "matches" or "does not match"
+on evidence that does not exist.
+
+## Part G — a better option than the body basis
+
+The primary source, `knowledge/POI_MASTER_CATALOG.md` §1.4 (Bible ¶342–358):
+
+> Base = 2+ candles, short, **small range**, positioned close together,
+> relatively uniform, horizontally aligned (not forming a staircase).
+
+> **Author clarification needed:** "Short," "small," "relatively uniform," and
+> "close together" for base candles have **no numeric thresholds**.
+
+Two things follow. The book says **small RANGE** for a Base — it talks about
+body proportion only for Pressure Wick (§1.5: "still closes with a meaningful
+body … not just a long wick"), so the distinction is deliberate in the source.
+And **0.50 is the project's constant, not the book's** — the book supplies none.
+
+So the thing rejecting the author's formation is a project constant applied to
+the right basis, not the wrong basis.
+
+**Arm E:** keep Total Range, move §2 from 0.50 to **0.60** — already §3's Base
+Height / departure cap in the same standard, so no new number enters. By the
+Part D bound this makes §2 exactly redundant with §3 rather than bypassed.
+
+| capture | A approved (range 0.50) | B experiment (body) | **E calibrated (range 0.60)** | E == B |
+| --- | --- | --- | --- | --- |
+| M15 EURUSD | 4 | 7 | **7** | **yes** |
+| M45 XAUUSD | 4 | 10 | **10** | **yes** |
+| H3 XAUUSD | 6 | 9 | **9** | **yes** |
+
+**Arm E admits exactly the same Bases as the body basis on all three captures**,
+including the author's formation with identical geometry (zone
+1.14672–1.14693, same source candles).
+
+One difference, and it favours E: strength. The golden formation is **STRONG**
+under the body basis and **STANDARD** under arm E, because the 3.0 strong ratio
+is still measured on Total Range there. Arm E is the more conservative of the
+two everywhere it differs.
+
+> **OPEN AUTHOR DECISION 3.** Arm E reaches the same population while keeping
+> the measurement basis the source specifies, introducing no new constant, and
+> contradicting nothing. The body basis reaches it by changing the basis the
+> source specifies and the standard mandates. **Recommendation: arm E**, as a
+> §2 calibration — which is exactly the calibration §2 says it is waiting for.
+> Not adopted here: changing an approved constant is the author's call, and
+> `base_size_uses_body` stays default FALSE either way.
+
+## Acceptance status
+
+| body-rule approval gate | result |
+| --- | --- |
+| 1. golden M15 case passes | **YES** |
+| 2. structural arrival gives DBD | **YES** |
+| 3. formation ownership reaches FINAL authority | **YES** |
+| 4. P5/P8 subordinate behaviour correct | **YES** — suppressed via `suppressed_record_ids`, history before activation preserved |
+| 5. H3 huge-wick case resolved by existing doctrine | **YES** — §3 governs it; not separable by size |
+| 6. real-host sample review acceptable | **YES, with a caveat** — all 12 pass every unchanged gate and fall in a bounded band; no approved corpus exists to compare against |
+| 7. batch == incremental | **YES** |
+| 8. full suite green | **YES** |
+
+**FORMATION OWNERSHIP INTEGRATION: approved.**
+
+**BODY-SIZE BASIS: `default remains FALSE`.** Gates 1–8 pass, but gate 6 rests
+on an absent corpus and Part C shows the switch contradicts §2 as written. That
+is an author decision, not one to take by passing a checklist.
