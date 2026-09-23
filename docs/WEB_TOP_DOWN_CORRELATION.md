@@ -335,3 +335,86 @@ this codebase, rather than introducing one new global version constant.
 No credentials, no network dependency, no subprocess/shell invocation, no
 arbitrary file-path access, no `pickle`, no `eval`/`exec` anywhere in this
 package. No new third-party dependency was added.
+
+## HTTP service layer (`btmm_ai_scanner.service`, Phase 2/web-integration)
+
+A thin, additive FastAPI service exposing this engine to Bell Academy Hub's
+Laravel backend over an internal-only HTTP boundary. Optional dependency
+group (`pip install '.[service]'` / `uv sync --extra service`) — the
+analytical core above stays dependency-free beyond pydantic whether or not
+this is installed.
+
+```
+service/
+    identity.py   deterministic content-addressed UUIDv7/fingerprint helpers
+    candles.py    RawBar -> NormalizedCandle, built directly (bypasses the
+                  FXCM-only market_data/source_mapping.py ingestion chain —
+                  see docs/BTMM_SCANNER_WEB_INTEGRATION.md in the Bell
+                  Academy Hub repo for why)
+    schemas.py    the ONLY types an external caller needs: AnalyzeRequest/
+                  AnalyzeResponse/HealthResponse/ErrorResponse
+    app.py        POST /v1/analyze, GET /health
+```
+
+`POST /v1/analyze` takes a symbol, a `TradingMode`, and a bundle of
+already-CLOSED bars per timeframe; it builds `NormalizedCandle`s, calls the
+unmodified `scan_market()` then `evaluate_top_down_setup()`, and returns the
+existing `TopDownWebContract`/`AnnotationContract`. It never persists
+anything and never depends on wall-clock state beyond stamping each
+candle's own `processing_time_utc`. `GET /health` returns only
+`status`/`scanner_git_sha`/`contract_version`/`schema_version`/`rule_version`
+— never environment, filesystem paths, or secrets. Bind to `127.0.0.1` only;
+this service has no authentication of its own and must never be reachable
+from outside its own host.
+
+A well-formed request that the engine itself resolves to
+`SetupVerdict.INSUFFICIENT_DATA` is a normal `200` response (that is a real
+analytical verdict, not a service failure); a malformed/unsupported request
+(bad symbol, unknown timeframe key, empty bundle) is a `422` with a
+structured `ErrorResponse`; an unexpected internal error is a `500` with a
+generic message — the caller never sees a Python traceback.
+
+Covered by `tests/unit/test_service_identity.py`,
+`test_service_candles.py`, `test_service_schemas.py`, `test_service_app.py`
+(identity determinism, `NormalizedCandle` construction, request-schema
+validation, and full FastAPI `TestClient` round-trips including a
+determinism check across two identical requests).
+
+### Bugs found and fixed while building this layer
+
+Driving real multi-timeframe bars (including the H2/H6/H9/H12 timeframes
+added earlier in this phase) through the actual `scan_market()`/`analyze_pois`
+pipeline for the first time — rather than the hand-built `ScannerAnalysis`
+fixtures the correlation-engine unit tests use — surfaced four private,
+differently-named timeframe-rank/duration tables that the original Timeframe
+extension's audit missed because they don't share the `_TIMEFRAME_RANK`
+substring grepped for at the time:
+
+- `poi/analyzer.py::_TIMEFRAME_STRENGTH_RANK` (would `KeyError` on any POI
+  bundle using H2/H6/H9/H12/MN1 — this is what the first end-to-end
+  `/v1/analyze` call actually hit)
+- `poi/overlap.py::_TIMEFRAME_STRENGTH_RANK` (same bug, POI cross-timeframe
+  overlap ranking)
+- `poi/rc5_host_identity.py::MINUTES_BY_TIMEFRAME` (RC5 host-identity
+  minute-length lookup)
+- `historical_backtest/csv_parser.py::_INTRADAY_DURATION`,
+  `historical_backtest/data_quality.py::_FIXED_TIMEFRAME_DURATION`, and
+  `market_data/gap_observation.py::_EXPECTED_INTERVAL_BY_TIMEFRAME` (the
+  latter two guarded with `.get()`/`in` so they degrade rather than crash,
+  but all three silently mishandled a new timeframe)
+
+All were extended to the same full 13-member ordering/duration convention
+already used by the three `_TIMEFRAME_RANK` tables from the initial
+extension (`scanner/analyzer.py`, `scanner/replay.py`,
+`historical_backtest/loader.py`). `btmm/analyzer.py::_TIMEFRAME_STRENGTH_RANK`
+was deliberately left at its original 3 entries — it is intentionally scoped
+to only M1/M5/M15 BTMM-formation bundles, not a missed case. No behavior
+changed for any of the original eight timeframes.
+
+The full suite was re-run after these fixes: **17 failed, 5398 passed, 215
+skipped**. All 17 failures are in the exact same four files already
+documented as pre-existing, order-dependent/flaky
+(`test_a6f6h_execution_mode_split.py`, `test_historical_cli.py`,
+`test_historical_execution.py`, `test_historical_reporting.py`) — none of
+which this phase touches — and match the count from the original baseline
+run before any Phase 1/2 change. Zero new failures were introduced.

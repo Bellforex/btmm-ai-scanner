@@ -12,10 +12,15 @@ _TIMEFRAME_STRENGTH_RANK: dict[Timeframe, int] = {
     Timeframe.M5: 2,
     Timeframe.M15: 3,
     Timeframe.H1: 4,
-    Timeframe.H3: 5,
-    Timeframe.H4: 6,
-    Timeframe.D1: 7,
-    Timeframe.W1: 8,
+    Timeframe.H2: 5,
+    Timeframe.H3: 6,
+    Timeframe.H4: 7,
+    Timeframe.H6: 8,
+    Timeframe.H9: 9,
+    Timeframe.H12: 10,
+    Timeframe.D1: 11,
+    Timeframe.W1: 12,
+    Timeframe.MN1: 13,
 }
 
 

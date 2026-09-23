@@ -94,8 +94,12 @@ _FIXED_TIMEFRAME_DURATION: dict[Timeframe, timedelta] = {
     Timeframe.M5: timedelta(minutes=5),
     Timeframe.M15: timedelta(minutes=15),
     Timeframe.H1: timedelta(hours=1),
+    Timeframe.H2: timedelta(hours=2),
     Timeframe.H3: timedelta(hours=3),
     Timeframe.H4: timedelta(hours=4),
+    Timeframe.H6: timedelta(hours=6),
+    Timeframe.H9: timedelta(hours=9),
+    Timeframe.H12: timedelta(hours=12),
 }
 
 

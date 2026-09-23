@@ -24,11 +24,24 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 
+[project.optional-dependencies]
+# Only the HTTP service entry point (src/btmm_ai_scanner/service/) needs
+# these — the deterministic analytical core (correlation/btrc/poi/scanner/
+# structure/domain/measurements) stays dependency-free beyond pydantic, so
+# it can still be embedded/tested without pulling in a web framework.
+service = [
+    "fastapi>=0.121,<0.122",
+    "uvicorn[standard]>=0.38,<0.39",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1,<10",
     "mypy>=2.3.0,<3",
     "ruff>=0.15.22,<0.16",
+    # Only needed to drive FastAPI's TestClient in tests/unit/test_service_*
+    # — the running service itself never imports httpx.
+    "httpx>=0.28,<0.29",
 ]
 
 [tool.uv]

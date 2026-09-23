@@ -34,18 +34,25 @@ __all__ = [
     "host_identity_of",
 ]
 
-#: Bar length in minutes for every member of the frozen enum. W1 and D1 are
-#: calendar-based; their nominal lengths are recorded for completeness and are
-#: not used to infer identity from spacing.
+#: Bar length in minutes for every member of the frozen enum. W1, D1 and MN1
+#: are calendar-based; their nominal lengths are recorded for completeness
+#: and are not used to infer identity from spacing. MN1's nominal length uses
+#: the same 30-day convention as the rest of this codebase's calendar-based
+#: timeframe handling.
 MINUTES_BY_TIMEFRAME: dict[Timeframe, int] = {
     Timeframe.M1: 1,
     Timeframe.M5: 5,
     Timeframe.M15: 15,
     Timeframe.H1: 60,
+    Timeframe.H2: 120,
     Timeframe.H3: 180,
     Timeframe.H4: 240,
+    Timeframe.H6: 360,
+    Timeframe.H9: 540,
+    Timeframe.H12: 720,
     Timeframe.D1: 1440,
     Timeframe.W1: 10080,
+    Timeframe.MN1: 43200,
 }
 
 #: Hosts RC5 supports that the frozen enum cannot name. Keyed by bar minutes.
