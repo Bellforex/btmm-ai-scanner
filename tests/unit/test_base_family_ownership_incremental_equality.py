@@ -48,6 +48,12 @@ _SHAPE = [
 ]
 
 
+#: Arm B of the size-basis experiment. Batch and frontier must agree under
+#: BOTH bases -- a switch implemented in only one path would be worse than no
+#: switch at all.
+_PCONFIG_BODY = _PCONFIG.model_copy(update={"base_size_uses_body": True})
+
+
 def _series():
     return [_candle(i, o, h, low, c) for i, (o, h, low, c) in enumerate(_SHAPE)]
 
@@ -77,6 +83,35 @@ def _ownership_signature(candidates) -> list[tuple]:
         ),
         key=repr,
     )
+
+
+def _assert_paths_agree(cfg) -> set:
+    """Walk every prefix under one config; return the families seen."""
+    candles = _series()
+    seen: set = set()
+    for k in range(1, len(candles) + 1):
+        prefix = tuple(candles[:k])
+        batch = detect_bases(prefix, cfg)
+        incremental: list[object] = []
+        for m in range(1, k + 1):
+            ring = prefix[max(0, m - 21) : m]
+            atr = compute_atr_series(prefix[:m], 14)[m - 1]
+            incremental.extend(_evaluate_new_bases(ring, atr, cfg))
+        assert _base_signature(batch) == _base_signature(incremental), (
+            f"Base family/geometry diverged at prefix {k}"
+        )
+        patterns = list(detect_single_candle_reversals(prefix, cfg))
+        assert _ownership_signature(list(batch) + patterns) == _ownership_signature(
+            incremental + patterns
+        ), f"ownership diverged at prefix {k}"
+        seen.update(row[1] for row in _base_signature(batch))
+    return seen
+
+
+def test_batch_equals_incremental_under_the_body_size_basis() -> None:
+    """Arm B: the experimental size basis must be identical in both paths."""
+    seen = _assert_paths_agree(_PCONFIG_BODY)
+    assert seen, "arm B produced no Base; the assertions were vacuous"
 
 
 def test_batch_equals_incremental_for_base_family_and_geometry() -> None:
