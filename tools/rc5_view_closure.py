@@ -73,11 +73,16 @@ FORBIDDEN_EXACT = {
     "f_poiFind",
 }
 
-#: Reached only through single-letter in-flow locals (`ti`, `ty`, `di`, `on`)
-#: that collide across scopes. The analyser is scope-blind by design, so these
-#: are reported as INCONCLUSIVE rather than silently allowed or silently
-#: failed. Resolving them needs either scope-aware parsing or -- definitively --
-#: compiling a constructed VIEW and letting the Pine compiler answer.
+#: CORRECTION (2026-09-23). These were first written off as scope-blind
+#: collisions through single-letter locals. Tracing the actual data path proved
+#: otherwise: the one-trendline winner reads `rc5TlHit` (CORE 6550), which is
+#: written by the RC5 sweep/reaction qualification engine (CORE 6476), which
+#: reads the POI registry directly -- `poiDirection`, `poiZoneTop/Bottom`,
+#: `poiAvailTime`, `f_rc5PoiKind`, `f_rc5PoiSrc` (CORE 6400-6404).
+#:
+#: So the analyser was RIGHT to reach them and the dismissal was wrong. They are
+#: kept listed here only to name the real path; the trendline renderer is not a
+#: pure structural consumer and cannot move to VIEW on its own.
 INCONCLUSIVE = {"poiType", "poiDirection", "f_rc5PoiKind"}
 
 

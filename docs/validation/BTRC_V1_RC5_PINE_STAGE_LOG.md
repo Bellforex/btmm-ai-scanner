@@ -789,3 +789,60 @@ VIEW was not built on the strength of this tool alone.
 VIEW composer, anti-drift tests, real generated-CORE measurement, VIEW token
 count, and the runtime gates (VIEW alone, CORE+VIEW, CORE+VIEW+PANEL). P2+P3
 remain blocked behind them, as the plan requires.
+
+## VIEW extraction — STOP. The trendline renderer is not a structural consumer.
+
+Building VIEW was the authorised next step, and mapping its real boundaries
+before generating it found a dependency that neither direct inspection nor the
+scope-blind analyser had pinned down. It is a genuine forbidden dependency, so
+per the port plan this stops rather than being worked around.
+
+### The path
+
+| step | site |
+| --- | --- |
+| the one-trendline winner tests whether a candidate was already hit | `bool tlHit = map.contains(rc5TlHit, ...)` — CORE 6550 |
+| `rc5TlHit` is written by the RC5 sweep/reaction qualification engine | `map.put(rc5TlHit, pr.ref, true)` — CORE 6476 |
+| that engine qualifies reactions against EVERY reference kind, POI included | `C_RC5K_POI`, and directly reads `poiDirection`, `poiZoneBottom`, `poiZoneTop`, `poiAvailTime`, `f_rc5PoiKind`, `f_rc5PoiSrc` — CORE 6400-6404 |
+
+So reproducing the trendline winner FAITHFULLY requires the sweep engine, which
+requires the POI registry. Not "to make it compile" — to make it pick the same
+line.
+
+### This corrects an earlier call of mine
+
+The previous unit flagged `poiType`, `poiDirection` and `f_rc5PoiKind` as
+reachable and I classified them INCONCLUSIVE, attributing them to single-letter
+local collisions (`ti`, `ty`, `di`, `on`). **That dismissal was wrong.** The
+analyser was reaching them for a real reason. The tool's comment now records
+the actual path rather than the excuse.
+
+### What this costs
+
+| option | recovery | CORE | hard headroom | verdict |
+| --- | --- | --- | --- | --- |
+| move R1+R2 **and** R3 (original plan) | 2,200 | 97,171 | 3,085 | **not available** — R3 drags the POI registry into VIEW |
+| move R1+R2 only (structure overlay) | 1,036 | 98,335 | **1,921** | available, but **below the 3,000 target** |
+| move R3 only | 1,164 | 98,207 | 1,984 | same objection as the first row |
+
+The structure overlay itself is clean: it draws HH/HL/LH/LL and BOS/CHOCH from
+`p3Swings` / `p3Events`, and `rc5SwingRole` is written only from those. Moving
+it is sound. It just is not enough on its own.
+
+### Options for the author — none taken here
+
+1. **Move R1+R2 only and accept 1,921 hard headroom.** Honest, safe, and below
+   the stated target. P2+P3 would proceed on a thinner budget than the plan
+   wanted, and P4 almost certainly would not fit.
+2. **Re-examine the `tlHit` tiebreak.** If the trendline winner does not truly
+   need "was this line already swept", R3 becomes structural and the full 2,200
+   is available. That is a DOCTRINE question about the one-trendline rule, not a
+   refactor, and it is the author's to answer.
+3. **Give VIEW the sweep engine and the POI registry.** Rejected on its face:
+   VIEW stops being a minimum structural subset and becomes a second scanner,
+   which the plan forbids and the Heavy Script warning makes reckless.
+4. **Find capacity elsewhere.** The POI renderer (4,131) is explicitly staying
+   in CORE by author decision, so this would mean new ground.
+
+VIEW was NOT generated, NOT compiled and NOT measured, because doing so would
+have meant choosing one of these on the author's behalf.
