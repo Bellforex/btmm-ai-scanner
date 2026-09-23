@@ -1,0 +1,134 @@
+// RC5 PANEL PRESENTATION PART -- the screen-space diagnostics, and nothing else.
+//
+// This file is NOT a Pine script. It is the only text that the RC5 PANEL adds
+// to the RC5 CORE source, kept here so that PANEL is COMPOSED from CORE rather
+// than hand-copied from it. Every semantic line in PANEL is literally CORE's
+// own line; nothing below computes market meaning.
+//
+// tools/rc5_compose.py reads the directives:
+//   //#INSERT-BEFORE  the block goes immediately above the anchor that follows
+//   //#REPLACE        the block replaces the anchor lines that follow it
+//   //#ANCHOR         one exact CORE line, which must occur exactly once
+//   //#END            ends a block
+
+//#INSERT-BEFORE the location string the POI table's last column is built from
+//#ANCHOR         if not na(fwR)
+        string lt = "NONE"
+//#END
+
+//#INSERT-BEFORE range location
+//#ANCHOR         else
+//#ANCHOR             float org = bull ? zb : zt
+            lt := "RANGE " + (pos < 0 ? "LOW" : pos > 0 ? "HIGH" : "MID")
+//#END
+
+//#INSERT-BEFORE trend retracement location
+//#ANCHOR         if f.swp
+                lt := "TREND " + str.tostring(ret) + "%"
+//#END
+
+//#INSERT-BEFORE the Cycle / Location / Liq cell
+//#ANCHOR     [on, pre, loc, ep]
+        f.txt := (fail ? "FAIL" : pre ? ((f.dis ? "DIS " : "") + (dly ? "DEL " : "") + (wip ? "WIP " : "")) : "- ") + "| " + lt + " | " + str.tostring(loc)
+//#END
+
+//#INSERT-BEFORE sweep suffix
+//#ANCHOR         f.txt := (fail ? "FAIL" : pre ? ((f.dis ? "DIS " : "") + (dly ? "DEL " : "") + (wip ? "WIP " : "")) : "- ") + "| " + lt + " | " + str.tostring(loc)
+            lt += " +SWEEP"
+//#END
+
+//#INSERT-BEFORE the nine tilde-separated POI table cells
+//#ANCHOR 
+//#ANCHOR                 // ---- P8: alert-event detection (informational only; see
+                fq.row := str.tostring(i) + "~" + (poiBullish ? "BULL" : "BEAR") + "~" + bahui.tierLabel(array.get(poiTier, i)) + "~" + (btmmValid ? "YES" : "NO") + "~" + bahui.alignmentLabel(align) + "~" + str.tostring(finalScore) + "~" + bahui.permissionLabel(permission) + "~" + bahui.lifecycleLabel(lifecycle) + "~" + fq.txt
+//#END
+
+//#REPLACE the two diagnostic tables
+//#ANCHOR // RC5 CORE: the diagnostic tables live in the RC5 PANEL companion.
+//#ANCHOR // Every semantic field they displayed is still computed here.
+// RC5 PANEL owns the screen-space diagnostics. CORE draws the chart; this
+// script draws neither zones, trendlines, structure nor markers, so the two
+// can be attached together without a single duplicated drawing.
+if barstate.islast
+    // RC3: Dashboard and POI table are independent toggles.
+    if p7ShowUi
+        // Debug-gated per the P5EVAL convention (matching test_p5_resource_budget's
+        // "unconditional log volume" concern) -- verified once, real FXCM data,
+        // during P7 UI validation; see BTRC_V1_P7_UI_CLOSURE.md.
+        // RC3 DEV: P7DIAG line removed with P5EVAL and P9TRACE, same reason.
+        var table p7Summary = table.new(position.top_left, 2, 10, border_width = 1, bgcolor = color.new(color.black, 15))
+        bahui.renderRow(p7Summary, 0, "P7 — BTRC Scanner", "")
+        bahui.renderRow(p7Summary, 1, "Feed", syminfo.prefix + ":" + syminfo.ticker)
+        bahui.renderRow(p7Summary, 2, "Host TF", timeframe.period)
+        // Compaction (RC3): rows 3-11 written by one loop over parallel key/value
+        // arrays instead of nine separate writes; cell content is unchanged.
+        array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Breakout|Volatility|Active POIs|Market framework", "|")
+        array<string> p7SumVals = array.from(bahui.directionLabel(p7LastGlobalDir), bahui.regimeLabel(p7LastRegime), bahui.directionLabel(p7LastMomDir), bahui.breakoutLabel(p7LastBrk), bahui.volatilityLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)), not na(fwR) ? "RANGE " + str.tostring(fwR.l) + " - " + str.tostring(fwR.h) : "TREND / impulse")
+        // Phase 14 zero-state: no confirmed bar processed yet -- every row
+        // reads "-", never a stale or fabricated value.
+        for r = 3 to 9
+            bahui.renderRow(p7Summary, r, p7HasData ? array.get(p7SumKeys, r - 3) : "-", p7HasData ? array.get(p7SumVals, r - 3) : "-")
+
+    if p7ShowActivePois
+        int p7Active = array.size(p7PoiIdx)
+        int p7Shown  = math.min(p7Active, p7MaxVisiblePois)
+        var table p7Pois = table.new(position.bottom_right, 9, p7MaxVisiblePois + 2, border_width = 1, bgcolor = color.new(color.black, 15))
+        // Compaction (RC3): header written by one loop; `text.align_center` is
+        // table.cell's default, so columns 1-7 render exactly as before.
+        array<string> p7Hdr = str.split("#|Dir|Tier|BTMM|Align|Score|Permission|State|Cycle / Location / Liq", "|")
+        for c = 0 to 8
+            table.cell(p7Pois, c, 0, array.get(p7Hdr, c), text_size = size.tiny, text_color = color.gray, text_halign = c == 0 ? text.align_left : text.align_center)
+        // ---- RC1-POI CORRECTIVE (presentation only): order the table rows by
+        // the SAME proximity-to-current-close projection the P7-Z boxes use, so
+        // the table describes the zones the trader can actually see. The frozen
+        // RC1 build listed rows 0..n-1 of `p7PoiIdx` -- ascending registry index
+        // -- which, with no P3 expiry, meant the OLDEST POIs. Measured on the
+        // live FX:XAUUSD M15 capture of 2026-09-09 (close 4400.87, 51 active):
+        // the registry-order rows sat 8.97-72.57 from price, median 63.45, while
+        // the nearest rows sit 0-9.02, median 3.22.
+        //
+        // The parallel arrays (`p7PoiBull`/`p7PoiTier`/...) are keyed by ROW
+        // position inside `p7PoiIdx`, NOT by POI-registry index, so the ordering
+        // is computed over ROW indices -- reordering by registry index here
+        // would desynchronise every parallel array and mislabel every row.
+        //
+        // ENGINE UNCHANGED: `p7PoiIdx` still holds every active POI and P5/P8
+        // still see all of them; only which rows are PRINTED changes.
+        array<int> p7RowOrder = array.new<int>()
+        if p7Shown > 0
+            array<float> p7RowDist = array.new<float>()
+            // Rows of a filtered-out POI type start "taken": hidden from the table
+            // only (the POI stays in p7PoiIdx, P5 and P8).
+            array<bool> p7RowTaken = array.new<bool>(p7Active, false)
+            for r = 0 to p7Active - 1
+                int p7RowPoi = array.get(p7PoiIdx, r)
+                array.set(p7RowTaken, r, not array.get(p7zTypeOn, array.get(poiType, p7RowPoi) - 1))
+                array.push(p7RowDist, bahui.bandDistance(close, array.get(poiZoneTop, p7RowPoi), array.get(poiZoneBottom, p7RowPoi)))
+            p7RowOrder := bahui.nearestFirst(p7RowDist, p7PoiIdx, p7RowTaken, p7Shown)
+
+        // T2 (presentation only): the occupied-row write and the blank-row
+        // write were two separate `for c = 0 to 8` loops, each with its own
+        // table.cell call. They are ONE loop now. A row with no POI yields an
+        // empty string and the default colour, which is exactly what the old
+        // blank branch wrote, so a bar with fewer POIs than the previous one
+        // still cannot leave a stale row visible.
+        //
+        // NOTHING ELSE CHANGES. Same nine columns, same values, same proximity
+        // ordering, same colours, same footer.
+        for r = 1 to p7MaxVisiblePois
+            int rowIdx = r - 1
+            bool p7Has = rowIdx < array.size(p7RowOrder)
+            int poiI = p7Has ? array.get(p7PoiIdx, array.get(p7RowOrder, rowIdx)) : -1
+            bool bull = p7Has and array.get(poiDirection, poiI) == C_POI_DIR_BULLISH
+            int perm = p7Has ? array.get(fwPoi, poiI).perm : 0
+            array<string> p7Cells = p7Has ? str.split(array.get(fwPoi, poiI).row, "~") : na
+            for c = 0 to 8
+                table.cell(p7Pois, c, r, p7Has ? array.get(p7Cells, c) : "", text_size = size.tiny, text_color = not p7Has ? color.white : c == 1 ? (bull ? color.lime : color.red) : c == 6 ? bahui.permissionColor(perm) : color.white, text_halign = c == 0 ? text.align_left : text.align_center)
+        // Phase 7 overflow policy: presentation is bounded, evaluation is not
+        // -- the loop above evaluated all `p7Active` eligible POIs regardless
+        // of how many rows are visible here.
+        // T2: the footer text and the eight blanks beside it were a cell write
+        // plus a loop; one loop now writes all nine. Same text, same position.
+        for c = 0 to 8
+            table.cell(p7Pois, c, p7MaxVisiblePois + 1, c == 0 ? str.tostring(array.size(p7RowOrder)) + " shown / " + str.tostring(p7Active) + " active" : "", text_size = size.tiny, text_color = color.gray, text_halign = text.align_left)
+//#END

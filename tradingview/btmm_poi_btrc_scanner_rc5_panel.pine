@@ -2041,33 +2041,7 @@ if barstate.isconfirmed
     p2TransCount    := array.size(p2bEvents)
     p3Events := p2bEvents
 
-    // ---- RC3 market-structure overlay (presentation only). Draws the frozen
-    // P2 walk's own BOS / CHOCH events and P1's confirmed swings -- no second
-    // structure algorithm. Rebuilt on the last confirmed bars only, each event
-    // at its own break candle, so history shows real transitions and nothing
-    // is painted before it was available. Bull = green, bear = red.
-    if dspMs and bar_index >= last_bar_index - 1
-        bahui.clearLines(msLines)
-        bahui.clearLabels(msLabels)
-        for [k, ev] in p2bEvents
-            if k >= p2TransCount - maxDrawPerFamily
-                color msC = ev.transitionCode > 0 ? color.green : color.red
-                array.push(msLines, line.new(ev.brokenSwingKey, ev.brokenLevel, ev.breakTime, ev.brokenLevel, xloc.bar_time, color = msC, style = line.style_dotted))
-                array.push(msLabels, label.new(ev.breakTime, ev.brokenLevel, math.abs(ev.transitionCode) == 2 ? "CHOCH" : "BOS", xloc.bar_time, color = color(na), textcolor = msC, style = label.style_label_left, size = size.tiny))
-        for [k, sw] in swings
-            if k >= array.size(swings) - maxDrawPerFamily
-                bool msHigh = sw.swingType == SWING_HIGH
-                // RC5 STAGE H: HH / HL / LH / LL instead of the dense SH / SL
-                // forest. Only swings the walk actually used are labelled;
-                // highs and lows are sequenced INDEPENDENTLY, because a higher
-                // high compares against the previous HIGH, not against
-                // whatever confirmed in between. An equal pivot within the
-                // frozen tie tolerance gets no label rather than a forced one.
-                if f_rc5SwingMeaningful(sw.pivotEndTime)
-                    float prevPx = msHigh ? array.get(msPrevHL, 0) : array.get(msPrevHL, 1)
-                    if not na(prevPx) and math.abs(sw.price - prevPx) > sw.referenceAtr * 0.0
-                        array.push(msLabels, label.new(sw.pivotEndTime, sw.price, msHigh ? (sw.price > prevPx ? "HH" : "LH") : (sw.price > prevPx ? "HL" : "LL"), xloc.bar_time, color = color(na), textcolor = color.gray, style = msHigh ? label.style_label_down : label.style_label_up, size = size.tiny))
-                    array.set(msPrevHL, msHigh ? 0 : 1, sw.price)
+    // RC5 PANEL: structure overlay (BOS/CHOCH + HH/HL/LH/LL) is drawn by RC5 CORE.
 
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
@@ -6293,10 +6267,12 @@ f_fwPoi(int i) =>
                     f.ext := na(f.ext) or (x - f.ext) * dir > 0 ? x : f.ext
         else
             f.ext := bull ? math.max(f.ext, high) : math.min(f.ext, low)
+        string lt = "NONE"
         if not na(fwR)
             float rel = (mid - fwR.l) / (fwR.h - fwR.l)
             int pos = rel < 1.0 / 3 ? -1 : rel > 2.0 / 3 ? 1 : 0
             loc := pos == 0 ? 35 : pos == -dir ? 75 : 20
+            lt := "RANGE " + (pos < 0 ? "LOW" : pos > 0 ? "HIGH" : "MID")
         else
             float org = bull ? zb : zt
             int best = na
@@ -6309,8 +6285,11 @@ f_fwPoi(int i) =>
             if span > 0
                 float ret = math.round((f.ext - mid) * dir / span * 10000) / 100
                 loc := ret < 50 ? 40 : ret < 61.8 ? 65 : ret <= 79 ? 80 : 55
+                lt := "TREND " + str.tostring(ret) + "%"
         if f.swp
             loc := math.min(100, loc + 15)
+            lt += " +SWEEP"
+        f.txt := (fail ? "FAIL" : pre ? ((f.dis ? "DIS " : "") + (dly ? "DEL " : "") + (wip ? "WIP " : "")) : "- ") + "| " + lt + " | " + str.tostring(loc)
     [on, pre, loc, ep]
 
 // ---- per-bar framework advance (before P5 reads it) ----
@@ -6467,52 +6446,7 @@ if barstate.isconfirmed
                         corr += 1
                 array.push(rc5Ev, RcEv.new(pr.t, pr.d, pr.p, pr.kind, pr.ref, corr, pr.why))
 
-    // ---- RC5 STRUCTURAL TRENDLINE LAYER ------------------------------------
-    // The legacy RC4 picture -- range lines, level rays, BSL/SSL tags and the
-    // generic SWEEP forest -- is gone. What replaces part of it is this, and
-    // the SOURCE is the correction:
-    //
-    // Trendlines are drawn from `fwTls`, the DETECTED TRENDLINE collection,
-    // and never from the consumable framework level. A framework level retires
-    // the instant its liquidity is taken -- and "taken" there means price
-    // wicked through without closing through, which is precisely the bar price
-    // RESPECTS the line. Drawing structure from that object is what made a
-    // respected trendline disappear on the exact bar it proved itself.
-    //
-    // Structure and liquidity are different objects with different lifetimes.
-    // The sweep still fires and RC5 still qualifies it; only the trendline
-    // engine may end a trendline. No expiry, touch-count or slope rule is
-    // introduced here.
-    //
-    // Anchored in MARKET SPACE: both endpoints are anchor TIMES under
-    // xloc.bar_time, so the line stays on its swings through pan, zoom,
-    // timeframe change and reload. No bar_index is used.
-    if bar_index >= last_bar_index - 1
-        bahui.clearLines(fwLines)
-        if dspTl
-            // ---- DISPLAY ELIGIBILITY, not semantic existence --------------
-            // Every fwTls record is kept and the persistence fix is untouched:
-            // a displayed line still survives touch, respect, wick-through and
-            // a qualified sweep. What changes is WHICH of them are drawn.
-            //
-            // The rule is not new. It is the trendline qualification Stage G
-            // already applies to liquidity -- BOTH defining anchors must be
-            // swings the structural walk actually used -- applied to drawing.
-            // A line built from texture pivots is not structural, so it is not
-            // drawn. No angle, touch-count, distance or price tolerance is
-            // introduced, and no maximum is forced: bullish and bearish lines
-            // are independent and several of each may legitimately survive.
-            //
-            // The map is an exact-anchor-pair guard, so one structural
-            // relationship cannot print twice. Lines sharing only ONE anchor
-            // describe different relationships and both survive.
-            map<string, bool> tlSeen = map.new<string, bool>()
-            for [_ti, t2] in fwTls
-                if f_rc5SwingMeaningful(t2.anchor1Time) and f_rc5SwingMeaningful(t2.anchor2Time)
-                    string tlKey = str.tostring(t2.anchor1Time) + "|" + str.tostring(t2.anchor2Time)
-                    if not map.contains(tlSeen, tlKey)
-                        map.put(tlSeen, tlKey, true)
-                        array.push(fwLines, line.new(t2.anchor1Time, t2.anchor1Price, t2.anchor2Time, t2.anchor2Price, xloc.bar_time, extend.right, color.purple, line.style_solid))
+    // RC5 PANEL: structural trendline layer is drawn by RC5 CORE.
 
 var int fwCyc = 0
 var bool p8Primed = false
@@ -6672,6 +6606,7 @@ if barstate.isconfirmed
                 FwPoi fq = array.get(fwPoi, i)
                 fq.perm := permission
                 fq.scr := finalScore
+                fq.row := str.tostring(i) + "~" + (poiBullish ? "BULL" : "BEAR") + "~" + bahui.tierLabel(array.get(poiTier, i)) + "~" + (btmmValid ? "YES" : "NO") + "~" + bahui.alignmentLabel(align) + "~" + str.tostring(finalScore) + "~" + bahui.permissionLabel(permission) + "~" + bahui.lifecycleLabel(lifecycle) + "~" + fq.txt
 
                 // ---- P8: alert-event detection (informational only; see
                 // BTRC_V1_P8_ALERT_READINESS.md / BTRC_V1_P8_ALERT_CLOSURE.md).
@@ -6727,176 +6662,7 @@ if barstate.isconfirmed
     if not p8Primed
         p8Primed := true
 
-    // =========================================================================
-    // P7-Z — POI zone visualization (informational, presentation-only).
-    // Draws real box/label objects for a BOUNDED subset of the SAME
-    // `p7PoiIdx` active set the P7 table already selects from -- the
-    // `p7zMaxVisibleZones` entries NEAREST CURRENT PRICE (RC1-POI
-    // corrective; the frozen RC1 build used ascending registry-index order
-    // here, which drew only the oldest POIs). No P3/P4/P5/P6/P8
-    // semantic is read or recomputed here -- only already-computed registry
-    // geometry (`poiZoneTop`/`poiZoneBottom`/`poiAvailTime`/`poiType`/
-    // `poiDirection`/`poiTier`/`poiTerminal`) and the already-selected
-    // `p7PoiIdx` set. See
-    // docs/architecture/BTRC_V1_P7Z_POI_VISUALIZATION_CLOSURE.md for the
-    // full geometry/lifecycle/retention contract this ports line-for-line
-    // from `tests/parity_support/p7z_zone_model.py`.
-    // =========================================================================
-    if p7zShowZones and bar_index >= p1DatasetBars - 2
-        // ---- RC5 STAGE B: ONLY VALID POIs REACH THE VISUAL LAYER ---------
-        // DISPLAY READS THE REGISTRY, NOT `p7PoiIdx`. `p7PoiIdx` is the set P5
-        // still EVALUATES, which the RC4 rule empties once a POI's final row
-        // is emitted -- so selecting from it would delete a mitigated zone
-        // from the chart no matter what the validity gate below decided. The
-        // Python side has no such narrowing: `active_display_pois` walks every
-        // observation. Visibility is a property of the POI, not of whether P5
-        // is still scoring it, and the zone projection reads only registry
-        // geometry (`poiType`, `poiDirection`, `poiZoneTop`, `poiZoneBottom`,
-        // `poiCandTime`), never a P5 field.
-        //
-        // RC3/RC4 filtered on `poiFreshActive`, so a zone vanished the moment
-        // price first touched it. That is wrong: a POI is mitigated, re-tested
-        // and traded again, and a far-side break that was reclaimed is the
-        // false-break case the author explicitly asked to keep. Measured on
-        // the frozen captures, the difference is not marginal -- M5 keeps
-        // 6 mitigated + 14 re-mitigated + 8 reclaimed zones, H4 keeps
-        // 10 + 16 + 1, every one of which RC3/RC4 hid on first contact.
-        //
-        // The filter is now VALIDITY: a zone leaves the visual layer only when
-        // it is genuinely invalidated through its far side, or superseded by
-        // the ORDER BLOCK of its own formation. Doing it first still means a
-        // dead zone can never consume a visual slot or drag a live neighbour
-        // into a group.
-        // ---- RC5 SIMPLIFIED RENDERER (presentation only) -----------------
-        // RC5's semantic layers already decide WHAT exists, whether it is
-        // valid, whether it is authoritative and whether it may be shown. The
-        // renderer therefore no longer runs a SECOND arbitration of its own:
-        // the RC1-POI-V2 visual group projection -- per-direction interval
-        // merge, the exact-geometry twin map, group naming with its "xN"
-        // suffix, the group-keyed selection and the annotation collision pass
-        // -- is gone.
-        //
-        // INDEPENDENT POIs STAY INDEPENDENT. Nothing is merged to save tokens.
-        // Every display-eligible POI draws its OWN zone from its OWN
-        // zone_top / zone_bottom and its OWN availability anchor. An
-        // authoritative reversal and an independent imbalance remain two
-        // zones, exactly as the semantic layer produced them.
-        //
-        // The one arbitration kept is the FVG-vs-origin dominance map, because
-        // RC5 authority (Stage E) does not exist yet. It is the first thing to
-        // delete once authority resolves those duplicates semantically.
-        array<int> p7zVisibleIdx = array.new<int>()
-        int p7zEligible = array.size(poiType)
-        map<int, bool> p7zDom = map.new<int, bool>()
-        for pI = 0 to (p7zEligible > 0 ? p7zEligible - 1 : na)
-            int ty = array.get(poiType, pI)
-            if f_rc5Validity(pI) == C_RC5_VALID and array.get(p7zTypeOn, ty - 1) and (ty <= C_POI_SELL_ORDER_BLOCK or ty == C_POI_BULLISH_ENGULFING or ty == C_POI_BEARISH_ENGULFING)
-                map.put(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI), true)
-        for pI = 0 to (p7zEligible > 0 ? p7zEligible - 1 : na)
-            int ty = array.get(poiType, pI)
-            bool isFvg = ty == C_POI_BUY_FAIR_VALUE_GAP or ty == C_POI_SELL_FAIR_VALUE_GAP
-            if f_rc5Validity(pI) == C_RC5_VALID and not map.contains(rc5Subordinate, pI) and array.get(p7zTypeOn, ty - 1) and not (isFvg and map.contains(p7zDom, array.get(poiCandTime, pI) * array.get(poiDirection, pI)))
-                array.push(p7zVisibleIdx, pI)
-        int p7zActive = array.size(p7zVisibleIdx)
-
-        // ---- ONE VISIBLE WINNER PER SAME-DIRECTION OVERLAP CLUSTER -------
-        // PRESENTATION ONLY. Nothing is deleted: every suppressed POI keeps
-        // its registry record, its P5 row, its P8 events and its P7 table
-        // row, so the evidence stays available. Only box and text are hidden,
-        // and p7zOverlapHidden reports how many.
-        //
-        // DIRECTION-AWARE BY AUTHOR DECISION. Bullish competes with bullish
-        // and bearish with bearish. A bearish wick must never hide a bullish
-        // order block: opposite-direction overlap carries real conflict
-        // information and stays visible.
-        //
-        // CHAINED OVERLAP is one cluster -- if A meets B and B meets C they
-        // travel together even when A and C do not touch. That is a sort by
-        // lower edge and a sweep on a running maximum upper edge, which is the
-        // cheap interval-cluster relation, NOT the retired P7-Z projection:
-        // nothing is merged, renamed or counted, and one member is chosen.
-        //
-        // NO NEW TOLERANCE. The existing exact interval relation decides.
-        array<int> p7zKept = array.new<int>()
-        for dirPass = 0 to 1
-            int want = dirPass == 0 ? C_POI_DIR_BULLISH : C_POI_DIR_BEARISH
-            array<int> dIdx = array.new<int>()
-            array<float> dBot = array.new<float>()
-            for [_di, pD] in p7zVisibleIdx
-                if array.get(poiDirection, pD) == want
-                    array.push(dIdx, pD)
-                    array.push(dBot, array.get(poiZoneBottom, pD))
-            if array.size(dIdx) > 0
-                // Cluster state is held in ARRAYS, not scalars: a scalar
-                // assigned inside a Pine for-loop reads back as its initial
-                // value on the next pass, which is the defect that once left
-                // every FVG undrawn.
-                array<int>   cBest = array.from(-1)
-                array<float> cTop  = array.from(float(na))
-                for [_oi, oi] in array.sort_indices(dBot, order.ascending)
-                    int p = array.get(dIdx, oi)
-                    if not na(array.get(cTop, 0)) and array.get(poiZoneBottom, p) > array.get(cTop, 0)
-                        array.push(p7zKept, array.get(cBest, 0))
-                        array.set(cBest, 0, -1)
-                        array.set(cTop, 0, na)
-                    array.set(cTop, 0, na(array.get(cTop, 0)) ? array.get(poiZoneTop, p) : math.max(array.get(cTop, 0), array.get(poiZoneTop, p)))
-                    if array.get(cBest, 0) == -1 or f_rc5DisplayBetter(p, array.get(cBest, 0))
-                        array.set(cBest, 0, p)
-                if array.get(cBest, 0) != -1
-                    array.push(p7zKept, array.get(cBest, 0))
-        p7zOverlapHidden := p7zActive - array.size(p7zKept)
-        p7zVisibleIdx := p7zKept
-        p7zActive := array.size(p7zVisibleIdx)
-        int p7zShown = math.min(p7zActive, p7zMaxVisibleZones)
-        string p7zTfl = bahui.timeframeLabel(timeframe.period)
-        int p7zRightEdge = time_close + p7zProjectBars * timeframe.in_seconds() * 1000
-        color p7zFillColor = color.new(color.gray, 60)
-        color p7zBorderColor = color.new(color.gray, 20)
-        color p7zTextColor = color.black
-
-        // Bounded presentation, nearest to the current close first. It reuses
-        // the distance helper and the ordering that were already approved; no
-        // new market-quality rule decides which zones are shown, and the
-        // overflow is REPORTED rather than silently dropped.
-        array<int> p7zSelected = array.new<int>()
-        if p7zShown > 0
-            array<float> p7zDist = array.new<float>()
-            for [_zi, pZ] in p7zVisibleIdx
-                array.push(p7zDist, bahui.bandDistance(close, array.get(poiZoneTop, pZ), array.get(poiZoneBottom, pZ)))
-            p7zSelected := bahui.nearestFirst(p7zDist, p7zVisibleIdx, array.new<bool>(p7zActive, false), p7zShown)
-        p7zHidden := p7zActive - p7zShown
-
-        // evict boxes for POIs no longer selected; reverse walk because
-        // array.remove shifts every later index down by one
-        int k = array.size(p7zBoxPoiIdx) - 1
-        while k >= 0
-            if array.indexof(p7zSelected, array.get(p7zBoxPoiIdx, k)) == -1
-                box.delete(array.get(p7zBoxes, k))
-                array.remove(p7zBoxPoiIdx, k)
-                array.remove(p7zBoxes, k)
-            k -= 1
-
-        if p7zShown > 0
-            for [_si, p7zPoiI] in p7zSelected
-                int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
-                int ty2 = array.get(poiType, p7zPoiI)
-                string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + (ty2 == C_POI_DOJI ? "DOJI" : bahui.poiTypeLabel(ty2)) : ""
-                if slot == -1
-                    // MARKET-SPACE ANCHOR. `left` is this POI's OWN
-                    // availability time and the box is drawn in
-                    // xloc.bar_time, so the zone stays on the formation that
-                    // produced it through pan, zoom, timeframe change and
-                    // reload. No bar_index appears anywhere in this renderer.
-                    box p7zNewBox = box.new(left = array.get(poiAvailTime, p7zPoiI), top = array.get(poiZoneTop, p7zPoiI), right = p7zRightEdge, bottom = array.get(poiZoneBottom, p7zPoiI),
-                      xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
-                      extend = extend.right, border_style = (ty2 == C_POI_SUPPORT_ZONE or ty2 == C_POI_RESISTANCE_ZONE) ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
-                      text_valign = text.align_center, text_color = p7zTextColor, text_size = 31)
-                    array.push(p7zBoxPoiIdx, p7zPoiI)
-                    array.push(p7zBoxes, p7zNewBox)
-                else
-                    if not array.get(poiTerminal, p7zPoiI)
-                        box.set_right(array.get(p7zBoxes, slot), p7zRightEdge)
-                        box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)
+    // RC5 PANEL: P7-Z zone boxes and labels are drawn by RC5 CORE.
 
     // =========================================================================
     // P9 — full-system integration trace (debug only, no semantic, no new
@@ -6937,7 +6703,90 @@ if barstate.isconfirmed
 // already established), so this adds exactly two persistent table objects,
 // zero new plots, and a bounded, fixed number of cell writes per bar.
 // =============================================================================
-plotshape(dspBtmm and fwCyc > 0, "BTMM cycle valid", shape.diamond, location.bottom, color.orange, size = size.tiny)
+// RC5 PANEL: the BTMM cycle marker is a chart visual and belongs to CORE.
 
-// RC5 CORE: the diagnostic tables live in the RC5 PANEL companion.
-// Every semantic field they displayed is still computed here.
+// RC5 PANEL owns the screen-space diagnostics. CORE draws the chart; this
+// script draws neither zones, trendlines, structure nor markers, so the two
+// can be attached together without a single duplicated drawing.
+if barstate.islast
+    // RC3: Dashboard and POI table are independent toggles.
+    if p7ShowUi
+        // Debug-gated per the P5EVAL convention (matching test_p5_resource_budget's
+        // "unconditional log volume" concern) -- verified once, real FXCM data,
+        // during P7 UI validation; see BTRC_V1_P7_UI_CLOSURE.md.
+        // RC3 DEV: P7DIAG line removed with P5EVAL and P9TRACE, same reason.
+        var table p7Summary = table.new(position.top_left, 2, 10, border_width = 1, bgcolor = color.new(color.black, 15))
+        bahui.renderRow(p7Summary, 0, "P7 — BTRC Scanner", "")
+        bahui.renderRow(p7Summary, 1, "Feed", syminfo.prefix + ":" + syminfo.ticker)
+        bahui.renderRow(p7Summary, 2, "Host TF", timeframe.period)
+        // Compaction (RC3): rows 3-11 written by one loop over parallel key/value
+        // arrays instead of nine separate writes; cell content is unchanged.
+        array<string> p7SumKeys = str.split("Global direction|Regime|Momentum|Breakout|Volatility|Active POIs|Market framework", "|")
+        array<string> p7SumVals = array.from(bahui.directionLabel(p7LastGlobalDir), bahui.regimeLabel(p7LastRegime), bahui.directionLabel(p7LastMomDir), bahui.breakoutLabel(p7LastBrk), bahui.volatilityLabel(p7LastVol) + (p7LastVolAbnormal ? " (abnormal)" : ""), str.tostring(array.size(p7PoiIdx)), not na(fwR) ? "RANGE " + str.tostring(fwR.l) + " - " + str.tostring(fwR.h) : "TREND / impulse")
+        // Phase 14 zero-state: no confirmed bar processed yet -- every row
+        // reads "-", never a stale or fabricated value.
+        for r = 3 to 9
+            bahui.renderRow(p7Summary, r, p7HasData ? array.get(p7SumKeys, r - 3) : "-", p7HasData ? array.get(p7SumVals, r - 3) : "-")
+
+    if p7ShowActivePois
+        int p7Active = array.size(p7PoiIdx)
+        int p7Shown  = math.min(p7Active, p7MaxVisiblePois)
+        var table p7Pois = table.new(position.bottom_right, 9, p7MaxVisiblePois + 2, border_width = 1, bgcolor = color.new(color.black, 15))
+        // Compaction (RC3): header written by one loop; `text.align_center` is
+        // table.cell's default, so columns 1-7 render exactly as before.
+        array<string> p7Hdr = str.split("#|Dir|Tier|BTMM|Align|Score|Permission|State|Cycle / Location / Liq", "|")
+        for c = 0 to 8
+            table.cell(p7Pois, c, 0, array.get(p7Hdr, c), text_size = size.tiny, text_color = color.gray, text_halign = c == 0 ? text.align_left : text.align_center)
+        // ---- RC1-POI CORRECTIVE (presentation only): order the table rows by
+        // the SAME proximity-to-current-close projection the P7-Z boxes use, so
+        // the table describes the zones the trader can actually see. The frozen
+        // RC1 build listed rows 0..n-1 of `p7PoiIdx` -- ascending registry index
+        // -- which, with no P3 expiry, meant the OLDEST POIs. Measured on the
+        // live FX:XAUUSD M15 capture of 2026-09-09 (close 4400.87, 51 active):
+        // the registry-order rows sat 8.97-72.57 from price, median 63.45, while
+        // the nearest rows sit 0-9.02, median 3.22.
+        //
+        // The parallel arrays (`p7PoiBull`/`p7PoiTier`/...) are keyed by ROW
+        // position inside `p7PoiIdx`, NOT by POI-registry index, so the ordering
+        // is computed over ROW indices -- reordering by registry index here
+        // would desynchronise every parallel array and mislabel every row.
+        //
+        // ENGINE UNCHANGED: `p7PoiIdx` still holds every active POI and P5/P8
+        // still see all of them; only which rows are PRINTED changes.
+        array<int> p7RowOrder = array.new<int>()
+        if p7Shown > 0
+            array<float> p7RowDist = array.new<float>()
+            // Rows of a filtered-out POI type start "taken": hidden from the table
+            // only (the POI stays in p7PoiIdx, P5 and P8).
+            array<bool> p7RowTaken = array.new<bool>(p7Active, false)
+            for r = 0 to p7Active - 1
+                int p7RowPoi = array.get(p7PoiIdx, r)
+                array.set(p7RowTaken, r, not array.get(p7zTypeOn, array.get(poiType, p7RowPoi) - 1))
+                array.push(p7RowDist, bahui.bandDistance(close, array.get(poiZoneTop, p7RowPoi), array.get(poiZoneBottom, p7RowPoi)))
+            p7RowOrder := bahui.nearestFirst(p7RowDist, p7PoiIdx, p7RowTaken, p7Shown)
+
+        // T2 (presentation only): the occupied-row write and the blank-row
+        // write were two separate `for c = 0 to 8` loops, each with its own
+        // table.cell call. They are ONE loop now. A row with no POI yields an
+        // empty string and the default colour, which is exactly what the old
+        // blank branch wrote, so a bar with fewer POIs than the previous one
+        // still cannot leave a stale row visible.
+        //
+        // NOTHING ELSE CHANGES. Same nine columns, same values, same proximity
+        // ordering, same colours, same footer.
+        for r = 1 to p7MaxVisiblePois
+            int rowIdx = r - 1
+            bool p7Has = rowIdx < array.size(p7RowOrder)
+            int poiI = p7Has ? array.get(p7PoiIdx, array.get(p7RowOrder, rowIdx)) : -1
+            bool bull = p7Has and array.get(poiDirection, poiI) == C_POI_DIR_BULLISH
+            int perm = p7Has ? array.get(fwPoi, poiI).perm : 0
+            array<string> p7Cells = p7Has ? str.split(array.get(fwPoi, poiI).row, "~") : na
+            for c = 0 to 8
+                table.cell(p7Pois, c, r, p7Has ? array.get(p7Cells, c) : "", text_size = size.tiny, text_color = not p7Has ? color.white : c == 1 ? (bull ? color.lime : color.red) : c == 6 ? bahui.permissionColor(perm) : color.white, text_halign = c == 0 ? text.align_left : text.align_center)
+        // Phase 7 overflow policy: presentation is bounded, evaluation is not
+        // -- the loop above evaluated all `p7Active` eligible POIs regardless
+        // of how many rows are visible here.
+        // T2: the footer text and the eight blanks beside it were a cell write
+        // plus a loop; one loop now writes all nine. Same text, same position.
+        for c = 0 to 8
+            table.cell(p7Pois, c, p7MaxVisiblePois + 1, c == 0 ? str.tostring(array.size(p7RowOrder)) + " shown / " + str.tostring(p7Active) + " active" : "", text_size = size.tiny, text_color = color.gray, text_halign = text.align_left)

@@ -1150,3 +1150,125 @@ trustworthy rather than hopeful — G1 measured 357, 357 and 358 on three
 unrelated bases, and the N=97 boundary prediction held to 15 tokens — but the
 merged CORE must still be built and measured before the architecture is frozen.
 That is the next step, and it is the honest caveat on the 98,773.
+
+---
+
+# THE MERGED CORE — the composition becomes a fact
+
+The caveat above is now closed. One artifact was assembled from ONE base,
+containing every faithful stage, and measured directly on the real TradingView
+compiler.
+
+## How the merge was built
+
+`tools/rc5_compose.py`'s ancestor — a single generator — starts from the
+CORE-no-table + G1 + trendline-filter base and applies, in dependency order:
+
+| step | what it adds |
+| --- | --- |
+| G plumbing | `FwLv` / `FwEv` carry the identity of the level they describe, `RcCand` |
+| Stage E | same-origin authority (`rc5Subordinate`, ladder, one pass per bar) |
+| Stage D | structural-origin gate, blocking at emission |
+| Stage G declarations | kind codes, `RcEv`, qualification, shared-source test |
+| Stage D per-bar | pivot candle → swing maps, per side |
+| Stage G producer | POI far edges, qualification, deduplication |
+| Stage G DISTRACTION | consumes `rc5Ev`, never the raw `fwEv` stream |
+| Stage F | terminal means genuine invalidation or supersession |
+| Stage H | HH / HL / LH / LL, previous pivot held in an ARRAY |
+| Stage E display | the renderer honours semantic authority |
+
+**One semantic join was made that no single-stage prototype could make.** Stage
+G's `f_rc5Authoritative` was a `true` stub carrying the comment *"Stage E
+supplies this"*. In the merged build Stage E exists, so it is wired to the real
+subordinate map: a subordinate POI's far edge is not an independent liquidity
+reference, because it is not an independent decision. Authority is also computed
+BEFORE Stage G registers far edges, so the ordering is not accidental.
+
+## Exact source transfer
+
+The candidate reached the TradingView page through the clipboard, and the
+transfer was PROVEN rather than assumed: the in-page SHA-256 of the received
+string is `94e21bbf…`, byte-identical to the file on disk (381,770 chars, CRLF).
+A localhost fetch was tried first and is blocked from the page's origin; that is
+recorded so the next session does not re-derive it.
+
+## The measurement
+
+Three points, pad N ≤ 100, `BASE = TOTAL − 97·N − 41`:
+
+| N | reported total | derived BASE |
+| --- | --- | --- |
+| 98 | 108,273 | **98,726** |
+| 99 | 108,370 | **98,726** |
+| 100 | 108,467 | **98,726** |
+
+C2−C1 = 97, C3−C2 = 97. BASE1 = BASE2 = BASE3. The oracle validates itself.
+
+**A fourth, unpadded save returned `success: true` with an 832,472-character
+IL.** The merged CORE does not merely tokenise — it COMPILES on the real
+compiler.
+
+| | |
+| --- | --- |
+| **MERGED CORE** | **98,726** |
+| hard limit 100,256 | **1,530 under** |
+| strict target 99,256 | **530 under** |
+| composed estimate 98,773 | **47 high** — the composition was accurate to 0.05% |
+
+## RC5 PANEL
+
+PANEL is composed from CORE, not written beside it (see
+`tools/rc5_compose.py`). It removes the chart-space renderers and restores the
+screen-space diagnostics; every semantic line in it is CORE's own line.
+
+| N | reported total | derived BASE |
+| --- | --- | --- |
+| 98 | 106,603 | **97,056** |
+| 99 | 106,700 | **97,056** |
+| 100 | 106,797 | **97,056** |
+
+Unpadded save: `success: true`, IL 817,161 characters. **PANEL compiles.**
+
+| | |
+| --- | --- |
+| **RC5 PANEL** | **97,056** |
+| hard limit 100,256 | **3,200 under** |
+| strict target 99,256 | **2,200 under** |
+
+The chart-space renderer layer therefore costs **4,908** tokens, and the
+diagnostic tables cost **3,238**. Neither script needs the other's half.
+
+## Static merge audit
+
+Every intended block was verified present exactly once in the merged artifact,
+and every superseded one verified absent:
+
+* Stage B validity predicate, 5 call sites; Stage C provenance maps and writer
+* Stage D gate predicate, its single blocking call site, both pivot maps
+* Stage E subordinate map, authority pass, its per-bar call, both consumers
+* Stage F new terminal predicate present — **old mitigation predicate absent**
+* G1 role map; Stage G kind codes, `RcEv`, `RcCand`, qualification, dedup
+* DISTRACTION reads `rc5Ev` — **the raw `fwEv` read is absent**
+* Stage H HH/HL/LH/LL present — **the old dense SH/SL label is absent**
+* trendline drawn from `fwTls`, display filter, exact-anchor guard
+* gray fill / gray border / black text / text size 31
+* `xloc.bar_index` occurrences: **0**
+* `table.new` / `table.cell` in live code: **0** (four surviving mentions are
+  comments)
+* duplicate function DEFINITIONS across 127 `f_` functions: **0**
+
+Two near-duplicates are recorded rather than silently merged: `f_rc5IsReversal`
+(Stage D) and `f_rc5IsReversalE` (Stage E) express the same reversal-family set
+in two forms — D as an explicit disjunction, E as "has a ladder rank". They
+agree today. Unifying them would save tokens and remove a drift risk, but it
+changes two measured stages at once, so it is offered as an author decision, not
+taken unilaterally.
+
+One stale comment is also recorded: the FVG-vs-origin dominance map still says
+*"RC5 authority (Stage E) does not exist yet. It is the first thing to delete
+once authority resolves those duplicates semantically."* Stage E now exists —
+but Stage E refuses an imbalance only when it lies WHOLLY INSIDE the primary,
+while the dominance map suppresses on shared candle time and direction
+regardless of geometry. They are different rules, so deleting the map would make
+some currently hidden FVGs visible. That is a display change the author should
+decide; the rule is kept and the comment flagged.
