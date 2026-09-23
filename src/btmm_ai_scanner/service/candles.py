@@ -42,12 +42,18 @@ _SCHEMA_VERSION = SemVer.parse("0.1.0")
 # Fallback minimum price ticks, used only when Bell Academy Hub does not
 # supply a tick size of its own for a request. Ordinary, widely known market
 # quoting conventions (XAUUSD to the cent, EURUSD/GBPUSD to the 5th decimal
-# "pip point") — this only controls how finely price is measured, never any
-# analytical verdict.
+# "pip point", BTCUSD to the cent, AAPL to the cent) — this only controls
+# how finely price is measured, never any analytical verdict. A bare
+# dict[symbol] subscript at the one call site (app.py's
+# _build_scanner_configuration) means every InternalSymbol member MUST have
+# an entry here or that request crashes — this was the first thing Bell
+# Academy Hub's Phase 2C audit had to fix when adding BTCUSD/AAPL.
 DEFAULT_MINIMUM_PRICE_TICK: dict[InternalSymbol, Decimal] = {
     InternalSymbol.XAUUSD: Decimal("0.01"),
     InternalSymbol.EURUSD: Decimal("0.00001"),
     InternalSymbol.GBPUSD: Decimal("0.00001"),
+    InternalSymbol.BTCUSD: Decimal("0.01"),
+    InternalSymbol.AAPL: Decimal("0.01"),
 }
 
 

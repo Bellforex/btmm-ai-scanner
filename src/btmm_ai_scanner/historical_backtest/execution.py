@@ -32,6 +32,8 @@ _SYMBOL_ORDER: dict[InternalSymbol, int] = {
     InternalSymbol.XAUUSD: 1,
     InternalSymbol.EURUSD: 2,
     InternalSymbol.GBPUSD: 3,
+    InternalSymbol.BTCUSD: 4,
+    InternalSymbol.AAPL: 5,
 }
 
 # Run-level safety gates (register §44AF/§44AM, AUTHOR-APPROVED).

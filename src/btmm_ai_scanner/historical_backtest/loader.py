@@ -69,6 +69,8 @@ _SYMBOL_ORDER: dict[InternalSymbol, int] = {
     InternalSymbol.XAUUSD: 1,
     InternalSymbol.EURUSD: 2,
     InternalSymbol.GBPUSD: 3,
+    InternalSymbol.BTCUSD: 4,
+    InternalSymbol.AAPL: 5,
 }
 
 

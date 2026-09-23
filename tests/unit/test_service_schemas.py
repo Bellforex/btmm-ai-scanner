@@ -72,7 +72,7 @@ def test_analyze_request_accepts_a_well_formed_bundle() -> None:
 
 def test_analyze_request_rejects_unknown_symbol() -> None:
     with pytest.raises(ValidationError):
-        AnalyzeRequest.model_validate(_analyze_request(symbol="BTCUSD"))
+        AnalyzeRequest.model_validate(_analyze_request(symbol="DOGEUSD"))
 
 
 def test_analyze_request_rejects_unknown_timeframe_key() -> None:

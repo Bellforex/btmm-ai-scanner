@@ -117,7 +117,7 @@ def test_analyze_reports_insufficient_data_without_an_execution_timeframe() -> N
 
 def test_analyze_rejects_an_unsupported_symbol_with_422() -> None:
     payload = _scalp_payload()
-    payload["symbol"] = "BTCUSD"
+    payload["symbol"] = "DOGEUSD"  # not an InternalSymbol member
     response = client.post("/v1/analyze", json=payload)
     assert response.status_code == 422
 
@@ -131,7 +131,7 @@ def test_analyze_rejects_an_empty_timeframe_bundle_with_422() -> None:
 
 def test_analyze_never_leaks_a_traceback_on_error() -> None:
     payload = _scalp_payload()
-    payload["symbol"] = "BTCUSD"
+    payload["symbol"] = "DOGEUSD"  # not an InternalSymbol member
     response = client.post("/v1/analyze", json=payload)
     text = response.text
     assert "Traceback" not in text

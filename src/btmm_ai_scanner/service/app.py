@@ -69,6 +69,13 @@ _SCHEMA_VERSION = "0.1.0"
 _RULE_VERSION = "0.1.0"
 
 _ALL_TIMEFRAMES: frozenset[Timeframe] = frozenset(Timeframe)
+# ScannerConfiguration.enabled_symbols defaults to only the original three
+# forex/metals symbols (scanner/configuration.py's own
+# _DEFAULT_ENABLED_SYMBOLS) — this service must accept every InternalSymbol
+# member DEFAULT_MINIMUM_PRICE_TICK below has a tick for, not silently fall
+# back to that narrower default (Bell Academy Hub Phase 2C's own audit
+# finding: this is the second of two places a new symbol must be wired in).
+_ALL_SYMBOLS: frozenset[InternalSymbol] = frozenset(InternalSymbol)
 
 
 class ScannerRequestError(ValueError):
@@ -118,6 +125,7 @@ def _build_scanner_configuration(symbol: InternalSymbol) -> ScannerConfiguration
         btmm_configuration=BtmmConfiguration(minimum_price_tick=tick),
         required_timeframes=frozenset(),
         optional_timeframes=_ALL_TIMEFRAMES,
+        enabled_symbols=_ALL_SYMBOLS,
     )
     validate_configuration(configuration)
     return configuration
