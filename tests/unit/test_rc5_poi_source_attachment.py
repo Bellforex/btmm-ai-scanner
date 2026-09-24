@@ -38,7 +38,11 @@ def _zone_box_new() -> str:
     `extend = extend.right` and silently weaken the assertions.
     """
     lines = _core().splitlines()
-    starts = [i for i, l in enumerate(lines) if "box.new(" in l and "p7zNewBox" in l]
+    starts = [
+        i
+        for i, line in enumerate(lines)
+        if "box.new(" in line and "p7zNewBox" in line
+    ]
     assert len(starts) == 1, f"expected exactly one zone box.new, got {len(starts)}"
     i = starts[0]
     return chr(10).join(lines[i : i + 4])
