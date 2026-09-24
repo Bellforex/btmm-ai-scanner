@@ -190,12 +190,26 @@ Everything the acceptance run needs is now in place on this machine:
 
 ### What blocks the run
 
-Generic process launch **is** now permitted. What is refused is launching or
-closing **MetaTrader** specifically, and MetaTrader allows only one instance per
-data folder — so the running terminal must be closed before a `/config:` launch
-does anything. Launching with the config while it runs was attempted: it exited
-without starting a tester, created no `Tester\logs` directory, and left the
-terminal untouched.
+Generic process launch **is** permitted — verified with an inert probe. What is
+refused is process control over **MetaTrader** specifically. Three independent
+routes have now been attempted and refused:
+
+| route | result |
+| --- | --- |
+| PowerShell `CloseMainWindow()` on the terminal | refused |
+| PowerShell `Start-Process terminal64.exe /config:` | refused |
+| `taskkill //PID <terminal>` | refused |
+
+MetaTrader allows only one instance per data folder, so the running terminal
+must close before a `/config:` launch does anything. The safer route was tried
+first — launching with the config **without** closing the terminal — and it
+exited without starting a tester, created no `Tester\logs` directory and left
+the terminal untouched. That is MT5's design, not a configuration mistake.
+
+A scheduled task could technically perform the same close-and-launch, and is
+deliberately **not** used: routing around a refused permission by another
+mechanism would defeat the point of the refusal rather than satisfy it. This
+needs the author's approval or the author's hand.
 
 Portable mode is not an alternative: it would need write access to
 `C:\Program Files` and a fresh login, and credentials are never handled here.

@@ -160,7 +160,7 @@ correctly even while the page reports itself hidden.
 | --- | --- | --- |
 | 8.1 | configs for XAUUSDm / EURUSDm / GBPUSDm | **PASS** |
 | 8.2 | per-symbol report paths | **PASS** |
-| 8.3 | tester execution | **BLOCKED** — narrowed: generic process launch now works; closing/launching MetaTrader is refused, and MT5 allows one instance per data folder |
+| 8.3 | tester execution | **BLOCKED** — generic process launch works; MetaTrader process control refused on three independent routes; MT5 allows one instance per data folder |
 | 8.3a | acceptance run staged | **PASS** — EA installed byte-identical, fixture file, `.set` and launch config all in place |
 | 8.4 | XAUUSDm run | **BLOCKED** |
 | 8.5 | EURUSDm run | **BLOCKED** |
