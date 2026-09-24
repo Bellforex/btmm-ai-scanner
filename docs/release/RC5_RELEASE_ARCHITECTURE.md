@@ -321,5 +321,13 @@ Measured, and it changes how a tester result must be read: on the author's
 higher-timeframe context does not produce. M45 and H3 never leave `DETECTED`.
 
 A tester run against such a fixture file will place zero trades, and that is
-correct behaviour rather than an EA failure. A multi-timeframe capture is
-required before any execution claim can be made.
+correct behaviour rather than an EA failure.
+
+Diagnosed further: with full context, regime is **DECELERATION on 100% of
+11,083 evaluations**, and `DECELERATION` is `regime_engine`'s image of
+`TrendState.EXHAUSTING`, so the primary regime timeframe was EXHAUSTING
+throughout. Meanwhile alignment varies (PARTIAL 7,442 / COUNTER_TREND 3,641)
+and permission varies across four values including **BUY_BIAS 50 times** — the
+pipeline is alive, the window simply never offers a favourable regime. What is
+needed is a capture whose primary regime timeframe is TRENDING, or FORMING with
+recent displacement. See `RC5_RELEASE_CHECKLIST.md` §11.

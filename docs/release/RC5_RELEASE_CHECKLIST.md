@@ -187,11 +187,39 @@ conclusion — "the EA does not work" — would be wrong. Confirm
 `confirmed > 0` from the fixture generator BEFORE reading anything into a
 tester result.
 
+### DIAGNOSED — it is the window, not the wiring
+
+A second run sampled the ladder's own inputs over 30 host bars with the full
+context set (11,083 POI evaluations):
+
+| input | distribution |
+| --- | --- |
+| regime | **DECELERATION 11,083 — a single value, 100%** |
+| trend alignment | PARTIAL 7,442 / COUNTER_TREND 3,641 |
+| analytical permission | WATCH_ONLY 9,304 / NO_TRADE_CONTEXT 890 / COUNTER_TREND 839 / **BUY_BIAS 50** |
+
+`regime_engine` maps regime 1:1 from `TrendState` for every non-FORMING state,
+and `DECELERATION` is the image of **`EXHAUSTING`**. So the primary regime
+timeframe — `D1` first, then `H4`, `W1`, `H1`, `M15`, `M5` — was EXHAUSTING for
+the entire sampled period. Over 30 M15 bars (7.5 hours) a constant D1 trend
+state is exactly what one would expect.
+
+**This is a data property of the window, not a wiring defect**, and the other
+two columns prove the pipeline is alive rather than stuck: alignment varies
+across two values, permission across four, and a directional **`BUY_BIAS` is
+issued 50 times** — which also shows the strict P5 reading is not vacuous.
+
+One correction to that run: its momentum/liquidity line read `cs.momentum` and
+`cs.liquidity`, but the fields are `momentum_score` and `liquidity_score`, so
+it reported `n=0` for my own reason and not the engine's. Those two rungs sit
+ABOVE the regime gate and are never reached here, so no claim is made about
+them either way.
+
 ### What would settle it
 
-A capture over a window that actually contains a TREND or EXPANSION regime,
-long enough for the regime engine to classify one. That is a data question, not
-a code question, and it is the next thing worth doing.
+A capture over a window whose primary regime timeframe is TRENDING — or FORMING
+with recent displacement, which yields EXPANSION or BREAKOUT_PENDING. That is a
+data question, not a code question, and it is the next thing worth doing.
 
 ---
 
