@@ -7072,12 +7072,22 @@ if barstate.isconfirmed
                 int ty2 = array.get(poiType, p7zPoiI)
                 string p7zBoxTxt = p7zShowLabels ? (ty2 == C_POI_DOJI ? "DOJI" : bahui.poiTypeLabel(ty2)) : ""
                 if slot == -1
-                    // MARKET-SPACE ANCHOR. `left` is this POI's OWN
-                    // availability time and the box is drawn in
-                    // xloc.bar_time, so the zone stays on the formation that
-                    // produced it through pan, zoom, timeframe change and
-                    // reload. No bar_index appears anywhere in this renderer.
-                    box p7zNewBox = box.new(left = array.get(poiAvailTime, p7zPoiI), top = array.get(poiZoneTop, p7zPoiI), right = p7zRightEdge, bottom = array.get(poiZoneBottom, p7zPoiI),
+                    // MARKET-SPACE ANCHOR -- and it must be the SOURCE, not
+                    // the availability. `availTime == confirmTime for every
+                    // production detector` (PoiRec), so anchoring there drew
+                    // every zone one or more bars to the RIGHT of the candles
+                    // that actually created it: WHEN it became tradable, not
+                    // WHERE it came from. `srcFirstTime` is the record's own
+                    // "first source candle event time" and is already the
+                    // identity P4 ownership compares spans with, so this is a
+                    // presentation fix that reads an existing semantic field
+                    // and changes no semantics.
+                    //
+                    // The box still extends right while the POI lives; only
+                    // its origin is pinned. Drawn in xloc.bar_time, so it
+                    // survives pan, zoom, timeframe change and reload, and no
+                    // bar_index appears anywhere in this renderer.
+                    box p7zNewBox = box.new(left = array.get(poiSrcFirst, p7zPoiI), top = array.get(poiZoneTop, p7zPoiI), right = p7zRightEdge, bottom = array.get(poiZoneBottom, p7zPoiI),
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
                       extend = extend.right, border_style = (ty2 == C_POI_SUPPORT_ZONE or ty2 == C_POI_RESISTANCE_ZONE) ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
                       text_valign = text.align_center, text_color = p7zTextColor, text_size = 16)
