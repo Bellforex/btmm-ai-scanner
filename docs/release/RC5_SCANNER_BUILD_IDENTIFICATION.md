@@ -53,3 +53,47 @@ to be added for the first time.
 
 Then set `dspMs` ON in VIEW and `dspTl` ON in CORE, per
 `RC5_SCANNER_DEPLOY_RUNBOOK.md` -- both default to false.
+
+---
+
+## ACTIVATED ON THE CHART -- 2026-09-24
+
+`BAH-RC5-LAB` (`/chart/fn3ash9L/`), `OANDA:XAUUSD`, H4, as `bellcare1994`.
+Verified **after a full page reload**, so this is persisted state, not a live
+handle:
+
+| study | pineVersion | dspMs | dspTl |
+| --- | --- | --- | --- |
+| `[RC5 USER]` CORE | **19.0** | true | true |
+| `[RC5 VIEW]` | **1.0** | **true** | false |
+
+**LATEST BUILD ACTIVE: TRUE.**
+
+### What the version-cache trap actually looked like
+
+The study already on the chart reported `pineVersion: "18.0"` even after v19 was
+saved to the script store -- the runtime proof that saving a script does not
+update a chart. `setInputValues({pineVersion:'19.0'})` was accepted without
+error and changed nothing; the value read back as 18.0. Only removing the study
+and adding it again picked up v19.
+
+### Settings were restored, not guessed
+
+The old study's 45 inputs were captured before removal and diffed against the
+freshly added one. Exactly three differed -- `dspMs`, `dspBtmm`, `dspTl`, all
+previously on and all defaulting off -- and those three were restored. Every
+other input (18 type toggles, `maxDrawPerFamily` 20, `p7zMaxVisibleZones` 8,
+`p7zProjectBars` 12) already matched.
+
+`dspMs` was also set on VIEW, where it is the gate that actually draws
+structure.
+
+### Observed rendering on XAUUSD H4
+
+POI zones draw (two BUY FVG), a `BOS` label draws from VIEW, one purple
+descending structural trendline, BTMM cycle diamonds. Zero console errors, no
+object duplication, chart responsive.
+
+`getAllShapes()` returned **0 before and after** -- the layout holds no manual
+drawings, so nothing hand-drawn existed to preserve. The purple line is CORE's
+own structural trendline, not a hand-drawn one.
