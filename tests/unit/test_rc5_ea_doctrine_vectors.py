@@ -27,11 +27,13 @@ from tools.rc5_ea_fixtures import (  # type: ignore[import-not-found]
     APPROVED_CLOSE_EVENTS,
     FIXTURE_FIELDS,
     NEVER_CLOSE_EVENTS,
-    UNRESOLVED_EVENTS,
+    STATE_MIGRATION_EVENTS,
     BrokerSpec,
     SetupFixture,
+    decide,
     fixture_line,
     plan_for,
+    signal_id,
 )
 
 _EA = Path(__file__).resolve().parents[2] / "mt5" / "Experts" / "RC5_EA.mq5"
@@ -285,11 +287,34 @@ def test_mitigation_and_false_invalidation_never_close_in_mql5() -> None:
         assert policy[event] == "RC5_TP_NO_ACTION", event
 
 
-def test_the_three_unresolved_states_are_recognized_and_inert_in_mql5() -> None:
+def test_the_three_state_migrations_are_recognized_and_never_close() -> None:
+    """Author-locked V1 policy: all three migrate the RECORD, not the trade."""
     policy = _policy_map()
-    for event in UNRESOLVED_EVENTS:
-        assert policy[event] == "RC5_TP_UNRESOLVED", event
-    assert "TERMINAL_POLICY_UNRESOLVED" in _ea_source()
+    for event in STATE_MIGRATION_EVENTS:
+        assert policy[event] == "RC5_TP_STATE_MIGRATION", event
+    src = _ea_source()
+    assert "_STATE_MIGRATION " in src
+    # the interim "pending doctrine" wording must be gone, so the log cannot
+    # claim the question is still open after the author closed it
+    assert "TERMINAL_POLICY_UNRESOLVED" not in src
+    assert "RC5_TP_UNRESOLVED" not in src
+
+
+def test_state_migration_is_a_distinct_policy_from_plain_no_action() -> None:
+    """MITIGATED and a promotion both decline to close, for different reasons,
+    and the log has to be able to tell them apart."""
+    policy = _policy_map()
+    assert policy["MITIGATED"] == "RC5_TP_NO_ACTION"
+    assert policy["PROMOTED_TO_ORDER_BLOCK"] == "RC5_TP_STATE_MIGRATION"
+
+
+def test_a_promoted_record_can_never_open_a_new_position() -> None:
+    """No new rule was needed: SUPERSEDED is not VALID."""
+    plan = plan_for(
+        EURUSD, _confirmed(validity=2), Decimal("1.14690"), Decimal("10000")
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "NOT_VALID"
 
 
 def test_the_mql5_trigger_is_liquidity_validated() -> None:
@@ -331,3 +356,193 @@ def test_no_martingale_vocabulary_in_executable_mql5() -> None:
     ).lower()
     for banned in ("martingale", "grid", "averagedown", "recoverymultiplier"):
         assert banned not in code, banned
+
+
+# ---------------------------------------------------------------------------
+# the duplicate and concurrency guards
+# ---------------------------------------------------------------------------
+
+
+def test_the_signal_id_matches_the_ea_format_field_for_field() -> None:
+    fixture = _confirmed()
+    assert signal_id(fixture) == "EURUSD|15|BASE_DROP~1788213600|31|-1|1788214500"
+    src = _ea_source()
+    assert 'StringFormat("%s|%d|%s|%d|%d|%I64d"' in src
+
+
+def test_two_pois_confirming_on_the_same_bar_are_different_signals() -> None:
+    """Why a bar timestamp alone is not the identity."""
+    a = _confirmed(poi_id="BASE_DROP~1788213600")
+    b = _confirmed(poi_id="EVENING_STAR~1788213600")
+    assert a.bar_time_epoch == b.bar_time_epoch
+    assert signal_id(a) != signal_id(b)
+
+
+def test_a_reconfirmation_on_a_later_bar_is_a_new_signal() -> None:
+    a = _confirmed()
+    b = _confirmed(bar_time_epoch=a.bar_time_epoch + 900)
+    assert signal_id(a) != signal_id(b)
+
+
+def test_a_consumed_signal_is_denied() -> None:
+    fixture = _confirmed()
+    plan = decide(
+        EURUSD,
+        fixture,
+        Decimal("1.14690"),
+        Decimal("10000"),
+        consumed_signal_ids={signal_id(fixture)},
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "SIGNAL_ALREADY_EXECUTED"
+
+
+def test_a_symbol_that_already_holds_a_position_is_denied() -> None:
+    plan = decide(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        symbols_with_open_position={"EURUSDm"},
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "SYMBOL_POSITION_ACTIVE"
+
+
+def test_concurrency_is_keyed_on_the_BROKER_symbol_not_the_logical_one() -> None:
+    """The fixture says EURUSD; the position is on EURUSDm. Same instrument."""
+    assert _confirmed().symbol == "EURUSD"
+    assert EURUSD.name == "EURUSDm"
+    blocked = decide(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        symbols_with_open_position={"EURUSDm"},
+    )
+    assert blocked.deny_reason == "SYMBOL_POSITION_ACTIVE"
+    # an unrelated symbol must not block it
+    allowed = decide(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        symbols_with_open_position={"XAUUSDm"},
+    )
+    assert allowed.eligible
+
+
+def test_guards_run_before_any_price_is_read() -> None:
+    """Order is part of the contract: a duplicate must not report a stop and a
+    volume it was never going to use, and the EA's own pipeline agrees."""
+    plan = decide(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        symbols_with_open_position={"EURUSDm"},
+    )
+    assert plan.stop is None and plan.volume is None
+
+    body = _ea_source().split("bool RC5ProcessSetup(", 1)[1][:900]
+    order = [
+        body.index("RC5PlanEligibility("),
+        body.index("RC5PlanGuards("),
+        body.index("RC5PlanPrices("),
+        body.index("RC5PlanRisk("),
+    ]
+    assert order == sorted(order)
+
+
+# ---------------------------------------------------------------------------
+# risk sizing across broker contracts
+# ---------------------------------------------------------------------------
+
+
+def _spec(**over: object) -> BrokerSpec:
+    base = dict(
+        name="TESTm",
+        digits=5,
+        point=Decimal("0.00001"),
+        tick_size=Decimal("0.00001"),
+        tick_value_loss=Decimal("0.1"),
+        volume_min=Decimal("0.01"),
+        volume_max=Decimal("200"),
+        volume_step=Decimal("0.01"),
+    )
+    base.update(over)
+    return BrokerSpec(**base)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("spec_over", "equity", "expected_volume"),
+    [
+        # 4 ticks x 0.1/lot = 0.4 per lot; 0.5% of 1,000 = 5.00 -> 12.5 -> 12.50
+        ({}, Decimal("1000"), Decimal("12.50")),
+        # a coarser volume step floors, never rounds up (12.5 is already on
+        # the 0.1 grid, so it survives intact)
+        ({"volume_step": Decimal("0.1")}, Decimal("1000"), Decimal("12.5")),
+        # double the tick value halves the size
+        ({"tick_value_loss": Decimal("0.2")}, Decimal("1000"), Decimal("6.25")),
+        # A coarser tick re-quantizes the STOP as well, so R itself changes:
+        # 1.14693 + one 2-point tick snaps to 1.14696, making R 3 coarse ticks
+        # rather than 4 fine ones. 5.00 / (3 x 0.1) = 16.66.
+        (
+            {"tick_size": Decimal("0.00002"), "point": Decimal("0.00002")},
+            Decimal("1000"),
+            Decimal("16.66"),
+        ),
+        # the broker's ceiling binds
+        ({"volume_max": Decimal("5")}, Decimal("1000"), Decimal("5")),
+    ],
+)
+def test_volume_tracks_the_broker_contract(
+    spec_over: dict, equity: Decimal, expected_volume: Decimal
+) -> None:
+    plan = plan_for(_spec(**spec_over), _confirmed(), Decimal("1.14690"), equity)
+    assert plan.eligible
+    assert plan.volume == expected_volume
+
+
+def test_realized_risk_never_exceeds_the_budget_on_any_contract() -> None:
+    for step in (Decimal("0.01"), Decimal("0.1"), Decimal("1")):
+        for equity in (Decimal("500"), Decimal("1000"), Decimal("25000")):
+            plan = plan_for(
+                _spec(volume_step=step), _confirmed(), Decimal("1.14690"), equity
+            )
+            if not plan.eligible:
+                assert plan.deny_reason in {"RISK_BUDGET_EXCEEDED", "VOLUME_INVALID"}
+                continue
+            assert plan.realized_risk is not None and plan.risk_money is not None
+            assert plan.realized_risk <= plan.risk_money, (step, equity)
+
+
+def test_a_volume_max_below_volume_min_has_no_legal_size() -> None:
+    plan = plan_for(
+        _spec(volume_min=Decimal("1"), volume_max=Decimal("0.5")),
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("1000"),
+    )
+    assert not plan.eligible
+    assert plan.deny_reason in {"RISK_BUDGET_EXCEEDED", "VOLUME_INVALID"}
+
+
+def test_a_wider_stop_takes_a_smaller_size_for_the_same_budget() -> None:
+    near = plan_for(EURUSD, _confirmed(), Decimal("1.14690"), Decimal("10000"))
+    far = plan_for(EURUSD, _confirmed(), Decimal("1.14650"), Decimal("10000"))
+    assert near.r is not None and far.r is not None
+    assert far.r > near.r
+    assert near.volume is not None and far.volume is not None
+    assert far.volume < near.volume
+
+
+def test_zero_tick_value_is_an_unusable_contract_not_a_free_trade() -> None:
+    plan = plan_for(
+        _spec(tick_value_loss=Decimal("0")),
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("1000"),
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "RISK_MODEL_INVALID"

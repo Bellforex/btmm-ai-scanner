@@ -398,14 +398,17 @@ void LogSpec(const RC5SymbolSpec &s)
 #define RC5_TE_FALSE_INVALIDATION_CONFIRMED   2  // stays VALID -- NEVER closes
 #define RC5_TE_GENUINE_INVALIDATION_CONFIRMED 3  // CLOSES
 #define RC5_TE_INVALIDATED                    4  // CLOSES
-#define RC5_TE_RECLAIM_WITHOUT_DISPLACEMENT   5  // UNRESOLVED -- no action
-#define RC5_TE_RECLAIM_FAILED                 6  // UNRESOLVED -- no action
-#define RC5_TE_PROMOTED_TO_ORDER_BLOCK        7  // UNRESOLVED -- no action
+#define RC5_TE_RECLAIM_WITHOUT_DISPLACEMENT   5  // state migration -- NO CLOSE
+#define RC5_TE_RECLAIM_FAILED                 6  // state migration -- NO CLOSE
+#define RC5_TE_PROMOTED_TO_ORDER_BLOCK        7  // state migration -- NO CLOSE
 
 //--- What RC5TerminalPolicy returns.
-#define RC5_TP_NO_ACTION   0
-#define RC5_TP_CLOSE       1
-#define RC5_TP_UNRESOLVED  2
+#define RC5_TP_NO_ACTION        0
+#define RC5_TP_CLOSE            1
+//--- RESOLVED as no-close, and logged distinctly because the POI's RECORD
+//--- changed even though the position's management did not. It replaced an
+//--- earlier pending-doctrine policy once the author ruled on all three.
+#define RC5_TP_STATE_MIGRATION  2
 
 //+------------------------------------------------------------------+
 //| One intended trade, fully computed. A plan is produced whether   |
@@ -788,10 +791,29 @@ bool RC5PlanGuards(const RC5SymbolSpec &spec, RC5Plan &p)
 //| the appearance of a new authoritative POI. None of them is an    |
 //| invalidation of THIS setup.                                      |
 //|                                                                  |
-//| The three reclaim/promotion states are UNRESOLVED. V1 recognizes |
-//| and logs them and does nothing else. That is a conservative      |
-//| no-action pending policy, NOT a semantic claim that they are     |
-//| harmless.                                                        |
+//|  RECLAIM_WITHOUT_DISPLACEMENT  NO CLOSE. A PoiLifecycleStatus,   |
+//|  RECLAIM_FAILED                 not a PoiTerminalReason: neither  |
+//|                                 sets `terminal`, the walk         |
+//|                                 continues past both, and the POI  |
+//|                                 stays VALID. Closing would        |
+//|                                 contradict the analytical layer.  |
+//|                                                                  |
+//|  PROMOTED_TO_ORDER_BLOCK        NO CLOSE on an OPEN position.     |
+//|                                 It IS terminal, but rc5_validity  |
+//|                                 maps it to SUPERSEDED and states  |
+//|                                 it is NOT a failure -- the RC3    |
+//|                                 rule ends an engulfing record     |
+//|                                 when its ORDER BLOCK record       |
+//|                                 becomes available, so the         |
+//|                                 formation lives on under a new    |
+//|                                 record. NEW entries are already   |
+//|                                 blocked, with no extra rule,      |
+//|                                 because SUPERSEDED is not VALID.  |
+//|                                 Promotion also never opens a      |
+//|                                 second trade.                    |
+//|                                                                  |
+//| All three log <EVENT>_STATE_MIGRATION. Author-locked V1 policy,   |
+//| decided from what the frozen engine does, not assumed.            |
 //+------------------------------------------------------------------+
 int RC5TerminalPolicy(const int ev)
   {
@@ -804,7 +826,7 @@ int RC5TerminalPolicy(const int ev)
       case RC5_TE_RECLAIM_WITHOUT_DISPLACEMENT:
       case RC5_TE_RECLAIM_FAILED:
       case RC5_TE_PROMOTED_TO_ORDER_BLOCK:
-         return RC5_TP_UNRESOLVED;
+         return RC5_TP_STATE_MIGRATION;
 
       case RC5_TE_MITIGATED:
       case RC5_TE_FALSE_INVALIDATION_CONFIRMED:
@@ -988,11 +1010,18 @@ void RC5OnTerminalEvent(const RC5SymbolSpec &spec, const int ev, const string po
    int policy = RC5TerminalPolicy(ev);
    string name = RC5TerminalName(ev);
 
-   if(policy == RC5_TP_UNRESOLVED)
+   if(policy == RC5_TP_STATE_MIGRATION)
      {
-      PrintFormat("RC5TERM %s poi=%s event=%s TERMINAL_POLICY_UNRESOLVED "
-                  "(recognized, logged, NO ACTION -- pending doctrine)",
-                  spec.name, poiId, name);
+      // V1 DECISION, author-locked. The record moved; the trade did not.
+      // A promoted engulfing continues to exist as its ORDER BLOCK record and
+      // a reclaim state leaves the POI VALID, so none of the three is a
+      // failure of the setup this position was opened on. Management stays
+      // with the existing SL, the existing TP, and the two approved
+      // invalidation exits.
+      PrintFormat("RC5TERM %s poi=%s event=%s %s_STATE_MIGRATION "
+                  "(NO CLOSE; management continues on SL/TP + the two "
+                  "approved invalidation exits)",
+                  spec.name, poiId, name, name);
       return;
      }
    if(policy != RC5_TP_CLOSE)

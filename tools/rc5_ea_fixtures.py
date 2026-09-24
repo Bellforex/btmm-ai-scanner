@@ -34,12 +34,15 @@ __all__ = [
     "APPROVED_CLOSE_EVENTS",
     "FIXTURE_FIELDS",
     "NEVER_CLOSE_EVENTS",
-    "UNRESOLVED_EVENTS",
+    "STATE_MIGRATION_EVENTS",
     "BrokerSpec",
     "SetupFixture",
     "TradePlan",
+    "decide",
     "fixture_line",
+    "guard_deny",
     "plan_for",
+    "signal_id",
 ]
 
 #: The EA's fixture line, in the exact order `ParseFixtureLine` reads it.
@@ -71,9 +74,19 @@ NEVER_CLOSE_EVENTS = frozenset(
     {"MITIGATED", "FALSE_INVALIDATION_CONFIRMED"}
 )
 
-#: Recognized, logged, and deliberately NOT acted on. This is a conservative
-#: no-action pending policy, not a semantic claim that they are harmless.
-UNRESOLVED_EVENTS = frozenset(
+#: RESOLVED as no-close by author decision, and logged distinctly because the
+#: POI's RECORD changed even though the position's management did not.
+#:
+#: The two reclaim states are `PoiLifecycleStatus` members: neither sets
+#: `terminal`, the breach walk continues past both, and the POI stays VALID, so
+#: closing on them would contradict the analytical layer.
+#:
+#: `PROMOTED_TO_ORDER_BLOCK` IS terminal, but `rc5_validity` maps it to
+#: SUPERSEDED and says outright it is not a failure: the RC3 rule ends an
+#: engulfing record once its ORDER BLOCK record exists, so the formation lives
+#: on under a new record. NEW entries need no extra rule -- SUPERSEDED is not
+#: VALID, so the existing eligibility gate already refuses them.
+STATE_MIGRATION_EVENTS = frozenset(
     {
         "RECLAIM_WITHOUT_DISPLACEMENT",
         "RECLAIM_FAILED",
@@ -256,6 +269,20 @@ def plan_for(
         )
 
     volume = min(floored, spec.volume_max)
+    if volume < spec.volume_min:
+        # A broker ceiling BELOW its own floor leaves no legal size. Found by
+        # the vector suite: without this the model returned a volume under the
+        # minimum while the EA's NormalizeVolume correctly returns 0.0, so the
+        # mirror and the EA disagreed.
+        return TradePlan(
+            eligible=False,
+            deny_reason="VOLUME_INVALID",
+            distal=distal,
+            stop=stop,
+            take=take,
+            r=r,
+            risk_money=risk_money,
+        )
     return TradePlan(
         eligible=True,
         distal=distal,
@@ -266,3 +293,73 @@ def plan_for(
         risk_money=risk_money,
         realized_risk=volume * loss_per_lot,
     )
+
+
+def signal_id(fixture: SetupFixture) -> str:
+    """Mirror of the EA's `RC5SignalId`, field for field.
+
+    A bar timestamp alone is not enough: several POIs can confirm on the same
+    bar, so the POI's own identity is part of the key. The confirmation
+    instance makes a later re-confirmation of the same POI a DIFFERENT signal,
+    which is what "at most once per semantic setup" means.
+    """
+    return "|".join(
+        (
+            fixture.symbol,
+            str(fixture.timeframe_minutes),
+            fixture.poi_id,
+            str(fixture.poi_type),
+            str(fixture.direction),
+            str(fixture.bar_time_epoch),
+        )
+    )
+
+
+def guard_deny(
+    fixture: SetupFixture,
+    consumed_signal_ids: frozenset[str] | set[str],
+    symbols_with_open_position: frozenset[str] | set[str],
+    broker_symbol: str | None = None,
+) -> str:
+    """The duplicate and concurrency guards, in the EA's own order.
+
+    Returns the deny reason, or "" when both guards pass. `broker_symbol` is
+    the RESOLVED name (XAUUSDm), because concurrency is per broker symbol while
+    the signal id is keyed on the LOGICAL one.
+    """
+    if signal_id(fixture) in consumed_signal_ids:
+        return "SIGNAL_ALREADY_EXECUTED"
+    name = broker_symbol if broker_symbol is not None else fixture.symbol
+    if name in symbols_with_open_position:
+        return "SYMBOL_POSITION_ACTIVE"
+    return ""
+
+
+def decide(
+    spec: BrokerSpec,
+    fixture: SetupFixture,
+    entry: Decimal,
+    equity: Decimal,
+    consumed_signal_ids: frozenset[str] | set[str] = frozenset(),
+    symbols_with_open_position: frozenset[str] | set[str] = frozenset(),
+    risk_percent: Decimal = Decimal("0.5"),
+    reward_risk: Decimal = Decimal("2.0"),
+) -> TradePlan:
+    """The whole pipeline, in the EA's order: eligibility, guards, prices, risk.
+
+    The ORDER is part of the contract. Guards run before any price is read, so
+    a duplicate signal never reports a stop or a volume it was never going to
+    use, and the deny reason a log shows is the FIRST one that applied.
+    """
+    deny = _eligibility(fixture)
+    if deny:
+        return TradePlan(eligible=False, deny_reason=deny)
+    deny = guard_deny(
+        fixture,
+        consumed_signal_ids,
+        symbols_with_open_position,
+        spec.name,
+    )
+    if deny:
+        return TradePlan(eligible=False, deny_reason=deny)
+    return plan_for(spec, fixture, entry, equity, risk_percent, reward_risk)

@@ -71,3 +71,26 @@ can be diffed against Python rather than judged on its own output.
 Entry prices are deliberately absent from the expectation: the entry is the
 first tradable price AFTER confirmation, which exists only at runtime. The
 Python side marks it `ENTRY_PRICE_PENDING_TESTER` instead of inventing one.
+
+## Generate the fixture file BEFORE any tester run
+
+```bash
+PYTHONPATH=. .venv/Scripts/python.exe -m tests.parity_support.rc5_ea_layer_a \
+  --ohlc artifacts/rc4_aligned_v2/_normalized/m15.csv \
+  --timeframe M15 --minutes 15 --symbol XAUUSD --tick 0.01 \
+  --out "<terminal>/MQL5/Files/RC5_fixtures_XAUUSD.csv"
+```
+
+It prints `bars / rows / confirmed / actionable / arguable`.
+
+**If `confirmed` is 0, the run cannot demonstrate an execution.** Measured on
+the author's 300-bar M15 EURUSD capture, single-timeframe, NO POI reaches
+`LIQUIDITY_VALIDATED` — the ladder tops out at `POI_VALIDATED` because
+`TREND_VALIDATED` needs a trend alignment a single timeframe with no
+higher-timeframe context does not produce. M45 and H3 never leave `DETECTED`.
+
+So a tester run against such a file will place zero trades, and that is
+CORRECT behaviour rather than an EA failure. Use a multi-timeframe capture and
+confirm `confirmed > 0` before reading anything into a tester result.
+
+Full procedure: `docs/release/RC5_RUNTIME_PROCEDURES.md`.
