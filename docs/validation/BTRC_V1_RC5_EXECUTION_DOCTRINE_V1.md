@@ -643,3 +643,39 @@ changing it changes results, so it is not changed here.
 Pinned as tests in `tests/unit/test_rc5_ea_doctrine_vectors.py`, which assert
 what V1 DOES rather than what it should do, so the behaviour cannot drift while
 the decision is open.
+
+
+---
+
+## THE GOLDEN EA EXECUTION FIXTURES
+
+Two real `LIQUIDITY_VALIDATED` setups, frozen in
+`tests/unit/test_rc5_golden_execution_fixture.py`.
+
+| | GOLDEN 1 | GOLDEN 2 |
+| --- | --- | --- |
+| bar | 2026-08-30 22:45 UTC (1788129900) | 2026-09-08 14:45 UTC (1788878700) |
+| POI | `HAMMER` BULLISH | `MORNING_STAR` BULLISH |
+| zone | 4450.54 – 4467.06 | 4391.07 – 4399.54 |
+| host close | 4461.29 — **inside** | 4398.65 — **inside** |
+| btmm / alignment / regime | true / ALIGNED / TREND | true / ALIGNED / TREND |
+| momentum | BULLISH 69 | STRONG_BULLISH 72 |
+| liquidity | 70 | 70 |
+| permission | `BUY_BIAS` | `BUY_BIAS` |
+| **distal** | **4450.54** | **4391.07** |
+| **stop** | **4450.53** | **4391.06** |
+| R / TP / volume / margin / gates | `ENTRY_PRICE_PENDING_TESTER` | `ENTRY_PRICE_PENDING_TESTER` |
+
+Both are momentum-ALIGNED, which is why they cleared the rung every earlier
+`REGIME_VALIDATED` candidate failed — those were all counter-momentum.
+
+**The bar close is NOT used as a proxy entry.** It is a hindsight price the
+execution layer could never have traded at, and substituting it would convert a
+pending value into a fabricated one. Only the entry-INDEPENDENT geometry
+(distal, stop) is pinned exactly.
+
+### Why the first trigger found was rejected
+
+It was a `HAMMER` at 308.75-312.85 while price was near 4,400 — the stale-POI
+case above. Reachability was proven by it; usability was not. The two frozen
+here are the first in each window where price is inside the zone.

@@ -19,7 +19,7 @@ Checkpoint: branch `rc5-poi-authority`. Python semantic freeze `28d432e`.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,717 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,745 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
@@ -88,7 +88,7 @@ correctly even while the page reports itself hidden.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 6.1 | deterministic vectors | **PASS** | 64 passed |
+| 6.1 | deterministic vectors | **PASS** | 64 passed, plus 13 golden-fixture tests |
 | 6.2 | eligibility gates, each with its own reason | **PASS** | parametrized |
 | 6.3 | BUY / SELL distal and stop | **PASS** | |
 | 6.4 | 2R target both directions | **PASS** | |
@@ -147,57 +147,73 @@ correctly even while the page reports itself hidden.
 
 ---
 
-## 11. THE V1 TRIGGER IS REACHABLE — OBSERVED
+## 11. THE V1 TRIGGER IS REACHABLE — OBSERVED, AND NOT RARE
 
-**Status: PASS.** A targeted walk over the proven favourable-regime window
-produced a real `LIQUIDITY_VALIDATED` setup. The conjunction occurs.
+**Status: PASS.** Both proven favourable-regime windows produce real
+`LIQUIDITY_VALIDATED` setups, in quantity.
 
-### The walk
+### The complete walks
 
-60 host bars from 2026-08-28 15:00, full W1+D1+H4+H1+M5 context, one regime
-segment throughout (**TREND**, 24 bars of data spanning to 2026-08-30 22:00).
+60 host bars each, full W1+D1+H4+H1+M5 context, one **TREND** segment across all
+60 bars in both windows.
 
-| | |
-| --- | --- |
-| candidates evaluated | 6,735 |
-| `btmm_valid` | **41** |
-| favourable regime | 6,735 (all) |
-| `momentum_score >= 60` | 4,053 |
-| `liquidity_score >= 60` | 26 |
-| reached `REGIME_VALIDATED` | 40 |
-| reached **`LIQUIDITY_VALIDATED`** | **1** |
+| | 2026-08-28 | 2026-09-08 |
+| --- | --- | --- |
+| candidates evaluated | 17,689 | 17,903 |
+| `btmm_valid` | 3,212 (18%) | 2,996 (17%) |
+| favourable regime | 17,689 (all) | 17,903 (all) |
+| `momentum_score >= 60` | 8,957 | 5,492 |
+| `liquidity_score >= 60` | 6,054 | 5,449 |
+| stop at `STRUCTURALLY_VALIDATED` | 14,477 | 14,907 |
+| `POI_VALIDATED` | 221 | 612 |
+| `REGIME_VALIDATED` | 2,103 | 2,271 |
+| `MOMENTUM_VALIDATED` | 0 | 1 |
+| **`LIQUIDITY_VALIDATED`** | **888** | **112** |
+| of those, price INSIDE the zone | 3 | 5 |
 
-`btmm_valid` remains the dominant filter: 41 of 6,735, about 0.6%. Of the 40
-that reach rung 5, one clears momentum AND liquidity together.
+### CORRECTION to the figures reported earlier
 
-### The setup that triggered
+An earlier pass reported 6,735 candidates, 41 `btmm_valid` and 1 trigger for
+2026-08-28, and concluded that `btmm_valid` was "the dominant filter at 0.6%".
+**Both numbers were artefacts of a truncated walk** that stopped at the first
+trigger, 24 bars in and mid-bar. The complete walk gives 17,689 candidates and
+3,212 `btmm_valid` — **18%, not 0.6%**.
 
-| field | value |
-| --- | --- |
-| bar | **2026-08-30 22:00 UTC** (epoch 1788127200) |
-| POI | `HAMMER`, BULLISH |
-| zone | 308.75 – 312.85 |
-| authority / validity | authoritative / VALID |
-| btmm / alignment / regime | true / ALIGNED / TREND |
-| momentum | BULLISH, score 66 |
-| liquidity | score 70 |
-| permission / lifecycle | `BUY_BIAS` / `LIQUIDITY_VALIDATED` |
+The same artefact explains the earlier 15-bar probes, which showed 99.6%
+stalling at `STRUCTURALLY_VALIDATED`. Over 60 bars it is 82%. **Short walks
+over-report early-rung stalling**, because the POI registry is still warming up
+and most candidates have not yet qualified. Any future reachability figure
+should come from a walk long enough to leave warm-up behind.
 
-### It is NOT usable as the golden execution fixture
+### The golden execution fixtures
 
-The host bar closed near **4,400**; the zone is at **308–312**. A zone that low
-exists in no series but **W1**, which carries 2,000 bars — about 38 years — so
-this is a POI formed when gold traded near $310, never breached, and still
-registered.
+The FIRST trigger the walk produced was unusable — a `HAMMER` at 308.75-312.85
+while price was near 4,400 (see §13). The two frozen as golden are the first in
+each window where **price is inside the zone**:
 
-Executing it would be a buy at 4,400 with a stop at 308.74 and a take profit at
-12,582.52. **V1 accepts it**, and so do both new gates. See §13.
+| | GOLDEN 1 | GOLDEN 2 |
+| --- | --- | --- |
+| bar | 2026-08-30 22:45 UTC | 2026-09-08 14:45 UTC |
+| epoch | 1788129900 | 1788878700 |
+| POI | `HAMMER` BULLISH | `MORNING_STAR` BULLISH |
+| zone | 4450.54 – 4467.06 | 4391.07 – 4399.54 |
+| host close | 4461.29 (inside) | 4398.65 (inside) |
+| authority / validity | authoritative / VALID | authoritative / VALID |
+| btmm / alignment / regime | true / ALIGNED / TREND | true / ALIGNED / TREND |
+| momentum | BULLISH, 69 | STRONG_BULLISH, 72 |
+| liquidity | 70 | 70 |
+| permission / lifecycle | `BUY_BIAS` / `LIQUIDITY_VALIDATED` | same |
+| **distal / stop** | **4450.54 / 4450.53** | **4391.07 / 4391.06** |
 
-So: reachability is PROVEN and this candidate is REJECTED as the golden
-fixture. A second walk collecting every trigger in the window is running, to
-find a contemporaneous one.
+Both are momentum-ALIGNED, which is exactly why they cleared the rung every
+earlier `REGIME_VALIDATED` candidate failed — those were all counter-momentum.
 
----
+Frozen in `tests/unit/test_rc5_golden_execution_fixture.py`. Layer-A fields and
+the entry-independent geometry are exact; R, take profit, volume, margin and
+both quality gates are `ENTRY_PRICE_PENDING_TESTER`, because they need the
+first tradable price AFTER confirmation. **The bar close is deliberately not
+used as a proxy entry** — it is a hindsight price the layer could never have
+traded at.
 
 ## 12. SAFETY FINDING 1 — ZERO-HEIGHT ZONES (micro-R) — NOW GATED
 
