@@ -1074,3 +1074,49 @@ UNDETERMINED.
 That is a far cheaper port than the earlier "Pine has no timeline" reading
 suggested, which matters against 1,921 hard headroom. Not implemented here:
 P2+P3 remain gated behind runtime acceptance.
+
+## The bootstrap parity fixture cannot be built from any existing capture
+
+Checked offline while the UI gate was failing, because the answer changes the
+P2 test plan regardless of when runtime unblocks.
+
+The only case that distinguishes a FAITHFUL bootstrap port from one that simply
+returns `UNDETERMINED` until the first transition is a Base whose first candle
+falls in the **bootstrap-only window**: `[bootstrap availability, first
+transition availability)`. Everywhere else the two implementations agree.
+
+All three captures do have a distinct bootstrap window. None contains a Base in
+it:
+
+| capture | bootstrap | first transition | window | Bases before bootstrap | **Bases IN WINDOW** |
+| --- | --- | --- | --- | --- | --- |
+| M15 EURUSD | 2026-09-18 18:30 BULLISH | 2026-09-18 19:15 | 45 min | 3 | **0** |
+| M45 XAUUSD | 2026-08-27 21:15 BULLISH | 2026-08-28 00:15 | 3 h | 1 | **0** |
+| H3 XAUUSD | 2026-08-05 04:00 BULLISH | 2026-08-05 07:00 | 3 h | 2 | **0** |
+
+The windows are short and early, and every Base that exists nearby starts
+*before* the bootstrap — where Python itself answers `UNDETERMINED`, so those
+Bases discriminate nothing either.
+
+### Why this matters
+
+A Pine port that skipped the bootstrap entirely would pass **every** real-data
+parity check available today. The divergence would be real, silent, and
+invisible to the evidence we have. That is precisely the failure mode the "port
+the bootstrap faithfully" decision exists to prevent, and the current fixture
+set cannot detect it.
+
+### What the parity test therefore requires
+
+One of:
+
+1. a **constructed synthetic series** that produces a bootstrap, then a Base
+   inside the window, with no transition in between — Python computes the
+   reference family, Pine must match it; or
+2. a **new real capture** chosen so a Base lands in that window.
+
+Option 1 is deterministic and cheap to re-run, so it is the better fixture;
+option 2 would be corroboration, not a substitute.
+
+Neither is built here: P2+P3 remain gated behind VIEW runtime acceptance, and
+building the fixture early would not change that gate.
