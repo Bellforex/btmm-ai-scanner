@@ -333,6 +333,14 @@ The reason one long window could not have shown this is worth keeping: **regime
 cannot vary inside a short host window**, because it is governed by the primary
 higher timeframe (D1 first), which barely moves across a couple of days.
 
-The ceiling is therefore **rung 5 → 6**, `momentum_score >= 60`, and whether
-that is ever satisfied on a `REGIME_VALIDATED` POI is the single blocking
-unknown for the entire execution track. See `RC5_RELEASE_CHECKLIST.md` §11.
+Measuring the component scores at those favourable windows then showed that
+**no single rung is the blocker**. `momentum_score >= 60` is satisfied by 61%
+and 29% of evaluations, so that gate is ordinary. The mass is eliminated much
+earlier, at `btmm_valid` — about 99.6% stop at `STRUCTURALLY_VALIDATED` — and
+the handful that do reach `REGIME_VALIDATED` are counter-momentum, with BEARISH
+momentum against BULLISH POIs. `liquidity_score >= 60` is the scarcest
+ingredient at 0.2–0.7%.
+
+The trigger needs all four on the same POI at the same instant. Each exists in
+this data; the conjunction was not observed in the 30 host bars sampled, which
+is a keyhole rather than a verdict. See `RC5_RELEASE_CHECKLIST.md` §11.

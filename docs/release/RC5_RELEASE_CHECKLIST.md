@@ -228,18 +228,47 @@ it reported `n=0` for my own reason and not the engine's. Those two rungs sit
 ABOVE the regime gate and are never reached here, so no claim is made about
 them either way.
 
+### MEASURED at the two favourable windows — no single rung is the blocker
+
+Sampling the component scores where regime is TREND:
+
+| window | evaluations | stop at rung 2 | reach rung 5 | `momentum_score >= 60` | `liquidity_score >= 60` |
+| --- | --- | --- | --- | --- | --- |
+| 2026-08-28 | 4,378 | **4,359** | 19 | 2,653 (61%) | **10 (0.2%)** |
+| 2026-09-08 | 4,447 | 4,410 | 9 | 1,308 (29%) | **30 (0.7%)** |
+
+Three things this settles, none of which was guessable from the ladder alone:
+
+1. **`momentum_score >= 60` is NOT unreachable.** It is satisfied by 61% and
+   29% of evaluations. The gate is ordinary; an earlier reading of mine implied
+   it might be the ceiling, and that was wrong.
+2. **The mass is eliminated at rung 2, `btmm_valid`.** 4,359 of 4,378 stop at
+   `STRUCTURALLY_VALIDATED` — about 99.6% — long before regime or momentum are
+   ever consulted.
+3. **Every POI observed at `REGIME_VALIDATED` was counter-momentum.** Scores of
+   17, 0 and 38, and the reason is visible in the same rows:
+   `momentum_direction` is BEARISH or STRONG_BEARISH while `poi_direction` is
+   BULLISH. The few candidates that clear BTMM in these windows are the ones
+   momentum opposes.
+
+`liquidity_score >= 60` is the scarcest ingredient of all, at 0.2% and 0.7%.
+
+### What this does and does not establish
+
+The V1 trigger needs `btmm_valid` AND a favourable regime AND aligned momentum
+AND liquidity, **all on the same POI at the same instant**. Each ingredient
+exists in this data; the conjunction was not observed.
+
+That is **not** a claim that the trigger is unreachable. Only 30 host bars
+across two favourable windows were sampled, which is a keyhole. It IS a claim
+that the conjunction is rare, that no single rung is responsible, and that the
+selectivity is concentrated at `btmm_valid` rather than anywhere downstream.
+
 ### What would settle it
 
-The data question is **answered**: this capture DOES contain favourable-regime
-windows, and two are identified above by timestamp. The remaining question is
-narrower and is now the single blocking unknown for the whole execution track:
-
-> Is `momentum_score >= 60` ever satisfied on a POI that has already reached
-> `REGIME_VALIDATED`?
-
-If yes, the trigger is reachable and a fixture file can be built from those
-windows. If no, the ladder has a rung nothing in this data clears, and that is
-a finding about the engine's calibration rather than about the data.
+A longer walk over one of the two identified favourable windows — hours of host
+bars rather than fifteen — measuring how often all four ingredients coincide.
+That is a compute question now, not a data question and not a code question.
 
 ---
 
