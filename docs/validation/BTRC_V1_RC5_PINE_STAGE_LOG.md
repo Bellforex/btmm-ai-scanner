@@ -1282,3 +1282,44 @@ terminal events" — none of which exist in MQL5. Building it means a THIRD full
 implementation of the engine beside Python and Pine, against a Pine port whose
 parity is still unproven. That is a large, genuinely risky piece of work and it
 should start from a decision, not from a gap in the schedule.
+
+## Capacity recovery — candidate 1 measured: 73 tokens
+
+| candidate | CORE before | CORE after | saved | semantic effect | verdict |
+| --- | --- | --- | --- | --- | --- |
+| P2/P3 parity log, verbose -> compact | 99,377 | **99,304** | **73** | none; observability INCREASED | **accepted** |
+
+The old sink counted standard families in a loop and emitted three labelled
+fields. The new one drops the counter and the literals and emits
+`bootDir,time:family,...` — one entry per Base. That is strictly MORE parity
+evidence than before (per-Base family, not just a count), for fewer tokens, and
+it still reads the family VALUES so the compiler cannot eliminate the chain.
+
+Measured at N=20: `C = 101,244`, `C - 1,940 = 99,304`. **Single point**, not the
+three-point protocol — the pad arithmetic was validated to three points earlier
+in this campaign and again by the N=50 control, so a survey point is
+trustworthy; the build that is finally ACCEPTED for P4 still gets three.
+
+### Where this leaves P4
+
+| | |
+| --- | --- |
+| CORE now | 99,304 |
+| hard headroom | **952** |
+| P4 measured cost | 1,007 |
+| **still short by** | **~55** |
+
+Candidate 1 alone does not land P4. Candidates 2-4 from the priority list
+(dead locals, duplicate predicates, stale RC4 branches) are untouched and are
+the next measurements; ~55 tokens from that list is a plausible target, but it
+is not yet evidence.
+
+## MT5 — one step environment-blocked, the rest is not
+
+`RC5_SpecCapture` is installed and compiled (0 errors, 0 warnings, `.ex5`
+present on disk). Executing it needs either Windows UI automation or a terminal
+relaunch with a startup config; the sandbox denies the process launch and this
+session has no Windows UI tooling. That ONE step is **ENVIRONMENT BLOCKED**.
+
+It is not an EA blocker: the EA reads the same `SymbolInfo` values at runtime,
+so the CSV is validation evidence rather than a dependency.

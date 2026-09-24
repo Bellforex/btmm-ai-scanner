@@ -6801,11 +6801,10 @@ if barstate.isconfirmed
 // plots), emitted once on the last bar. It is not chart text and not a user
 // input.
 if barstate.islast
-    int rc5Std = 0
-    for [_fk, fv] in rc5BaseFam
-        if fv == C_RC5_FAM_RBR or fv == C_RC5_FAM_DBD
-            rc5Std := rc5Std + 1
-    log.info("RC5_P3 bootDir=" + str.tostring(rc5BootDir) + " bases=" + str.tostring(map.size(rc5BaseFam)) + " standard=" + str.tostring(rc5Std))
+    string rc5L = str.tostring(rc5BootDir)
+    for [fk, fv] in rc5BaseFam
+        rc5L := rc5L + "," + str.tostring(fk) + ":" + str.tostring(fv)
+    log.info(rc5L)
 
 // RC5 PANEL: the BTMM cycle marker is a chart visual and belongs to CORE.
 
