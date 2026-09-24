@@ -19,7 +19,7 @@ Checkpoint: branch `rc5-poi-authority`. Python semantic freeze `28d432e`.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,688 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,717 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
