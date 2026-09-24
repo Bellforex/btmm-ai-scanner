@@ -47,11 +47,28 @@ analysis. That separation is why one can be audited without the other.
 
 ## 4. The EA, and its licence (2 min)
 
+> **REHEARSAL FINDING — READ BEFORE THE TALK.** `LICENSE_VALID` requires a
+> reachable licence endpoint, and **none is deployed**. On a live chart today
+> the attach log will read `LICENSE_SERVER_UNREACHABLE | newEntries=BLOCKED`,
+> and the EA will refuse to open anything. Do not discover this on stage.
+>
+> Two honest options:
+> * **if the endpoint is live by then** — demo it for real, and show a revoke
+>   taking effect;
+> * **if it is not** — show the captured tester log instead and say plainly
+>   that the licence server goes live before the first customer is billed.
+>
+> Either way, do not attach a licensed EA to a live chart expecting
+> `LICENSE_VALID` unless you have seen it succeed that morning.
+
 Show the Experts log on attach:
 
 ```
 RC5LIC RC5-ABCDE-***-PQRST LICENSE_VALID | newEntries=ALLOWED
 ```
+
+The real line also carries `| product=RC5-EA v1.00`, and in the tester
+`| tester=1`.
 
 **Say three things:**
 - the key is masked in every log — it is never printed in full;
@@ -104,8 +121,22 @@ does not describe execution *quality*; this gate does.
 
 ## 7. Risk sizing, against reality (1 min)
 
-**Say:** predicted aggregate risk across the two trades was **92.30**. The
-realized loss was **92.30**.
+**Say:** predicted risk at the volumes actually traded was **91.85**. The
+account lost **92.30**. The gap is **0.46**, and it is entirely stop slippage:
+
+| | stop placed | stop filled | slipped |
+| --- | --- | --- | --- |
+| trade 1 | 4450.539 | 4450.459 | 0.080 |
+| trade 2 | 4391.069 | 4391.046 | 0.023 |
+
+0.080 x 100 x 0.04 + 0.023 x 100 x 0.06 = **0.46**, which closes 91.85 to
+92.31 against an actual 92.30 — a one-cent residual from the journal printing
+risk to two decimals. Every cent is accounted for.
+
+**Do not say "predicted equals realized".** It does not, and someone will check.
+What is true is better: the model was within half a percent, and the residual is
+real-tick slippage rather than an error in the model. A backtest that matched to
+the cent would mean the ticks were not real.
 
 Then immediately: **both trades lost, and that is not a result.** Two trades is
 not a sample, they are test fixtures, and nothing was tuned. What it verifies is

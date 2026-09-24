@@ -1,0 +1,26 @@
+# RC5 Strategy Tester journal — the evidence behind the demo numbers.
+# XAUUSDm M15, real Exness ticks, every-tick model, 10000 USD, 1:500.
+# Extracted lines only: the account number and terminal identifiers are
+# deliberately not carried into the repository.
+
+RC5LIC RC5-**** state LICENSE_INVALID -> LICENSE_TESTER_BYPASS | newEntries=ALLOWED | openPositionsUnaffected=TRUE
+RC5LIC RC5-**** LICENSE_TESTER_BYPASS | newEntries=ALLOWED | product=RC5-EA v1.00 | tester=1
+RC5SETUP XAUUSDm|15|1788127200|HAMMER~38983f2ef82a|0|1|312.850|308.750|1|0|1|7|ELIGIBLE|-
+RC5DENY CONFIRMATION_PROXIMITY_INVALID XAUUSDm~15~HAMMER~38983f2ef82a~0~1~1788127200|price=4458.786|zone=308.750..312.850|distance=4145.936|spread=0.260|tick=0.001|tolerance=0.260
+RC5PLAN DENIED|XAUUSDm~15~HAMMER~38983f2ef82a~0~1~1788127200|XAUUSDm|15|BUY|conf=1788127200|dec=1788128100|entry=0.000|sl=0.000|tp=0.000|R=0.000|riskPct=0.50|riskMoney=0.00|realized=0.00|vol=0.00|spread=0.260|spreadToR=0.0000|margin=0.00|marginFrac=0.0000|confDist=4145.936|entryDist=0.000|tol=0.260|Rticks=0.0|R/entry=0.000000|TPdist=0.000|TP/entry=0.000000|lc=7|xb=0|CONFIRMATION_PROXIMITY_INVALID
+RC5SETUP XAUUSDm|15|1788129900|CURRENT_DAY_LOW~spreadR00001|27|1|4461.610|4461.610|1|0|1|7|ELIGIBLE|-
+RC5DENY SPREAD_TO_RISK_INVALID XAUUSDm~15~CURRENT_DAY_LOW~spreadR00001~27~1~1788129900|spread=0.260|R=0.240|ratio=1.0833|max=0.2500
+RC5PLAN DENIED|XAUUSDm~15~CURRENT_DAY_LOW~spreadR00001~27~1~1788129900|XAUUSDm|15|BUY|conf=1788129900|dec=1788130800|entry=4461.849|sl=4461.609|tp=4462.329|R=0.240|riskPct=0.50|riskMoney=0.00|realized=0.00|vol=0.00|spread=0.260|spreadToR=1.0833|margin=0.00|marginFrac=0.0000|confDist=0.236|entryDist=0.239|tol=0.260|Rticks=240.0|R/entry=0.000054|TPdist=0.480|TP/entry=0.000108|lc=7|xb=1|SPREAD_TO_RISK_INVALID
+RC5SETUP XAUUSDm|15|1788129900|HAMMER~82c481350728|0|1|4467.060|4450.540|1|0|1|7|ELIGIBLE|-
+RC5PLAN EXECUTED|XAUUSDm~15~HAMMER~82c481350728~0~1~1788129900|XAUUSDm|15|BUY|conf=1788129900|dec=1788130800|entry=4461.849|sl=4450.539|tp=4484.469|R=11.310|riskPct=0.50|riskMoney=50.00|realized=45.24|vol=0.04|spread=0.260|spreadToR=0.0230|margin=35.69|marginFrac=0.0036|confDist=0.000|entryDist=0.000|tol=0.260|Rticks=11310.0|R/entry=0.002535|TPdist=22.620|TP/entry=0.005070|lc=7|xb=3|-
+RC5SETUP XAUUSDm|15|1788129900|HAMMER~82c481350728|0|1|4467.060|4450.540|1|0|1|7|ELIGIBLE|-
+RC5PLAN DENIED|XAUUSDm~15~HAMMER~82c481350728~0~1~1788129900|XAUUSDm|15|BUY|conf=1788129900|dec=1788130800|entry=0.000|sl=0.000|tp=0.000|R=0.000|riskPct=0.50|riskMoney=0.00|realized=0.00|vol=0.00|spread=0.000|spreadToR=0.0000|margin=0.00|marginFrac=0.0000|confDist=0.000|entryDist=0.000|tol=0.000|Rticks=0.0|R/entry=0.000000|TPdist=0.000|TP/entry=0.000000|lc=7|xb=0|SIGNAL_ALREADY_EXECUTED
+RC5SETUP XAUUSDm|15|1788129900|HAMMER~concurrent001|0|1|4467.060|4450.540|1|0|1|7|ELIGIBLE|-
+RC5PLAN DENIED|XAUUSDm~15~HAMMER~concurrent001~0~1~1788129900|XAUUSDm|15|BUY|conf=1788129900|dec=1788130800|entry=0.000|sl=0.000|tp=0.000|R=0.000|riskPct=0.50|riskMoney=0.00|realized=0.00|vol=0.00|spread=0.000|spreadToR=0.0000|margin=0.00|marginFrac=0.0000|confDist=0.000|entryDist=0.000|tol=0.000|Rticks=0.0|R/entry=0.000000|TPdist=0.000|TP/entry=0.000000|lc=7|xb=0|SYMBOL_POSITION_ACTIVE
+RC5SETUP XAUUSDm|15|1788878700|MORNING_STAR~cf5314af21ab|1|1|4399.540|4391.070|1|0|1|7|ELIGIBLE|-
+RC5PLAN EXECUTED|XAUUSDm~15~MORNING_STAR~cf5314af21ab~1~1~1788878700|XAUUSDm|15|BUY|conf=1788878700|dec=1788879600|entry=4398.837|sl=4391.069|tp=4414.373|R=7.768|riskPct=0.50|riskMoney=49.77|realized=46.61|vol=0.06|spread=0.260|spreadToR=0.0335|margin=52.79|marginFrac=0.0053|confDist=0.000|entryDist=0.000|tol=0.260|Rticks=7768.0|R/entry=0.001766|TPdist=15.536|TP/entry=0.003532|lc=7|xb=3|-
+deal #2 buy 0.04 XAUUSDm at 4461.849 done (based on order #2)
+deal #3 sell 0.04 XAUUSDm at 4450.459 done (based on order #3)
+deal #4 buy 0.06 XAUUSDm at 4398.837 done (based on order #4)
+deal #5 sell 0.06 XAUUSDm at 4391.046 done (based on order #5)
+final balance 9907.70 USD
