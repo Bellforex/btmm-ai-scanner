@@ -533,3 +533,64 @@ def test_string_inputs_in_set_files_carry_no_optimization_suffix() -> None:
             name = line.split("=", 1)[0].strip()
             if name in string_inputs:
                 assert "|" not in line, f"{symbol}: {name} carries a suffix"
+
+
+# ---------------------------------------------------------------------------
+# MARGIN DENY REACHABILITY — proved, not assumed
+# ---------------------------------------------------------------------------
+
+
+def test_margin_deny_is_unreachable_while_the_spread_gate_passes() -> None:
+    """MEASURED from the tester's own XAUUSDm spec, then proved algebraically.
+
+    The two gates constrain R in opposite directions:
+
+        spread/R <= 0.25   requires  R >= 4 * spread
+        margin   >  0.20*E requires  R <  k / 0.20
+
+    On the observed account those ranges do not overlap, so
+    `MARGIN_EXPOSURE_INVALID` cannot fire. That is why no tester harness was
+    built to force it: the branch is not merely untested here, it is
+    unreachable, and a synthetic case would have verified a situation this
+    account cannot produce.
+
+    It becomes reachable at lower leverage, which the test states explicitly so
+    the conclusion is scoped rather than absolute.
+    """
+    tick = Decimal("0.001")  # SYMBOL_TRADE_TICK_SIZE, observed
+    tick_value = Decimal("0.1")  # SYMBOL_TRADE_TICK_VALUE_LOSS, observed
+    price = Decimal("4461.849")  # observed entry
+    contract = Decimal("100")
+    leverage = Decimal("500")  # observed 1:500
+    equity = Decimal("10000")
+    spread = Decimal("0.260")  # observed
+
+    def volume(r: Decimal) -> Decimal:
+        return (Decimal("0.005") * equity) / ((r / tick) * tick_value)
+
+    def margin_fraction(r: Decimal) -> Decimal:
+        return (volume(r) * price * contract) / (leverage * equity)
+
+    # the model reproduces the observed GOLDEN 1 row
+    assert round(volume(Decimal("11.310")), 2) == Decimal("0.04")
+    assert round(margin_fraction(Decimal("11.310")), 4) == Decimal("0.0039")
+
+    r_min_allowed = spread / MAX_SPREAD_TO_RISK  # 1.04
+    assert r_min_allowed == Decimal("1.04")
+
+    # the LARGEST margin fraction still compatible with the spread gate
+    worst = margin_fraction(r_min_allowed)
+    assert worst < MAX_MARGIN_FRACTION, worst
+    assert round(worst, 4) == Decimal("0.0429")  # 4.29%, against a 20% limit
+
+    # and the R the margin gate would need is far below what spread/R permits
+    k = (Decimal("0.005") * equity * tick * price * contract) / (
+        tick_value * leverage * equity
+    )
+    r_needed = k / MAX_MARGIN_FRACTION
+    assert r_needed < r_min_allowed
+    assert round(r_min_allowed / r_needed, 2) == Decimal("4.66")
+
+    # scope: it IS reachable on a lower-leverage account
+    leverage_threshold = leverage * worst / MAX_MARGIN_FRACTION
+    assert Decimal("100") < leverage_threshold < Decimal("110")

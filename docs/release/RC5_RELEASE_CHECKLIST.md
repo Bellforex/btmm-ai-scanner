@@ -33,18 +33,20 @@ a thing can be provably correct in source and still never have run.
 
 | component | highest level reached | next level, and what blocks it |
 | --- | --- | --- |
-| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,801 tests; it IS the reference) |
+| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,802 tests; it IS the reference) |
 | **Pine CORE / P4** | **SOURCE-VERIFIED** + COMPILED + token-verified | RUNTIME-VERIFIED — TradingView renderer |
 | **Pine VIEW / PANEL** | **SOURCE-VERIFIED** (generated, anti-drift tested) | RUNTIME-VERIFIED — same |
 | **EA — broker adapter** | **TESTER-VERIFIED** | symbol resolved, spec read, orders filled |
 | **EA — Execution Doctrine V1** | **TESTER-VERIFIED** (see the exceptions below) | live deployment — NOT APPROVED |
 | **Layer-A → EA transport** | **TESTER-VERIFIED** | 4 fixtures loaded, 0 unparseable |
 | **Stage-2 entry proximity** | **TESTER-VERIFIED** | PASS ×2 on real ASKs, DENY at 0.475 vs 0.260 |
-| **margin gate** | **TESTER-VERIFIED (PASS only)** | real `OrderCalcMargin` 35.69 / 52.79; DENY never triggered |
-| **spread/R gate** | **VECTOR-VERIFIED** | it never fired at runtime — proximity refused first |
-| **duplicate guard** | **NOT EXERCISED** | 0 duplicates, but nothing tried to duplicate |
-| **one-position-per-symbol** | **NOT EXERCISED** | GOLDEN 1 closed before GOLDEN 2 opened |
-| **terminal-event exits** | **NOT EXERCISED** | both positions closed on SL |
+| **spread/R gate** | **TESTER-VERIFIED** | Phase 2: ratio 1.0833 vs 0.25 → DENY, risk/margin never ran |
+| **duplicate guard** | **TESTER-VERIFIED** | Phase 2: same identity twice, 1 order, `SIGNAL_ALREADY_EXECUTED` |
+| **one-position-per-symbol** | **TESTER-VERIFIED** | Phase 2: distinct identity denied `SYMBOL_POSITION_ACTIVE` |
+| **margin gate (PASS)** | **TESTER-VERIFIED** | real `OrderCalcMargin` 35.69 / 52.79 |
+| **margin gate (DENY)** | **PROVED UNREACHABLE HERE** | spread gate needs R ≥ 1.04, margin needs R < 0.2231 — no overlap at 1:500 |
+| **terminal-event exits** | **NOT EXERCISED** | `RC5OnTerminalEvent` is never CALLED — no runtime event source |
+| **symbol genericity** | **TESTER-VERIFIED** | XAUUSDm / EURUSDm / GBPUSDm resolved; digits 3 vs 5, tick 1e-3 vs 1e-5 |
 | **Structure coordinates S1/S2** | IMPLEMENTED (unchanged) | VISUALLY-VERIFIED — TradingView renderer |
 | **Live production** | — | **NOT APPROVED** |
 
@@ -52,12 +54,19 @@ a thing can be provably correct in source and still never have run.
 directions — it passed on two real ASKs and refused a third at 0.475 against a
 0.260 tolerance. That row is upgraded on evidence.
 
-**The rows that must NOT be rounded up.** The spread/R gate never fired at
-runtime; entry proximity refused the micro-R case first, which is the locked
-gate order working but leaves spread/R VECTOR-VERIFIED. The duplicate guard,
-the one-position-per-symbol guard and the terminal-event exits were never
-exercised: zero duplicates is evidence that nothing tried to duplicate, not
-that the guard works. Full detail: `RC5_TESTER_RESULTS.md`.
+**Phase 2 deliberately forced the branches Phase 1 never reached.** spread/R,
+the duplicate guard and the concurrency guard all fired on real tester runs and
+are upgraded on that evidence.
+
+**The rows that must NOT be rounded up.** The margin DENY branch was not tested
+because it is UNREACHABLE on this account — the spread gate requires R ≥ 1.04
+while the margin gate needs R < 0.2231, and the ranges do not overlap at 1:500
+leverage (it becomes reachable below ~1:107). Building a harness would have
+verified a situation this account cannot produce. The terminal-event exits
+remain unexercised for a different and more interesting reason:
+**`RC5OnTerminalEvent` is never called** — the fixture transport carries
+analytical STATE, not lifecycle EVENTS, so the V1 close path has no runtime
+event source yet. Full detail: `RC5_TESTER_RESULTS.md`.
 
 
 ---
@@ -66,7 +75,7 @@ that the guard works. Full detail: `RC5_TESTER_RESULTS.md`.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,801 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,802 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
@@ -176,13 +185,13 @@ correctly even while the page reports itself hidden.
 | 8.4b | GOLDEN 2 | **PASS** — executed, entry 4398.837, SL 4391.069, TP 4414.373, margin 52.79 |
 | 8.4c | stale negative | **PASS** — `CONFIRMATION_PROXIMITY_INVALID`, distance 4145.936 |
 | 8.4d | zero-height negative | **PASS** — `ENTRY_PROXIMITY_INVALID`, distance 0.475 vs 0.260 |
-| 8.4e | duplicates | **0** observed; guard NOT exercised |
+| 8.4e | duplicate guard | **PASS** — Phase 2, 2 presentations, 1 order |
 | 8.4f | runtime exceptions | **none** |
 | 8.4g | parser integrity | **PASS** — 4 plans, 0 unparsed |
 | 8.3a | acceptance run staged | **PASS** — EA installed byte-identical, fixture file, `.set` and launch config all in place |
-| 8.5 | XAUUSDm broader smoke | **PENDING** |
-| 8.6 | EURUSDm smoke | **PENDING** |
-| 8.7 | GBPUSDm smoke | **PENDING** |
+| 8.5 | XAUUSDm normal-mode smoke | **PASS** — resolved, 100% history, 0 exceptions |
+| 8.6 | EURUSDm smoke | **PASS** — digits 5, tick 1e-5, tickVal 1.0, spread 8 |
+| 8.7 | GBPUSDm smoke | **PASS** — digits 5, tick 1e-5, tickVal 1.0, spread 10 |
 
 ## 9. MTF QA
 
