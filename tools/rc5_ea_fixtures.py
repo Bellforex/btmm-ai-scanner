@@ -33,6 +33,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 __all__ = [
     "APPROVED_CLOSE_EVENTS",
     "FIXTURE_FIELDS",
+    "MAX_ENTRY_DISTANCE_SPREADS",
     "MAX_MARGIN_FRACTION",
     "MAX_SPREAD_TO_RISK",
     "NEVER_CLOSE_EVENTS",
@@ -44,7 +45,9 @@ __all__ = [
     "fixture_line",
     "guard_deny",
     "plan_for",
+    "proximity_tolerance",
     "signal_id",
+    "zone_distance",
 ]
 
 #: The EA's fixture line, in the exact order `ParseFixtureLine` reads it.
@@ -162,6 +165,22 @@ class TradePlan:
     #: passed.
     spread_gate: str = "PENDING_TESTER"
     margin_gate: str = "PENDING_TESTER"
+    #: STAGE 1 -- the causally available confirmation close against the zone.
+    confirmation_distance: Decimal | None = None
+    confirmation_gate: str = "NOT_SUPPLIED"
+    #: STAGE 2 -- the ACTUAL executable price against the zone. Reports
+    #: PENDING_TESTER unless the caller states the entry is a real fill price,
+    #: so a hypothetical entry can never be mistaken for a passed gate.
+    entry_distance: Decimal | None = None
+    entry_gate: str = "PENDING_TESTER"
+    proximity_tolerance_used: Decimal | None = None
+    #: Diagnostics only. V1 denies on NONE of these; they exist so a maximum-R
+    #: or maximum-TP rule can later be calibrated from evidence instead of
+    #: guessed at now.
+    r_ticks: Decimal | None = None
+    r_over_entry: Decimal | None = None
+    tp_distance: Decimal | None = None
+    tp_over_entry: Decimal | None = None
 
 
 LIQUIDITY_VALIDATED = 7
@@ -183,6 +202,43 @@ MAX_SPREAD_TO_RISK = Decimal("0.25")
 #: a 20,000,000 EUR notional. Broker `volume_max` bounded it, which is a
 #: contract limit rather than a risk rule.
 MAX_MARGIN_FRACTION = Decimal("0.20")
+
+#: How far price may sit from the POI zone and still be an execution candidate,
+#: expressed in SPREADS. Author-locked V1 policy.
+#:
+#: Deliberately NOT a percentage of R: a stale far-away zone creates an enormous
+#: R, so an R-relative test would be self-defeating -- the further the zone, the
+#: more slack it would grant. Deliberately NOT a percentage of price either,
+#: because that behaves completely differently on FX and on gold. The tolerance
+#: is built from the two quantities the BROKER actually publishes.
+MAX_ENTRY_DISTANCE_SPREADS = Decimal("1.0")
+
+
+def zone_distance(
+    price: Decimal, zone_top: Decimal, zone_bottom: Decimal
+) -> Decimal:
+    """Distance from `price` to the nearest edge of the zone; 0 when inside."""
+    if price < zone_bottom:
+        return zone_bottom - price
+    if price > zone_top:
+        return price - zone_top
+    return Decimal(0)
+
+
+def proximity_tolerance(
+    spec: BrokerSpec,
+    spread: Decimal | None = None,
+    spreads_allowed: Decimal = MAX_ENTRY_DISTANCE_SPREADS,
+) -> Decimal:
+    """`max(tick_size, spread * spreads_allowed)`.
+
+    With no spread supplied the tolerance collapses to one tick, which is the
+    STRICTEST it can be. That is deliberate: offline, under-granting tolerance
+    can only refuse a setup a live spread would have allowed, never admit one it
+    would have refused.
+    """
+    scaled = Decimal(0) if spread is None else spread * spreads_allowed
+    return max(spec.tick_size, scaled)
 
 
 def fixture_line(fixture: SetupFixture) -> str:
@@ -246,6 +302,9 @@ def plan_for(
     required_margin: Decimal | None = None,
     max_spread_to_risk: Decimal = MAX_SPREAD_TO_RISK,
     max_margin_fraction: Decimal = MAX_MARGIN_FRACTION,
+    confirmation_close: Decimal | None = None,
+    entry_is_executable: bool = False,
+    max_entry_distance_spreads: Decimal = MAX_ENTRY_DISTANCE_SPREADS,
 ) -> TradePlan:
     """Everything V1 decides, given an entry price the caller supplies.
 
@@ -260,14 +319,64 @@ def plan_for(
         return TradePlan(eligible=False, deny_reason=deny)
 
     is_buy = fixture.direction > 0
+
+    # -- PROXIMITY, both stages, BEFORE any geometry or sizing ---------------
+    # Rationale, author-locked: reject stale geometry before performing
+    # unnecessary risk calculations. A remote POI is not an execution candidate
+    # however small a lot would satisfy the 0.5% budget.
+    tolerance = proximity_tolerance(spec, spread, max_entry_distance_spreads)
+
+    confirmation_distance = None
+    confirmation_gate = "NOT_SUPPLIED"
+    if confirmation_close is not None:
+        confirmation_distance = zone_distance(
+            confirmation_close, fixture.zone_top, fixture.zone_bottom
+        )
+        if confirmation_distance > tolerance:
+            return TradePlan(
+                eligible=False,
+                deny_reason="CONFIRMATION_PROXIMITY_INVALID",
+                spread=spread,
+                confirmation_distance=confirmation_distance,
+                confirmation_gate="DENY",
+                proximity_tolerance_used=tolerance,
+            )
+        confirmation_gate = "PASS"
+
+    entry = _to_tick(spec, entry)
+    entry_distance = zone_distance(entry, fixture.zone_top, fixture.zone_bottom)
+    if not entry_is_executable:
+        # A hypothetical entry is NOT evidence that the real fill will be near
+        # the zone, so the gate reports pending rather than passed.
+        entry_gate = "PENDING_TESTER"
+    elif entry_distance <= tolerance:
+        entry_gate = "PASS"
+    else:
+        return TradePlan(
+            eligible=False,
+            deny_reason="ENTRY_PROXIMITY_INVALID",
+            spread=spread,
+            confirmation_distance=confirmation_distance,
+            confirmation_gate=confirmation_gate,
+            entry_distance=entry_distance,
+            entry_gate="DENY",
+            proximity_tolerance_used=tolerance,
+        )
+
     distal = fixture.zone_bottom if is_buy else fixture.zone_top
     stop = _to_tick(
         spec, distal - spec.tick_size if is_buy else distal + spec.tick_size
     )
-    entry = _to_tick(spec, entry)
 
     if (is_buy and stop >= entry) or (not is_buy and stop <= entry):
-        return TradePlan(eligible=False, deny_reason="STOP_WRONG_SIDE", distal=distal)
+        return TradePlan(
+            eligible=False,
+            deny_reason="STOP_WRONG_SIDE",
+            distal=distal,
+            confirmation_gate=confirmation_gate,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
+        )
 
     r = abs(entry - stop)
 
@@ -276,7 +385,14 @@ def plan_for(
     # defence in depth because every downstream number divides by it.
     if r <= 0:
         return TradePlan(
-            eligible=False, deny_reason="R_ZERO", distal=distal, stop=stop, r=r
+            eligible=False,
+            deny_reason="R_ZERO",
+            distal=distal,
+            stop=stop,
+            r=r,
+            confirmation_gate=confirmation_gate,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
         )
 
     take = _to_tick(spec, entry + r * reward_risk if is_buy else entry - r * reward_risk)
@@ -298,6 +414,11 @@ def plan_for(
             spread=spread,
             spread_to_risk=spread_to_risk,
             spread_gate="DENY",
+            confirmation_distance=confirmation_distance,
+            confirmation_gate=confirmation_gate,
+            entry_distance=entry_distance,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
         )
 
     level = max(spec.stops_level, spec.freeze_level)
@@ -312,12 +433,24 @@ def plan_for(
             spread=spread,
             spread_to_risk=spread_to_risk,
             spread_gate=spread_gate,
+            confirmation_distance=confirmation_distance,
+            confirmation_gate=confirmation_gate,
+            entry_distance=entry_distance,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
         )
 
     risk_money = equity * risk_percent / Decimal(100)
     loss_per_lot = (r / spec.tick_size) * spec.tick_value_loss
     if loss_per_lot <= 0:
-        return TradePlan(eligible=False, deny_reason="RISK_MODEL_INVALID", r=r)
+        return TradePlan(
+            eligible=False,
+            deny_reason="RISK_MODEL_INVALID",
+            r=r,
+            confirmation_gate=confirmation_gate,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
+        )
 
     desired = risk_money / loss_per_lot
     floored = (desired / spec.volume_step).quantize(
@@ -336,6 +469,9 @@ def plan_for(
             r=r,
             risk_money=risk_money,
             realized_risk=spec.volume_min * loss_per_lot,
+            confirmation_gate=confirmation_gate,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
         )
 
     volume = min(floored, spec.volume_max)
@@ -352,6 +488,9 @@ def plan_for(
             take=take,
             r=r,
             risk_money=risk_money,
+            confirmation_gate=confirmation_gate,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
         )
     # EXECUTION QUALITY, gate 2 of 2. The risk budget does not bound GROSS
     # EXPOSURE when the stop is tight, so required margin is checked against
@@ -379,6 +518,11 @@ def plan_for(
             spread=spread,
             spread_to_risk=spread_to_risk,
             spread_gate=spread_gate,
+            confirmation_distance=confirmation_distance,
+            confirmation_gate=confirmation_gate,
+            entry_distance=entry_distance,
+            entry_gate=entry_gate,
+            proximity_tolerance_used=tolerance,
             required_margin=required_margin,
             margin_fraction=margin_fraction,
             margin_gate="DENY",
@@ -399,6 +543,15 @@ def plan_for(
         required_margin=required_margin,
         margin_fraction=margin_fraction,
         margin_gate=margin_gate,
+        confirmation_distance=confirmation_distance,
+        confirmation_gate=confirmation_gate,
+        entry_distance=entry_distance,
+        entry_gate=entry_gate,
+        proximity_tolerance_used=tolerance,
+        r_ticks=r / spec.tick_size,
+        r_over_entry=(r / entry if entry > 0 else None),
+        tp_distance=abs(take - entry),
+        tp_over_entry=(abs(take - entry) / entry if entry > 0 else None),
     )
 
 
@@ -453,6 +606,8 @@ def decide(
     reward_risk: Decimal = Decimal("2.0"),
     spread: Decimal | None = None,
     required_margin: Decimal | None = None,
+    confirmation_close: Decimal | None = None,
+    entry_is_executable: bool = False,
 ) -> TradePlan:
     """The whole pipeline, in the EA's order: eligibility, guards, prices, risk.
 
@@ -480,4 +635,6 @@ def decide(
         reward_risk,
         spread=spread,
         required_margin=required_margin,
+        confirmation_close=confirmation_close,
+        entry_is_executable=entry_is_executable,
     )

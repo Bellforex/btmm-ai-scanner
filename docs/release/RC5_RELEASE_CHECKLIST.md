@@ -19,7 +19,7 @@ Checkpoint: branch `rc5-poi-authority`. Python semantic freeze `28d432e`.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,745 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,766 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
@@ -88,7 +88,7 @@ correctly even while the page reports itself hidden.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 6.1 | deterministic vectors | **PASS** | 64 passed, plus 13 golden-fixture tests |
+| 6.1 | deterministic vectors | **PASS** | 83 passed, plus 17 golden-fixture tests |
 | 6.2 | eligibility gates, each with its own reason | **PASS** | parametrized |
 | 6.3 | BUY / SELL distal and stop | **PASS** | |
 | 6.4 | 2R target both directions | **PASS** | |
@@ -103,7 +103,10 @@ correctly even while the page reports itself hidden.
 | 6.13 | zero-height zone behaviour pinned | **PASS** | measured and documented — see §12 |
 | 6.14 | margin / exposure ceiling | **PASS** | `InpMaxMarginFraction = 0.20`, via `OrderCalcMargin` |
 | 6.15 | spread-vs-R refusal | **PASS** | `InpMaxSpreadToRisk = 0.25`, boundary inclusive |
-| 6.16 | proximity requirement | **PENDING** | V1 has NONE — a stale POI 4,000 points away is eligible; see §13 |
+| 6.16 | proximity gate, both stages | **PASS** | `InpMaxEntryDistanceSpreads = 1.0`; stale POI now DENIED — see §13 |
+| 6.17 | locked gate order | **PASS** | asserted against the MQL5 pipeline; one documented deviation |
+| 6.18 | R / TP diagnostics | **PASS** | recorded, never enforced — no max-R gate in V1 |
+| 6.19 | POI age cap | **N/A** | deliberately NONE in V1; proximity covers the case |
 
 ## 7. EA — ANALYTICAL PARITY WITH PYTHON
 
@@ -232,33 +235,41 @@ detect.
 
 ---
 
-## 13. SAFETY FINDING 2 — STALE POIs (macro-R) — NOT GATED
+## 13. SAFETY FINDING 2 — STALE POIs (macro-R) — NOW GATED
 
-The mirror image, and the spread gate is blind to it by construction: a
+The mirror image of §12, and the spread gate was blind to it by construction: a
 pathologically LARGE R makes the spread ratio trivially small.
 
-Measured on the trigger above, entry 4,400, equity 10,000:
+**Closed by a two-stage proximity gate.**
 
-| | |
+```
+distance(price, zone) = 0 inside, else the distance to the nearest edge
+tolerance = max(SYMBOL_TRADE_TICK_SIZE, spread * InpMaxEntryDistanceSpreads)
+```
+
+`InpMaxEntryDistanceSpreads` defaults to **1.0**. Stage 1 checks the causally
+available confirmation close (`CONFIRMATION_PROXIMITY_INVALID`); Stage 2 checks
+the ACTUAL executable price at the order (`ENTRY_PROXIMITY_INVALID`). Both
+required.
+
+The tolerance is deliberately NOT a fraction of R — a stale far-away zone
+produces an enormous R, so an R-relative test would grant more slack the
+further away the zone is — and NOT a fraction of price, which behaves
+differently on FX and gold. It is built from the tick size and the live spread,
+the two quantities the broker publishes.
+
+| case | result |
 | --- | --- |
-| R | **4,091.26** |
-| take profit | **12,582.52** |
-| volume | 0.01 |
-| realized risk | 40.91 of 50.00 |
-| spread / R | 0.00005 |
-| margin fraction | 0.05 |
-| **verdict** | **ELIGIBLE** |
+| stale HAMMER 308.75–312.85, confirmation ~4,400 | **DENY**, distance 4087.15 vs tolerance 0.20 |
+| GOLDEN 1, close 4461.29 inside the zone | **PASS**, distance 0 |
+| GOLDEN 2, close 4398.65 inside the zone | **PASS**, distance 0 |
 
-**The gap is that V1 has no proximity requirement.** Executing "at a POI"
-implies price is interacting with it, but the entry rule says only "the first
-tradable price AFTER confirmation". Entry 4,400 and entry 312 are both accepted
-against the same zone.
-
-Author decisions, recorded in
-`docs/validation/BTRC_V1_RC5_EXECUTION_DOCTRINE_V1.md`: whether to require
-proximity and how to express it; whether to bound context history so
-decades-old POIs never register; and whether a maximum R or TP distance is
-warranted independently.
+Two decisions taken deliberately and recorded: **no execution-layer POI age
+cap** (age does not prove irrelevance, and proximity already refuses the
+distant case), and **no maximum-R or maximum-TP gate** (once proximity passes,
+R reflects local geometry; adding a fourth threshold before evidence requires
+it would be a guess). R and TP distances are logged as diagnostics on every
+eligible trade and **never** cause a denial.
 
 ---
 
@@ -267,13 +278,11 @@ warranted independently.
 The BUILD is complete and internally verified: Python, Pine compile and
 capacity, EA compile, EA doctrine vectors and the Layer-A projection all PASS.
 
-One item is neither environment nor build: **§13, the missing proximity rule.**
-V1 will currently execute a decades-old POI four thousand points from price,
-and both new gates pass it. That is an open author decision, not a blocked
-task, and it is the only item on this list that could produce a wrong trade
-rather than no trade.
+§13 is now CLOSED. The proximity gate refuses the stale-POI case that both
+earlier gates passed, so nothing on this list is currently known to produce a
+WRONG trade rather than no trade.
 
-**Every other remaining item is an EXECUTION-ENVIRONMENT item**, and there are
+**Every remaining item is an EXECUTION-ENVIRONMENT item**, and there are
 exactly two blockers behind all of them:
 
 1. TradingView never lays out its renderer in the automation tab, which blocks

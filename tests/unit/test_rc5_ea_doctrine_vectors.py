@@ -33,7 +33,9 @@ from tools.rc5_ea_fixtures import (  # type: ignore[import-not-found]
     decide,
     fixture_line,
     plan_for,
+    proximity_tolerance,
     signal_id,
+    zone_distance,
 )
 
 _EA = Path(__file__).resolve().parents[2] / "mt5" / "Experts" / "RC5_EA.mq5"
@@ -219,6 +221,9 @@ def test_no_prior_result_can_influence_size() -> None:
         "required_margin",
         "max_spread_to_risk",
         "max_margin_fraction",
+        "confirmation_close",
+        "entry_is_executable",
+        "max_entry_distance_spreads",
     }
     # the point of the assertion, stated so a future addition cannot pass by
     # simply being appended to the set above
@@ -964,3 +969,268 @@ def test_v1_has_no_proximity_requirement_at_all() -> None:
     assert far.r > near.r * 1000
     assert far.volume == Decimal("0.01")
     assert near.volume == Decimal("15.33")
+
+
+# ---------------------------------------------------------------------------
+# TWO-STAGE POI PROXIMITY — the gate that closes the stale-POI hole
+# ---------------------------------------------------------------------------
+#
+# STAGE 1 is eligibility, from the causally available confirmation close.
+# STAGE 2 is the ACTUAL executable price at the moment of the order.
+# Both required. Tolerance = max(tick_size, spread * InpMaxEntryDistanceSpreads).
+#
+# Analytical validity is untouched: the stale POI below is still a valid POI,
+# V1 simply refuses to trade it. There is deliberately NO POI AGE CAP.
+
+
+def test_zone_distance_is_zero_inside_and_edge_relative_outside() -> None:
+    top, bottom = Decimal("4467.06"), Decimal("4450.54")
+    assert zone_distance(Decimal("4461.29"), top, bottom) == 0
+    assert zone_distance(top, top, bottom) == 0
+    assert zone_distance(bottom, top, bottom) == 0
+    assert zone_distance(Decimal("4470.06"), top, bottom) == Decimal("3.00")
+    assert zone_distance(Decimal("4448.54"), top, bottom) == Decimal("2.00")
+
+
+def test_the_tolerance_is_broker_derived_not_R_or_price_derived() -> None:
+    """One tick floor, one spread otherwise."""
+    assert proximity_tolerance(EURUSD, None) == EURUSD.tick_size
+    assert proximity_tolerance(EURUSD, Decimal("0.00010")) == Decimal("0.00010")
+    # a spread narrower than a tick cannot lower the floor
+    assert proximity_tolerance(EURUSD, Decimal("0.000001")) == EURUSD.tick_size
+
+
+@pytest.mark.parametrize("direction", [1, -1])
+def test_a_confirmation_inside_the_zone_passes(direction: int) -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(direction=direction),
+        Decimal("1.14690") if direction < 0 else Decimal("1.14680"),
+        Decimal("10000"),
+        confirmation_close=Decimal("1.14680"),  # inside 1.14672-1.14693
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.confirmation_distance == 0
+
+
+def test_one_tick_outside_the_zone_passes_on_the_tick_floor() -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        confirmation_close=Decimal("1.14694"),  # one tick above 1.14693
+    )
+    assert plan.confirmation_distance == EURUSD.tick_size
+    assert plan.confirmation_gate == "PASS"
+
+
+def test_exactly_one_spread_away_passes_the_boundary() -> None:
+    spread = 10 * EURUSD.tick_size
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=spread,
+        confirmation_close=Decimal("1.14703"),  # 10 ticks above the top
+    )
+    assert plan.confirmation_distance == spread
+    assert plan.proximity_tolerance_used == spread
+    assert plan.confirmation_gate == "PASS"
+
+
+def test_one_tick_beyond_the_tolerance_is_denied() -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.14704"),  # 11 ticks above the top
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "CONFIRMATION_PROXIMITY_INVALID"
+    assert plan.confirmation_gate == "DENY"
+
+
+def test_THE_STALE_POI_IS_NOW_DENIED() -> None:
+    """The permanent regression for the first trigger ever found.
+
+    A HAMMER at 308.75-312.85 confirmed while gold traded near 4,400. It passed
+    the monetary risk, spread/R and margin gates simultaneously; proximity is
+    what refuses it.
+    """
+    plan = plan_for(
+        _XAU_LIVE,
+        _confirmed(**_STALE),
+        Decimal("4400.00"),
+        Decimal("10000"),
+        spread=Decimal("0.20"),
+        required_margin=Decimal("500"),
+        confirmation_close=Decimal("4400.00"),
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "CONFIRMATION_PROXIMITY_INVALID"
+    assert plan.confirmation_distance == Decimal("4087.15")
+    assert plan.proximity_tolerance_used == Decimal("0.20")
+
+
+def test_stage_2_denies_an_entry_that_jumped_away_after_confirmation() -> None:
+    """Confirmation was fine; the fill would not be."""
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14750"),  # far above the zone by the time we can fill
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.14680"),
+        entry_is_executable=True,
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert not plan.eligible
+    assert plan.deny_reason == "ENTRY_PROXIMITY_INVALID"
+    assert plan.entry_gate == "DENY"
+
+
+def test_stage_2_passes_when_the_fill_is_still_at_the_zone() -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=EURUSD.tick_size,
+        confirmation_close=Decimal("1.14680"),
+        entry_is_executable=True,
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.entry_gate == "PASS"
+    assert plan.eligible
+
+
+def test_a_hypothetical_entry_never_reports_stage_2_as_passed() -> None:
+    """The anti-fabrication rule, as a test."""
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        confirmation_close=Decimal("1.14680"),
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.entry_gate == "PENDING_TESTER"
+
+
+def test_a_zero_height_poi_on_its_level_still_reaches_the_later_gates() -> None:
+    """Zero height is not itself disqualifying — the other gates decide."""
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14900"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.14831"),  # exactly on the level
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.confirmation_distance == 0
+    assert plan.eligible
+
+
+def test_a_zero_height_poi_far_from_its_level_is_denied_on_proximity() -> None:
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14900"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.15200"),
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "CONFIRMATION_PROXIMITY_INVALID"
+
+
+def test_proximity_passing_does_not_rescue_a_failing_spread_gate() -> None:
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14832"),  # R = 2 ticks
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.14831"),
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert not plan.eligible
+    assert plan.deny_reason == "SPREAD_TO_RISK_INVALID"
+
+
+def test_proximity_and_spread_passing_do_not_rescue_a_failing_margin() -> None:
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14900"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.14831"),
+        required_margin=Decimal("9999"),
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.spread_gate == "PASS"
+    assert not plan.eligible
+    assert plan.deny_reason == "MARGIN_EXPOSURE_INVALID"
+
+
+def test_r_and_tp_diagnostics_are_recorded_and_never_enforced() -> None:
+    """V1 has NO maximum-R and NO maximum-TP gate. These exist so one can be
+    calibrated later from evidence rather than guessed at now."""
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14900"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        confirmation_close=Decimal("1.14831"),
+    )
+    assert plan.eligible
+    assert plan.r_ticks == Decimal("70")
+    assert plan.r_over_entry is not None and plan.r_over_entry > 0
+    assert plan.tp_distance == Decimal("0.00140")  # 2R
+    assert plan.tp_over_entry is not None
+    import inspect
+
+    params = set(inspect.signature(plan_for).parameters)
+    assert not any("max_r" in n or "max_tp" in n for n in params)
+
+
+def test_the_locked_gate_order_is_what_the_mql5_pipeline_does() -> None:
+    """Proximity BEFORE geometry and sizing, margin last.
+
+    ONE DOCUMENTED DEVIATION from the numbered list in the instruction: the
+    duplicate / concurrency guard runs EARLY here, not at position 12. It is
+    the cheapest possible refusal and nothing between eligibility and execution
+    can change its answer, so running it late would only spend price, risk and
+    margin work on a signal already known to be spent -- which is the same
+    rationale given for putting proximity before risk.
+    """
+    src = _ea_source()
+    assert "input double InpMaxEntryDistanceSpreads = 1.0;" in src
+    assert "CONFIRMATION_PROXIMITY_INVALID" in src
+    assert "ENTRY_PROXIMITY_INVALID" in src
+
+    prices = src.split("bool RC5PlanPrices(", 1)[1][:2000]
+    order = [
+        prices.index("RC5ConfirmationProximity("),
+        prices.index("RC5EntryProximity("),
+        prices.index("RC5Distal(s)"),
+    ]
+    assert order == sorted(order)
+
+    body = src.split("bool RC5ProcessSetup(", 1)[1][:1400]
+    pipeline = [
+        body.index("RC5PlanEligibility("),
+        body.index("RC5PlanGuards("),
+        body.index("RC5PlanPrices("),
+        body.index("RC5SpreadGate("),
+        body.index("RC5PlanRisk("),
+        body.index("RC5MarginGate("),
+    ]
+    assert pipeline == sorted(pipeline)

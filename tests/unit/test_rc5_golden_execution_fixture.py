@@ -39,6 +39,7 @@ from tools.rc5_ea_fixtures import (  # type: ignore[import-not-found]
     fixture_line,
     plan_for,
     signal_id,
+    zone_distance,
 )
 
 #: Exness Standard gold, as the EA reads it at runtime. Pinned so the geometry
@@ -219,3 +220,47 @@ def test_everything_entry_dependent_is_pending_not_invented(
     # no spread and no broker margin offline, so neither gate claims to pass
     assert plan.spread_gate == "PENDING_TESTER"
     assert plan.margin_gate == "PENDING_TESTER"
+
+
+# ---------------------------------------------------------------------------
+# STAGE 1 proximity — provable offline, because the confirmation close is
+# historical. STAGE 2 is not, and is not claimed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fixture", GOLDEN, ids=lambda f: f.poi_id)
+def test_stage_1_confirmation_proximity_passes(fixture: SetupFixture) -> None:
+    """Both goldens confirmed with price INSIDE the zone, so distance is 0 and
+    the gate passes under any tolerance — including the strictest, one tick."""
+    close = GOLDEN_EVIDENCE[fixture.poi_id]["host_close"]
+    assert isinstance(close, Decimal)
+    assert zone_distance(close, fixture.zone_top, fixture.zone_bottom) == 0
+
+    plan = plan_for(
+        XAUUSD,
+        fixture,
+        Decimal("4460.00"),
+        Decimal("10000"),
+        confirmation_close=close,
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.confirmation_distance == 0
+
+
+@pytest.mark.parametrize("fixture", GOLDEN, ids=lambda f: f.poi_id)
+def test_stage_2_stays_pending_until_a_real_fill_exists(
+    fixture: SetupFixture,
+) -> None:
+    """The confirmation close is NOT promoted to an entry.
+
+    It proves Stage 1 and nothing else: it is a hindsight price the execution
+    layer could never have been filled at.
+    """
+    close = GOLDEN_EVIDENCE[fixture.poi_id]["host_close"]
+    assert isinstance(close, Decimal)
+    plan = plan_for(
+        XAUUSD, fixture, close, Decimal("10000"), confirmation_close=close
+    )
+    assert plan.confirmation_gate == "PASS"
+    assert plan.entry_gate == "PENDING_TESTER"
+    assert plan.entry_note == "ENTRY_PRICE_PENDING_TESTER"

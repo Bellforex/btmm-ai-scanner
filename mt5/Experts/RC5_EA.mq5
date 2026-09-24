@@ -46,6 +46,9 @@ input string InpSetupFile        = "";
 //--- specifies neither a spread tolerance nor a margin ceiling.
 input double InpMaxSpreadToRisk  = 0.25;   // spread <= 25% of R
 input double InpMaxMarginFraction = 0.20;  // required margin <= 20% of equity
+//--- How far price may sit from the POI zone and still be an execution
+//--- candidate, measured in SPREADS. tolerance = max(tickSize, spread * this)
+input double InpMaxEntryDistanceSpreads = 1.0;
 input int    InpMaxSpreadPoints  = 0;      // 0 = no spread filter yet
 input bool   InpVerbose          = true;
 
@@ -441,6 +444,14 @@ struct RC5Plan
    double            spreadToRisk;     // spread / R, 0 when R is not known yet
    double            requiredMargin;   // from OrderCalcMargin, never modelled
    double            marginFraction;   // requiredMargin / equity
+   double            confirmationClose;   // STAGE 1 reference, from history
+   double            confirmationDistance;
+   double            entryDistance;       // STAGE 2, the executable price
+   double            proximityTolerance;
+   double            rTicks;              // diagnostics only -- never enforced
+   double            rOverEntry;
+   double            tpDistance;
+   double            tpOverEntry;
    int               lifecycleTrigger;
    string            denyReason;
   };
@@ -487,6 +498,14 @@ bool RC5PlanEligibility(const RC5Setup &s, RC5Plan &p)
    p.spreadToRisk     = 0.0;
    p.requiredMargin   = 0.0;
    p.marginFraction   = 0.0;
+   p.confirmationClose    = 0.0;
+   p.confirmationDistance = 0.0;
+   p.entryDistance        = 0.0;
+   p.proximityTolerance   = 0.0;
+   p.rTicks      = 0.0;
+   p.rOverEntry  = 0.0;
+   p.tpDistance  = 0.0;
+   p.tpOverEntry = 0.0;
    p.lifecycleTrigger = s.lifecycle;
    p.denyReason       = "";
 
@@ -554,8 +573,20 @@ bool RC5PlanPrices(const RC5SymbolSpec &spec, const RC5Setup &s, RC5Plan &p)
      }
    p.spread = ask - bid;
 
+   // STAGE 1. Eligibility, from the confirmation bar's own close. Runs before
+   // any geometry: a remote POI is not an execution candidate however small a
+   // lot would satisfy the risk budget.
+   if(!RC5ConfirmationProximity(spec, s, p))
+      return false;
+
    bool   isBuy  = (s.direction == RC5_DIR_BULLISH);
    double entry  = NormalizePriceToTick(spec, isBuy ? ask : bid);
+   p.entry = entry;
+
+   // STAGE 2. The ACTUAL executable price -- ask to buy, bid to sell.
+   if(!RC5EntryProximity(spec, s, p))
+      return false;
+
    double distal = RC5Distal(s);
    double stop   = NormalizePriceToTick(spec,
                       isBuy ? distal - spec.tickSize : distal + spec.tickSize);
@@ -579,6 +610,7 @@ bool RC5PlanPrices(const RC5SymbolSpec &spec, const RC5Setup &s, RC5Plan &p)
    p.stop  = stop;
    p.take  = take;
    p.r     = r;
+   RC5Diagnostics(p, spec);
 
    if(!StopDistanceOk(spec, entry, stop) || !BrokerLevelsOk(spec, entry, stop))
      {
@@ -901,7 +933,7 @@ ENUM_ORDER_TYPE_FILLING PickFilling(const RC5SymbolSpec &s)
 void RC5LogPlan(const RC5SymbolSpec &spec, const RC5Plan &p, const string verdict)
   {
    PrintFormat("RC5PLAN %s|%s|%s|%d|%s|conf=%I64d|dec=%I64d|entry=%s|sl=%s|tp=%s|"
-               "R=%s|riskPct=%s|riskMoney=%s|realized=%s|vol=%s|spread=%s|spreadToR=%s|margin=%s|marginFrac=%s|lc=%d|xb=%d|%s",
+               "R=%s|riskPct=%s|riskMoney=%s|realized=%s|vol=%s|spread=%s|spreadToR=%s|margin=%s|marginFrac=%s|confDist=%s|entryDist=%s|tol=%s|Rticks=%s|R/entry=%s|TPdist=%s|TP/entry=%s|lc=%d|xb=%d|%s",
                verdict, p.signalId, p.symbol, (int)p.timeframe,
                (p.direction == RC5_DIR_BULLISH ? "BUY"
                 : (p.direction == RC5_DIR_BEARISH ? "SELL" : "NONE")),
@@ -918,6 +950,13 @@ void RC5LogPlan(const RC5SymbolSpec &spec, const RC5Plan &p, const string verdic
                DoubleToString(p.spreadToRisk, 4),
                DoubleToString(p.requiredMargin, 2),
                DoubleToString(p.marginFraction, 4),
+               DoubleToString(p.confirmationDistance, spec.digits),
+               DoubleToString(p.entryDistance, spec.digits),
+               DoubleToString(p.proximityTolerance, spec.digits),
+               DoubleToString(p.rTicks, 1),
+               DoubleToString(p.rOverEntry, 6),
+               DoubleToString(p.tpDistance, spec.digits),
+               DoubleToString(p.tpOverEntry, 6),
                p.lifecycleTrigger, p.xbState,
                (p.denyReason == "" ? "-" : p.denyReason));
   }
@@ -1319,6 +1358,148 @@ bool RC5MarginGate(const RC5SymbolSpec &spec, RC5Plan &p)
       return false;
      }
    return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B7 -- TWO-STAGE POI PROXIMITY                                    |
+//|                                                                  |
+//| The gate that closes the stale-POI hole. A setup can be          |
+//| authoritative, VALID, P5-permitted and LIQUIDITY_VALIDATED while |
+//| price is nowhere near the zone: the first real trigger this       |
+//| project found was a HAMMER at 308.75-312.85 while gold traded     |
+//| near 4,400, and it passed the monetary risk, spread/R and margin  |
+//| gates simultaneously.                                            |
+//|                                                                  |
+//| ANALYTICAL VALIDITY IS UNTOUCHED. That POI is still a valid POI;  |
+//| V1 simply refuses to TRADE it. Nothing here deletes, invalidates  |
+//| or ages out a record, and there is deliberately NO POI AGE CAP:   |
+//| age alone does not prove irrelevance, and a decades-old level     |
+//| genuinely revisited by price would pass this gate on its merits.  |
+//|                                                                  |
+//| TWO STAGES, BOTH REQUIRED:                                       |
+//|   1. the causally available CONFIRMATION close must be near the   |
+//|      zone -- eligibility, evaluated without any future price;     |
+//|   2. the ACTUAL executable price (ask to buy, bid to sell) must   |
+//|      STILL be near it at the moment of the order.                 |
+//+------------------------------------------------------------------+
+
+//--- B7a. Distance from a price to the nearest zone edge; 0 when inside.
+double ZoneDistance(const double price, const double zoneTop,
+                    const double zoneBottom)
+  {
+   if(price < zoneBottom)
+      return zoneBottom - price;
+   if(price > zoneTop)
+      return price - zoneTop;
+   return 0.0;
+  }
+
+//--- The tolerance is built from what the BROKER publishes, not from R and not
+//--- from a percentage of price.
+//---
+//--- NOT a fraction of R, because a stale far-away zone produces an enormous R:
+//--- an R-relative test would grant MORE slack the further away the zone is,
+//--- which is exactly backwards. NOT a fraction of price either, because that
+//--- behaves completely differently on EURUSD and on gold.
+double ProximityTolerance(const RC5SymbolSpec &spec, const double spread)
+  {
+   double scaled = spread * InpMaxEntryDistanceSpreads;
+   return MathMax(spec.tickSize, scaled);
+  }
+
+//--- The confirmation close of the bar the setup was confirmed ON. Read from
+//--- history by time, never from the live tick: this is an eligibility test
+//--- and must not see a price that did not exist at confirmation.
+bool ConfirmationClose(const string sym, const ENUM_TIMEFRAMES tf,
+                       const datetime barTime, double &out)
+  {
+   double c[];
+   if(CopyClose(sym, tf, barTime, 1, c) != 1)
+      return false;
+   out = c[0];
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B7b -- STAGE 1, confirmation proximity.                          |
+//| Runs BEFORE any geometry or sizing: a remote POI is not an       |
+//| execution candidate however small a lot would satisfy the risk   |
+//| budget, so there is no point computing one.                      |
+//+------------------------------------------------------------------+
+bool RC5ConfirmationProximity(const RC5SymbolSpec &spec, const RC5Setup &s,
+                              RC5Plan &p)
+  {
+   double close = 0.0;
+   if(!ConfirmationClose(spec.name, s.timeframe, s.barTime, close))
+     {
+      p.denyReason = "CONFIRMATION_CLOSE_UNAVAILABLE";
+      return false;
+     }
+
+   p.confirmationClose = close;
+   p.confirmationDistance = ZoneDistance(close, s.zoneTop, s.zoneBottom);
+   p.proximityTolerance = ProximityTolerance(spec, p.spread);
+
+   if(p.confirmationDistance > p.proximityTolerance)
+     {
+      p.denyReason = "CONFIRMATION_PROXIMITY_INVALID";
+      PrintFormat("RC5DENY CONFIRMATION_PROXIMITY_INVALID %s|price=%s|"
+                  "zone=%s..%s|distance=%s|spread=%s|tick=%s|tolerance=%s",
+                  p.signalId,
+                  DoubleToString(close, spec.digits),
+                  DoubleToString(s.zoneBottom, spec.digits),
+                  DoubleToString(s.zoneTop, spec.digits),
+                  DoubleToString(p.confirmationDistance, spec.digits),
+                  DoubleToString(p.spread, spec.digits),
+                  DoubleToString(spec.tickSize, spec.digits),
+                  DoubleToString(p.proximityTolerance, spec.digits));
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B7c -- STAGE 2, entry proximity.                                 |
+//| The ACTUAL executable price, ask to buy and bid to sell. The     |
+//| confirmation close is NOT substituted here: it is a hindsight    |
+//| price the layer could never have been filled at.                 |
+//+------------------------------------------------------------------+
+bool RC5EntryProximity(const RC5SymbolSpec &spec, const RC5Setup &s, RC5Plan &p)
+  {
+   p.entryDistance = ZoneDistance(p.entry, s.zoneTop, s.zoneBottom);
+   if(p.entryDistance > p.proximityTolerance)
+     {
+      p.denyReason = "ENTRY_PROXIMITY_INVALID";
+      PrintFormat("RC5DENY ENTRY_PROXIMITY_INVALID %s|price=%s|"
+                  "zone=%s..%s|distance=%s|spread=%s|tick=%s|tolerance=%s",
+                  p.signalId,
+                  DoubleToString(p.entry, spec.digits),
+                  DoubleToString(s.zoneBottom, spec.digits),
+                  DoubleToString(s.zoneTop, spec.digits),
+                  DoubleToString(p.entryDistance, spec.digits),
+                  DoubleToString(p.spread, spec.digits),
+                  DoubleToString(spec.tickSize, spec.digits),
+                  DoubleToString(p.proximityTolerance, spec.digits));
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B7d -- R / TP DIAGNOSTICS. Recorded, never enforced.             |
+//|                                                                  |
+//| V1 deliberately has NO maximum-R and NO maximum-TP-distance gate. |
+//| Once proximity passes, R reflects LOCAL zone geometry rather than |
+//| the distance to some remote stale level, and the existing three   |
+//| gates already bound the trade. These numbers exist so a future    |
+//| threshold can be calibrated from evidence instead of guessed at.  |
+//+------------------------------------------------------------------+
+void RC5Diagnostics(RC5Plan &p, const RC5SymbolSpec &spec)
+  {
+   p.rTicks     = (spec.tickSize > 0.0) ? p.r / spec.tickSize : 0.0;
+   p.rOverEntry = (p.entry > 0.0) ? p.r / p.entry : 0.0;
+   p.tpDistance = MathAbs(p.take - p.entry);
+   p.tpOverEntry = (p.entry > 0.0) ? p.tpDistance / p.entry : 0.0;
   }
 
 //+------------------------------------------------------------------+

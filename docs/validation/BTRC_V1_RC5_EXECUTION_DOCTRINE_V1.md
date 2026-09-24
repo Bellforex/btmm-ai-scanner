@@ -679,3 +679,125 @@ pending value into a fabricated one. Only the entry-INDEPENDENT geometry
 It was a `HAMMER` at 308.75-312.85 while price was near 4,400 — the stale-POI
 case above. Reachability was proven by it; usability was not. The two frozen
 here are the first in each window where price is inside the zone.
+
+---
+
+## PROXIMITY GATE — §13 CLOSED
+
+Two stages, both required. **Layer-B execution policy, not a change to RC5
+analytical semantics.**
+
+### Why it exists
+
+The first real `LIQUIDITY_VALIDATED` setup this project found was a `HAMMER` at
+308.75–312.85 confirmed while gold traded near 4,400 — a POI formed decades
+earlier, never breached, still VALID. It passed the monetary risk gate, the
+spread/R gate and the margin gate **simultaneously**, and V1 would have bought
+gold at 4,400 with a stop at 308.74 and a target at 12,582.52.
+
+`LIQUIDITY_VALIDATED` says the analytical ladder is satisfied. It does not say
+price is anywhere near the POI being traded.
+
+### The rule
+
+| | |
+| --- | --- |
+| **Stage 1 — confirmation** | the causally available confirmation close must be within tolerance of the zone |
+| **Stage 2 — entry** | the ACTUAL executable price (ask to buy, bid to sell) must STILL be within tolerance at the moment of the order |
+
+```
+distance(price, zone) = 0                     when zone_bottom <= price <= zone_top
+                      = zone_bottom - price   when price < zone_bottom
+                      = price - zone_top      when price > zone_top
+
+tolerance = max(SYMBOL_TRADE_TICK_SIZE, spread * InpMaxEntryDistanceSpreads)
+```
+
+`InpMaxEntryDistanceSpreads` defaults to **1.0**.
+
+| failure | deny reason |
+| --- | --- |
+| Stage 1 | `CONFIRMATION_PROXIMITY_INVALID` — do not arm |
+| Stage 2 | `ENTRY_PROXIMITY_INVALID` — do not send the order |
+
+Both log the signal id, the price, both zone edges, the distance, the spread,
+the tick size and the tolerance.
+
+### Why the tolerance takes this form
+
+**Not a fraction of R.** A stale far-away zone produces an enormous R, so an
+R-relative test would grant MORE slack the further away the zone is — exactly
+backwards, and self-defeating against the case it exists to catch.
+
+**Not a fraction of price.** That behaves completely differently on EURUSD and
+on gold.
+
+The tolerance is built from the two quantities the BROKER publishes: the tick
+size and the live spread. It is local, instrument-correct and requires no new
+constant beyond the multiplier.
+
+### Stage 1 uses history; Stage 2 uses the live quote
+
+Stage 1 reads the confirmation bar's own close, **by time, from history**
+(`CopyClose(sym, tf, barTime, 1, …)`). It is an eligibility test and must not
+see a price that did not exist at confirmation — no future tick, no later
+close, no hindsight best price.
+
+Stage 2 uses the actual executable side: **ask** for a buy, **bid** for a sell.
+The confirmation close is never substituted for it. Offline, where no fill
+exists, the Python mirror reports `PENDING_TESTER` rather than `PASS`; a
+hypothetical entry can never be mistaken for a passed gate.
+
+### Two decisions taken deliberately
+
+**NO EXECUTION-LAYER POI AGE CAP IN V1.** Age alone does not prove irrelevance:
+a decades-old level genuinely revisited by price is a legitimate setup, and the
+proximity gate already refuses the distant case on its merits. The analytical
+registry and its history are unchanged.
+
+**NO MAXIMUM-R AND NO MAXIMUM-TP-DISTANCE GATE IN V1.** Once proximity passes,
+R reflects LOCAL zone geometry rather than the distance to a remote stale
+level, and three gates already bound the trade. Adding a fourth threshold
+before evidence requires it would be a guess.
+
+Instead, every eligible trade logs `R` absolute, `R` in ticks, `R / entry`, the
+TP distance and `TP / entry`. **No denial is ever based on these.** They exist
+so a future threshold can be calibrated from evidence.
+
+### Zero-height POIs
+
+Still **ANALYTICALLY VALID**, and still not automatically execution-invalid.
+They must pass every gate like anything else: authority, validity, P5,
+`LIQUIDITY_VALIDATED`, confirmation proximity, entry proximity, `R > 0`,
+spread/R, monetary risk, legal volume, margin exposure, duplicate guard and
+one-position-per-symbol. A zero-height setup trades only when the execution
+geometry is genuinely viable.
+
+### The locked gate order
+
+1. analytical eligibility → 2. `LIQUIDITY_VALIDATED` → 3. **confirmation
+proximity** → 4. obtain executable entry → 5. **entry proximity** → 6. distal
+and stop → 7. `R > 0` → 8. spread/R → 9. risk sizing → 10. legal volume →
+11. margin exposure → 12. execution.
+
+Proximity precedes risk deliberately: a remote POI is not an execution
+candidate however small a lot would satisfy the 0.5% budget, so there is no
+point computing one.
+
+**One documented deviation.** The duplicate / concurrency guard runs EARLY,
+immediately after eligibility, rather than at position 12. It is the cheapest
+possible refusal and nothing between eligibility and execution can change its
+answer, so running it late would only spend price, risk and margin work — including
+a broker margin call — on a signal already known to be spent. That is the same
+rationale that puts proximity before risk. The order as implemented is asserted
+by `test_the_locked_gate_order_is_what_the_mql5_pipeline_does`.
+
+### Golden fixture expectations
+
+| | Stage 1 | Stage 2 |
+| --- | --- | --- |
+| GOLDEN 1 — HAMMER, close 4461.29 inside 4450.54–4467.06 | **PASS**, distance 0 | `ENTRY_PRICE_PENDING_TESTER` |
+| GOLDEN 2 — MORNING_STAR, close 4398.65 inside 4391.07–4399.54 | **PASS**, distance 0 | `ENTRY_PRICE_PENDING_TESTER` |
+| stale HAMMER 308.75–312.85, close ~4400 | **DENY** `CONFIRMATION_PROXIMITY_INVALID`, distance 4087.15 | never reached |
+
+The stale case is a permanent regression fixture.

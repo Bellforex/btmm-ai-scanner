@@ -1,9 +1,14 @@
 ; RC5_EA Strategy Tester inputs — EURUSDm
 ;
-; Execution is enabled HERE ONLY. The product default stays false, and since
-; EA2-B these files CANNOT arm the live account even if loaded there:
+; Execution is enabled HERE ONLY. These files CANNOT arm a live account:
 ; CanExecuteHere() requires either MQL_TESTER or InpAllowLiveExecution, and
 ; InpAllowLiveExecution is false below and stays false.
+;
+; The three EXECUTION DOCTRINE V1 quality gates are carried explicitly so a
+; tester run uses the same thresholds the vectors pin:
+;   InpMaxEntryDistanceSpreads  proximity, in spreads
+;   InpMaxSpreadToRisk          spread <= 25% of R
+;   InpMaxMarginFraction        required margin <= 20% of equity
 InpSymbolRoots=EURUSD||EURUSD||EURUSD||EURUSD||N
 InpHostTF=15||0||0||0||N
 InpExecutionEnabled=true||false||0||true||N
@@ -13,5 +18,8 @@ InpMagic=5150001||0||1||5150001||N
 InpAllowLiveExecution=false||false||0||true||N
 InpSlippagePoints=20||0||1||20||N
 InpSetupFile=RC5_fixtures_EURUSD.csv||||||N
+InpMaxSpreadToRisk=0.25||0.25||0.000000||0.250000||N
+InpMaxMarginFraction=0.20||0.20||0.000000||0.200000||N
+InpMaxEntryDistanceSpreads=1.0||1.0||0.000000||1.000000||N
 InpMaxSpreadPoints=0||0||0||0||N
 InpVerbose=true||false||0||true||N

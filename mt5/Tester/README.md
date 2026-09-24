@@ -94,3 +94,25 @@ CORRECT behaviour rather than an EA failure. Use a multi-timeframe capture and
 confirm `confirmed > 0` before reading anything into a tester result.
 
 Full procedure: `docs/release/RC5_RUNTIME_PROCEDURES.md`.
+
+## Execution-quality thresholds carried by every set file
+
+| input | tester value | meaning |
+| --- | --- | --- |
+| `InpMaxEntryDistanceSpreads` | 1.0 | proximity tolerance = `max(tick, spread x this)` |
+| `InpMaxSpreadToRisk` | 0.25 | spread must be at most 25% of R |
+| `InpMaxMarginFraction` | 0.20 | required margin at most 20% of equity |
+
+All three are EXECUTION DOCTRINE V1 PARAMETERS, not analytical semantics.
+
+## What the first tester run must capture
+
+The golden fixtures are complete except for one thing that cannot exist
+offline: **the first executable tick after confirmation**. Capture it, and the
+run turns `ENTRY_PRICE_PENDING_TESTER` into measured values for entry, Stage-2
+entry proximity, SL, R, TP, volume, margin and the final decision.
+
+Run the two golden windows FIRST:
+
+* 2026-08-30 22:45 UTC — HAMMER BULLISH, zone 4450.54-4467.06
+* 2026-09-08 14:45 UTC — MORNING_STAR BULLISH, zone 4391.07-4399.54
