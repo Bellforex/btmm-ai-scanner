@@ -122,3 +122,79 @@ That needs XAUUSD H4 data the repository does not currently hold as a fixture
 is: **the rule and the wiring are correct by inspection, and the screenshots
 are consistent with correct behaviour under the direction rule** -- not that
 the zones have been proven valid one by one.
+
+---
+
+# 7. REAL XAUUSD H4 EVIDENCE -- AND WHERE THE RISK ACTUALLY SITS
+
+795 H4 bars captured from the live chart (`OANDA:XAUUSD`, 2026-03-23 ->
+2026-09-24) and run through the unmodified Python engine.
+
+## The engine invalidates, and often
+
+| lifecycle transition | count |
+| --- | --- |
+| CLOSE_BREACH_CANDIDATE | 96 |
+| **GENUINE_INVALIDATION_CONFIRMED** | **53** |
+| RECLAIM_CONFIRMED | 41 |
+| RECLAIM_WITHOUT_DISPLACEMENT | 35 |
+| DISPLACEMENT_AFTER_RECLAIM_CONFIRMED | 6 |
+| FALSE_INVALIDATION_CONFIRMED | 6 |
+| RECLAIM_FAILED | 2 |
+
+239 transitions over 86 POIs. **The detector layer is not the problem** -- 53
+zones were genuinely invalidated under the frozen rule.
+
+## But not one record carries INVALIDATED
+
+| `terminal_reason` | count |
+| --- | --- |
+| MITIGATED | 59 |
+| None | 27 |
+| **INVALIDATED** | **0** |
+
+`freshness_status` agrees: INTERACTED 59, FRESH 27.
+
+This is **by design**, and `resolve_terminal` says so in its own docstring:
+
+> "POI that was touched and only later broke down stays MITIGATED."
+
+Earliest cause wins. A zone is almost always touched before it is broken, so
+the genuinely-broken zones record MITIGATED, not INVALIDATED.
+
+## THE CONSEQUENCE THAT MATTERS
+
+**`terminal_reason` cannot distinguish "touched and holding" from "touched and
+then destroyed".** Both read MITIGATED. On this capture that is 59 records
+covering both populations, with 53 genuine invalidations hiding inside them.
+
+So any display gate that asked `terminal_reason == INVALIDATED` would show
+every failed zone as live. Pine does **not** ask that -- it asks:
+
+```
+poiTerminal[i] or r == C_POI_TERM_INVALIDATED
+```
+
+The `poiTerminal` flag is set independently by the breach walk when it
+concludes terminal. **The entire correctness of the active chart therefore
+rests on that single boolean**, not on the terminal reason.
+
+## WHAT IS PROVEN AND WHAT IS NOT
+
+Proven:
+
+* the invalidation rule exists, is close-based and direction-aware, and fires
+  53 times on real XAUUSD H4;
+* every one of those records reports `terminal_reason = MITIGATED`, so the
+  reason field is useless as a display gate;
+* Pine's gate reads `poiTerminal` first, which is the only thing that can
+  carry these 53 out of the display set.
+
+**Not** proven: that Pine's `poiTerminal` is actually true for those 53 at
+runtime. That needs the flag observed on the chart, and it is the single
+highest-value next measurement -- if it is false for any of them, failed zones
+are live on the chart and the fix is in the Pine breach walk, not the renderer.
+
+The author's complaint is therefore **plausible and has an identified
+mechanism**, and it has not been confirmed or refuted yet. It should not be
+"fixed" before that flag is read.
