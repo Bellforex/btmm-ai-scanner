@@ -531,3 +531,115 @@ Until these are answered the behaviour above stands, unchanged and documented.
 It has never reached a live account: execution is disabled by default, the
 trigger has never fired on any available capture, and no tester run has
 occurred.
+
+---
+
+## EXECUTION QUALITY GATES — spread/R and margin/equity
+
+Two gates added after the zero-height finding above proved that the monetary
+risk budget does not describe execution QUALITY.
+
+**They are EXECUTION DOCTRINE V1 PARAMETERS, not frozen analytical semantics.**
+RC5 specifies neither a spread tolerance nor a margin ceiling. Zero-height POIs
+remain fully valid ANALYTICALLY — nothing here deletes or invalidates a POI, it
+only refuses to trade one.
+
+| input | default | rule | deny reason |
+| --- | --- | --- | --- |
+| `InpMaxSpreadToRisk` | **0.25** | `spread <= 0.25 * R`, boundary INCLUSIVE | `SPREAD_TO_RISK_INVALID` |
+| `InpMaxMarginFraction` | **0.20** | `required_margin <= 0.20 * equity`, boundary INCLUSIVE | `MARGIN_EXPOSURE_INVALID` |
+
+Plus an explicit `R > 0` guard (`R_ZERO`) as defence in depth, since every
+downstream number divides by R.
+
+**Order matters and is asserted by a test.** The spread gate runs immediately
+after prices and BEFORE sizing — there is no point costing a trade the spread
+already disqualifies. The margin gate runs AFTER sizing, because required
+margin is a function of the volume just computed.
+
+**Three independent gates, all required.** `InpRiskPercent = 0.5` is unchanged
+and still applies. A setup must pass monetary risk sizing AND the spread gate
+AND the margin gate; they solve different problems and none substitutes for
+another. In particular the broker's `volume_max` is NOT a margin gate: it
+bounds the contract, not the account.
+
+**The margin number is the broker's.** The EA calls `OrderCalcMargin`; nothing
+reimplements MT5's margin engine, because a second implementation would be a
+second thing to be wrong. Offline, where no broker exists, the Python mirror
+reports `PENDING_TESTER` rather than `PASS` — a gate that could not be
+evaluated has not been satisfied.
+
+The measured pathological case is now denied: R = 2 ticks against a ~10 tick
+spread is a ratio of 5.0, twenty times the limit.
+
+---
+
+## SAFETY FINDING 2 — THE MIRROR IMAGE: A STALE POI WITH AN ENORMOUS R
+
+Found by the reachability walk, in the very first real `LIQUIDITY_VALIDATED`
+setup it produced. **Not fixed**, because the fix is a proximity rule and that
+is a doctrine decision.
+
+### The setup
+
+| field | value |
+| --- | --- |
+| bar | 2026-08-30 22:00 UTC |
+| POI | `HAMMER`, BULLISH |
+| zone | **308.75 – 312.85** |
+| host bar close | **~4,400** |
+| authority / validity | authoritative, VALID |
+| btmm_valid / alignment / regime | true / ALIGNED / TREND |
+| momentum / liquidity | BULLISH 66 / 70 |
+| permission / lifecycle | `BUY_BIAS` / `LIQUIDITY_VALIDATED` |
+
+A zone at 308–312 exists nowhere in the H1, M15 or M5 series (lowest 3,941) and
+nowhere in D1 (lowest 1,265). Only the **W1** series reaches that low, because
+2,000 W1 bars is roughly 38 years of history. So this is a POI formed when gold
+traded near $310, still registered, still VALID — price never came back to
+breach it — and therefore still executable.
+
+### What V1 does with it, measured
+
+Entry 4,400.00, equity 10,000, spread 0.20, margin 500:
+
+| | |
+| --- | --- |
+| distal / stop | 308.75 / 308.74 |
+| **R** | **4,091.26** |
+| take profit | **12,582.52** — nearly three times the current price |
+| volume | 0.01 |
+| realized risk | 40.91 of a 50.00 budget |
+| spread / R | 0.00005 |
+| margin fraction | 0.05 |
+| **verdict** | **ELIGIBLE** |
+
+**Every gate passes, including both new ones.** The spread gate is blind here
+by construction: a pathologically LARGE R makes the spread ratio trivially
+small, so the protection against micro-R sails straight past macro-R.
+
+### The actual gap
+
+**V1 has no proximity requirement.** Executing "at a POI" implies price is
+interacting with it, but the entry rule says only "the first tradable price
+AFTER confirmation" — it never requires the entry to be at, inside or near the
+zone. Entry 4,400 and entry 312 are both accepted against the same zone; only
+the resulting size differs.
+
+There is a second, separate question behind it: whether feeding 2,000 W1 bars
+(~38 years) as context is intended. That is a replay-configuration decision and
+changing it changes results, so it is not changed here.
+
+### Author decisions
+
+1. **Should V1 require proximity between entry and the zone?** If so, expressed
+   how — inside the zone, within N × ATR, within some multiple of R?
+2. **Should context history be bounded** so decades-old POIs do not enter the
+   registry at all? This belongs to the replay configuration, not to the
+   execution layer.
+3. **Is a maximum R or a maximum TP distance warranted** independently of
+   proximity?
+
+Pinned as tests in `tests/unit/test_rc5_ea_doctrine_vectors.py`, which assert
+what V1 DOES rather than what it should do, so the behaviour cannot drift while
+the decision is open.

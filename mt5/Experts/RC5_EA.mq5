@@ -42,6 +42,10 @@ input ulong  InpSlippagePoints   = 20;
 //--- Reference-state fixture file in MQL5\Files. Empty = no setups, which is
 //--- the default: the EA never manufactures analytical state of its own.
 input string InpSetupFile        = "";
+//--- EXECUTION DOCTRINE V1 PARAMETERS. Not analytical semantics: RC5
+//--- specifies neither a spread tolerance nor a margin ceiling.
+input double InpMaxSpreadToRisk  = 0.25;   // spread <= 25% of R
+input double InpMaxMarginFraction = 0.20;  // required margin <= 20% of equity
 input int    InpMaxSpreadPoints  = 0;      // 0 = no spread filter yet
 input bool   InpVerbose          = true;
 
@@ -434,6 +438,9 @@ struct RC5Plan
    double            realizedRisk;  // what the normalized volume actually risks
    double            volume;
    double            spread;
+   double            spreadToRisk;     // spread / R, 0 when R is not known yet
+   double            requiredMargin;   // from OrderCalcMargin, never modelled
+   double            marginFraction;   // requiredMargin / equity
    int               lifecycleTrigger;
    string            denyReason;
   };
@@ -477,6 +484,9 @@ bool RC5PlanEligibility(const RC5Setup &s, RC5Plan &p)
    p.realizedRisk     = 0.0;
    p.volume           = 0.0;
    p.spread           = 0.0;
+   p.spreadToRisk     = 0.0;
+   p.requiredMargin   = 0.0;
+   p.marginFraction   = 0.0;
    p.lifecycleTrigger = s.lifecycle;
    p.denyReason       = "";
 
@@ -891,7 +901,7 @@ ENUM_ORDER_TYPE_FILLING PickFilling(const RC5SymbolSpec &s)
 void RC5LogPlan(const RC5SymbolSpec &spec, const RC5Plan &p, const string verdict)
   {
    PrintFormat("RC5PLAN %s|%s|%s|%d|%s|conf=%I64d|dec=%I64d|entry=%s|sl=%s|tp=%s|"
-               "R=%s|riskPct=%s|riskMoney=%s|realized=%s|vol=%s|spread=%s|lc=%d|xb=%d|%s",
+               "R=%s|riskPct=%s|riskMoney=%s|realized=%s|vol=%s|spread=%s|spreadToR=%s|margin=%s|marginFrac=%s|lc=%d|xb=%d|%s",
                verdict, p.signalId, p.symbol, (int)p.timeframe,
                (p.direction == RC5_DIR_BULLISH ? "BUY"
                 : (p.direction == RC5_DIR_BEARISH ? "SELL" : "NONE")),
@@ -905,6 +915,9 @@ void RC5LogPlan(const RC5SymbolSpec &spec, const RC5Plan &p, const string verdic
                DoubleToString(p.realizedRisk, 2),
                DoubleToString(p.volume, 2),
                DoubleToString(p.spread, spec.digits),
+               DoubleToString(p.spreadToRisk, 4),
+               DoubleToString(p.requiredMargin, 2),
+               DoubleToString(p.marginFraction, 4),
                p.lifecycleTrigger, p.xbState,
                (p.denyReason == "" ? "-" : p.denyReason));
   }
@@ -1061,7 +1074,11 @@ bool RC5ProcessSetup(const RC5SymbolSpec &spec, const RC5Setup &s)
    if(!RC5PlanEligibility(s, p))  { RC5LogPlan(spec, p, "DENIED"); return false; }
    if(!RC5PlanGuards(spec, p))    { RC5LogPlan(spec, p, "DENIED"); return false; }
    if(!RC5PlanPrices(spec, s, p)) { RC5LogPlan(spec, p, "DENIED"); return false; }
+   // Gate 1 before sizing: no point costing a trade the spread disqualifies.
+   if(!RC5SpreadGate(spec, p))    { RC5LogPlan(spec, p, "DENIED"); return false; }
    if(!RC5PlanRisk(spec, p))      { RC5LogPlan(spec, p, "DENIED"); return false; }
+   // Gate 2 after sizing: margin is a function of the volume just computed.
+   if(!RC5MarginGate(spec, p))    { RC5LogPlan(spec, p, "DENIED"); return false; }
 
    if(!CanExecuteHere())
      {
@@ -1193,6 +1210,115 @@ void DispatchFixtures(const RC5SymbolSpec &spec, const string root,
       RC5LogSetup(s);
       RC5ProcessSetup(spec, s);
      }
+  }
+
+//+------------------------------------------------------------------+
+//| B8 -- EXECUTION QUALITY GATES                                    |
+//|                                                                  |
+//| Two gates that the monetary risk budget provably does NOT cover. |
+//| Both are EXECUTION DOCTRINE V1 PARAMETERS, not frozen analytical |
+//| semantics: RC5 specifies neither a spread tolerance nor a margin |
+//| ceiling, and zero-height POIs remain fully valid ANALYTICALLY.   |
+//| Nothing here deletes or invalidates a POI; it only refuses to    |
+//| TRADE one.                                                       |
+//|                                                                  |
+//| WHY THEY EXIST -- measured, not imagined. A real generated        |
+//| fixture produced a liquidity-level POI with                       |
+//| zone_top == zone_bottom, entry 1.14832, R about 2 ticks against a |
+//| spread of about 10 ticks, sized to 200.00 lots (~20,000,000 EUR). |
+//| Realized risk was 40.00 against a 50.00 budget, so EVERY existing |
+//| risk gate PASSED. The trade was nevertheless stopped out by       |
+//| transaction cost alone, and its gross exposure was bounded only   |
+//| by the broker's volume_max -- a contract limit, not a risk rule.  |
+//|                                                                  |
+//| Neither gate special-cases zero-height zones. Any setup whose R   |
+//| is small relative to the spread, or whose margin is large         |
+//| relative to equity, has the same problem whatever its geometry.   |
+//+------------------------------------------------------------------+
+
+//--- spread <= InpMaxSpreadToRisk * R. The boundary is INCLUSIVE.
+double SpreadToRisk(const double spread, const double r)
+  {
+   return (r > 0.0) ? spread / r : 0.0;
+  }
+
+//--- Required margin for the intended order, from the BROKER. This asks
+//--- OrderCalcMargin rather than reimplementing MT5's margin engine, because
+//--- a second implementation would be a second thing to be wrong.
+bool RequiredMargin(const RC5SymbolSpec &spec, const RC5Plan &p, double &margin)
+  {
+   margin = 0.0;
+   ENUM_ORDER_TYPE type = (p.direction == RC5_DIR_BULLISH) ? ORDER_TYPE_BUY
+                                                           : ORDER_TYPE_SELL;
+   return OrderCalcMargin(type, spec.name, p.volume, p.entry, margin);
+  }
+
+//+------------------------------------------------------------------+
+//| Gate 1 -- transaction cost against the planned stop.             |
+//| Runs right after prices, before any sizing: there is no point    |
+//| computing a volume for a trade the spread already disqualifies.  |
+//+------------------------------------------------------------------+
+bool RC5SpreadGate(const RC5SymbolSpec &spec, RC5Plan &p)
+  {
+   if(p.r <= 0.0)
+     {
+      p.denyReason = "R_ZERO";
+      return false;
+     }
+   p.spreadToRisk = SpreadToRisk(p.spread, p.r);
+   if(p.spread > InpMaxSpreadToRisk * p.r)
+     {
+      p.denyReason = "SPREAD_TO_RISK_INVALID";
+      PrintFormat("RC5DENY SPREAD_TO_RISK_INVALID %s|spread=%s|R=%s|ratio=%s|max=%s",
+                  p.signalId,
+                  DoubleToString(p.spread, spec.digits),
+                  DoubleToString(p.r, spec.digits),
+                  DoubleToString(p.spreadToRisk, 4),
+                  DoubleToString(InpMaxSpreadToRisk, 4));
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Gate 2 -- gross exposure against equity.                         |
+//| Runs AFTER sizing, because margin is a function of the volume.   |
+//| The broker's volume_max is NOT a substitute for this: it bounds  |
+//| the contract, not the account.                                   |
+//+------------------------------------------------------------------+
+bool RC5MarginGate(const RC5SymbolSpec &spec, RC5Plan &p)
+  {
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity <= 0.0)
+     {
+      p.denyReason = "NO_EQUITY";
+      return false;
+     }
+   double margin = 0.0;
+   if(!RequiredMargin(spec, p, margin))
+     {
+      // A broker that will not price the margin is a broker this layer will
+      // not trade blind against.
+      p.denyReason = "MARGIN_UNAVAILABLE";
+      return false;
+     }
+   p.requiredMargin = margin;
+   p.marginFraction = margin / equity;
+   if(margin > equity * InpMaxMarginFraction)
+     {
+      p.denyReason = "MARGIN_EXPOSURE_INVALID";
+      PrintFormat("RC5DENY MARGIN_EXPOSURE_INVALID %s|margin=%s|equity=%s|"
+                  "fraction=%s|max=%s|vol=%s|entry=%s|sl=%s",
+                  p.signalId,
+                  DoubleToString(margin, 2), DoubleToString(equity, 2),
+                  DoubleToString(p.marginFraction, 4),
+                  DoubleToString(InpMaxMarginFraction, 4),
+                  DoubleToString(p.volume, 2),
+                  DoubleToString(p.entry, spec.digits),
+                  DoubleToString(p.stop, spec.digits));
+      return false;
+     }
+   return true;
   }
 
 //+------------------------------------------------------------------+

@@ -33,6 +33,8 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 __all__ = [
     "APPROVED_CLOSE_EVENTS",
     "FIXTURE_FIELDS",
+    "MAX_MARGIN_FRACTION",
+    "MAX_SPREAD_TO_RISK",
     "NEVER_CLOSE_EVENTS",
     "STATE_MIGRATION_EVENTS",
     "BrokerSpec",
@@ -113,6 +115,10 @@ class BrokerSpec:
     volume_step: Decimal
     stops_level: int = 0
     freeze_level: int = 0
+    #: Informational only. The EA asks `OrderCalcMargin` for the authoritative
+    #: number; nothing here reimplements MT5's margin engine.
+    contract_size: Decimal = Decimal("100000")
+    leverage: int = 500
 
 
 @dataclass(frozen=True)
@@ -147,10 +153,36 @@ class TradePlan:
     #: The entry is whatever the market offers AFTER confirmation. Offline
     #: there is no such price, and inventing one would fabricate the result.
     entry_note: str = "ENTRY_PRICE_PENDING_TESTER"
+    spread: Decimal | None = None
+    spread_to_risk: Decimal | None = None
+    required_margin: Decimal | None = None
+    margin_fraction: Decimal | None = None
+    #: "PASS", "DENY", or "PENDING_TESTER" when the input does not exist
+    #: offline. A gate that cannot be evaluated is never silently treated as
+    #: passed.
+    spread_gate: str = "PENDING_TESTER"
+    margin_gate: str = "PENDING_TESTER"
 
 
 LIQUIDITY_VALIDATED = 7
 VALID = 0
+
+#: EXECUTION DOCTRINE V1 PARAMETERS. Not frozen analytical-engine semantics --
+#: RC5 specifies neither a spread tolerance nor a margin ceiling.
+#:
+#: The spread gate exists because the monetary risk budget alone does not
+#: describe execution QUALITY: a measured pathological case passed the 0.5%
+#: budget with room to spare (40.00 against 50.00) while the spread was about
+#: FIVE TIMES R, so the trade was stopped out by transaction cost alone. It is
+#: deliberately NOT special-cased to zero-height zones: any setup whose R is
+#: small relative to the spread has the same problem.
+MAX_SPREAD_TO_RISK = Decimal("0.25")
+
+#: The margin gate exists because the risk budget does not bound GROSS
+#: EXPOSURE when the stop is very tight -- the same case sized 200 lots, about
+#: a 20,000,000 EUR notional. Broker `volume_max` bounded it, which is a
+#: contract limit rather than a risk rule.
+MAX_MARGIN_FRACTION = Decimal("0.20")
 
 
 def fixture_line(fixture: SetupFixture) -> str:
@@ -210,11 +242,18 @@ def plan_for(
     equity: Decimal,
     risk_percent: Decimal = Decimal("0.5"),
     reward_risk: Decimal = Decimal("2.0"),
+    spread: Decimal | None = None,
+    required_margin: Decimal | None = None,
+    max_spread_to_risk: Decimal = MAX_SPREAD_TO_RISK,
+    max_margin_fraction: Decimal = MAX_MARGIN_FRACTION,
 ) -> TradePlan:
     """Everything V1 decides, given an entry price the caller supplies.
 
     The entry is a parameter rather than a computation on purpose: it is the
-    first tradable price AFTER confirmation, which exists only at runtime.
+    first tradable price AFTER confirmation, which exists only at runtime. The
+    same is true of `spread` and `required_margin`: when they are not supplied
+    the corresponding gate reports PENDING_TESTER rather than PASS, because a
+    gate that could not be evaluated has not been satisfied.
     """
     deny = _eligibility(fixture)
     if deny:
@@ -231,7 +270,35 @@ def plan_for(
         return TradePlan(eligible=False, deny_reason="STOP_WRONG_SIDE", distal=distal)
 
     r = abs(entry - stop)
+
+    # EXECUTION QUALITY, gate 1 of 2. R must exist before anything is sized
+    # against it. Unreachable after the wrong-side check above, and kept as
+    # defence in depth because every downstream number divides by it.
+    if r <= 0:
+        return TradePlan(
+            eligible=False, deny_reason="R_ZERO", distal=distal, stop=stop, r=r
+        )
+
     take = _to_tick(spec, entry + r * reward_risk if is_buy else entry - r * reward_risk)
+
+    # The spread gate. `<=` at the boundary, so spread == 25% of R is ACCEPTED.
+    spread_to_risk = None if spread is None else spread / r
+    if spread is None:
+        spread_gate = "PENDING_TESTER"
+    elif spread_to_risk is not None and spread_to_risk <= max_spread_to_risk:
+        spread_gate = "PASS"
+    else:
+        return TradePlan(
+            eligible=False,
+            deny_reason="SPREAD_TO_RISK_INVALID",
+            distal=distal,
+            stop=stop,
+            take=take,
+            r=r,
+            spread=spread,
+            spread_to_risk=spread_to_risk,
+            spread_gate="DENY",
+        )
 
     level = max(spec.stops_level, spec.freeze_level)
     if level > 0 and r < level * spec.point:
@@ -242,6 +309,9 @@ def plan_for(
             stop=stop,
             take=take,
             r=r,
+            spread=spread,
+            spread_to_risk=spread_to_risk,
+            spread_gate=spread_gate,
         )
 
     risk_money = equity * risk_percent / Decimal(100)
@@ -283,6 +353,37 @@ def plan_for(
             r=r,
             risk_money=risk_money,
         )
+    # EXECUTION QUALITY, gate 2 of 2. The risk budget does not bound GROSS
+    # EXPOSURE when the stop is tight, so required margin is checked against
+    # equity separately. `required_margin` is the BROKER's number (the EA asks
+    # OrderCalcMargin); nothing here reimplements MT5's margin engine, and an
+    # absent value reports PENDING_TESTER rather than PASS.
+    margin_fraction = (
+        None if required_margin is None or equity <= 0 else required_margin / equity
+    )
+    if required_margin is None:
+        margin_gate = "PENDING_TESTER"
+    elif margin_fraction is not None and margin_fraction <= max_margin_fraction:
+        margin_gate = "PASS"
+    else:
+        return TradePlan(
+            eligible=False,
+            deny_reason="MARGIN_EXPOSURE_INVALID",
+            distal=distal,
+            stop=stop,
+            take=take,
+            r=r,
+            volume=volume,
+            risk_money=risk_money,
+            realized_risk=volume * loss_per_lot,
+            spread=spread,
+            spread_to_risk=spread_to_risk,
+            spread_gate=spread_gate,
+            required_margin=required_margin,
+            margin_fraction=margin_fraction,
+            margin_gate="DENY",
+        )
+
     return TradePlan(
         eligible=True,
         distal=distal,
@@ -292,6 +393,12 @@ def plan_for(
         volume=volume,
         risk_money=risk_money,
         realized_risk=volume * loss_per_lot,
+        spread=spread,
+        spread_to_risk=spread_to_risk,
+        spread_gate=spread_gate,
+        required_margin=required_margin,
+        margin_fraction=margin_fraction,
+        margin_gate=margin_gate,
     )
 
 
@@ -344,6 +451,8 @@ def decide(
     symbols_with_open_position: frozenset[str] | set[str] = frozenset(),
     risk_percent: Decimal = Decimal("0.5"),
     reward_risk: Decimal = Decimal("2.0"),
+    spread: Decimal | None = None,
+    required_margin: Decimal | None = None,
 ) -> TradePlan:
     """The whole pipeline, in the EA's order: eligibility, guards, prices, risk.
 
@@ -362,4 +471,13 @@ def decide(
     )
     if deny:
         return TradePlan(eligible=False, deny_reason=deny)
-    return plan_for(spec, fixture, entry, equity, risk_percent, reward_risk)
+    return plan_for(
+        spec,
+        fixture,
+        entry,
+        equity,
+        risk_percent,
+        reward_risk,
+        spread=spread,
+        required_margin=required_margin,
+    )

@@ -215,7 +215,24 @@ def test_no_prior_result_can_influence_size() -> None:
         "equity",
         "risk_percent",
         "reward_risk",
+        "spread",
+        "required_margin",
+        "max_spread_to_risk",
+        "max_margin_fraction",
     }
+    # the point of the assertion, stated so a future addition cannot pass by
+    # simply being appended to the set above
+    for forbidden in (
+        "last",
+        "previous",
+        "prior",
+        "streak",
+        "loss",
+        "win",
+        "consecutive",
+        "multiplier",
+    ):
+        assert not any(forbidden in name for name in params), forbidden
 
 
 # ---------------------------------------------------------------------------
@@ -639,3 +656,311 @@ def test_a_broker_stop_level_does_refuse_the_tiny_stop() -> None:
     plan = plan_for(with_level, _level_poi(), Decimal("1.14832"), Decimal("10000"))
     assert not plan.eligible
     assert plan.deny_reason == "BROKER_STOP_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# EXECUTION QUALITY GATES — spread/R and margin/equity
+# ---------------------------------------------------------------------------
+#
+# Both are EXECUTION DOCTRINE V1 PARAMETERS, not analytical semantics. They
+# exist because the monetary risk budget provably does not cover either
+# problem: the pathological case above passed it with room to spare.
+#
+# Zero-height POIs stay analytically VALID. These gates refuse to TRADE a
+# setup; nothing deletes or invalidates a POI.
+
+
+def test_the_pathological_case_is_now_denied_by_the_spread_gate() -> None:
+    """The exact measured case: R = 2 ticks against a ~10 tick spread."""
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14832"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "SPREAD_TO_RISK_INVALID"
+    assert plan.spread_to_risk == Decimal("5")
+    assert plan.spread_gate == "DENY"
+
+
+def test_a_zero_height_poi_with_an_acceptable_spread_is_still_eligible() -> None:
+    """Geometry is not the disqualifier — execution quality is.
+
+    Same zero-height POI, entry far enough away that R is 70 ticks, so a 10
+    tick spread is 14% of R.
+    """
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14900"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+    )
+    assert plan.eligible
+    assert plan.spread_gate == "PASS"
+    assert plan.r == Decimal("0.00070")
+
+
+def test_an_ordinary_zone_with_a_wide_spread_is_denied_too() -> None:
+    """Not special-cased to zero-height zones."""
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),  # a real 21-tick band
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+    )
+    assert plan.r == Decimal("0.00004")
+    assert not plan.eligible
+    assert plan.deny_reason == "SPREAD_TO_RISK_INVALID"
+
+
+def test_the_spread_boundary_is_inclusive() -> None:
+    """spread == 25% of R is ACCEPTED, one tick more is not."""
+    at_boundary = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14870"),  # stop is 1.14830, so R = 40 ticks
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,  # exactly 25%
+    )
+    assert at_boundary.r == Decimal("0.00040")
+    assert at_boundary.spread_to_risk == Decimal("0.25")
+    assert at_boundary.eligible
+    assert at_boundary.spread_gate == "PASS"
+
+    over = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14870"),
+        Decimal("10000"),
+        spread=11 * EURUSD.tick_size,
+    )
+    assert not over.eligible
+    assert over.deny_reason == "SPREAD_TO_RISK_INVALID"
+
+
+def test_a_zero_R_is_refused_before_anything_divides_by_it() -> None:
+    """R == 0 means entry sits ON the stop.
+
+    It is denied as STOP_WRONG_SIDE rather than R_ZERO, because the wrong-side
+    check runs first and `stop >= entry` is true at equality. Both the mirror
+    and the EA keep an explicit `r <= 0` guard anyway, since every downstream
+    number divides by R.
+    """
+    plan = plan_for(
+        EURUSD, _confirmed(), Decimal("1.14694"), Decimal("10000")
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "STOP_WRONG_SIDE"
+    assert "R_ZERO" in _ea_source()
+
+
+def test_margin_above_the_ceiling_is_denied() -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=EURUSD.tick_size,
+        required_margin=Decimal("2500"),  # 25% of equity
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "MARGIN_EXPOSURE_INVALID"
+    assert plan.margin_fraction == Decimal("0.25")
+    assert plan.margin_gate == "DENY"
+
+
+def test_the_margin_boundary_is_inclusive() -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=EURUSD.tick_size,
+        required_margin=Decimal("2000"),  # exactly 20%
+    )
+    assert plan.eligible
+    assert plan.margin_fraction == Decimal("0.20")
+    assert plan.margin_gate == "PASS"
+
+
+def test_acceptable_margin_does_not_rescue_an_invalid_risk_size() -> None:
+    """Different problems, both required. Margin is never consulted here
+    because the risk gate denies first."""
+    plan = plan_for(
+        XAUUSD,
+        _confirmed(
+            symbol="XAUUSD",
+            zone_top=Decimal("2400.00"),
+            zone_bottom=Decimal("2380.00"),
+        ),
+        Decimal("2390.00"),
+        Decimal("10"),
+        spread=Decimal("0.01"),
+        required_margin=Decimal("0.01"),
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "RISK_BUDGET_EXCEEDED"
+
+
+def test_acceptable_risk_does_not_rescue_an_invalid_margin() -> None:
+    plan = plan_for(
+        EURUSD,
+        _confirmed(),
+        Decimal("1.14690"),
+        Decimal("10000"),
+        spread=EURUSD.tick_size,
+        required_margin=Decimal("9999"),
+    )
+    assert not plan.eligible
+    assert plan.deny_reason == "MARGIN_EXPOSURE_INVALID"
+    # the risk side HAD passed; it is not what refused the trade
+    assert plan.realized_risk is not None
+    assert plan.risk_money is not None
+    assert plan.realized_risk <= plan.risk_money
+
+
+def test_all_three_gates_passing_is_what_eligible_means() -> None:
+    plan = plan_for(
+        EURUSD,
+        _level_poi(),
+        Decimal("1.14900"),
+        Decimal("10000"),
+        spread=10 * EURUSD.tick_size,
+        required_margin=Decimal("1000"),
+    )
+    assert plan.eligible
+    assert plan.spread_gate == "PASS"
+    assert plan.margin_gate == "PASS"
+    assert plan.realized_risk is not None and plan.risk_money is not None
+    assert plan.realized_risk <= plan.risk_money
+
+
+def test_an_unevaluable_gate_reports_pending_not_pass() -> None:
+    """Offline there is no bid/ask and no broker margin. A gate that could not
+    run has NOT been satisfied, and must not read as though it had."""
+    plan = plan_for(EURUSD, _level_poi(), Decimal("1.14900"), Decimal("10000"))
+    assert plan.eligible
+    assert plan.spread_gate == "PENDING_TESTER"
+    assert plan.margin_gate == "PENDING_TESTER"
+
+
+def test_the_mql5_source_implements_both_gates_in_the_right_order() -> None:
+    """Spread before sizing, margin after — margin depends on the volume."""
+    src = _ea_source()
+    assert "input double InpMaxSpreadToRisk  = 0.25;" in src
+    assert "input double InpMaxMarginFraction = 0.20;" in src
+    assert "SPREAD_TO_RISK_INVALID" in src
+    assert "MARGIN_EXPOSURE_INVALID" in src
+    # the broker's own number, not a reimplemented margin model
+    assert "OrderCalcMargin(" in src
+
+    body = src.split("bool RC5ProcessSetup(", 1)[1][:1400]
+    order = [
+        body.index("RC5PlanPrices("),
+        body.index("RC5SpreadGate("),
+        body.index("RC5PlanRisk("),
+        body.index("RC5MarginGate("),
+    ]
+    assert order == sorted(order)
+
+
+# ---------------------------------------------------------------------------
+# THE MIRROR-IMAGE FAILURE: a STALE POI, whose R is enormous
+# ---------------------------------------------------------------------------
+#
+# Found by the reachability walk, which produced the first real
+# LIQUIDITY_VALIDATED setup: a BULLISH HAMMER with zone 308.75-312.85 while the
+# host bar closed near 4,400. The W1 context series carries 2,000 bars -- about
+# 38 years -- so POIs formed when gold traded near $310 are still registered,
+# still VALID (price never came back to breach them), and therefore still
+# executable under V1.
+#
+# The spread/R gate does NOT catch this. A pathologically LARGE R makes the
+# spread ratio trivially small, so the gate that protects against micro-R sails
+# straight past macro-R. These tests pin that, they do not fix it: the fix is a
+# proximity rule and V1 has none.
+
+
+_STALE = dict(
+    symbol="XAUUSD",
+    poi_id="HAMMER~38983f2ef82a",
+    poi_type=0,
+    direction=1,
+    zone_top=Decimal("312.85"),
+    zone_bottom=Decimal("308.75"),
+    bar_time_epoch=1788127200,
+)
+
+_XAU_LIVE = BrokerSpec(
+    name="XAUUSDm",
+    digits=2,
+    point=Decimal("0.01"),
+    tick_size=Decimal("0.01"),
+    tick_value_loss=Decimal("0.01"),
+    volume_min=Decimal("0.01"),
+    volume_max=Decimal("100"),
+    volume_step=Decimal("0.01"),
+)
+
+
+def test_a_stale_poi_far_from_price_is_ELIGIBLE_under_V1() -> None:
+    """MEASURED on the first real trigger. Every gate passes.
+
+    Entry 4,400 against a zone at 308.75-312.85 gives R = 4,091.26, a take
+    profit at 12,582.52 -- nearly three times the current price -- and a
+    volume of 0.01 lots. Risk 40.91 of a 50.00 budget, margin 5% of equity,
+    spread/R about 0.00005. Nothing refuses it.
+    """
+    plan = plan_for(
+        _XAU_LIVE,
+        _confirmed(**_STALE),
+        Decimal("4400.00"),
+        Decimal("10000"),
+        spread=Decimal("0.20"),
+        required_margin=Decimal("500"),
+    )
+    assert plan.eligible
+    assert plan.r == Decimal("4091.26")
+    assert plan.take == Decimal("12582.52")
+    assert plan.volume == Decimal("0.01")
+    assert plan.spread_gate == "PASS"
+    assert plan.margin_gate == "PASS"
+
+
+def test_the_spread_gate_cannot_see_this_because_R_is_huge() -> None:
+    """The micro-R protection is blind to macro-R, by construction."""
+    plan = plan_for(
+        _XAU_LIVE,
+        _confirmed(**_STALE),
+        Decimal("4400.00"),
+        Decimal("10000"),
+        spread=Decimal("0.20"),
+    )
+    assert plan.spread_to_risk is not None
+    assert plan.spread_to_risk < Decimal("0.0001")
+    assert plan.spread_gate == "PASS"
+
+
+def test_v1_has_no_proximity_requirement_at_all() -> None:
+    """The gap, stated as a test rather than as a comment.
+
+    Executing "at a POI" implies price is interacting with it, but the entry
+    rule says only "the first tradable price AFTER confirmation". Entry
+    4,400 and entry 312 are both accepted against the same zone; only the
+    resulting size differs.
+    """
+    far = plan_for(
+        _XAU_LIVE, _confirmed(**_STALE), Decimal("4400.00"), Decimal("10000")
+    )
+    near = plan_for(
+        _XAU_LIVE, _confirmed(**_STALE), Decimal("312.00"), Decimal("10000")
+    )
+    assert far.eligible and near.eligible
+    assert far.r is not None and near.r is not None
+    assert far.r > near.r * 1000
+    assert far.volume == Decimal("0.01")
+    assert near.volume == Decimal("15.33")
