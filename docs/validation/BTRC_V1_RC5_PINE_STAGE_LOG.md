@@ -1211,3 +1211,74 @@ its correctness is unverified.** It must not be treated as parity-proven.
 879 hard headroom is below the 1,500 the plan set as the threshold for
 starting P4. A **P4 cost probe is required** before any P4 work, and more
 capacity is likely needed.
+
+## P4 cost probe — MEASURED, and it does NOT fit
+
+An ACTIVE probe, not an estimate: standard-family Bases (RBR/DBD only) own
+patterns that are either CONTAINED in the consolidation (`mf >= bf and ml < bl`
+— strictly before the departure) or EXACTLY CO-EXTENSIVE (same span, same
+`srcCount`, and both zone edges equal, no tolerance). Activation is
+`max(owner availability, member availability)` and nothing is masked before it.
+`f_rc5Ownership()` runs inside `f_rc5Authority()` immediately after
+`map.clear(rc5Subordinate)` and BEFORE the same-origin loop, which only ever
+adds to that map and so cannot hand standing back. Base stays out of
+`REVERSAL_LADDER`.
+
+### Measurement
+
+| N | `ctx.outputILLength` | `C - 97N` |
+| --- | --- | --- |
+| 8 | 101,162 | 100,386 |
+| 10 | 101,354 | **100,384** |
+| 12 | 101,548 | **100,384** |
+
+N=10 and N=12 agree exactly, with the expected `97 x 2 = 194` interval. **N=8
+disagreed by 2** and is reported rather than dropped; the protocol wants three
+agreeing points and this campaign produced two. The conclusion does not depend
+on which value is right.
+
+| | |
+| --- | --- |
+| CORE with P2+P3 | 99,377 |
+| **CORE with P4** | **100,384** |
+| **P4 cost** | **+1,007** |
+| hard limit | 100,256 |
+| available headroom | 879 |
+| **EXCESS OVER THE HARD LIMIT** | **128** |
+
+### Consequence
+
+P4 does not fit, by 128 tokens. Per the plan this STOPS rather than being
+squeezed in: nothing was weakened — not the bootstrap, not BaseFamily, not
+co-extensive ownership, not causal activation, not `tlHit`.
+
+**The probe has been reverted from CORE**, which is back at the compiling
+99,377 build. Leaving a CORE that cannot compile would have been worse than
+having no P4 at all.
+
+A capacity recovery pass is now required before P4 can land. 128 tokens is a
+small gap, and the strict-target deficit (121) is a separate, secondary matter.
+
+## MT5 EA — environment blocked before any code was written
+
+Checked first, because writing an EA that cannot be compiled or tested would be
+unverifiable bulk:
+
+| check | result |
+| --- | --- |
+| `metaeditor64.exe` | **absent** |
+| `terminal64.exe` | **absent** |
+| `%APPDATA%\MetaQuotes` | **absent** |
+
+So `.ex5` compilation, the Strategy Tester runs on XAUUSD / EURUSD / GBPUSD, and
+capturing the Standard-account symbol properties (`SYMBOL_POINT`,
+`SYMBOL_TRADE_TICK_VALUE`, `SYMBOL_VOLUME_STEP`, `SYMBOL_TRADE_STOPS_LEVEL`, …)
+are all impossible on this machine — those properties can only be read from a
+terminal connected to the broker.
+
+A scope note the plan should carry: the EA is **not** a thin adapter. Its signal
+contract is "authoritative POI state, P5, P8, BTMM permission, validity,
+terminal events" — none of which exist in MQL5. Building it means a THIRD full
+implementation of the engine beside Python and Pine, against a Pine port whose
+parity is still unproven. That is a large, genuinely risky piece of work and it
+should start from a decision, not from a gap in the schedule.
