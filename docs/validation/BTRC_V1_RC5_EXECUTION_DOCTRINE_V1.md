@@ -151,3 +151,46 @@ than the original, and it is the one worth measuring next — not whether the
 trigger discriminates, but whether its inputs do.
 
 Nothing here changes `28d432e`.
+
+## Upstream input audit — CASE A confirmed end to end
+
+The ladder is family-blind; the remaining question was whether its six inputs
+are. Traced at the single call site, `btrc/t5_engine.py:378`:
+
+| input | expression | source dimension | uses POI type/kind/family? |
+| --- | --- | --- | --- |
+| `has_structure` | `bool(trend.timeframe_assessments)` | T1 trend | **no** |
+| `btmm_valid` | `btmm is not None` (line 222) | BTMM setup presence | **no** |
+| `alignment` | trend-direction comparison (lines 240-252) | T1 trend | **no** |
+| `favorable_regime` | `regime_value in _FAVORABLE_REGIME` | T2 regime | **no** |
+| `momentum_aligned` | `momentum_score >= 60` | T3 momentum | **no** |
+| `liquidity_ok` | `liquidity_score >= 60` | liquidity dimension | **no** |
+
+Every one is a supervisory BTRC dimension — trend, regime, momentum, liquidity
+— or a presence check on the BTMM setup object. **Not one is computed from the
+POI's type, kind or family.**
+
+### FINAL VERDICT — CASE A
+
+**`LIQUIDITY_VALIDATED` is the FINAL Execution Doctrine V1 confirmation
+trigger.** No POI family is structurally excluded, at the ladder or above it.
+Unresolved item 1 is closed.
+
+Reachability is therefore purely a market-conditions question: a family trades
+when trend, regime, momentum and liquidity agree and a BTMM setup exists — and
+never fails to trade because of what kind of POI it is.
+
+## Pine capacity — candidate REJECTED on reasoning, not measured
+
+`f_rc5IsReversal` (a 13-term `or` chain) and `f_rc5LadderRank(ty) < 99` were
+proved to cover **exactly the same 13 types** — the Pine ladder's seven rank
+groups enumerate precisely the 13 members of Python's `REVERSAL_LADDER`. So the
+merge is semantically sound.
+
+It is still **rejected**: `f_rc5IsReversal` has ONE call site, and Pine inlines
+user functions, so replacing a 13-term chain with an inlined 13-comparison,
+7-ternary ladder is a wash at best and probably a loss. Recorded here so a
+later unit does not spend compiler round-trips rediscovering it.
+
+Candidates 1 and 4-7 (dead locals, zone-equality, source-span, authority
+temporaries, dead legacy) remain unmeasured.
