@@ -19,7 +19,7 @@ in a trading terminal is not an acceptable risk to take on your behalf.
 
 | | |
 | --- | --- |
-| licence server | running on `127.0.0.1:8713`, health returns `{"status":"ok"}` |
+| licence server | **start it first** (command below); health then returns `{"status":"ok"}` |
 | demo licence | `LIC-20260924-2BR03`, ACTIVE, bound to your MT5 login and server |
 | EA preset | `MQL5/Presets/RC5_livecheck.set` — key filled in, **execution disabled three ways** |
 | startup config | `config/RC5_livecheck.ini` — attaches the EA to XAUUSDm M15 |
@@ -27,6 +27,20 @@ in a trading terminal is not an acceptable risk to take on your behalf.
 
 `RC5_livecheck.set` contains the demo licence key in plain text. It is a
 two-day demo on your own machine; **delete the file when you are done.**
+
+## START THE LICENCE SERVER FIRST
+
+It ran during verification and has since exited, so start it before the test.
+From the repository, with the event pepper in the environment:
+
+```bash
+RC5_LICENSE_PEPPER='<the event pepper>' .venv/Scripts/python.exe -m licensing.server --db '<path to event.db>' --host 127.0.0.1 --port 8713
+```
+
+Check it with `curl -sS http://127.0.0.1:8713/v1/health` -- expect
+`{"status":"ok"}`. The demo store used during verification lives in this
+session's scratchpad under a throwaway pepper; for anything beyond a rehearsal,
+create a fresh store and a real pepper.
 
 ## THE STEP
 
