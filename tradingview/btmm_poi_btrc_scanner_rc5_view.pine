@@ -592,6 +592,25 @@ var map<int, FwRg> fwRgByC = map.new<int, FwRg>()
 var array<FwSw>  fwSw  = array.new<FwSw>()
 var array<float> msPrevHL = array.from(float(na), float(na))   // last meaningful high, last meaningful low
 
+// ---- RC5 P2/P3: CAUSAL ARRIVAL + BASE FAMILY -----------------------------
+// Python authority: poi/leg_origin._direction_timeline and poi/base_arrival,
+// frozen at 28d432e. Structural direction at an instant has TWO sources: the
+// walk's BOOTSTRAP (the first HH+HL / LH+LL relationship pair) and every later
+// transition's direction_after. A port carrying only the second half is wrong,
+// and tests/unit/test_base_arrival_bootstrap_fixture proves it would still pass
+// every real-data check available -- all three captures have zero Bases in
+// their bootstrap-only window.
+var int rc5BootDir   = C_ST_NA   // 1 bullish, -1 bearish, C_ST_NA none yet
+var int rc5BootAvail = 0
+// Base identity (first base candle open time) -> family. Kept for the P4
+// ownership gate, which needs to know which Bases are standard.
+var map<int, int> rc5BaseFam = map.new<int, int>()
+int C_RC5_FAM_UNKNOWN = 0
+int C_RC5_FAM_RBR     = 1
+int C_RC5_FAM_DBR     = 2
+int C_RC5_FAM_RBD     = 3
+int C_RC5_FAM_DBD     = 4
+
 // ---- RC5 G1: MEANINGFUL SWINGS -------------------------------------------
 var map<int, int> rc5SwingRole = map.new<int, int>()
 int C_RC5_ROLE_BROKEN    = 1
@@ -1271,6 +1290,47 @@ f_p2StructureWalk(array<StructSwingView> views, array<StructRelRec> rels, array<
     int weakHighKey = weakHighIx >= 0 ? array.get(views, weakHighIx).stableKey : C_ST_NA
     int weakLowKey  = weakLowIx  >= 0 ? array.get(views, weakLowIx).stableKey  : C_ST_NA
     [dir, protHighKey, protLowKey, weakHighKey, weakLowKey, lastChange, events, brokenKeys, weakHighBoundaryAbs, weakLowBoundaryAbs, chochAborts]
+
+// =============================================================================
+// RC5 P2 — BOOTSTRAP RECOVERY AND DIRECTION-AT-TIME
+// -----------------------------------------------------------------------------
+// f_p2StructureWalk already computes the bootstrap internally, but only as
+// `lastChange`, which later transitions overwrite. Rather than widen the walk's
+// return tuple (127-slot risk) the bootstrap is recovered here from p2Rels,
+// using the SAME canonical order f_p2OrderRelationships already reproduces:
+// (availability, pivot_bar_index, record_id).
+// =============================================================================
+
+f_rc5Bootstrap(array<StructRelRec> rels, array<int> order) =>
+    int bDir   = C_ST_NA
+    int bAt    = 0
+    int lastHi = C_ST_NA
+    int lastLo = C_ST_NA
+    for [oi, _rb] in order
+        if bDir == C_ST_NA
+            StructRelRec r = array.get(rels, array.get(order, oi))
+            if f_p2RelIsHigh(r.relationshipCode)
+                lastHi := r.relationshipCode
+            else
+                lastLo := r.relationshipCode
+            if lastHi == C_ST_REL_HIGHER_HIGH and lastLo == C_ST_REL_HIGHER_LOW
+                bDir := 1
+                bAt  := r.availabilityTime
+            else if lastHi == C_ST_REL_LOWER_HIGH and lastLo == C_ST_REL_LOWER_LOW
+                bDir := -1
+                bAt  := r.availabilityTime
+    [bDir, bAt]
+
+// Direction as of instant t: the bootstrap if it is already available, then
+// every transition whose availability is <= t, latest wins. Events after t are
+// ignored, so a transition that happens between a Base's first candle and its
+// departure can never rewrite the arrival.
+f_rc5DirAt(int t) =>
+    int d = rc5BootDir != C_ST_NA and rc5BootAvail <= t ? rc5BootDir : C_ST_NA
+    for e in p3Events
+        if e.availabilityTime <= t
+            d := e.transitionCode > 0 ? 1 : -1
+    d
 
 // =============================================================================
 // MAIN — advance state ONLY on confirmed/closed bars (non-repaint).

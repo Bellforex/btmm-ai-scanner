@@ -592,6 +592,25 @@ var map<int, FwRg> fwRgByC = map.new<int, FwRg>()
 var array<FwSw>  fwSw  = array.new<FwSw>()
 var array<float> msPrevHL = array.from(float(na), float(na))   // last meaningful high, last meaningful low
 
+// ---- RC5 P2/P3: CAUSAL ARRIVAL + BASE FAMILY -----------------------------
+// Python authority: poi/leg_origin._direction_timeline and poi/base_arrival,
+// frozen at 28d432e. Structural direction at an instant has TWO sources: the
+// walk's BOOTSTRAP (the first HH+HL / LH+LL relationship pair) and every later
+// transition's direction_after. A port carrying only the second half is wrong,
+// and tests/unit/test_base_arrival_bootstrap_fixture proves it would still pass
+// every real-data check available -- all three captures have zero Bases in
+// their bootstrap-only window.
+var int rc5BootDir   = C_ST_NA   // 1 bullish, -1 bearish, C_ST_NA none yet
+var int rc5BootAvail = 0
+// Base identity (first base candle open time) -> family. Kept for the P4
+// ownership gate, which needs to know which Bases are standard.
+var map<int, int> rc5BaseFam = map.new<int, int>()
+int C_RC5_FAM_UNKNOWN = 0
+int C_RC5_FAM_RBR     = 1
+int C_RC5_FAM_DBR     = 2
+int C_RC5_FAM_RBD     = 3
+int C_RC5_FAM_DBD     = 4
+
 // ---- RC5 G1: MEANINGFUL SWINGS -------------------------------------------
 var map<int, int> rc5SwingRole = map.new<int, int>()
 int C_RC5_ROLE_BROKEN    = 1
@@ -1978,6 +1997,47 @@ f_latestDisplacement(array<float> highs, array<float> lows, array<float> opens, 
 
 //#VIEW-CUT-END NON_STRUCTURAL_ENGINES
 // =============================================================================
+// RC5 P2 — BOOTSTRAP RECOVERY AND DIRECTION-AT-TIME
+// -----------------------------------------------------------------------------
+// f_p2StructureWalk already computes the bootstrap internally, but only as
+// `lastChange`, which later transitions overwrite. Rather than widen the walk's
+// return tuple (127-slot risk) the bootstrap is recovered here from p2Rels,
+// using the SAME canonical order f_p2OrderRelationships already reproduces:
+// (availability, pivot_bar_index, record_id).
+// =============================================================================
+
+f_rc5Bootstrap(array<StructRelRec> rels, array<int> order) =>
+    int bDir   = C_ST_NA
+    int bAt    = 0
+    int lastHi = C_ST_NA
+    int lastLo = C_ST_NA
+    for [oi, _rb] in order
+        if bDir == C_ST_NA
+            StructRelRec r = array.get(rels, array.get(order, oi))
+            if f_p2RelIsHigh(r.relationshipCode)
+                lastHi := r.relationshipCode
+            else
+                lastLo := r.relationshipCode
+            if lastHi == C_ST_REL_HIGHER_HIGH and lastLo == C_ST_REL_HIGHER_LOW
+                bDir := 1
+                bAt  := r.availabilityTime
+            else if lastHi == C_ST_REL_LOWER_HIGH and lastLo == C_ST_REL_LOWER_LOW
+                bDir := -1
+                bAt  := r.availabilityTime
+    [bDir, bAt]
+
+// Direction as of instant t: the bootstrap if it is already available, then
+// every transition whose availability is <= t, latest wins. Events after t are
+// ignored, so a transition that happens between a Base's first candle and its
+// departure can never rewrite the arrival.
+f_rc5DirAt(int t) =>
+    int d = rc5BootDir != C_ST_NA and rc5BootAvail <= t ? rc5BootDir : C_ST_NA
+    for e in p3Events
+        if e.availabilityTime <= t
+            d := e.transitionCode > 0 ? 1 : -1
+    d
+
+// =============================================================================
 // MAIN — advance state ONLY on confirmed/closed bars (non-repaint).
 // =============================================================================
 if barstate.isconfirmed
@@ -2047,6 +2107,15 @@ if barstate.isconfirmed
 
     //#VIEW-RENDER-ANCHOR structure overlay lives in rc5_view_presentation.pine
     //#VIEW-CUT-BEGIN MAIN_NON_STRUCTURAL
+    // RC5 P2: freeze the bootstrap the first time it exists. Relationships are
+    // append-only over a frozen swing set, so the FIRST qualifying pair never
+    // changes on a longer prefix -- computing it once is identical to Python
+    // recomputing the timeline per prefix, and cheaper.
+    if rc5BootDir == C_ST_NA and array.size(p2Rels) > 0
+        [_rc5bD, _rc5bA] = f_rc5Bootstrap(p2Rels, f_p2OrderRelationships(p2Rels))
+        rc5BootDir   := _rc5bD
+        rc5BootAvail := _rc5bA
+
 
     // Latest confirmed of each direction. The list is append-ordered, so the last
     // entry of each type wins; scanning backwards lets us stop as soon as both
@@ -3342,6 +3411,13 @@ f_poiDetectBases(int wn) =>
                             direction := C_POI_DIR_BEARISH
                         if typeCode != 0
                             bool strong = maxBaseRange <= C_POI_BASE_SIZE_STRONG * departureRange
+                            // RC5 P3: arrival is read at the Base's FIRST CANDLE,
+                            // never at the departure -- a transition between the
+                            // two must not rewrite the family.
+                            int rc5Arr = f_rc5DirAt(array.get(wOpenT, si))
+                            int rc5Fam = rc5Arr == C_ST_NA ? C_RC5_FAM_UNKNOWN : rc5Arr > 0 ? (typeCode == C_POI_BASE_RALLY ? C_RC5_FAM_RBR : C_RC5_FAM_RBD) : (typeCode == C_POI_BASE_RALLY ? C_RC5_FAM_DBR : C_RC5_FAM_DBD)
+                            if not map.contains(rc5BaseFam, array.get(wOpenT, si))
+                                map.put(rc5BaseFam, array.get(wOpenT, si), rc5Fam)
                             f_poiEmit(typeCode, direction, baseHigh, baseLow, strong ? C_POI_TIER_STRONG : C_POI_TIER_STANDARD, array.get(wOpenT, si), length + 1, array.get(wOpenT, di), array.get(wOpenT, si), array.get(wAvailT, di))
 
 // =============================================================================
@@ -6718,6 +6794,19 @@ if barstate.isconfirmed
 // already established), so this adds exactly two persistent table objects,
 // zero new plots, and a bounded, fixed number of cell writes per bar.
 // =============================================================================
+// RC5 P2/P3 LIVENESS. The Base family has no consumer until P4 formation
+// ownership lands, and Pine eliminates state nothing observes -- which would
+// make the token measurement meaningless. This is the project's established
+// "log.info / table, not plot" mechanism (P5 already sits at 63 of Pine's 64
+// plots), emitted once on the last bar. It is not chart text and not a user
+// input.
+if barstate.islast
+    int rc5Std = 0
+    for [_fk, fv] in rc5BaseFam
+        if fv == C_RC5_FAM_RBR or fv == C_RC5_FAM_DBD
+            rc5Std := rc5Std + 1
+    log.info("RC5_P3 bootDir=" + str.tostring(rc5BootDir) + " bases=" + str.tostring(map.size(rc5BaseFam)) + " standard=" + str.tostring(rc5Std))
+
 // RC5 PANEL: the BTMM cycle marker is a chart visual and belongs to CORE.
 
 // RC5 PANEL owns the screen-space diagnostics. CORE draws the chart; this

@@ -1120,3 +1120,94 @@ option 2 would be corroboration, not a substitute.
 
 Neither is built here: P2+P3 remain gated behind VIEW runtime acceptance, and
 building the fixture early would not change that gate.
+
+## Stage P2+P3 — implemented, measured at 99,377. Parity NOT yet proven.
+
+### UI gate, and why the author's screenshot and the automation disagreed
+
+One fresh check, as asked. It still reported `document.hidden: true`, 0 of 7
+canvases laid out, 0 legend rows — while the author was looking at a rendered
+chart. Switching to the other connected browser explains it:
+
+| browser | account | chart |
+| --- | --- | --- |
+| Browser 1 (automation drives this) | **bellcare1994** | correct layout, but window hidden |
+| Browser 2 (the visible one) | **STEVECRYPTO1995** | "Chart Not Found" |
+
+So the visible window is signed into the account this work must never use, and
+the correct account lives in the hidden one. Making "the window" visible is not
+enough — it has to be **Browser 1**. Browser 2 was left immediately; only a
+navigation and a read happened there, no state-changing action.
+
+Runtime gates therefore remain environmentally blocked, and work proceeded
+offline as authorised.
+
+### What was implemented
+
+| piece | where | reuses |
+| --- | --- | --- |
+| `f_rc5Bootstrap(rels, order)` | before MAIN | `f_p2OrderRelationships` (the canonical availability / pivot-index / record-id order) and `f_p2RelIsHigh` |
+| bootstrap freeze | first statement of the CORE-only `MAIN_NON_STRUCTURAL` region | `p2Rels` |
+| `f_rc5DirAt(t)` | before MAIN | `p3Events` (`transitionCode`, `availabilityTime`) |
+| family assignment | `f_poiDetectBases`, at emit | queried at `array.get(wOpenT, si)` — the Base's FIRST candle |
+| storage | `map<int,int> rc5BaseFam` keyed by that same first-candle time | — |
+
+The walk's 127-slot return tuple was **not** touched. No second structure
+engine, no new detector, no new sort.
+
+Bootstrap is frozen once: relationships are append-only over a frozen swing
+set, so the FIRST qualifying pair never changes on a longer prefix. That is
+identical to Python recomputing the timeline per prefix, and cheaper.
+
+### Liveness
+
+The family has no consumer until P4, and Pine eliminates state nothing
+observes — which would have made the measurement meaningless. P5 already sits
+at 63 of Pine's 64 plots, so the project's established "log.info / table, not
+plot" mechanism is used: one `barstate.islast` log reporting bootstrap
+direction, Base count and standard-family count. Not chart text, not a user
+input, and it reads the family VALUES (not just the map size), so the whole
+chain is retained.
+
+One compile error was hit and fixed on the way: `CE10088 Cannot modify global
+variable in function` — the standard-family counter was being incremented
+inside `f_poiDetectBases`. The count now happens outside the function, where a
+global may be written. The map write stays, because mutating a global
+collection is permitted.
+
+### Token measurement — three points
+
+| N | `ctx.outputILLength` | `C - 97N` |
+| --- | --- | --- |
+| 20 | 101,317 | **99,377** |
+| 22 | 101,511 | **99,377** |
+| 24 | 101,705 | **99,377** |
+
+Both intervals exactly `97 x 2 = 194`.
+
+| | |
+| --- | --- |
+| CORE before P2+P3 | 98,335 |
+| **CORE after P2+P3** | **99,377** |
+| **delta** | **+1,042** |
+| **hard headroom** | **879** |
+| **strict headroom** | **-121** (over the 99,256 engineering target) |
+
+It fits the hard limit. It does not fit the strict target.
+
+### P2+P3 is NOT approved
+
+Implemented and measured is not proven. Every parity claim the plan requires —
+golden M15 DBD, synthetic RBR/DBD, the transitions-only discriminator run
+against PINE, M45/H3 families, transition-history, the future-transition guard
+and prefix stability — needs Pine's actual OUTPUT, which is only observable at
+runtime through that `log.info`. The runtime is blocked.
+
+So the honest status is: **the port compiles, its cost is known exactly, and
+its correctness is unverified.** It must not be treated as parity-proven.
+
+### P4
+
+879 hard headroom is below the 1,500 the plan set as the threshold for
+starting P4. A **P4 cost probe is required** before any P4 work, and more
+capacity is likely needed.
