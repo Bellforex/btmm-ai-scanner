@@ -35,3 +35,5 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+# MetaEditor build output; the .mq5 source is what is reviewed.
+mt5/**/*.ex5

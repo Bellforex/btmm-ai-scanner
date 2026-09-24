@@ -2676,11 +2676,82 @@ f_rc5ZonesOverlap(int a, int b) =>
 f_rc5ZoneInside(int inner, int outer) =>
     array.get(poiZoneBottom, inner) >= array.get(poiZoneBottom, outer) and array.get(poiZoneTop, inner) <= array.get(poiZoneTop, outer)
 
+// ---- RC5 P4: FORMATION OWNERSHIP ----------------------------------------
+// Ports poi/formation_ownership.py, and it answers a DIFFERENT question from
+// same-origin reversal authority: not "which synonym ranks higher" but "do
+// these two detections describe the SAME formation". A Base is not a reversal
+// and is deliberately NOT in REVERSAL_LADDER, so before this layer a Shooting
+// Star sitting INSIDE a Base outranked nothing, survived as the visible
+// authoritative record, and left the Base that actually described the decision
+// unranked. That is the author's original M15 complaint.
+//
+// Ownership changes STANDING, never IDENTITY. A Doji subordinate to a
+// Drop-Base-Drop is still a Doji with its own geometry and transport code;
+// nothing is relabelled and nothing is deleted.
+//
+// ONLY standard-family Bases own: RALLY_BASE_RALLY and DROP_BASE_DROP. A
+// DROP_BASE_RALLY or RALLY_BASE_DROP is not authoritative under the approved
+// standard and subordinates nothing.
+//
+// ORDER BLOCK and B2S/S2B (ladder ranks 1-2) are deliberately NOT ownable:
+// precedence against a Base is unestablished and must not be frozen by
+// omission. FVG is not ownable either -- a departure legitimately creates an
+// imbalance, and that imbalance is its own region rather than a restatement of
+// the Base.
+f_rc5Ownable(int ty) =>
+    int r = f_rc5LadderRank(ty)
+    r >= 3 and r < 99
+
+f_rc5Ownership() =>
+    int n = array.size(poiType)
+    for b = 0 to n - 1
+        int tb = array.get(poiType, b)
+        // srcCount > 1 is the "base candles are non-empty" guard. The emit
+        // stores (base candles..., departure), so a count of 1 is departure
+        // only and owns nothing -- Python's `if not base_ids: continue`.
+        if (tb == C_POI_BASE_RALLY or tb == C_POI_BASE_DROP) and array.get(poiSrcCount, b) > 1
+            int bf = array.get(poiSrcFirst, b)
+            int fam = map.contains(rc5BaseFam, bf) ? map.get(rc5BaseFam, bf) : C_RC5_FAM_UNKNOWN
+            if fam == C_RC5_FAM_RBR or fam == C_RC5_FAM_DBD
+                int bl = array.get(poiSrcLast, b)
+                int bc = array.get(poiSrcCount, b)
+                int ba = array.get(poiAvailTime, b)
+                int bd = array.get(poiDirection, b)
+                int btk = int(math.round(array.get(poiZoneTop, b) / syminfo.mintick))
+                int bbk = int(math.round(array.get(poiZoneBottom, b) / syminfo.mintick))
+                for m = 0 to n - 1
+                    // Direction must agree: a pattern defending the opposite
+                    // side inside the same candles is a different read of the
+                    // market, not the same decision restated.
+                    if m != b and bd == array.get(poiDirection, m) and f_rc5Ownable(array.get(poiType, m))
+                        int mf = array.get(poiSrcFirst, m)
+                        int ml = array.get(poiSrcLast, m)
+                        // CONTAINED -- every member candle is a BASE candle, so
+                        // the member must end STRICTLY BEFORE the departure. A
+                        // pattern formed on the departure describes the impulse
+                        // and keeps its independence.
+                        // CO-EXTENSIVE -- the same complete formation span, the
+                        // same source count and the same zone on BOTH edges,
+                        // with no tolerance. That is one market decision
+                        // carrying two semantic descriptions, and it is what
+                        // makes the Evening Star on the author's M15 formation
+                        // subordinate although it is not inside the pause.
+                        bool own = (mf >= bf and ml < bl) or (mf == bf and ml == bl and array.get(poiSrcCount, m) == bc and int(math.round(array.get(poiZoneTop, m) / syminfo.mintick)) == btk and int(math.round(array.get(poiZoneBottom, m) / syminfo.mintick)) == bbk)
+                        // CAUSALITY -- inert until BOTH records exist. A Base
+                        // discovered later can never retroactively suppress a
+                        // pattern that was actionable before the Base existed.
+                        if own and math.max(ba, array.get(poiAvailTime, m)) <= time_close
+                            map.put(rc5Subordinate, m, true)
+
 // One pass per bar over the registry, NOT inlined at any emission site.
 f_rc5Authority() =>
     int n = array.size(poiType)
     if n > 0
         map.clear(rc5Subordinate)
+        // P4 FIRST. Formation ownership settles standing BEFORE same-origin
+        // reversal authority runs, and that loop only ever ADDS to this map,
+        // so it can never hand subordinate standing back.
+        f_rc5Ownership()
         for i = 0 to n - 1
             int ti = array.get(poiType, i)
             int di = array.get(poiDirection, i)
@@ -6956,7 +7027,6 @@ if barstate.isconfirmed
         p7zVisibleIdx := p7zKept
         p7zActive := array.size(p7zVisibleIdx)
         int p7zShown = math.min(p7zActive, p7zMaxVisibleZones)
-        string p7zTfl = bahui.timeframeLabel(timeframe.period)
         int p7zRightEdge = time_close + p7zProjectBars * timeframe.in_seconds() * 1000
         color p7zFillColor = color.new(color.gray, 60)
         color p7zBorderColor = color.new(color.gray, 20)
@@ -7000,7 +7070,7 @@ if barstate.isconfirmed
                 int p7zPoiI = array.get(p7zVisibleIdx, p7zSelPos)
                 int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
                 int ty2 = array.get(poiType, p7zPoiI)
-                string p7zBoxTxt = p7zShowLabels ? p7zTfl + " • " + (ty2 == C_POI_DOJI ? "DOJI" : bahui.poiTypeLabel(ty2)) : ""
+                string p7zBoxTxt = p7zShowLabels ? (ty2 == C_POI_DOJI ? "DOJI" : bahui.poiTypeLabel(ty2)) : ""
                 if slot == -1
                     // MARKET-SPACE ANCHOR. `left` is this POI's OWN
                     // availability time and the box is drawn in
@@ -7016,7 +7086,6 @@ if barstate.isconfirmed
                 else
                     if not array.get(poiTerminal, p7zPoiI)
                         box.set_right(array.get(p7zBoxes, slot), p7zRightEdge)
-                        box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)
 
     // =========================================================================
     // P9 — full-system integration trace (debug only, no semantic, no new

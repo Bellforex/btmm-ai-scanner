@@ -30,6 +30,18 @@ input ENUM_TIMEFRAMES InpHostTF = PERIOD_M15;
 //--- MUST default false. See the safety note above.
 input bool   InpExecutionEnabled = false;
 input double InpRiskPercent      = 0.5;
+//--- V1 EXECUTION POLICY, not RC5 analytical doctrine. RC5 specifies no
+//--- reward multiple and no risk fraction; these belong to Layer B alone.
+input double InpRewardRisk       = 2.0;
+//--- Identifies THIS EA's positions. Nothing else is treated as RC5's.
+input long   InpMagic            = 5150001;
+//--- Required for LIVE execution OUTSIDE the Strategy Tester. This gate only
+//--- ever tightens: arming it is not sufficient on its own.
+input bool   InpAllowLiveExecution = false;
+input ulong  InpSlippagePoints   = 20;
+//--- Reference-state fixture file in MQL5\Files. Empty = no setups, which is
+//--- the default: the EA never manufactures analytical state of its own.
+input string InpSetupFile        = "";
 input int    InpMaxSpreadPoints  = 0;      // 0 = no spread filter yet
 input bool   InpVerbose          = true;
 
@@ -350,6 +362,811 @@ void LogSpec(const RC5SymbolSpec &s)
   }
 
 //+------------------------------------------------------------------+
+//| EA2-B -- RC5 EXECUTION DOCTRINE V1                               |
+//|                                                                  |
+//| LAYER SEPARATION. Everything above is RC5: the analytical engine |
+//| frozen at Python 28d432e, which produces STATE and never an      |
+//| order. Everything in this section is Execution Doctrine V1, a    |
+//| SEPARATE downstream layer authored after an audit established    |
+//| that RC5 never contained an execution contract. Nothing here is  |
+//| a claim about what the scanner has always done.                  |
+//|                                                                  |
+//| What V1 borrows from RC5 (derived, not invented):                |
+//|   trigger  lifecycle == LIQUIDITY_VALIDATED, the last analytical |
+//|            state the frozen engine assigns                       |
+//|   stop     the distal boundary read out of poi/lifecycle.py      |
+//|   exits    the two events the engine calls genuine invalidation  |
+//|                                                                  |
+//| What V1 decides for itself (execution policy, NOT RC5 doctrine): |
+//|   2R take profit, 0.5% risk, one position per symbol.            |
+//|   RC5 has never specified a reward multiple or a risk fraction.  |
+//+------------------------------------------------------------------+
+
+//--- Layer-B states. These names match the future-bot seam the Python
+//--- interface declares (RISK_VALIDATED..CLOSED), but the BEHAVIOUR below is
+//--- Execution Doctrine V1's, not something Python implemented.
+#define RC5_XB_ANALYTICAL_CONFIRMED  0
+#define RC5_XB_RISK_VALIDATED        1
+#define RC5_XB_EXECUTION_READY       2
+#define RC5_XB_TRIGGERED             3
+#define RC5_XB_MANAGED               4
+#define RC5_XB_CLOSED                5
+
+//--- Analytical terminal / lifecycle events, and what V1 does about each.
+#define RC5_TE_NONE                           0
+#define RC5_TE_MITIGATED                      1  // first touch -- NEVER closes
+#define RC5_TE_FALSE_INVALIDATION_CONFIRMED   2  // stays VALID -- NEVER closes
+#define RC5_TE_GENUINE_INVALIDATION_CONFIRMED 3  // CLOSES
+#define RC5_TE_INVALIDATED                    4  // CLOSES
+#define RC5_TE_RECLAIM_WITHOUT_DISPLACEMENT   5  // UNRESOLVED -- no action
+#define RC5_TE_RECLAIM_FAILED                 6  // UNRESOLVED -- no action
+#define RC5_TE_PROMOTED_TO_ORDER_BLOCK        7  // UNRESOLVED -- no action
+
+//--- What RC5TerminalPolicy returns.
+#define RC5_TP_NO_ACTION   0
+#define RC5_TP_CLOSE       1
+#define RC5_TP_UNRESOLVED  2
+
+//+------------------------------------------------------------------+
+//| One intended trade, fully computed. A plan is produced whether   |
+//| or not execution is armed, so safe mode logs exactly the trade   |
+//| that armed mode would have sent.                                 |
+//+------------------------------------------------------------------+
+struct RC5Plan
+  {
+   bool              eligible;
+   int               xbState;
+   string            signalId;
+   string            symbol;
+   ENUM_TIMEFRAMES   timeframe;
+   int               direction;
+   datetime          confirmedAt;   // the analytical bar that confirmed
+   datetime          decidedAt;     // when THIS layer decided
+   double            entry;
+   double            stop;
+   double            take;
+   double            r;             // |entry - stop|, in price
+   double            riskPercent;
+   double            riskMoney;     // intended, from equity
+   double            realizedRisk;  // what the normalized volume actually risks
+   double            volume;
+   double            spread;
+   int               lifecycleTrigger;
+   string            denyReason;
+  };
+
+//+------------------------------------------------------------------+
+//| Stable identity for one executable decision.                     |
+//|                                                                  |
+//| A bar timestamp alone is not enough: several POIs can confirm on |
+//| the same bar, so the POI's own identity is part of the key. The  |
+//| confirmation instance (the bar at which LIQUIDITY_VALIDATED      |
+//| became causally available) makes a later re-confirmation of the  |
+//| same POI a DIFFERENT signal, which is what "at most once per     |
+//| semantic setup" means.                                           |
+//+------------------------------------------------------------------+
+string RC5SignalId(const RC5Setup &s)
+  {
+   return StringFormat("%s|%d|%s|%d|%d|%I64d",
+                       s.symbol, (int)s.timeframe, s.poiId,
+                       s.poiType, s.direction, (long)s.barTime);
+  }
+
+//+------------------------------------------------------------------+
+//| B1 -- eligibility. Analytical state only; computes no price.     |
+//+------------------------------------------------------------------+
+bool RC5PlanEligibility(const RC5Setup &s, RC5Plan &p)
+  {
+   p.eligible         = false;
+   p.xbState          = RC5_XB_ANALYTICAL_CONFIRMED;
+   p.signalId         = RC5SignalId(s);
+   p.symbol           = s.symbol;
+   p.timeframe        = s.timeframe;
+   p.direction        = s.direction;
+   p.confirmedAt      = s.barTime;
+   p.decidedAt        = TimeCurrent();
+   p.entry            = 0.0;
+   p.stop             = 0.0;
+   p.take             = 0.0;
+   p.r                = 0.0;
+   p.riskPercent      = InpRiskPercent;
+   p.riskMoney        = 0.0;
+   p.realizedRisk     = 0.0;
+   p.volume           = 0.0;
+   p.spread           = 0.0;
+   p.lifecycleTrigger = s.lifecycle;
+   p.denyReason       = "";
+
+   string reason = "";
+   if(!RC5EligibleV1(s, reason))
+     {
+      p.denyReason = reason;
+      return false;
+     }
+   p.eligible = true;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Is a stop/target distance legal against BOTH broker levels?      |
+//|                                                                  |
+//| STOPS_LEVEL is the minimum distance from market for an attached  |
+//| SL/TP; FREEZE_LEVEL is the band in which an existing order may   |
+//| not be modified. V1 checks both and, when either is violated,    |
+//| DENIES the trade. It never widens the stop: the distal boundary  |
+//| is semantic, and moving it would execute a trade the reference   |
+//| engine did not specify.                                          |
+//+------------------------------------------------------------------+
+bool BrokerLevelsOk(const RC5SymbolSpec &s, const double entry, const double price)
+  {
+   if(!s.valid)
+      return false;
+   double dist  = MathAbs(entry - price);
+   long   level = MathMax(s.stopsLevel, s.freezeLevel);
+   if(level <= 0)
+      return true;
+   return dist >= level * s.point;
+  }
+
+//+------------------------------------------------------------------+
+//| B2 -- entry, stop and take profit.                               |
+//|                                                                  |
+//| ENTRY. The first tradable price AFTER the confirmation became    |
+//| causally available: the live ask for a buy, the live bid for a   |
+//| sell, read at decision time. There is no backfill and no fill at |
+//| the POI price -- the setup is confirmed at a bar close, and the  |
+//| only honest entry is what the market offers next.                |
+//|                                                                  |
+//| STOP. The distal boundary plus one executable tick BEYOND it,    |
+//| normalized to SYMBOL_TRADE_TICK_SIZE. `_Point` is not the        |
+//| tradable increment on every instrument and is not used.          |
+//|                                                                  |
+//| TAKE. InpRewardRisk x R. This is V1 EXECUTION POLICY. RC5 has    |
+//| never specified a reward multiple.                               |
+//+------------------------------------------------------------------+
+bool RC5PlanPrices(const RC5SymbolSpec &spec, const RC5Setup &s, RC5Plan &p)
+  {
+   if(!spec.valid)
+     {
+      p.denyReason = "SPEC_INVALID";
+      return false;
+     }
+
+   double bid = SymbolInfoDouble(spec.name, SYMBOL_BID);
+   double ask = SymbolInfoDouble(spec.name, SYMBOL_ASK);
+   if(bid <= 0.0 || ask <= 0.0)
+     {
+      p.denyReason = "NO_QUOTE";
+      return false;
+     }
+   p.spread = ask - bid;
+
+   bool   isBuy  = (s.direction == RC5_DIR_BULLISH);
+   double entry  = NormalizePriceToTick(spec, isBuy ? ask : bid);
+   double distal = RC5Distal(s);
+   double stop   = NormalizePriceToTick(spec,
+                      isBuy ? distal - spec.tickSize : distal + spec.tickSize);
+
+   // The stop must be on the far side of entry. If price has already run
+   // through the zone by the time the layer decides, there is no V1 trade.
+   if((isBuy && stop >= entry) || (!isBuy && stop <= entry))
+     {
+      p.entry = entry;
+      p.stop  = stop;
+      p.denyReason = "STOP_WRONG_SIDE";
+      return false;
+     }
+
+   double r = MathAbs(entry - stop);
+   double take = NormalizePriceToTick(spec,
+                    isBuy ? entry + r * InpRewardRisk
+                          : entry - r * InpRewardRisk);
+
+   p.entry = entry;
+   p.stop  = stop;
+   p.take  = take;
+   p.r     = r;
+
+   if(!StopDistanceOk(spec, entry, stop) || !BrokerLevelsOk(spec, entry, stop))
+     {
+      p.denyReason = "BROKER_STOP_INVALID";
+      return false;
+     }
+   if(!BrokerLevelsOk(spec, entry, take))
+     {
+      p.denyReason = "BROKER_TARGET_INVALID";
+      return false;
+     }
+   if(InpMaxSpreadPoints > 0 && spec.spreadPoints > InpMaxSpreadPoints)
+     {
+      p.denyReason = "SPREAD_TOO_WIDE";
+      return false;
+     }
+
+   p.xbState = RC5_XB_RISK_VALIDATED;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B3 -- risk and volume.                                           |
+//|                                                                  |
+//| Volume is a pure function of account equity, the stop distance   |
+//| and the broker's contract. It reads NOTHING about previous       |
+//| trades: there is no martingale, no grid, no averaging down, no   |
+//| loss-recovery multiplier and no progressive escalation anywhere  |
+//| in this program, and the absence is structural rather than a     |
+//| setting -- no prior-result term exists to switch on.             |
+//|                                                                  |
+//| The 0.5% default is V1 TESTER/RESEARCH policy. RC5 specifies no  |
+//| risk fraction.                                                   |
+//|                                                                  |
+//| When the smallest legal volume would risk MORE than the budget,  |
+//| V1 denies instead of rounding the risk up. That mirrors the stop |
+//| rule: the layer never quietly takes a bigger trade than the one  |
+//| it was authorized to take.                                       |
+//+------------------------------------------------------------------+
+bool RC5PlanRisk(const RC5SymbolSpec &spec, RC5Plan &p)
+  {
+   if(!spec.valid || p.r <= 0.0 || spec.tickSize <= 0.0)
+     {
+      p.denyReason = "RISK_MODEL_INVALID";
+      return false;
+     }
+
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity <= 0.0)
+     {
+      p.denyReason = "NO_EQUITY";
+      return false;
+     }
+   p.riskMoney = equity * InpRiskPercent / 100.0;
+   if(p.riskMoney <= 0.0)
+     {
+      p.denyReason = "RISK_BUDGET_ZERO";
+      return false;
+     }
+
+   // Money lost per 1.0 lot per tick. TICK_VALUE_LOSS is the correct side of
+   // the contract for a stop; fall back to TICK_VALUE only if the broker does
+   // not publish it.
+   double perTickPerLot = (spec.tickValueLoss > 0.0) ? spec.tickValueLoss
+                                                     : spec.tickValue;
+   if(perTickPerLot <= 0.0)
+     {
+      p.denyReason = "RISK_MODEL_INVALID";
+      return false;
+     }
+
+   double ticks      = p.r / spec.tickSize;
+   double lossPerLot = ticks * perTickPerLot;
+   if(lossPerLot <= 0.0)
+     {
+      p.denyReason = "RISK_MODEL_INVALID";
+      return false;
+     }
+
+   double desired = p.riskMoney / lossPerLot;
+
+   // Quantize DOWN first, without clamping, so "smaller than the minimum lot"
+   // is distinguishable from "a legal size that happens to be the minimum".
+   double floored = MathFloor(desired / spec.volumeStep) * spec.volumeStep;
+   if(floored < spec.volumeMin - spec.volumeStep * 0.5)
+     {
+      p.volume       = 0.0;
+      p.realizedRisk = spec.volumeMin * lossPerLot;
+      p.denyReason   = "RISK_BUDGET_EXCEEDED";
+      return false;
+     }
+
+   double vol = NormalizeVolume(spec, desired);
+   if(vol <= 0.0)
+     {
+      p.denyReason = "VOLUME_INVALID";
+      return false;
+     }
+
+   p.volume       = vol;
+   p.realizedRisk = vol * lossPerLot;
+   if(p.realizedRisk > p.riskMoney * 1.000001)
+     {
+      p.denyReason = "RISK_BUDGET_EXCEEDED";
+      return false;
+     }
+
+   p.xbState = RC5_XB_EXECUTION_READY;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B4 -- signal identity and concurrency.                           |
+//|                                                                  |
+//| Two independent guards, both required:                           |
+//|   * one execution per SEMANTIC SETUP (the signal id), so a       |
+//|     confirmed POI cannot re-fire on every subsequent tick or     |
+//|     after an EA re-init;                                         |
+//|   * at most one RC5 position per RESOLVED BROKER SYMBOL, so      |
+//|     there is no pyramiding and no same-symbol hedge.             |
+//|                                                                  |
+//| Durability: the in-memory list answers the common case, and a    |
+//| terminal GlobalVariable keyed by a hash of the id survives an    |
+//| OnInit (timeframe change, recompile, reattach) that would empty  |
+//| the array. The hash exists only because GlobalVariable names are |
+//| length-limited; the full id is what the log records.             |
+//+------------------------------------------------------------------+
+string g_consumed[];
+
+//--- FNV-1a, 64-bit, used ONLY to name a persistence slot.
+string RC5IdHash(const string id)
+  {
+   ulong h = 1469598103934665603;
+   int n = StringLen(id);
+   for(int i = 0; i < n; i++)
+     {
+      h ^= (ulong)StringGetCharacter(id, i);
+      h *= 1099511628211;
+     }
+   return "RC5X_" + StringFormat("%I64X", h);
+  }
+
+bool SignalConsumed(const string id)
+  {
+   int n = ArraySize(g_consumed);
+   for(int i = 0; i < n; i++)
+      if(g_consumed[i] == id)
+         return true;
+   return GlobalVariableCheck(RC5IdHash(id));
+  }
+
+void MarkSignalConsumed(const string id)
+  {
+   int n = ArraySize(g_consumed);
+   ArrayResize(g_consumed, n + 1);
+   g_consumed[n] = id;
+   GlobalVariableSet(RC5IdHash(id), (double)TimeCurrent());
+  }
+
+//--- Positions this EA owns on one symbol. Other EAs' and manual trades are
+//--- deliberately ignored: the magic number is what makes a position "RC5's".
+int RC5PositionCount(const string sym)
+  {
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != sym)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      count++;
+     }
+   return count;
+  }
+
+//+------------------------------------------------------------------+
+//| Duplicate / concurrency gate. Runs before ANY intended order.    |
+//+------------------------------------------------------------------+
+bool RC5PlanGuards(const RC5SymbolSpec &spec, RC5Plan &p)
+  {
+   if(SignalConsumed(p.signalId))
+     {
+      p.denyReason = "SIGNAL_ALREADY_EXECUTED";
+      return false;
+     }
+   if(RC5PositionCount(spec.name) > 0)
+     {
+      p.denyReason = "SYMBOL_POSITION_ACTIVE";
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| B5 -- terminal / invalidation mapping.                           |
+//|                                                                  |
+//| Derived from the frozen engine, not chosen here:                 |
+//|                                                                  |
+//|  MITIGATED                      NO CLOSE. rc5_semantics.py says  |
+//|                                 outright that mitigation is not  |
+//|                                 termination -- it is set at the  |
+//|                                 FIRST TOUCH. A layer that enters |
+//|                                 AT a POI touches it by entering, |
+//|                                 so closing here would close      |
+//|                                 every trade at its own entry.    |
+//|                                                                  |
+//|  FALSE_INVALIDATION_CONFIRMED   NO CLOSE. The engine keeps the   |
+//|                                 setup VALID; closing would exit  |
+//|                                 exactly the trap the doctrine    |
+//|                                 exists to survive.               |
+//|                                                                  |
+//|  GENUINE_INVALIDATION_CONFIRMED CLOSE.                           |
+//|  PoiTerminalReason.INVALIDATED  CLOSE.                           |
+//|                                                                  |
+//| Deliberately NOT closes, and deliberately not listed above:      |
+//| an opposite analytical pattern, a trend-direction change, and    |
+//| the appearance of a new authoritative POI. None of them is an    |
+//| invalidation of THIS setup.                                      |
+//|                                                                  |
+//| The three reclaim/promotion states are UNRESOLVED. V1 recognizes |
+//| and logs them and does nothing else. That is a conservative      |
+//| no-action pending policy, NOT a semantic claim that they are     |
+//| harmless.                                                        |
+//+------------------------------------------------------------------+
+int RC5TerminalPolicy(const int ev)
+  {
+   switch(ev)
+     {
+      case RC5_TE_GENUINE_INVALIDATION_CONFIRMED:
+      case RC5_TE_INVALIDATED:
+         return RC5_TP_CLOSE;
+
+      case RC5_TE_RECLAIM_WITHOUT_DISPLACEMENT:
+      case RC5_TE_RECLAIM_FAILED:
+      case RC5_TE_PROMOTED_TO_ORDER_BLOCK:
+         return RC5_TP_UNRESOLVED;
+
+      case RC5_TE_MITIGATED:
+      case RC5_TE_FALSE_INVALIDATION_CONFIRMED:
+      case RC5_TE_NONE:
+         return RC5_TP_NO_ACTION;
+     }
+   return RC5_TP_NO_ACTION;
+  }
+
+string RC5TerminalName(const int ev)
+  {
+   switch(ev)
+     {
+      case RC5_TE_NONE:                           return "NONE";
+      case RC5_TE_MITIGATED:                      return "MITIGATED";
+      case RC5_TE_FALSE_INVALIDATION_CONFIRMED:   return "FALSE_INVALIDATION_CONFIRMED";
+      case RC5_TE_GENUINE_INVALIDATION_CONFIRMED: return "GENUINE_INVALIDATION_CONFIRMED";
+      case RC5_TE_INVALIDATED:                    return "INVALIDATED";
+      case RC5_TE_RECLAIM_WITHOUT_DISPLACEMENT:   return "RECLAIM_WITHOUT_DISPLACEMENT";
+      case RC5_TE_RECLAIM_FAILED:                 return "RECLAIM_FAILED";
+      case RC5_TE_PROMOTED_TO_ORDER_BLOCK:        return "PROMOTED_TO_ORDER_BLOCK";
+     }
+   return "UNKNOWN";
+  }
+
+//+------------------------------------------------------------------+
+//| B6 -- the execution adapter.                                     |
+//|                                                                  |
+//| EVERY OrderSend in this program is inside this section, and both |
+//| of them are behind CanExecuteHere(). There is no other path to   |
+//| the market.                                                      |
+//+------------------------------------------------------------------+
+
+//--- Fifth gate, and it only ever TIGHTENS. Inside the Strategy Tester the
+//--- four existing permissions are enough; outside it, live execution
+//--- additionally requires this input to be armed deliberately. Nothing here
+//--- makes live trading easier in order to make testing possible.
+bool CanExecuteHere()
+  {
+   if(!CanExecuteLive())
+      return false;
+   if(MQLInfoInteger(MQL_TESTER))
+      return true;
+   return InpAllowLiveExecution;
+  }
+
+//--- The broker publishes a mask; sending an unsupported fill is rejected.
+ENUM_ORDER_TYPE_FILLING PickFilling(const RC5SymbolSpec &s)
+  {
+   if((s.fillingMode & SYMBOL_FILLING_FOK) != 0)
+      return ORDER_FILLING_FOK;
+   if((s.fillingMode & SYMBOL_FILLING_IOC) != 0)
+      return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
+  }
+
+//+------------------------------------------------------------------+
+//| SAFE-MODE RECORD. Emitted for every decision, armed or not, so   |
+//| a tester run and a Python reference dump can be diffed field by  |
+//| field before a single order is ever sent.                        |
+//+------------------------------------------------------------------+
+void RC5LogPlan(const RC5SymbolSpec &spec, const RC5Plan &p, const string verdict)
+  {
+   PrintFormat("RC5PLAN %s|%s|%s|%d|%s|conf=%I64d|dec=%I64d|entry=%s|sl=%s|tp=%s|"
+               "R=%s|riskPct=%s|riskMoney=%s|realized=%s|vol=%s|spread=%s|lc=%d|xb=%d|%s",
+               verdict, p.signalId, p.symbol, (int)p.timeframe,
+               (p.direction == RC5_DIR_BULLISH ? "BUY"
+                : (p.direction == RC5_DIR_BEARISH ? "SELL" : "NONE")),
+               (long)p.confirmedAt, (long)p.decidedAt,
+               DoubleToString(p.entry, spec.digits),
+               DoubleToString(p.stop,  spec.digits),
+               DoubleToString(p.take,  spec.digits),
+               DoubleToString(p.r,     spec.digits),
+               DoubleToString(p.riskPercent, 2),
+               DoubleToString(p.riskMoney, 2),
+               DoubleToString(p.realizedRisk, 2),
+               DoubleToString(p.volume, 2),
+               DoubleToString(p.spread, spec.digits),
+               p.lifecycleTrigger, p.xbState,
+               (p.denyReason == "" ? "-" : p.denyReason));
+  }
+
+//+------------------------------------------------------------------+
+//| THE ONLY OrderSend THAT OPENS A POSITION.                        |
+//+------------------------------------------------------------------+
+bool SubmitOrder(const RC5SymbolSpec &spec, RC5Plan &p)
+  {
+   if(!CanExecuteHere())
+     {
+      p.denyReason = "EXECUTION_DISABLED";
+      return false;
+     }
+
+   MqlTradeRequest  req;
+   MqlTradeResult   res;
+   ZeroMemory(req);
+   ZeroMemory(res);
+
+   req.action       = TRADE_ACTION_DEAL;
+   req.symbol       = spec.name;
+   req.volume       = p.volume;
+   req.type         = (p.direction == RC5_DIR_BULLISH) ? ORDER_TYPE_BUY
+                                                       : ORDER_TYPE_SELL;
+   req.price        = p.entry;
+   req.sl           = p.stop;
+   req.tp           = p.take;
+   req.deviation    = InpSlippagePoints;
+   req.magic        = InpMagic;
+   req.comment      = "RC5V1";
+   req.type_filling = PickFilling(spec);
+
+   if(!OrderSend(req, res))
+     {
+      p.denyReason = StringFormat("ORDER_SEND_FAILED_%d", res.retcode);
+      return false;
+     }
+   if(res.retcode != TRADE_RETCODE_DONE && res.retcode != TRADE_RETCODE_PLACED)
+     {
+      p.denyReason = StringFormat("ORDER_REJECTED_%d", res.retcode);
+      return false;
+     }
+
+   p.xbState = RC5_XB_TRIGGERED;
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| THE ONLY OrderSend THAT CLOSES A POSITION.                       |
+//| Reached exclusively from a RC5_TP_CLOSE policy decision.         |
+//+------------------------------------------------------------------+
+bool CloseRC5Position(const RC5SymbolSpec &spec, const string why)
+  {
+   if(!CanExecuteHere())
+      return false;
+
+   bool any = false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != spec.name)
+         continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+
+      long dir = PositionGetInteger(POSITION_TYPE);
+
+      MqlTradeRequest req;
+      MqlTradeResult  res;
+      ZeroMemory(req);
+      ZeroMemory(res);
+      req.action       = TRADE_ACTION_DEAL;
+      req.position     = ticket;
+      req.symbol       = spec.name;
+      req.volume       = PositionGetDouble(POSITION_VOLUME);
+      req.type         = (dir == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL
+                                                    : ORDER_TYPE_BUY;
+      req.price        = (dir == POSITION_TYPE_BUY)
+                         ? SymbolInfoDouble(spec.name, SYMBOL_BID)
+                         : SymbolInfoDouble(spec.name, SYMBOL_ASK);
+      req.deviation    = InpSlippagePoints;
+      req.magic        = InpMagic;
+      req.comment      = "RC5V1X";
+      req.type_filling = PickFilling(spec);
+
+      bool ok = OrderSend(req, res);
+      PrintFormat("RC5CLOSE %s ticket=%I64u why=%s ok=%d retcode=%d",
+                  spec.name, ticket, why, (int)ok, (int)res.retcode);
+      any = any || ok;
+     }
+   return any;
+  }
+
+//+------------------------------------------------------------------+
+//| Apply an analytical terminal event to a live RC5 position.       |
+//| The policy table in B5 decides; this only carries it out.        |
+//+------------------------------------------------------------------+
+void RC5OnTerminalEvent(const RC5SymbolSpec &spec, const int ev, const string poiId)
+  {
+   int policy = RC5TerminalPolicy(ev);
+   string name = RC5TerminalName(ev);
+
+   if(policy == RC5_TP_UNRESOLVED)
+     {
+      PrintFormat("RC5TERM %s poi=%s event=%s TERMINAL_POLICY_UNRESOLVED "
+                  "(recognized, logged, NO ACTION -- pending doctrine)",
+                  spec.name, poiId, name);
+      return;
+     }
+   if(policy != RC5_TP_CLOSE)
+     {
+      if(InpVerbose)
+         PrintFormat("RC5TERM %s poi=%s event=%s NO_CLOSE (non-terminal for V1)",
+                     spec.name, poiId, name);
+      return;
+     }
+
+   if(RC5PositionCount(spec.name) == 0)
+     {
+      PrintFormat("RC5TERM %s poi=%s event=%s CLOSE_REQUESTED but no RC5 position",
+                  spec.name, poiId, name);
+      return;
+     }
+   if(!CanExecuteHere())
+     {
+      PrintFormat("RC5TERM %s poi=%s event=%s CLOSE_REQUESTED "
+                  "(safe mode -- not sent)", spec.name, poiId, name);
+      return;
+     }
+   CloseRC5Position(spec, name);
+  }
+
+//+------------------------------------------------------------------+
+//| B1..B6 in order, for one analytical setup.                       |
+//|                                                                  |
+//| The WHOLE pipeline runs whether or not execution is armed. In    |
+//| safe mode the only thing that does not happen is the OrderSend,  |
+//| which is what makes the safe-mode log a faithful preview.        |
+//+------------------------------------------------------------------+
+bool RC5ProcessSetup(const RC5SymbolSpec &spec, const RC5Setup &s)
+  {
+   RC5Plan p;
+
+   if(!RC5PlanEligibility(s, p))  { RC5LogPlan(spec, p, "DENIED"); return false; }
+   if(!RC5PlanGuards(spec, p))    { RC5LogPlan(spec, p, "DENIED"); return false; }
+   if(!RC5PlanPrices(spec, s, p)) { RC5LogPlan(spec, p, "DENIED"); return false; }
+   if(!RC5PlanRisk(spec, p))      { RC5LogPlan(spec, p, "DENIED"); return false; }
+
+   if(!CanExecuteHere())
+     {
+      RC5LogPlan(spec, p, "WOULD_EXECUTE");
+      return false;
+     }
+
+   bool sent = SubmitOrder(spec, p);
+   if(sent)
+      MarkSignalConsumed(p.signalId);
+   RC5LogPlan(spec, p, sent ? "EXECUTED" : "DENIED");
+   return sent;
+  }
+
+//+------------------------------------------------------------------+
+//| B7 -- FIXTURE FEED (tester / parity only).                        |
+//|                                                                  |
+//| THIS IS NOT A LIVE SIGNAL SOURCE. The MT5 side of RC5 has no      |
+//| detector: the analytical engine is Python (frozen at 28d432e) and |
+//| Pine. What this reads is a file of ALREADY-DECIDED analytical     |
+//| state, exported from the reference engine, in exactly the field   |
+//| order RC5LogSetup prints. Its purpose is to let a Strategy Tester |
+//| run drive Execution Doctrine V1 with REAL reference state so the  |
+//| EA's decisions can be diffed against the Python expectation,      |
+//| instead of against state the EA invented for itself.              |
+//|                                                                  |
+//| Format, one setup per line, '#' starts a comment:                 |
+//|   symbol|tf|barTimeEpoch|poiId|poiType|direction|zoneTop|         |
+//|   zoneBottom|authoritative|validity|p5|lifecycle                  |
+//|                                                                  |
+//| `symbol` is the LOGICAL root (XAUUSD); the broker's real name is  |
+//| resolved at runtime, so a fixture is portable across servers.     |
+//+------------------------------------------------------------------+
+RC5Setup g_fixtures[];
+bool     g_fixtureDone[];
+
+bool ParseFixtureLine(const string line, RC5Setup &s)
+  {
+   string f[];
+   if(StringSplit(line, '|', f) != 12)
+      return false;
+   for(int i = 0; i < 12; i++)
+     {
+      StringTrimLeft(f[i]);
+      StringTrimRight(f[i]);
+     }
+
+   s.symbol        = f[0];
+   s.timeframe     = (ENUM_TIMEFRAMES)(int)StringToInteger(f[1]);
+   s.barTime       = (datetime)StringToInteger(f[2]);
+   s.poiId         = f[3];
+   s.poiType       = (int)StringToInteger(f[4]);
+   s.direction     = (int)StringToInteger(f[5]);
+   s.zoneTop       = StringToDouble(f[6]);
+   s.zoneBottom    = StringToDouble(f[7]);
+   s.authoritative = (StringToInteger(f[8]) != 0);
+   s.validity      = (int)StringToInteger(f[9]);
+   s.p5Permission  = (StringToInteger(f[10]) != 0);
+   s.lifecycle     = (int)StringToInteger(f[11]);
+   s.populated     = true;
+
+   // A zone with top below bottom is a broken export, not a tradable setup.
+   return (s.zoneTop >= s.zoneBottom && s.poiId != "");
+  }
+
+int LoadFixtures(const string file)
+  {
+   ArrayResize(g_fixtures, 0);
+   ArrayResize(g_fixtureDone, 0);
+   if(file == "")
+      return 0;
+
+   int h = FileOpen(file, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE)
+     {
+      PrintFormat("RC5 EA: fixture file %s not found (err %d) -- pipeline idle",
+                  file, GetLastError());
+      return 0;
+     }
+
+   int n = 0, bad = 0;
+   while(!FileIsEnding(h))
+     {
+      string line = FileReadString(h);
+      StringTrimLeft(line);
+      StringTrimRight(line);
+      if(line == "" || StringGetCharacter(line, 0) == '#')
+         continue;
+
+      RC5Setup s;
+      if(!ParseFixtureLine(line, s))
+        {
+         bad++;
+         continue;
+        }
+      ArrayResize(g_fixtures, n + 1);
+      ArrayResize(g_fixtureDone, n + 1);
+      g_fixtures[n]    = s;
+      g_fixtureDone[n] = false;
+      n++;
+     }
+   FileClose(h);
+   PrintFormat("RC5 EA: loaded %d fixture setups from %s (%d unparseable)",
+               n, file, bad);
+   return n;
+  }
+
+//--- Dispatch every fixture whose confirmation bar has now CLOSED on this
+//--- symbol. `<=` rather than `==` so a fixture whose exact bar was skipped
+//--- by the tester's data is still seen once, and never before its time.
+void DispatchFixtures(const RC5SymbolSpec &spec, const string root,
+                      const datetime closedBarTime)
+  {
+   int n = ArraySize(g_fixtures);
+   for(int i = 0; i < n; i++)
+     {
+      if(g_fixtureDone[i])
+         continue;
+      if(g_fixtures[i].symbol != root && g_fixtures[i].symbol != spec.name)
+         continue;
+      if(g_fixtures[i].barTime > closedBarTime)
+         continue;
+
+      // The EA trades the broker's symbol, whatever the fixture called it.
+      RC5Setup s = g_fixtures[i];
+      s.symbol = spec.name;
+
+      g_fixtureDone[i] = true;
+      RC5LogSetup(s);
+      RC5ProcessSetup(spec, s);
+     }
+  }
+
+//+------------------------------------------------------------------+
 int OnInit()
   {
    int n = StringSplit(InpSymbolRoots, ',', g_roots);
@@ -398,6 +1215,12 @@ int OnInit()
                AccountInfoString(ACCOUNT_CURRENCY),
                (int)AccountInfoInteger(ACCOUNT_LEVERAGE));
 
+   LoadFixtures(InpSetupFile);
+   PrintFormat("RC5 EA2-B: trigger=LIQUIDITY_VALIDATED | RR=%s | risk=%s%% | magic=%I64d | tester=%d | liveArmed=%d | canExecute=%d",
+               DoubleToString(InpRewardRisk, 2), DoubleToString(InpRiskPercent, 2),
+               InpMagic, (int)MQLInfoInteger(MQL_TESTER),
+               (int)InpAllowLiveExecution, (int)CanExecuteHere());
+
    if(usable == 0)
       return INIT_FAILED;
    return INIT_SUCCEEDED;
@@ -435,8 +1258,10 @@ void OnTick()
                      (int)g_spec[i].spreadPoints,
                      DoubleToString(SpreadPrice(g_spec[i]), g_spec[i].digits));
 
-      // EA2 attaches the RC5 semantic state here; EA3 maps it to intended
-      // trades; EA4 adds lifecycle. Each passes through CanExecuteLive().
+      // EA2-B: drive Execution Doctrine V1 from REFERENCE state only. With no
+      // fixture file this loop dispatches nothing, which is the whole point --
+      // the EA has no detector and must never act as if it had one.
+      DispatchFixtures(g_spec[i], g_roots[i], g_lastBar[i]);
      }
   }
 //+------------------------------------------------------------------+

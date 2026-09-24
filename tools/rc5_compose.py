@@ -72,7 +72,10 @@ CHART_RENDERERS: list[tuple[str, str, str]] = [
     ),
     (
         "    // P7-Z — POI zone visualization (informational, presentation-only).",
-        "                        box.set_text(array.get(p7zBoxes, slot), p7zBoxTxt)",
+        # was `box.set_text` until the presentation compaction removed it: the
+        # text cannot change for an existing box, because a POI's type is
+        # immutable once registered.
+        "                        box.set_right(array.get(p7zBoxes, slot), p7zRightEdge)",
         "P7-Z zone boxes and labels",
     ),
 ]

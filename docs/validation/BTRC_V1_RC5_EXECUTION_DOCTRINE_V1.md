@@ -321,3 +321,140 @@ All three are "the zone still exists but something changed" cases. V1
 deliberately holds the position in each: the stop and the approved close events
 already bound the risk, and inventing an exit here would be exactly the
 strategy invention this layer is forbidden to do.
+
+---
+
+## EA2-B — V1 implemented in MQL5
+
+`mt5/Experts/RC5_EA.mq5`. Six blocks, each compiled to **0 errors, 0 warnings**
+before the next was written.
+
+| block | what it adds | where |
+| --- | --- | --- |
+| B1 | eligibility, Layer-B states, `RC5Plan`, signal identity | `RC5PlanEligibility` |
+| B2 | entry, distal stop, 2R target, broker level validation | `RC5PlanPrices` |
+| B3 | 0.5% risk sizing and volume normalization | `RC5PlanRisk` |
+| B4 | one-per-signal and one-per-symbol guards | `RC5PlanGuards` |
+| B5 | terminal-event policy table | `RC5TerminalPolicy` |
+| B6 | the single execution adapter | `SubmitOrder` / `CloseRC5Position` |
+| B7 | reference-state fixture feed (tester/parity only) | `DispatchFixtures` |
+
+### Two decisions this layer made, and why
+
+**A minimum lot that would exceed the risk budget is DENIED, not taken.**
+`NormalizeVolume` clamps up to `SYMBOL_VOLUME_MIN`, so a small account plus a
+wide stop silently produces a trade larger than 0.5%. V1 quantizes DOWN first,
+without clamping, and refuses with `RISK_BUDGET_EXCEEDED` when the floor falls
+below the minimum lot. That is the volume counterpart of never widening a stop:
+the layer does not quietly take a bigger trade than it was authorized to take.
+
+**A fifth execution gate, which only ever tightens.** `CanExecuteHere()` calls
+the existing `CanExecuteLive()` (input + terminal + account + expert) and then
+requires EITHER `MQL_TESTER` OR `InpAllowLiveExecution`, which defaults false.
+The consequence is worth stating plainly: the tester `.set` files carry
+`InpExecutionEnabled=true`, and since this gate exists **those files can no
+longer arm a live account even if loaded onto a live chart**.
+
+### Deny reasons, complete
+
+`NO_STATE`, `NOT_AUTHORITATIVE`, `NOT_VALID`, `NO_P5`, `NOT_CONFIRMED`,
+`NO_DIRECTION`, `SIGNAL_ALREADY_EXECUTED`, `SYMBOL_POSITION_ACTIVE`,
+`SPEC_INVALID`, `NO_QUOTE`, `STOP_WRONG_SIDE`, `BROKER_STOP_INVALID`,
+`BROKER_TARGET_INVALID`, `SPREAD_TOO_WIDE`, `RISK_MODEL_INVALID`, `NO_EQUITY`,
+`RISK_BUDGET_ZERO`, `RISK_BUDGET_EXCEEDED`, `VOLUME_INVALID`,
+`EXECUTION_DISABLED`, `ORDER_SEND_FAILED_<retcode>`,
+`ORDER_REJECTED_<retcode>`.
+
+### Safe mode is the default, and it is the parity instrument
+
+With execution disabled the ENTIRE pipeline runs and emits `RC5PLAN … 
+WOULD_EXECUTE` carrying signal id, symbol, timeframe, direction, confirmation
+and decision timestamps, entry, SL, TP, R, risk %, risk money, realized risk,
+volume, spread, lifecycle trigger and Layer-B state. The only thing that does
+not happen is the `OrderSend`, which is what makes that line a faithful preview.
+
+### The EA has no detector, deliberately
+
+`InpSetupFile` reads analytical state EXPORTED from the reference engine. It is
+not a signal source. With no file configured — the default — the EA dispatches
+nothing at all, because a third independent implementation of RC5 in MQL5 is
+precisely what this architecture is avoiding.
+
+### Not claimed
+
+No MQL5 runtime test was executed and no Strategy Tester run has happened:
+launching one needs a terminal start with a custom config, which this
+environment denies. `tests/unit/test_rc5_ea_doctrine_vectors.py` pins the
+arithmetic in Python and asserts the MQL5 source states the same rules, which
+is an offline agreement check, not a runtime proof.
+
+---
+
+## TRACK F — the three unresolved states, TRACED (evidence, not a decision)
+
+The author's instruction stands: **do not invent close behaviour**. V1's
+runtime behaviour is unchanged — all three are recognized, logged
+`TERMINAL_POLICY_UNRESOLVED`, and neither close nor reverse a position. What
+follows is what the FROZEN ENGINE actually does with them, so the decision can
+be made from evidence.
+
+### The structural fact that separates them
+
+Two of the three are not terminal reasons at all. `RECLAIM_WITHOUT_DISPLACEMENT`
+and `RECLAIM_FAILED` are members of **`PoiLifecycleStatus`**;
+`PROMOTED_TO_ORDER_BLOCK` is a member of **`PoiTerminalReason`**. Different
+enums, consumed by different code.
+
+| state | enum | sets `terminal`? | `rc5_validity` | what the walk does next |
+| --- | --- | --- | --- | --- |
+| `RECLAIM_WITHOUT_DISPLACEMENT` | `PoiLifecycleStatus` | **no** | **VALID** | `i = reclaim_index + 1; continue` |
+| `RECLAIM_FAILED` | `PoiLifecycleStatus` | **no** | **VALID** | `i = window_end; continue` |
+| `PROMOTED_TO_ORDER_BLOCK` | `PoiTerminalReason` | yes | **SUPERSEDED** | record ends; the formation lives on as the OB |
+
+Compare `GENUINE_INVALIDATION_CONFIRMED` in the same walk, which sets
+`terminal = True` explicitly. Neither reclaim state does.
+
+### What that means for each of the author's four questions
+
+**`RECLAIM_WITHOUT_DISPLACEMENT`** — far side was breached, price reclaimed the
+zone, but no displacement followed. The walk CONTINUES from the reclaim bar and
+the POI stays VALID. Evidence says: **state migration only.** It cancels no
+pending setup, removes no execution permission and does not touch a position.
+It is an intermediate state on the way to either false or genuine invalidation,
+and it may still become either.
+
+**`RECLAIM_FAILED`** — the reclaim window expired without a qualifying reclaim.
+Same shape: status recorded, walk continues, POI stays VALID. Evidence says:
+**state migration only.** Note it is NOT the same as invalidation; the walk
+reaches `GENUINE_INVALIDATION_CONFIRMED` by a different branch that does set
+`terminal`.
+
+**`PROMOTED_TO_ORDER_BLOCK`** — genuinely different. It IS terminal, and
+`rc5_validity` maps it to SUPERSEDED, not INVALIDATED, with the explicit
+comment that it is "NOT a failure". The RC3 movement-origin rule ends an
+engulfing record when its ORDER BLOCK record becomes available so that one
+formation never has two live records. `apply_order_block_promotion` also keeps
+an EARLIER cause: a zone price had already used stays MITIGATED.
+
+For execution this splits cleanly:
+
+* **New entries are already handled, with no new rule.** V1 requires
+  `validity == VALID`, and SUPERSEDED is not VALID, so a promoted record can
+  never open a position. That is existing behaviour, not a proposal.
+* **An OPEN position is the open question.** The formation did not fail — it
+  continues under the ORDER BLOCK record — so closing on promotion would exit a
+  setup the engine still considers live, while ignoring it means the position is
+  managed against a record that no longer updates.
+
+### What is therefore still the author's to decide
+
+Only one of the three is genuinely open, and only in one direction:
+
+> When a position is open on an engulfing record that is then
+> `PROMOTED_TO_ORDER_BLOCK`, does V1 (a) hold on the original stop and target,
+> (b) migrate management onto the ORDER BLOCK record, or (c) close?
+
+The two reclaim states have no such question attached: the frozen engine keeps
+the POI VALID through both, so a close would contradict the analytical layer.
+That is an observation about the code, **not** a doctrine change — V1 still
+logs them and does nothing.

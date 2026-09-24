@@ -1396,3 +1396,110 @@ Three honest options, none taken here:
    restructuring rarely pays here.
 
 Option 1 is the only one with a measured reserve behind it.
+
+## Presentation compaction — MEASURED, and two of four candidates were worth ZERO
+
+The author's A2 instruction was to measure the WHOLE display-text pipeline for
+POI boxes rather than assume the one obvious line would pay. Inventorying CORE
+first settled how much there was to find: **no `label.new`, no `table.new`, no
+`table.cell`, one `box.new` and one `box.set_text` in the entire file.** The
+POI box text IS the display-text pipeline; everything else screen-space already
+lives in PANEL.
+
+Four variants were built and measured against the same oracle and pad family.
+
+| variant | what it removes | `C - 97N` | saved |
+| --- | --- | --- | --- |
+| baseline | — | 99,304 | — |
+| PRES-3B | `text_halign`/`text_valign` (both already default to centre) | 99,304 | **0** |
+| PRES-ST | the redundant `box.set_text` on update | 99,253 | **51** |
+| PRES-C | PRES-ST + the timeframe prefix and separator | **99,194** | **110** |
+| PRES-4 | all box text (last-resort probe) | 99,125 | 179 |
+
+**PRES-3B is the interesting zero.** Removing two named arguments whose values
+equal their own defaults recovered nothing, so the cost is not in the argument
+list — it is in building the string and in the second drawing call.
+
+**`box.set_text` is provably redundant, not merely cheap.** The text is a pure
+function of the POI's type, and `array.set(poiType, ...)` **does not occur
+anywhere in CORE** — a registered POI's type is immutable, so the text of an
+existing box can never change. Removing the call is a no-op by construction,
+which is why 51 tokens came free of any visual or semantic loss.
+
+### What the boxes lost, and what they did not
+
+The remaining 59 came from dropping `"M15 • "` — the chart's own timeframe,
+restated on every zone. Under the author's preference order this is outcome 2,
+"type-only text": the POI type name is still drawn in full.
+
+Outcome 1, "compact readable names", is **structurally unavailable**. The names
+come from `bahui.poiTypeLabel()` in the published BAH library, which is
+protected and must not be republished; shortening them inside CORE would mean
+building a name table there, which ADDS tokens. Reporting that as a measured
+impossibility rather than an untried option.
+
+PRES-4 was measured but **not taken**: 179 tokens is more than the requirement
+and boxes with no text at all are the last resort, not the cheapest win.
+
+## P4 — FORMATION OWNERSHIP LANDED, three agreeing points
+
+The probe at `e117939` was reverted inside its own commit, so no P4 source
+existed in history to restore; it was re-implemented from the doctrine this log
+and `poi/formation_ownership.py` already fix exactly.
+
+| N | `ctx.outputILLength` | `C - 97N` |
+| --- | --- | --- |
+| 12 | 101,347 | **100,183** |
+| 16 | 101,735 | **100,183** |
+| 20 | 102,123 | **100,183** |
+
+Three points, exact agreement, at the expected 97-per-pad interval.
+
+| | |
+| --- | --- |
+| CORE before compaction | 99,304 |
+| presentation compaction | −110 |
+| **optimized pre-P4 CORE** | **99,194** |
+| **CORE with P4** | **100,183** |
+| **P4 cost** | **+989** |
+| hard limit | 100,256 |
+| **hard headroom** | **73** |
+
+P4 costs 989 here against the probe's 1,007. The difference is encoding, not
+doctrine: the tick normalisation is inlined (`f_poiTicks` is defined *after*
+the authority block and cannot be called from it) and the ownable-type test
+reuses `f_rc5LadderRank` instead of restating a nine-term chain.
+
+### The doctrine, unchanged
+
+* Owners: **RBR and DBD only.** RBD, DBR and UNKNOWN own nothing.
+* Ownable members: ladder ranks 3–7 — star, engulfing, hammer/shooting star,
+  doji, pressure wick. ORDER BLOCK and B2S/S2B (ranks 1–2) are excluded
+  because precedence against a Base is unestablished; FVG is excluded because a
+  departure's imbalance is its own region.
+* Contained: `mf >= bf and ml < bl` — strictly before the departure.
+* Co-extensive: same span, same `srcCount`, both zone edges equal, no tolerance.
+* Direction must agree.
+* Activation: `max(owner, member)` availability, compared against `time_close`
+  because `wAvailT` is defined as the bar CLOSE time.
+* `f_rc5Ownership()` runs inside `f_rc5Authority()` immediately after
+  `map.clear(rc5Subordinate)` and BEFORE the same-origin loop, which only ever
+  ADDS to that map and so cannot hand standing back.
+* Base stays out of `REVERSAL_LADDER`.
+
+### VIEW is unaffected, and that was checked rather than assumed
+
+Regenerating from the new CORE left `btmm_poi_btrc_scanner_rc5_view.pine`
+**byte-identical** — P4 and the presentation compaction both fall inside
+existing VIEW cut regions, so VIEW remains structure-only exactly as the author
+required. PANEL did change, and its P7-Z end marker had to move from the
+deleted `box.set_text` line to `box.set_right`; the composer raised
+`CompositionError` rather than cutting blind, which is the behaviour that
+marker machinery exists for.
+
+### What is still NOT proven
+
+Token-verified is not parity-verified. Every P2/P3/P4 runtime claim — golden
+M15 DBD, synthetic RBR/DBD, the transitions-only discriminator against PINE,
+M45/H3 families, transition history, the future-transition guard and prefix
+stability — needs Pine's actual OUTPUT on a chart. That is a separate gate.
