@@ -33,7 +33,7 @@ a thing can be provably correct in source and still never have run.
 
 | component | highest level reached | next level, and what blocks it |
 | --- | --- | --- |
-| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,798 tests; it IS the reference) |
+| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,800 tests; it IS the reference) |
 | **Pine CORE / P4** | **SOURCE-VERIFIED** + COMPILED + token-verified | RUNTIME-VERIFIED — TradingView renderer |
 | **Pine VIEW / PANEL** | **SOURCE-VERIFIED** (generated, anti-drift tested) | RUNTIME-VERIFIED — same |
 | **EA — broker adapter** | **COMPILED** | TESTER-VERIFIED — process launch denied |
@@ -55,7 +55,7 @@ happens.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,798 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,800 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
@@ -160,7 +160,8 @@ correctly even while the page reports itself hidden.
 | --- | --- | --- |
 | 8.1 | configs for XAUUSDm / EURUSDm / GBPUSDm | **PASS** |
 | 8.2 | per-symbol report paths | **PASS** |
-| 8.3 | tester execution | **BLOCKED** — a terminal launch with `/config:` is denied in this sandbox |
+| 8.3 | tester execution | **BLOCKED** — narrowed: generic process launch now works; closing/launching MetaTrader is refused, and MT5 allows one instance per data folder |
+| 8.3a | acceptance run staged | **PASS** — EA installed byte-identical, fixture file, `.set` and launch config all in place |
 | 8.4 | XAUUSDm run | **BLOCKED** |
 | 8.5 | EURUSDm run | **BLOCKED** |
 | 8.6 | GBPUSDm run | **BLOCKED** |
@@ -189,7 +190,8 @@ correctly even while the page reports itself hidden.
 | 10.12 | structure visual decision pack | **PASS** |
 | 10.13 | demonstration package | **PASS** |
 | 10.14 | parameter consistency audit, 0 mismatches | **PASS** |
-| 10.15 | release backup | **PENDING** |
+| 10.15 | release artifact integrity | **PASS** — `tools/rc5_release_integrity.py`; caught a stale installed EA |
+| 10.16 | release backup | **PENDING** |
 
 ---
 

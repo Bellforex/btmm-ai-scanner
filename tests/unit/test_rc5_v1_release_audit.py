@@ -459,3 +459,50 @@ def test_the_ea_takes_its_margin_from_the_broker() -> None:
     src = _ea()
     assert "OrderCalcMargin(" in src
     assert "MARGIN_UNAVAILABLE" in src, "a broker that will not price it must deny"
+
+
+# ---------------------------------------------------------------------------
+# RELEASE ARTIFACT INTEGRITY
+# ---------------------------------------------------------------------------
+
+
+def test_the_installed_ea_matches_the_repository() -> None:
+    """Caught a real one: the terminal held the PRE-FIX build.
+
+    The EA had been recompiled in the repository after the signal-id separator
+    changed to `~`, but the copy installed in the MetaTrader data folder was
+    never refreshed. Both copies compiled cleanly and described themselves
+    identically; only their hashes disagreed. A tester run would have exercised
+    the old build and emitted pipe-bearing signal ids the parser now refuses.
+
+    Skips with an explicit reason where no terminal exists, rather than
+    reporting success for a check that could not run.
+    """
+    from tools.rc5_release_integrity import (  # type: ignore[import-not-found]
+        check_installed_ea,
+        installed_ea_paths,
+    )
+
+    if installed_ea_paths() is None:
+        pytest.skip("no MetaTrader data folder on this machine")
+    result = check_installed_ea()
+    assert result.ok, result.detail
+
+
+def test_view_regenerates_from_core_without_a_diff() -> None:
+    """The committed VIEW must be exactly what the composer produces.
+
+    PANEL has its own dedicated suite (`test_rc5_panel_composition.py`); this
+    asserts the one artifact the release pair depends on, rather than writing
+    a second half-check that could pass vacuously.
+    """
+    from tools.rc5_compose import (  # type: ignore[import-not-found]
+        CORE,
+        VIEW,
+        VIEW_PART,
+        compose_view,
+    )
+
+    core = CORE.read_bytes().decode("utf-8")
+    part = VIEW_PART.read_bytes().decode("utf-8")
+    assert VIEW.read_bytes().decode("utf-8") == compose_view(core, part)

@@ -5,9 +5,10 @@ direct run**, not more design work. Every value that can be known in advance is
 here; everything that cannot is marked `PENDING_TESTER` and must be *observed*,
 never filled in from hindsight.
 
-**Current execution availability: BLOCKED.** Launching MetaTrader with a custom
-`/config:` is denied in this sandbox. That launch has already been attempted and
-refused; do not retry it. Nothing below depends on retrying it.
+**Current execution availability: BLOCKED**, but the cause has NARROWED — see
+the appendix. Generic process launch is now permitted; what is refused is
+launching or closing MetaTrader itself, and MetaTrader allows only one instance
+per data folder. Everything else is staged and verified.
 
 ---
 
@@ -172,3 +173,54 @@ optimize parameters; V1 policy is frozen for verification.
 false, and `CanExecuteHere()` requires `MQL_TESTER` **or** that second arm — so
 a tester profile cannot arm a live account even if loaded onto a live chart.
 No deposits, no withdrawals, no transfers, no live orders.
+
+---
+
+## APPENDIX — THE RUN IS FULLY STAGED; ONE PERMISSION REMAINS
+
+Everything the acceptance run needs is now in place on this machine:
+
+| item | state |
+| --- | --- |
+| EA installed | `MQL5\Experts\RC5\RC5_EA.ex5`, **byte-identical** to the repo build |
+| fixture file | `MQL5\Files\RC5_fixtures_XAUUSD.csv` — GOLDEN 1, GOLDEN 2, stale negative |
+| tester inputs | `MQL5\Profiles\Tester\RC5_XAUUSDm.set` |
+| launch config | `config\RC5_acceptance.ini` — XAUUSDm M15, Model 0, 2026.08.25–2026.09.12, `ShutdownTerminal=1` |
+| symbol history | `bases\Exness-MT5Real10\history\XAUUSDm\2026.hcc` present |
+
+### What blocks the run
+
+Generic process launch **is** now permitted. What is refused is launching or
+closing **MetaTrader** specifically, and MetaTrader allows only one instance per
+data folder — so the running terminal must be closed before a `/config:` launch
+does anything. Launching with the config while it runs was attempted: it exited
+without starting a tester, created no `Tester\logs` directory, and left the
+terminal untouched.
+
+Portable mode is not an alternative: it would need write access to
+`C:\Program Files` and a fresh login, and credentials are never handled here.
+
+### The exact sequence, once permitted
+
+```powershell
+Stop-Process -Name terminal64 -Force      # or close it by hand
+& "C:\Program Files\MetaTrader 5 EXNESS\terminal64.exe" `
+  "/config:C:\Users\user\AppData\Roaming\MetaQuotes\Terminal\53785E099C927DB68A545C249CDBCE06\config\RC5_acceptance.ini"
+# ShutdownTerminal=1 closes it when the run finishes
+& "C:\Program Files\MetaTrader 5 EXNESS\terminal64.exe"   # restore the terminal
+```
+
+Then parse, do not read:
+
+```python
+from tools.rc5_journal_parser import parse_journal_file
+parsed = parse_journal_file(Path(r"<terminal>\Tester\logs\<date>.log"))
+```
+
+### One thing to expect, and not to misread
+
+The EA takes the confirmation close from the **broker's** history, while the
+golden zones came from the `rc4_aligned_v2` capture. If Exness's XAUUSDm prices
+at those bars differ materially from the capture's, Stage 1 will legitimately
+DENY on proximity. That would be a **feed difference, not an execution defect**,
+and the journal's `confDist` / `tol` fields say so directly.

@@ -32,7 +32,7 @@ Three sentences that are FALSE and appear nowhere: *"RC5 always used 2R"*,
 
 ## 2. Python — the reference
 
-**5,798 tests passing, 19 skipped.** Semantic freeze `28d432e`. Pine and MQL5
+**5,800 tests passing, 19 skipped.** Semantic freeze `28d432e`. Pine and MQL5
 are ports of it; where they disagree with it, they are wrong.
 
 ## 3. Pine — a hard capacity ceiling, measured not estimated
