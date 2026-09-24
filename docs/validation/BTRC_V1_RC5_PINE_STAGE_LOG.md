@@ -1503,3 +1503,59 @@ Token-verified is not parity-verified. Every P2/P3/P4 runtime claim — golden
 M15 DBD, synthetic RBR/DBD, the transitions-only discriminator against PINE,
 M45/H3 families, transition history, the future-transition guard and prefix
 stability — needs Pine's actual OUTPUT on a chart. That is a separate gate.
+
+## TRACK H — unblocked by P4, but it needs ONE author decision, not a guess
+
+P4 fits, so H is in scope. Both fixes live in `rc5_view_presentation.pine` and
+are generated into VIEW, so neither costs CORE a single token — VIEW is 10,792
+against the same 100,256 limit.
+
+### What the code actually does today
+
+```
+S1  label.new(sw.pivotEndTime,     sw.price, "HH"/"HL"/"LH"/"LL", …)
+S2  line.new (ev.brokenSwingKey,   ev.brokenLevel, ev.breakTime, …)
+```
+
+`brokenSwingKey` is documented at the type as `== SwingRec.pivotEndTime`, so
+**both endpoints are the same quantity**: the open time of the pivot's LAST
+candle.
+
+### The ambiguity, stated rather than resolved
+
+A pivot spans `pivotStartIdx..pivotEndIdx`. Two different times are therefore
+available, and BOTH are real event times — neither is an availability time, so
+the "availability controls WHEN, event controls WHERE" rule is **already
+satisfied**. The open question is *which* event time.
+
+| candidate | what the code says about it | who uses it that way |
+| --- | --- | --- |
+| `pivotEndTime` | line 311: "P1's own swing **identity**"; line 226: "event/open time of pivot end candle (**anchor**)" | `f_fwAdd` passes it as `a1`, an anchor coordinate |
+| `wOpenT[pivotStartIdx]` | line 318: "`pivot_start_time_utc`" | Python `t3_engine` / `trend_engine` order swings by `pivot_start_time_utc`; `f_fwAdd` puts it in the src key |
+
+So the same field is called identity in one comment and anchor in another, and
+each candidate has a real consumer. For a single-candle pivot they are equal
+and nothing moves; the choice only shows on MULTI-CANDLE pivots, which is
+exactly the case worth getting right.
+
+### Why this stops here instead of being implemented
+
+1. **Python publishes no label coordinate.** It is a scanner; there is no
+   renderer, so there is no reference answer to port. This is a presentation
+   decision, and presentation decisions in this project are the author's.
+2. **The result cannot be accepted.** A drawing change is verified by looking
+   at it, and the runtime gate is still blocked — re-confirmed today on the
+   AUTHORIZED account (chart loaded as `bellcare1994`, `document.hidden` true,
+   all 7 canvases 300x150, 0 legend rows). Shipping an unverifiable change to
+   where the author's annotations sit would be worse than leaving them.
+
+### The decision required
+
+> Should a swing's drawn coordinate be the pivot's FIRST candle
+> (`wOpenT[pivotStartIdx]`, matching how Python sequences swings) or its LAST
+> candle (`pivotEndTime`, the current behaviour and P1's identity)?
+
+One answer settles S1 and S2 together, because S2 resolves through the same
+field. The S2 implementation additionally needs a key→swing lookup with a
+fallback for a broken swing that has scrolled out of the confirmed window;
+that part is mechanical once the coordinate is chosen.
