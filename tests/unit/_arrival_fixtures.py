@@ -32,6 +32,11 @@ M15_CSV = _ARTIFACTS / "rc5_m15_screenshot_capture" / "rc5_ohlc_m15_eurusd.csv"
 #: The RC5 host captures (XAUUSD).
 M45_CSV = _ARTIFACTS / "rc5_host_capture" / "rc5_ohlc_m45.csv"
 H3_CSV = _ARTIFACTS / "rc5_host_capture" / "rc5_ohlc_h3.csv"
+#: XAUUSD H4, 795 bars captured from the live BAH-RC5-LAB chart (OANDA feed,
+#: 2026-03-23 -> 2026-09-24). Used for the zone-lifecycle audit: 53 of its 86
+#: POIs reach GENUINE_INVALIDATION_CONFIRMED, which makes it the first capture
+#: in the repository where invalidation is the COMMON case rather than a rarity.
+H4_XAU_CSV = _ARTIFACTS / "rc5_host_capture" / "rc5_ohlc_h4_xauusd.csv"
 
 
 def load_capture(
@@ -93,6 +98,10 @@ def m45_xauusd() -> tuple[NormalizedCandle, ...]:
 
 def h3_xauusd() -> tuple[NormalizedCandle, ...]:
     return load_capture(H3_CSV, Timeframe.H3, 180, InternalSymbol.XAUUSD, "0.01")
+
+
+def h4_xauusd() -> tuple[NormalizedCandle, ...]:
+    return load_capture(H4_XAU_CSV, Timeframe.H4, 240, InternalSymbol.XAUUSD, "0.001")
 
 
 def structure_of(
