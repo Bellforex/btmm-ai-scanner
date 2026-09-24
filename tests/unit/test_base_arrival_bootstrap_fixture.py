@@ -151,7 +151,7 @@ def test_a_transitions_only_implementation_would_answer_unknown(
     that same implementation is indistinguishable from a correct one.
     """
     for rows, name in ((_bullish_rows(), "bull"), (mirror(_bullish_rows()), "bear")):
-        _, timeline, walk, bases, facts = _resolve(rows, tmp_path, name)
+        _, _timeline, walk, bases, facts = _resolve(rows, tmp_path, name)
 
         transitions_only: tuple[list, list] = (
             [t.availability_time_utc for t in walk.transitions],
