@@ -199,6 +199,55 @@ correctly even while the page reports itself hidden.
 | --- | --- | --- |
 | 9.1 | M5 / M15 / M30 / M45 / H1 / H3 / H4 smoke | **BLOCKED** — same renderer blocker as §3 |
 
+## 9b. COMMERCIAL RELEASE — EA LICENSING
+
+| # | item | status |
+| --- | --- | --- |
+| 9b.1 | licence key entropy (100 bits, `secrets`) | **PASS** |
+| 9b.2 | store holds a hash, never a usable key | **PASS** |
+| 9b.3 | unknown key indistinguishable from wrong key | **PASS** |
+| 9b.4 | binding = MT5 LOGIN + BROKER SERVER | **PASS** |
+| 9b.5 | expiry / revoke / suspend / reactivate | **PASS** |
+| 9b.6 | activation limit | **PASS** |
+| 9b.7 | version block | **PASS** |
+| 9b.8 | offline lease, bound to key+account+server+product+version | **PASS** |
+| 9b.9 | **licence failure never abandons an open trade** | **PASS** — `CloseRC5Position` has no licence reference at all |
+| 9b.10 | tester bypass needs `MQL_TESTER` AND the input | **PASS** — one return path |
+| 9b.11 | full key never logged or returned | **PASS** |
+| 9b.12 | no secret embedded in the EA | **PASS** — source scan |
+| 9b.13 | MQL5/Python state vocabularies agree | **PASS** |
+| 9b.14 | licensing does not alter strategy semantics | **PASS** — identical tester execution and balance |
+| 9b.15 | admin CLI (create/list/show/revoke/suspend/reactivate/expiry/activations) | **PASS** |
+| 9b.16 | licence store gitignored | **PASS** |
+
+## 9c. COMMERCIAL RELEASE — TRADINGVIEW ACCESS
+
+| # | item | status |
+| --- | --- | --- |
+| 9c.1 | invite-only eligibility | **PASS** — account is `pro_premium` (Premium) |
+| 9c.2 | publication type decided | **PASS** — PUBLIC + INVITE-ONLY, not private |
+| 9c.3 | no licence key inside Pine | **PASS** — TradingView access control is the mechanism |
+| 9c.4 | publication draft (title/description/instructions/notes) | **PASS** |
+| 9c.5 | per-user expiry workflow | **PASS** |
+| 9c.6 | grant / extend / revoke workflow | **PASS** |
+| 9c.7 | customer intake form | **PASS** |
+| 9c.8 | access registry | **PASS** |
+| 9c.9 | **publication actually pressed** | **FALSE — not authorized** |
+| 9c.10 | plan renewal risk noted | 26 days remaining; access management lapses with the plan |
+
+## 9d. EVENT PACKAGE
+
+| # | item | status |
+| --- | --- | --- |
+| 9d.1 | customer EA package (EX5 + install guide) | **PASS** |
+| 9d.2 | customer scanner guide | **PASS** |
+| 9d.3 | admin runbook + registry (NOT distributed) | **PASS** |
+| 9d.4 | release notes with limitations stated | **PASS** |
+| 9d.5 | event-day checklist | **PASS** |
+| 9d.6 | demo walkthrough | **PASS** |
+| 9d.7 | checksum manifest | **PASS** |
+| 9d.8 | no source in the customer package | **PASS** |
+
 ## 10. RELEASE
 
 | # | item | status |

@@ -86,6 +86,10 @@ V1_PARAMETERS: tuple[tuple[str, str, str, Decimal | None], ...] = (
     ),
     ("InpExecutionEnabled", "false", "true", None),
     ("InpAllowLiveExecution", "false", "false", None),
+    #: Safety-critical and DELIBERATELY different between sources: the EA
+    #: default is false and only a tester profile sets it true. It is
+    #: inert on a live chart regardless -- see test_rc5_licensing.
+    ("InpLicenseTesterBypass", "false", "true", None),
 )
 
 
@@ -134,6 +138,14 @@ def test_no_v1_threshold_exists_that_the_audit_does_not_cover() -> None:
         "InpSetupFile",
         "InpMaxSpreadPoints",
         "InpVerbose",
+        # Licensing: transport and cadence, not execution policy. The one
+        # licence input that IS cross-source (InpLicenseTesterBypass) is
+        # audited in V1_PARAMETERS above; the rest are covered by
+        # tests/unit/test_rc5_licensing.py.
+        "InpLicenseKey",
+        "InpLicenseUrl",
+        "InpLicenseRecheckMinutes",
+        "InpLicenseLeaseHours",
     }
     assert declared - audited - infrastructure == set()
 

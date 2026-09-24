@@ -26,3 +26,8 @@ InpMaxMarginFraction=0.20||0.20||0.000000||0.200000||N
 InpMaxEntryDistanceSpreads=1.0||1.0||0.000000||1.000000||N
 InpMaxSpreadPoints=0||0||0||0||N
 InpVerbose=true||false||0||true||N
+; Strategy Tester ONLY. RC5EvaluateLicense also requires MQL_TESTER, so this
+; line does nothing on a live chart. Without it the licence gate would block
+; new entries and acceptance would silently regress to zero trades.
+InpLicenseTesterBypass=true||false||0||true||N
+InpLicenseKey=

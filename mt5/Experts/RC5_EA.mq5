@@ -42,6 +42,19 @@ input ulong  InpSlippagePoints   = 20;
 //--- Reference-state fixture file in MQL5\Files. Empty = no setups, which is
 //--- the default: the EA never manufactures analytical state of its own.
 input string InpSetupFile        = "";
+
+//--- COMMERCIAL LICENSING. The customer receives an EX5 and a key; nothing
+//--- secret is embedded here. See the B9 block for the safety rule that a
+//--- licence failure may block new entries but NEVER abandon an open trade.
+#define RC5_PRODUCT_ID  "RC5-EA"
+#define RC5_EA_VERSION  "1.00"
+input string InpLicenseKey       = "";
+input string InpLicenseUrl       = "https://license.bellforex.app/v1/licenses/validate";
+input int    InpLicenseRecheckMinutes = 45;
+input int    InpLicenseLeaseHours     = 12;
+//--- Strategy Tester ONLY. Requires MQL_TESTER as well; on a live chart this
+//--- input is ignored entirely.
+input bool   InpLicenseTesterBypass   = false;
 //--- EXECUTION DOCTRINE V1 PARAMETERS. Not analytical semantics: RC5
 //--- specifies neither a spread tolerance nor a margin ceiling.
 input double InpMaxSpreadToRisk  = 0.25;   // spread <= 25% of R
@@ -974,6 +987,18 @@ bool SubmitOrder(const RC5SymbolSpec &spec, RC5Plan &p)
       p.denyReason = "EXECUTION_DISABLED";
       return false;
      }
+   // LICENCE GATE -- on the OPEN path only. CloseRC5Position deliberately has
+   // no equivalent check: a lapsed licence must never leave a position
+   // unmanaged. See the B9 block.
+   if(!RC5LicenseAllowsNewEntries())
+     {
+      p.denyReason = "LICENSE_MANAGE_ONLY_" + RC5LicenseStateName(g_licenseState);
+      PrintFormat("RC5LIC %s new entry BLOCKED (%s); open positions keep "
+                  "their SL, TP and approved invalidation exits",
+                  RC5MaskKey(InpLicenseKey),
+                  RC5LicenseStateName(g_licenseState));
+      return false;
+     }
 
    MqlTradeRequest  req;
    MqlTradeResult   res;
@@ -1521,6 +1546,272 @@ void RC5Diagnostics(RC5Plan &p, const RC5SymbolSpec &spec)
   }
 
 //+------------------------------------------------------------------+
+//| B9 -- COMMERCIAL LICENSING                                       |
+//|                                                                  |
+//| THE SECURITY TARGET IS COMMERCIAL-GRADE CONTROLLED ACCESS, NOT   |
+//| UNCRACKABILITY. This EX5 runs on the customer's machine and can  |
+//| be inspected; nothing here pretends otherwise. What it does buy  |
+//| is real: keys cannot be guessed, a licence can be revoked        |
+//| centrally, and one key cannot quietly run on many accounts.      |
+//|                                                                  |
+//| NOTHING SECRET IS EMBEDDED. No database password, no admin       |
+//| token, no signing key. The EA is an untrusted client and is      |
+//| built like one: it asks a server and believes the answer, and    |
+//| the worst a decompiler yields is the endpoint URL.               |
+//|                                                                  |
+//| THE SAFETY RULE THAT OUTRANKS EVERY OTHER RULE HERE:             |
+//|                                                                  |
+//|   A LICENCE FAILURE MUST NEVER ABANDON AN OPEN TRADE.            |
+//|                                                                  |
+//| An expired, revoked or unreachable licence blocks NEW positions  |
+//| and nothing else. Existing positions keep their stop, their      |
+//| target and their approved invalidation exits. A customer whose   |
+//| subscription lapses mid-trade is not punished with an unmanaged  |
+//| position -- that would be a worse outcome than piracy.           |
+//+------------------------------------------------------------------+
+
+//--- Licence states. Mirrors licensing/service.py LicenseState; a Python test
+//--- asserts the two lists agree, so they cannot drift apart silently.
+#define RC5_LIC_VALID              0
+#define RC5_LIC_GRACE              1
+#define RC5_LIC_INVALID            2
+#define RC5_LIC_EXPIRED            3
+#define RC5_LIC_REVOKED            4
+#define RC5_LIC_ACCOUNT_MISMATCH   5
+#define RC5_LIC_ACTIVATION_LIMIT   6
+#define RC5_LIC_SERVER_UNREACHABLE 7
+#define RC5_LIC_VERSION_BLOCKED    8
+#define RC5_LIC_TESTER_BYPASS      9
+
+int      g_licenseState   = RC5_LIC_INVALID;
+datetime g_licenseChecked = 0;
+datetime g_leaseUntil     = 0;
+string   g_licenseId      = "";
+
+string RC5LicenseStateName(const int s)
+  {
+   switch(s)
+     {
+      case RC5_LIC_VALID:              return "LICENSE_VALID";
+      case RC5_LIC_GRACE:              return "LICENSE_GRACE";
+      case RC5_LIC_INVALID:            return "LICENSE_INVALID";
+      case RC5_LIC_EXPIRED:            return "LICENSE_EXPIRED";
+      case RC5_LIC_REVOKED:            return "LICENSE_REVOKED";
+      case RC5_LIC_ACCOUNT_MISMATCH:   return "LICENSE_ACCOUNT_MISMATCH";
+      case RC5_LIC_ACTIVATION_LIMIT:   return "LICENSE_ACTIVATION_LIMIT";
+      case RC5_LIC_SERVER_UNREACHABLE: return "LICENSE_SERVER_UNREACHABLE";
+      case RC5_LIC_VERSION_BLOCKED:    return "LICENSE_VERSION_BLOCKED";
+      case RC5_LIC_TESTER_BYPASS:      return "LICENSE_TESTER_BYPASS";
+     }
+   return "LICENSE_UNKNOWN";
+  }
+
+//+------------------------------------------------------------------+
+//| The ONLY form of the key that may ever be printed.               |
+//| RC5-ABCDE-FGHIJ-KLMNO-PQRST -> RC5-ABCDE-***-PQRST               |
+//+------------------------------------------------------------------+
+string RC5MaskKey(const string key)
+  {
+   string parts[];
+   if(StringSplit(key, '-', parts) < 3)
+      return "RC5-****";
+   return parts[0] + "-" + parts[1] + "-***-" + parts[ArraySize(parts) - 1];
+  }
+
+//--- Where the cached lease lives. FILE_COMMON so it survives a data-folder
+//--- move and is reachable from the tester, exactly like the fixture file.
+string RC5LeasePath()
+  {
+   return "RC5_lease_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+          + ".txt";
+  }
+
+//+------------------------------------------------------------------+
+//| A lease is only usable for the EXACT context that earned it.     |
+//| Key, account, server, product and version all bind, so a lease   |
+//| cannot be copied to another account or survive a version block.  |
+//+------------------------------------------------------------------+
+string RC5LeaseFingerprint()
+  {
+   return StringFormat("%s|%I64d|%s|%s|%s",
+                       RC5MaskKey(InpLicenseKey),
+                       AccountInfoInteger(ACCOUNT_LOGIN),
+                       AccountInfoString(ACCOUNT_SERVER),
+                       RC5_PRODUCT_ID,
+                       RC5_EA_VERSION);
+  }
+
+void RC5SaveLease(const datetime until, const string licenseId)
+  {
+   int h = FileOpen(RC5LeasePath(),
+                    FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(h == INVALID_HANDLE)
+      return;
+   FileWriteString(h, RC5LeaseFingerprint() + "\n");
+   FileWriteString(h, IntegerToString((long)until) + "\n");
+   FileWriteString(h, licenseId + "\n");
+   FileClose(h);
+  }
+
+//--- Returns the lease expiry, or 0 when there is no USABLE lease. A lease
+//--- for a different account/server/version is treated as absent, not as a
+//--- weaker yes.
+datetime RC5LoadLease(string &licenseId)
+  {
+   licenseId = "";
+   int h = FileOpen(RC5LeasePath(),
+                    FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(h == INVALID_HANDLE)
+      return 0;
+   string fingerprint = FileReadString(h);
+   string untilText   = FileReadString(h);
+   string id          = FileIsEnding(h) ? "" : FileReadString(h);
+   FileClose(h);
+
+   if(fingerprint != RC5LeaseFingerprint())
+      return 0;
+   licenseId = id;
+   return (datetime)StringToInteger(untilText);
+  }
+
+//+------------------------------------------------------------------+
+//| Ask the licensing service. Returns the resulting state.          |
+//|                                                                  |
+//| WebRequest needs the URL allow-listed in the terminal; when it is |
+//| not, this reports SERVER_UNREACHABLE rather than failing open.    |
+//+------------------------------------------------------------------+
+int RC5ValidateLicenseOnline()
+  {
+   string payload = StringFormat(
+      "{\"license_key\":\"%s\",\"product_id\":\"%s\",\"ea_version\":\"%s\","
+      "\"account_login\":\"%I64d\",\"account_server\":\"%s\",\"nonce\":\"%I64d\"}",
+      InpLicenseKey, RC5_PRODUCT_ID, RC5_EA_VERSION,
+      AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER),
+      (long)TimeLocal());
+
+   char post[], result[];
+   string headers = "Content-Type: application/json\r\n";
+   string response_headers = "";
+   StringToCharArray(payload, post, 0, StringLen(payload), CP_UTF8);
+
+   ResetLastError();
+   int code = WebRequest("POST", InpLicenseUrl, headers, 8000,
+                         post, result, response_headers);
+   if(code != 200)
+     {
+      int err = GetLastError();
+      // MEASURED, not assumed: inside the Strategy Tester WebRequest returns
+      // -1 with 4014 (ERR_FUNCTION_NOT_ALLOWED) and the request never leaves
+      // the terminal. No allow-list entry can fix that, so pointing a
+      // back-testing customer at Tools > Options would send them in circles.
+      if(MQLInfoInteger(MQL_TESTER))
+         PrintFormat("RC5LIC %s licence cannot be validated in the Strategy "
+                     "Tester: MetaTrader does not permit WebRequest there "
+                     "(http=%d err=%d). Set InpLicenseTesterBypass=true to "
+                     "back-test; it has no effect on a live chart.",
+                     RC5MaskKey(InpLicenseKey), code, err);
+      else
+         PrintFormat("RC5LIC %s server unreachable (http=%d err=%d) -- "
+                     "add %s to Tools > Options > Expert Advisors > WebRequest",
+                     RC5MaskKey(InpLicenseKey), code, err, InpLicenseUrl);
+      return RC5_LIC_SERVER_UNREACHABLE;
+     }
+
+   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   // Deliberately a substring read rather than a JSON parser: the contract is
+   // three fields and a thousand-line parser is a liability in a product that
+   // must not crash a customer's terminal.
+   bool ok = (StringFind(body, "\"valid\": true") >= 0
+              || StringFind(body, "\"valid\":true") >= 0);
+
+   int state = RC5_LIC_INVALID;
+   if(ok)
+      state = RC5_LIC_VALID;
+   else if(StringFind(body, "LICENSE_REVOKED") >= 0)
+      state = RC5_LIC_REVOKED;
+   else if(StringFind(body, "LICENSE_EXPIRED") >= 0)
+      state = RC5_LIC_EXPIRED;
+   else if(StringFind(body, "LICENSE_ACTIVATION_LIMIT") >= 0)
+      state = RC5_LIC_ACTIVATION_LIMIT;
+   else if(StringFind(body, "LICENSE_VERSION_BLOCKED") >= 0)
+      state = RC5_LIC_VERSION_BLOCKED;
+   else if(StringFind(body, "LICENSE_ACCOUNT_MISMATCH") >= 0)
+      state = RC5_LIC_ACCOUNT_MISMATCH;
+
+   if(state == RC5_LIC_VALID)
+     {
+      g_leaseUntil = TimeCurrent() + (datetime)(InpLicenseLeaseHours * 3600);
+      RC5SaveLease(g_leaseUntil, g_licenseId);
+     }
+   return state;
+  }
+
+//+------------------------------------------------------------------+
+//| The licence decision, including the tester bypass.               |
+//|                                                                  |
+//| THE BYPASS CANNOT ACTIVATE ON A LIVE CHART. It requires BOTH     |
+//| MQLInfoInteger(MQL_TESTER) and an explicit input that defaults    |
+//| false. Setting the input alone does nothing outside the tester,  |
+//| which is asserted by a static regression test.                   |
+//+------------------------------------------------------------------+
+int RC5EvaluateLicense()
+  {
+   if(MQLInfoInteger(MQL_TESTER) && InpLicenseTesterBypass)
+      return RC5_LIC_TESTER_BYPASS;
+
+   if(StringLen(InpLicenseKey) == 0)
+      return RC5_LIC_INVALID;
+
+   int state = RC5ValidateLicenseOnline();
+   if(state == RC5_LIC_SERVER_UNREACHABLE)
+     {
+      // GRACE: a cached, context-bound lease keeps a paying customer trading
+      // through a dropped connection. An expired or absent lease does not.
+      string leasedId = "";
+      datetime until = RC5LoadLease(leasedId);
+      if(until > TimeCurrent())
+        {
+         g_leaseUntil = until;
+         g_licenseId  = leasedId;
+         return RC5_LIC_GRACE;
+        }
+     }
+   return state;
+  }
+
+//--- May this program OPEN a new position? Licence-gated.
+bool RC5LicenseAllowsNewEntries()
+  {
+   return (g_licenseState == RC5_LIC_VALID
+           || g_licenseState == RC5_LIC_GRACE
+           || g_licenseState == RC5_LIC_TESTER_BYPASS);
+  }
+
+//+------------------------------------------------------------------+
+//| Refresh on a timer, never on a tick.                             |
+//| Trading decisions must not block on an HTTP round trip.          |
+//+------------------------------------------------------------------+
+void RC5RefreshLicense(const bool force = false)
+  {
+   datetime now = TimeCurrent();
+   if(!force && g_licenseChecked > 0
+      && (now - g_licenseChecked) < (datetime)(InpLicenseRecheckMinutes * 60))
+      return;
+
+   int previous = g_licenseState;
+   g_licenseState   = RC5EvaluateLicense();
+   g_licenseChecked = now;
+
+   if(previous != g_licenseState)
+      PrintFormat("RC5LIC %s state %s -> %s | newEntries=%s | "
+                  "openPositionsUnaffected=TRUE",
+                  RC5MaskKey(InpLicenseKey),
+                  RC5LicenseStateName(previous),
+                  RC5LicenseStateName(g_licenseState),
+                  (RC5LicenseAllowsNewEntries() ? "ALLOWED" : "BLOCKED"));
+  }
+
+//+------------------------------------------------------------------+
 int OnInit()
   {
    int n = StringSplit(InpSymbolRoots, ',', g_roots);
@@ -1570,6 +1861,15 @@ int OnInit()
                (int)AccountInfoInteger(ACCOUNT_LEVERAGE));
 
    LoadFixtures(InpSetupFile);
+
+   RC5RefreshLicense(true);
+   EventSetTimer(60);
+   PrintFormat("RC5LIC %s %s | newEntries=%s | product=%s v%s | tester=%d",
+               RC5MaskKey(InpLicenseKey),
+               RC5LicenseStateName(g_licenseState),
+               (RC5LicenseAllowsNewEntries() ? "ALLOWED" : "BLOCKED"),
+               RC5_PRODUCT_ID, RC5_EA_VERSION,
+               (int)MQLInfoInteger(MQL_TESTER));
    PrintFormat("RC5 EA2-B: trigger=LIQUIDITY_VALIDATED | RR=%s | risk=%s%% | magic=%I64d | tester=%d | liveArmed=%d | canExecute=%d",
                DoubleToString(InpRewardRisk, 2), DoubleToString(InpRiskPercent, 2),
                InpMagic, (int)MQLInfoInteger(MQL_TESTER),
@@ -1583,12 +1883,22 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   EventKillTimer();
    PrintFormat("RC5 EA: deinit reason=%d", reason);
   }
 
 //+------------------------------------------------------------------+
 //| EA1 dispatcher. Refreshes live quote state once per closed host  |
 //| bar. No signal engine yet, and nothing here can trade.           |
+//+------------------------------------------------------------------+
+//| Licensing is refreshed HERE, never in OnTick: a trading decision  |
+//| must not block on an HTTP round trip.                             |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   RC5RefreshLicense(false);
+  }
+
 //+------------------------------------------------------------------+
 void OnTick()
   {

@@ -37,3 +37,7 @@ dist/
 *.egg-info/
 # MetaEditor build output; the .mq5 source is what is reviewed.
 mt5/**/*.ex5
+
+# Licence store and secrets: server-side only, never committed.
+licensing/*.db
+licensing/licenses.db

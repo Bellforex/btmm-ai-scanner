@@ -317,3 +317,45 @@ Observational only. The Phase-2 batch ended at 9,907.70 from 10,000.00 — the
 same two stopped-out goldens as Phase 1, reproduced exactly. **Not a
 performance result**: the trades are test cases, the sample is two, and no
 parameter was tuned.
+
+---
+
+# ADDENDUM — LICENSING RUNTIME MATRIX (2026-09-24)
+
+Four Strategy Tester runs on XAUUSDm M15, real Exness ticks, identical config,
+varying only the licence condition. Every row is an observed run, not a
+prediction.
+
+| # | licence condition | reported state | new entries | executions | final balance |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `InpLicenseTesterBypass=true` | `LICENSE_TESTER_BYPASS` | ALLOWED | 2 | **9,907.70** |
+| 2 | real key, reachable server, bypass off | `LICENSE_SERVER_UNREACHABLE` | BLOCKED | 0 | 10,000.00 |
+| 3 | key + **valid lease for this account** | **`LICENSE_GRACE`** | ALLOWED | 2 | **9,907.70** |
+| 4 | key + lease **belonging to another account** | `LICENSE_SERVER_UNREACHABLE` | BLOCKED | 0 | 10,000.00 |
+
+What each row establishes:
+
+**Row 1 — licensing is non-invasive.** 9,907.70 is the pre-licensing baseline
+to the cent. Both goldens executed; all four deny reasons fired. Adding
+licensing moved no trading decision.
+
+**Row 2 — the EA does not fail open.** The server was genuinely running and
+genuinely reachable from the same machine seconds earlier; the tester call
+still returned `http=-1 err=4014` and the server log shows it never arrived.
+With no lease, the EA blocked new entries. This is the measurement behind the
+statement that **a licence cannot be validated in the Strategy Tester at all**.
+
+**Row 3 — grace works.** A cached, context-bound lease carried the EA through
+an unreachable server and produced exactly the baseline result. A paying
+customer on bad conference wifi keeps trading.
+
+**Row 4 — a lease is not portable.** The same file, in the same place, with the
+same expiry, differing only in the account it was issued for, was treated as
+*absent* rather than as a weaker yes. Copying a lease to a second machine buys
+nothing.
+
+Every run logged the key in masked form only (`RC5-AAAAA-***-DDDDD`). No
+plaintext key appears in any journal.
+
+`openPositionsUnaffected=TRUE` was logged on every transition, including both
+refusals.
