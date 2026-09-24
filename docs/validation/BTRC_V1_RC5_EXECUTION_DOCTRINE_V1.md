@@ -259,3 +259,65 @@ agree by construction: the trade dies at the same price the POI does, not at a
 number the execution layer invented.
 
 Unresolved item 2 is closed.
+
+---
+
+# Unresolved item 3 — RESOLVED: terminal / invalidation event inventory
+
+Source: `poi/enums.py` (`PoiLifecycleStatus`, `PoiTerminalReason`) and
+`poi/rc5_semantics.py::rc5_validity`, which is the frozen engine's own answer
+to "does this zone still stand?".
+
+## The safety-critical finding
+
+`PoiTerminalReason.MITIGATED` **must not close a V1 position.**
+
+`rc5_validity` says so directly — *"MITIGATION IS NOT TERMINATION.
+`terminal_reason = MITIGATED` is set at the FIRST TOUCH and says only that
+price has been in the zone."*
+
+For an execution layer that enters AT a POI, first touch **is the entry**.
+Closing on `MITIGATED` would close every trade at the moment it opened. This is
+the single most dangerous mapping available and it is explicitly wrong.
+
+## Inventory
+
+| state / reason | meaning | cancels pending setup? | invalidates entry permission? | **closes live V1 position?** | rationale |
+| --- | --- | --- | --- | --- | --- |
+| `NO_BREACH` | zone intact | no | no | **NO** | nothing happened |
+| `CLOSE_BREACH_CANDIDATE` | a close went through the far side, unconfirmed | no | no | **NO** | candidate only; the walk has not resolved |
+| `RECLAIM_PENDING` / `RECLAIM_CONFIRMED` | price came back through the boundary | no | no | **NO** | reclaim is the zone SURVIVING |
+| `DISPLACEMENT_PENDING` / `DISPLACEMENT_AFTER_RECLAIM_CONFIRMED` | the move the POI predicted | no | no | **NO** | this is the thesis working |
+| `RECLAIM_WITHOUT_DISPLACEMENT` | reclaimed, no follow-through | no | no | **UNRESOLVED** | zone stands but the thesis is weak; V1 has no doctrine for "stale but valid" |
+| `RECLAIM_FAILED` | reclaim attempt failed | no | no | **UNRESOLVED** | leads toward genuine invalidation but is not itself terminal |
+| `FALSE_INVALIDATION_CONFIRMED` | far-side break that was reclaimed | no | no | **NO** | `rc5_validity` keeps this **VALID** — closing here would exit exactly the trap the doctrine exists to survive |
+| **`GENUINE_INVALIDATION_CONFIRMED`** | confirmed failure through the far side | **yes** | **yes** | **YES** | `rc5_validity` -> `INVALIDATED`. The zone failed |
+| **`PoiTerminalReason.INVALIDATED`** | coarse form of the above | **yes** | **yes** | **YES** | same event, coarser vocabulary |
+| `PoiTerminalReason.MITIGATED` | price traded the zone (FIRST TOUCH) | no | no | **NO — never** | see above; this is the entry itself |
+| `PROMOTED_TO_ORDER_BLOCK` | engulfing superseded by its own ORDER BLOCK | no | no | **UNRESOLVED** | `rc5_validity` -> `SUPERSEDED`. The identity changed; the price level did not. Re-labelling is not failure, but V1 has no rule for an owning POI that becomes a different POI |
+
+## Approved V1 close events
+
+Exactly two, and they are the same event at two granularities:
+
+* `PoiLifecycleStatus.GENUINE_INVALIDATION_CONFIRMED`
+* `PoiTerminalReason.INVALIDATED`
+
+Nothing else closes a live position. In particular V1 does **not** close on an
+opposite pattern, a trend change, a newly authoritative POI, mitigation, or a
+false invalidation — none of which the frozen engine treats as the zone failing.
+
+Note the symmetry with Track B: the approved close is confirmed failure through
+the **distal** boundary, which is where the V1 stop already sits. So the stop
+normally fires first and the event is a backstop, not a parallel exit rule.
+
+## Still unresolved (3, narrow)
+
+1. `RECLAIM_WITHOUT_DISPLACEMENT` — valid but thesis unproven.
+2. `RECLAIM_FAILED` — en route to invalidation, not yet terminal.
+3. `PROMOTED_TO_ORDER_BLOCK` — owning POI becomes a different POI.
+
+All three are "the zone still exists but something changed" cases. V1
+deliberately holds the position in each: the stop and the approved close events
+already bound the risk, and inventing an exit here would be exactly the
+strategy invention this layer is forbidden to do.
