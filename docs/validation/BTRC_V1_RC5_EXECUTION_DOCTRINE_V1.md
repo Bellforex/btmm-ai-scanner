@@ -194,3 +194,68 @@ later unit does not spend compiler round-trips rediscovering it.
 
 Candidates 1 and 4-7 (dead locals, zone-equality, source-span, authority
 temporaries, dead legacy) remain unmeasured.
+
+---
+
+# Unresolved item 2 — RESOLVED: the distal boundary is already defined
+
+Not assumed from "bullish = bottom". Read out of the frozen lifecycle, which
+already has to answer exactly this question to decide when a POI dies.
+
+`src/btmm_ai_scanner/poi/lifecycle.py`:
+
+```python
+def _is_breach(candle, direction, zone_top, zone_bottom, overshoot_tolerance):
+    if direction == PoiDirection.BULLISH:
+        return (zone_bottom - candle.close) > overshoot_tolerance
+    return (candle.close - zone_top) > overshoot_tolerance
+
+def _is_displacement(candle, direction, zone_top, zone_bottom, contact_tolerance):
+    if direction == PoiDirection.BULLISH:
+        return candle.close >= zone_top + contact_tolerance
+    return candle.close <= zone_bottom - contact_tolerance
+```
+
+`_is_breach` is the FAR side — the edge whose violation the engine treats as a
+genuine failure of the zone. `_is_displacement` is the near side, the direction
+the POI is supposed to push price. Together they define proximal and distal
+without a word of interpretation:
+
+| direction | proximal (displacement side) | **distal (breach side)** | source |
+| --- | --- | --- | --- |
+| BULLISH | `zone_top` | **`zone_bottom`** | `lifecycle.py` `_is_displacement` / `_is_breach` |
+| BEARISH | `zone_bottom` | **`zone_top`** | same |
+
+## No family is ambiguous
+
+All three boundary functions take `(candle, direction, zone_top, zone_bottom,
+tolerance)`. **None of them receives a POI type, kind or family**, and none
+branches on one — the same shape as the lifecycle ladder. So the mapping is
+uniform across every executable family by construction, and the
+per-family ambiguity table has one row:
+
+| POI family | direction | proximal | distal | ambiguous |
+| --- | --- | --- | --- | --- |
+| **all executable families** | BULLISH | `zone_top` | `zone_bottom` | **no** |
+| **all executable families** | BEARISH | `zone_bottom` | `zone_top` | **no** |
+
+`_is_reclaim` uses the same edges as `_is_breach` (bullish `zone_bottom`,
+bearish `zone_top`), which corroborates the reading: breach and reclaim are
+the two directions across one boundary, and that boundary is the distal one.
+
+## V1 stop rule — LOCKED
+
+```
+BUY   SL = zone_bottom - 1 executable tick
+SELL  SL = zone_top    + 1 executable tick
+```
+
+one tick via `SYMBOL_TRADE_TICK_SIZE`, never `_Point`.
+
+This is a stronger result than picking a convention. **The V1 stop sits exactly
+one tick beyond the boundary whose violation the frozen engine already calls
+genuine invalidation.** The execution layer and the analytical layer therefore
+agree by construction: the trade dies at the same price the POI does, not at a
+number the execution layer invented.
+
+Unresolved item 2 is closed.
