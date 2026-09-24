@@ -546,3 +546,96 @@ def test_zero_tick_value_is_an_unusable_contract_not_a_free_trade() -> None:
     )
     assert not plan.eligible
     assert plan.deny_reason == "RISK_MODEL_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# zero-height zones: real data, and a gap the doctrine does not cover
+# ---------------------------------------------------------------------------
+#
+# Liquidity-level POIs (CURRENT_DAY_LOW, CURRENT_WEEK_HIGH, ...) are LINES, not
+# bands: the Layer-A projection emits them with `zone_top == zone_bottom`. The
+# tests below do not assert that this is correct or incorrect. They PIN what V1
+# as specified actually does with them, because the numbers are surprising and
+# an author decision is pending on whether to add a guard.
+
+
+def _level_poi(**over: object) -> SetupFixture:
+    return _confirmed(
+        poi_id="CURRENT_DAY_LOW~0c31feb6b40e",
+        poi_type=27,
+        direction=1,
+        zone_top=Decimal("1.14831"),
+        zone_bottom=Decimal("1.14831"),
+        **over,  # type: ignore[arg-type]
+    )
+
+
+def test_a_zero_height_zone_is_accepted_and_produces_a_one_tick_stop() -> None:
+    """MEASURED, not endorsed.
+
+    With `zone_top == zone_bottom`, the distal boundary IS the level, so the
+    stop lands one tick beyond it and R collapses to the distance from entry to
+    that single price. Nothing in the doctrine refuses this.
+    """
+    plan = plan_for(EURUSD, _level_poi(), Decimal("1.14832"), Decimal("10000"))
+    assert plan.eligible
+    assert plan.distal == Decimal("1.14831")
+    assert plan.stop == Decimal("1.14830")
+    assert plan.r == Decimal("0.00002")
+
+
+def test_a_tiny_R_produces_an_enormous_position_bounded_only_by_volume_max() -> None:
+    """The risk BUDGET is respected; the NOTIONAL is not bounded by anything.
+
+    0.5% of 10,000 is 50.00, and a 2-tick stop costs 0.2 per lot, so the
+    budget alone would buy 250 lots. `volume_max` is what stops it at 200 --
+    not a risk rule -- and the realized risk (40.00) is then UNDER budget,
+    so no risk gate fires either.
+
+    200 lots of EURUSD is roughly a 20,000,000 EUR notional held against a
+    2-tick stop. V1 has no margin check and no notional cap, so the broker's
+    own margin rejection is the first thing that would refuse it, at runtime.
+    """
+    plan = plan_for(EURUSD, _level_poi(), Decimal("1.14832"), Decimal("10000"))
+    assert plan.volume == EURUSD.volume_max == Decimal("200")
+    assert plan.risk_money == Decimal("50.000")
+    assert plan.realized_risk == Decimal("40.0")
+    assert plan.realized_risk < plan.risk_money
+
+
+def test_the_spread_can_exceed_R_entirely_and_nothing_refuses_it() -> None:
+    """A typical EURUSD spread is ~10 ticks. R here is 2.
+
+    The trade is therefore stopped out by the spread alone, by construction.
+    `InpMaxSpreadPoints` exists and defaults to 0 (off), and V1 compares the
+    spread to a FIXED input rather than to R, so the default configuration
+    does not catch this.
+    """
+    plan = plan_for(EURUSD, _level_poi(), Decimal("1.14832"), Decimal("10000"))
+    assert plan.r is not None
+    typical_spread = 10 * EURUSD.tick_size
+    assert typical_spread > plan.r
+    assert plan.eligible, "V1 as specified does not refuse it"
+
+
+def test_a_broker_stop_level_does_refuse_the_tiny_stop() -> None:
+    """The one existing protection, and it depends entirely on the broker.
+
+    When `SYMBOL_TRADE_STOPS_LEVEL` is non-zero the 2-tick stop is illegal and
+    V1 denies. Exness Standard commonly publishes 0, in which case this
+    protection is simply absent.
+    """
+    with_level = BrokerSpec(
+        name="EURUSDm",
+        digits=5,
+        point=Decimal("0.00001"),
+        tick_size=Decimal("0.00001"),
+        tick_value_loss=Decimal("0.1"),
+        volume_min=Decimal("0.01"),
+        volume_max=Decimal("200"),
+        volume_step=Decimal("0.01"),
+        stops_level=10,
+    )
+    plan = plan_for(with_level, _level_poi(), Decimal("1.14832"), Decimal("10000"))
+    assert not plan.eligible
+    assert plan.deny_reason == "BROKER_STOP_INVALID"

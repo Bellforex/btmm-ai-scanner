@@ -88,7 +88,7 @@ correctly even while the page reports itself hidden.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 6.1 | deterministic vectors | **PASS** | 45 passed |
+| 6.1 | deterministic vectors | **PASS** | 49 passed |
 | 6.2 | eligibility gates, each with its own reason | **PASS** | parametrized |
 | 6.3 | BUY / SELL distal and stop | **PASS** | |
 | 6.4 | 2R target both directions | **PASS** | |
@@ -100,6 +100,9 @@ correctly even while the page reports itself hidden.
 | 6.10 | MITIGATED / FALSE_INVALIDATION never close | **PASS** | " |
 | 6.11 | the three state migrations never close | **PASS** | " |
 | 6.12 | MQL5 source agrees with the Python mirror | **PASS** | source-reading assertions |
+| 6.13 | zero-height zone behaviour pinned | **PASS** | measured and documented — see §12 |
+| 6.14 | notional / margin ceiling | **PENDING** | V1 has none; author decision — see §12 |
+| 6.15 | spread-vs-R refusal | **PENDING** | `InpMaxSpreadPoints` compares to a constant, not to R — §12 |
 
 ## 7. EA — ANALYTICAL PARITY WITH PYTHON
 
@@ -189,6 +192,37 @@ tester result.
 A capture over a window that actually contains a TREND or EXPANSION regime,
 long enough for the regime engine to classify one. That is a data question, not
 a code question, and it is the next thing worth doing.
+
+---
+
+## 12. SAFETY FINDING — ZERO-HEIGHT ZONES SIZE FROM A ONE-TICK STOP
+
+Found by generating a real fixture file, not by reading the doctrine. Pinned as
+tests, **not fixed**, because fixing it means choosing a threshold.
+
+Liquidity-level POIs are LINES: the projection emits them with
+`zone_top == zone_bottom`. The distal boundary is then the level itself, the
+stop lands one tick beyond it, and R collapses. Measured on a broker publishing
+`STOPS_LEVEL = 0`, entry 1.14832: R = 2 ticks, volume **200.00** (the broker's
+`volume_max`, not a risk rule), realized risk 40.00 against a 50.00 budget.
+
+**Every risk gate passes** — the budget is respected with room to spare. What is
+not bounded is the NOTIONAL: roughly 20,000,000 EUR against a two-tick stop,
+while a typical EURUSD spread is ten ticks, five times R.
+
+Nothing in V1 catches it: the budget is satisfied, `InpMaxSpreadPoints`
+compares the spread to a constant rather than to R and defaults to off, and
+there is no margin or notional ceiling. `SYMBOL_TRADE_STOPS_LEVEL` does refuse
+it when non-zero — the only existing protection, and it belongs to the broker.
+
+Three author decisions, listed in
+`docs/validation/BTRC_V1_RC5_EXECUTION_DOCTRINE_V1.md`: whether zero-height POIs
+are executable at all; whether V1 should refuse when the spread is a
+significant fraction of R; and whether V1 needs a notional or margin ceiling
+independent of the risk budget.
+
+This has never reached a live account: execution is disabled by default, the
+trigger has never fired on any capture, and no tester run has occurred.
 
 ---
 

@@ -458,3 +458,76 @@ The two reclaim states have no such question attached: the frozen engine keeps
 the POI VALID through both, so a close would contradict the analytical layer.
 That is an observation about the code, **not** a doctrine change — V1 still
 logs them and does nothing.
+
+---
+
+## SAFETY FINDING — ZERO-HEIGHT ZONES SIZE FROM A ONE-TICK STOP
+
+Found by generating a real fixture file rather than by reading the doctrine.
+**Not fixed here**, because fixing it means choosing a threshold, and thresholds
+are the author's.
+
+### What the data actually contains
+
+Liquidity-level POIs are LINES, not bands. On the author's M15 EURUSD capture
+the projection emits, verbatim:
+
+```
+EURUSD|15|1789724700|CURRENT_DAY_LOW~0c31feb6b40e|27|1|1.14831|1.14831|1|0|0|1
+EURUSD|15|1789724700|CURRENT_MONTH_HIGH~3b57a668738a|30|-1|1.14865|1.14865|1|0|0|1
+```
+
+`zone_top == zone_bottom`. This is not malformed export; it is what a level is.
+
+### What V1 as specified does with one
+
+The distal boundary IS the level, so the stop lands one tick beyond it and R
+collapses to the distance from entry to a single price. Measured, on a broker
+publishing `STOPS_LEVEL = 0`:
+
+| entry | R | volume | realized risk | budget |
+| --- | --- | --- | --- | --- |
+| 1.14832 | 2 ticks | **200.00** (`volume_max`) | 40.00 | 50.00 |
+| 1.14840 | 10 ticks | 50.00 | 50.00 | 50.00 |
+| 1.14900 | 70 ticks | 7.14 | 49.98 | 50.00 |
+
+**Every risk gate passes.** The 0.5% budget is respected — realized risk on the
+first row is 40.00 against a 50.00 budget, comfortably UNDER. Nothing is
+violated. What bounds the first row is `volume_max`, which is a broker contract
+limit, not a risk rule.
+
+200 lots of EURUSD is roughly a 20,000,000 EUR notional held against a two-tick
+stop. And a typical EURUSD spread is around ten ticks — **five times R** — so
+the position is stopped out by the spread alone, by construction.
+
+### Why nothing catches it
+
+* The risk budget is satisfied, so no risk gate fires.
+* `InpMaxSpreadPoints` compares the spread to a FIXED input, not to R, and
+  defaults to 0 (off).
+* V1 has no margin check and no notional cap, so the first refusal would be the
+  broker's own margin rejection — at runtime, as `ORDER_REJECTED_<retcode>`.
+* `SYMBOL_TRADE_STOPS_LEVEL` DOES refuse it when non-zero. That is the only
+  existing protection, and it belongs to the broker: Exness Standard commonly
+  publishes 0, in which case the protection is simply absent.
+
+All four statements are pinned as tests in
+`tests/unit/test_rc5_ea_doctrine_vectors.py`, which assert what V1 DOES rather
+than what it should do.
+
+### The author decisions this surfaces
+
+1. **Should zero-height POIs be executable at all?** They are authoritative,
+   valid analytical records; whether a level is a tradable zone for an
+   execution layer is a doctrine question, not an implementation detail.
+2. **Should V1 refuse when the spread is a significant fraction of R?** The
+   input already exists; it currently compares against a constant rather than
+   against R.
+3. **Should V1 carry a notional or margin ceiling** independent of the risk
+   budget, given that the budget alone does not bound position size when R is
+   tiny?
+
+Until these are answered the behaviour above stands, unchanged and documented.
+It has never reached a live account: execution is disabled by default, the
+trigger has never fired on any available capture, and no tester run has
+occurred.
