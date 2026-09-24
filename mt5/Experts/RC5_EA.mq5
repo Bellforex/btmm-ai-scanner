@@ -186,6 +186,107 @@ bool StopDistanceOk(const RC5SymbolSpec &s, const double entry, const double sto
 double SpreadPrice(const RC5SymbolSpec &s) { return s.ask - s.bid; }
 
 //+------------------------------------------------------------------+
+//| EA2-A — ANALYTICAL STATE ADAPTER                                 |
+//|                                                                  |
+//| A deterministic MQL5 representation of ONE RC5 analytical setup,  |
+//| shaped to hold exactly what the Python reference produces. No     |
+//| detection lives here yet: EA2-A defines the vocabulary and the    |
+//| parity log, so the port that fills it can be checked field by     |
+//| field against Python rather than by eyeballing behaviour.         |
+//+------------------------------------------------------------------+
+
+//--- Mirrors poi/enums.py PoiDirection.
+#define RC5_DIR_NONE     0
+#define RC5_DIR_BULLISH  1
+#define RC5_DIR_BEARISH -1
+
+//--- Mirrors btrc/enums.py SignalLifecycleState, analytical scope only.
+//--- The future-bot states (RISK_VALIDATED..CLOSED) are deliberately absent:
+//--- they are Layer B's to supply, and the frozen engine never assigns them.
+#define RC5_LC_DETECTED                0
+#define RC5_LC_STRUCTURALLY_VALIDATED  1
+#define RC5_LC_BTMM_VALIDATED          2
+#define RC5_LC_POI_VALIDATED           3
+#define RC5_LC_TREND_VALIDATED         4
+#define RC5_LC_REGIME_VALIDATED        5
+#define RC5_LC_MOMENTUM_VALIDATED      6
+#define RC5_LC_LIQUIDITY_VALIDATED     7   // Execution Doctrine V1 trigger
+
+//--- Mirrors poi/rc5_semantics.py Rc5Validity.
+#define RC5_VALID        0
+#define RC5_INVALIDATED  1
+#define RC5_SUPERSEDED   2
+
+//+------------------------------------------------------------------+
+struct RC5Setup
+  {
+   string            symbol;
+   ENUM_TIMEFRAMES   timeframe;
+   datetime          barTime;        // the CLOSED bar this state belongs to
+   string            poiId;          // stable semantic identity
+   int               poiType;
+   int               direction;      // RC5_DIR_*
+   double            zoneTop;
+   double            zoneBottom;
+   bool              authoritative;  // survived formation + same-origin authority
+   int               validity;       // RC5_VALID / INVALIDATED / SUPERSEDED
+   bool              p5Permission;   // ANALYTICAL permission, never an order
+   int               lifecycle;      // RC5_LC_*
+   bool              populated;
+  };
+
+//+------------------------------------------------------------------+
+//| Distal = the boundary whose violation the frozen engine treats as |
+//| genuine invalidation (poi/lifecycle.py::_is_breach):              |
+//|   BULLISH -> zone_bottom, BEARISH -> zone_top.                    |
+//| Not a convention chosen here; read out of the reference engine.   |
+//+------------------------------------------------------------------+
+double RC5Distal(const RC5Setup &s)
+  {
+   return (s.direction == RC5_DIR_BULLISH) ? s.zoneBottom : s.zoneTop;
+  }
+
+double RC5Proximal(const RC5Setup &s)
+  {
+   return (s.direction == RC5_DIR_BULLISH) ? s.zoneTop : s.zoneBottom;
+  }
+
+//+------------------------------------------------------------------+
+//| Execution Doctrine V1 eligibility. ANALYTICAL state only -- this  |
+//| reports whether a setup qualifies, and never places anything.     |
+//+------------------------------------------------------------------+
+bool RC5EligibleV1(const RC5Setup &s, string &denyReason)
+  {
+   denyReason = "";
+   if(!s.populated)                         { denyReason = "NO_STATE";       return false; }
+   if(!s.authoritative)                     { denyReason = "NOT_AUTHORITATIVE"; return false; }
+   if(s.validity != RC5_VALID)              { denyReason = "NOT_VALID";      return false; }
+   if(!s.p5Permission)                      { denyReason = "NO_P5";          return false; }
+   if(s.lifecycle != RC5_LC_LIQUIDITY_VALIDATED) { denyReason = "NOT_CONFIRMED"; return false; }
+   if(s.direction == RC5_DIR_NONE)          { denyReason = "NO_DIRECTION";   return false; }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Compact parity line. Field order is fixed so a Python-side dump   |
+//| can be diffed against it directly.                                |
+//+------------------------------------------------------------------+
+void RC5LogSetup(const RC5Setup &s)
+  {
+   string reason = "";
+   bool eligible = RC5EligibleV1(s, reason);
+   int d = (int)SymbolInfoInteger(s.symbol, SYMBOL_DIGITS);
+   PrintFormat("RC5SETUP %s|%d|%I64d|%s|%d|%d|%s|%s|%d|%d|%d|%d|%s|%s",
+               s.symbol, (int)s.timeframe, (long)s.barTime, s.poiId,
+               s.poiType, s.direction,
+               DoubleToString(s.zoneTop, d), DoubleToString(s.zoneBottom, d),
+               (int)s.authoritative, s.validity, (int)s.p5Permission,
+               s.lifecycle,
+               (eligible ? "ELIGIBLE" : "DENIED"),
+               (eligible ? "-" : reason));
+  }
+
+//+------------------------------------------------------------------+
 //| THE ONLY PLACE THIS PROGRAM MAY TRADE.                           |
 //|                                                                  |
 //| Three independent permissions, all required. EA1 never calls     |

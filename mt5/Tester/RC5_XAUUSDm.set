@@ -1,0 +1,9 @@
+; RC5_EA Strategy Tester inputs — XAUUSDm
+; Execution is enabled HERE ONLY. The product default stays false; the tester
+; is an isolated environment, the live account is not.
+InpSymbolRoots=XAUUSD||XAUUSD||XAUUSD||XAUUSD||N
+InpHostTF=15||0||0||0||N
+InpExecutionEnabled=true||false||0||true||N
+InpRiskPercent=0.5||0.5||0.000000||0.500000||N
+InpMaxSpreadPoints=0||0||0||0||N
+InpVerbose=true||false||0||true||N
