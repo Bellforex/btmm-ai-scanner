@@ -323,11 +323,16 @@ higher-timeframe context does not produce. M45 and H3 never leave `DETECTED`.
 A tester run against such a fixture file will place zero trades, and that is
 correct behaviour rather than an EA failure.
 
-Diagnosed further: with full context, regime is **DECELERATION on 100% of
-11,083 evaluations**, and `DECELERATION` is `regime_engine`'s image of
-`TrendState.EXHAUSTING`, so the primary regime timeframe was EXHAUSTING
-throughout. Meanwhile alignment varies (PARTIAL 7,442 / COUNTER_TREND 3,641)
-and permission varies across four values including **BUY_BIAS 50 times** — the
-pipeline is alive, the window simply never offers a favourable regime. What is
-needed is a capture whose primary regime timeframe is TRENDING, or FORMING with
-recent displacement. See `RC5_RELEASE_CHECKLIST.md` §11.
+Diagnosed by climbing the ladder rung by rung. With full context the regime
+gate was the first obstacle, but that turned out to be a property of the WINDOW
+rather than of the capture: surveying three host windows at different points in
+time, two classify as **TREND** and in both the ladder climbs past the regime
+gate to **`REGIME_VALIDATED`**.
+
+The reason one long window could not have shown this is worth keeping: **regime
+cannot vary inside a short host window**, because it is governed by the primary
+higher timeframe (D1 first), which barely moves across a couple of days.
+
+The ceiling is therefore **rung 5 → 6**, `momentum_score >= 60`, and whether
+that is ever satisfied on a `REGIME_VALIDATED` POI is the single blocking
+unknown for the entire execution track. See `RC5_RELEASE_CHECKLIST.md` §11.

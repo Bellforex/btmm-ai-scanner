@@ -151,24 +151,37 @@ correctly even while the page reports itself hidden.
 This is the most important open item in the release and it is recorded as
 **FAIL**, not PENDING, because it was measured rather than left untried.
 
-| capture | context | host bars | rows | highest lifecycle reached |
-| --- | --- | --- | --- | --- |
-| M15 EURUSD (author's forensic) | none | 300 | 5,099 | 3 `POI_VALIDATED` |
-| M45 XAUUSD | none | 529 | 12,875 | 0 `DETECTED` |
-| H3 XAUUSD | none | 300 | 4,876 | 0 `DETECTED` |
-| M15 XAUUSD | **W1+D1+H4+H1+M5** | 200 | 71,881 | 4 `TREND_VALIDATED` |
+| capture / window | context | host bars | rows | regime | highest lifecycle |
+| --- | --- | --- | --- | --- | --- |
+| M15 EURUSD (author's forensic) | none | 300 | 5,099 | — | 3 `POI_VALIDATED` |
+| M45 XAUUSD | none | 529 | 12,875 | — | 0 `DETECTED` |
+| H3 XAUUSD | none | 300 | 4,876 | — | 0 `DETECTED` |
+| M15 XAUUSD, last 200 | **W1+D1+H4+H1+M5** | 200 | 71,881 | DECELERATION | 4 `TREND_VALIDATED` |
+| M15 XAUUSD, 2026-08-28 | full | 15 | 4,378 | **TREND** | **5 `REGIME_VALIDATED`** |
+| M15 XAUUSD, 2026-09-08 | full | 15 | 4,447 | **TREND** | **5 `REGIME_VALIDATED`** |
+| M15 XAUUSD, 2026-09-18 | full | 15 | 5,533 | DECELERATION | 4 `TREND_VALIDATED` |
 
 The lifecycle ladder is `has_structure -> btmm_valid -> alignment ->
-favorable_regime -> momentum_aligned -> liquidity_ok`. Adding full
-multi-timeframe context does exactly what it should: the single-timeframe runs
-stall at `POI_VALIDATED` because `alignment` is never ALIGNED/PARTIAL, and with
-context 14,728 evaluations clear that rung and reach `TREND_VALIDATED`.
+favorable_regime -> momentum_aligned -> liquidity_ok`, and each rung was found
+by climbing it.
 
-**The ladder then stops dead at rung 4.** Nothing in 71,881 evaluations reaches
-`REGIME_VALIDATED`, so nothing reaches `MOMENTUM_VALIDATED` and nothing reaches
-`LIQUIDITY_VALIDATED` — the V1 trigger. `favorable_regime` is
-`regime in {TREND, EXPANSION, BREAKOUT_PENDING}`, so every evaluation in this
-window classified as COMPRESSION, DECELERATION, RANGE or TRANSITION.
+* Single-timeframe runs stall at `POI_VALIDATED`: `alignment` is never
+  ALIGNED/PARTIAL without higher-timeframe context.
+* With full context, 14,728 evaluations clear that rung and reach
+  `TREND_VALIDATED`.
+* **CORRECTION, recorded rather than quietly amended.** An earlier note here
+  said the ladder "stops dead at rung 4". That was true of the window sampled
+  and FALSE of the capture. Surveying three host windows at different points in
+  time shows two of them classify as **TREND**, and in both the ladder climbs
+  past the regime gate to **`REGIME_VALIDATED`** (19 and 9 evaluations).
+* The real ceiling is **rung 5 → 6**: nothing yet reaches
+  `MOMENTUM_VALIDATED`, whose gate is `momentum_score >= 60`.
+
+The reason a single long window could not have found this: **regime cannot vary
+inside a short host window.** It is governed by the primary higher timeframe —
+D1 first — which barely moves across a couple of days, so a longer window
+samples the same regime for longer. Only windows at different points in TIME
+vary it.
 
 ### What this does and does not mean
 
@@ -217,9 +230,16 @@ them either way.
 
 ### What would settle it
 
-A capture over a window whose primary regime timeframe is TRENDING — or FORMING
-with recent displacement, which yields EXPANSION or BREAKOUT_PENDING. That is a
-data question, not a code question, and it is the next thing worth doing.
+The data question is **answered**: this capture DOES contain favourable-regime
+windows, and two are identified above by timestamp. The remaining question is
+narrower and is now the single blocking unknown for the whole execution track:
+
+> Is `momentum_score >= 60` ever satisfied on a POI that has already reached
+> `REGIME_VALIDATED`?
+
+If yes, the trigger is reachable and a fixture file can be built from those
+windows. If no, the ladder has a rung nothing in this data clears, and that is
+a finding about the engine's calibration rather than about the data.
 
 ---
 
