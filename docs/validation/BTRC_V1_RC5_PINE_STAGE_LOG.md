@@ -1323,3 +1323,76 @@ session has no Windows UI tooling. That ONE step is **ENVIRONMENT BLOCKED**.
 
 It is not an EA blocker: the EA reads the same `SymbolInfo` values at runtime,
 so the CSV is validation evidence rather than a dependency.
+
+## The remaining capacity list cannot deliver 55 tokens — structural, not pessimism
+
+Before measuring, the candidate list was checked against what this compiler has
+already been measured to do. Two of its seven entries are worth exactly zero by
+construction, and the rest are neutral for a structural reason.
+
+### Candidates 1, 6, 7 — dead locals and dead legacy branches: ZERO
+
+Dead code does not cost tokens on this compiler. Measured twice, independently,
+before this campaign:
+
+* `BTRC_V1_RC3_HIGHRAM_CONTINUATION_STATUS.md:165` — "dead code costs nothing
+  and **removing it buys nothing**";
+* re-confirmed in the RC4 work and recorded in this log at the P2/P3 liveness
+  section — which is precisely why the BaseFamily sink had to be made live
+  before its cost could be measured at all.
+
+So "delete dead locals" and "delete provably dead legacy branches" cannot
+recover a single token. They were never a source of capacity.
+
+### Candidates 2-5 — predicate and expression refactors: NEUTRAL
+
+Pine inlines user functions, so cost is *inline expansion x call sites*, not
+source length. Collapsing a duplicated predicate into a shared helper replaces
+N copies of an expression with N inline expansions of the helper. It saves only
+when the helper is genuinely smaller than what it replaces.
+
+Demonstrated twice now, both rejected on that basis:
+
+1. `f_rc5IsReversal` (13-term chain, ONE call site) vs
+   `f_rc5LadderRank(ty) < 99` — proved semantically identical, rejected: the
+   ladder inlines 13 comparisons and 7 ternaries to replace 13 comparisons.
+2. `f_rc5Ownable` (9-term chain) vs `rank >= 3 and rank < 99` — also provably
+   exact, since the ladder's ranks 3..7 are precisely the ownable set and ranks
+   1..2 are exactly ORDER BLOCK and B2S/S2B. Same objection, same verdict.
+
+The pattern is general: in an inlining compiler, *restructuring* reachable code
+of similar size is a wash. Only **removing reachable functionality** or finding
+a genuinely cheaper encoding saves anything, and the first is forbidden here.
+
+### What that leaves
+
+The 55-token gap cannot be closed from the candidate list. The measured levers
+that remain are:
+
+| lever | measured | status |
+| --- | --- | --- |
+| R1+R2 structure overlay | 1,036 | **already spent** — it is VIEW |
+| R3 trendline renderer | 1,164 | **unavailable** — its winner reads `rc5TlHit`, which the sweep engine writes from POI references |
+| **R4 POI renderer** | **4,131** | excluded by author decision |
+| P2/P3 parity log | 73 | **already taken** |
+
+R4 is the only proven reserve left, and 55 tokens is 1.3% of it.
+
+### The decision this surfaces
+
+"Do not move R4" was decided when the alternative was a 2,200-token plan that
+comfortably worked. That plan lost R3 to a real semantic dependency, and the
+result is 55 short. The premise of the exclusion has changed.
+
+Three honest options, none taken here:
+
+1. **Move a slice of the POI renderer** — not all 4,131. The zone-label text
+   path alone would likely cover 55 several times over, and unlike R3 it has no
+   sweep-engine dependency. It would need the same marker/composer treatment
+   VIEW already has.
+2. **Accept P4 does not fit in CORE** and decide what it displaces.
+3. **Re-examine the P4 encoding** for a cheaper form that preserves every rule
+   — the one avenue not yet measured, though the two rejections above suggest
+   restructuring rarely pays here.
+
+Option 1 is the only one with a measured reserve behind it.
