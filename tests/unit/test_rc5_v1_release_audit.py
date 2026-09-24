@@ -506,3 +506,30 @@ def test_view_regenerates_from_core_without_a_diff() -> None:
     core = CORE.read_bytes().decode("utf-8")
     part = VIEW_PART.read_bytes().decode("utf-8")
     assert VIEW.read_bytes().decode("utf-8") == compose_view(core, part)
+
+
+def test_string_inputs_in_set_files_carry_no_optimization_suffix() -> None:
+    """Proved by a real tester run, not by reading the docs.
+
+    With `||...||N` attached, MT5 passed the WHOLE line as the string value:
+    `InpSymbolRoots` became `XAUUSD||XAUUSD||XAUUSD||XAUUSD||N`, no symbol
+    resolved, and `OnInit` correctly returned INIT_FAILED. Numeric and bool
+    inputs parse the suffixed form fine; strings do not.
+
+    The earlier parameter audit was blind to this because `_set_value` splits
+    at the first `|` — it read the value I HOPED MT5 would read, rather than
+    the whole line MT5 actually reads.
+    """
+    string_inputs = set(
+        re.findall(r"^input\s+string\s+(Inp\w+)", _ea(), re.MULTILINE)
+    )
+    assert string_inputs, "no string inputs found; the regex has drifted"
+
+    for symbol in ("XAUUSD", "EURUSD", "GBPUSD"):
+        text = (_TESTER / f"RC5_{symbol}m.set").read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if line.startswith(";") or "=" not in line:
+                continue
+            name = line.split("=", 1)[0].strip()
+            if name in string_inputs:
+                assert "|" not in line, f"{symbol}: {name} carries a suffix"

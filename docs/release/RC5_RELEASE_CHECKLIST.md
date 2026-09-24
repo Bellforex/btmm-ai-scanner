@@ -33,20 +33,31 @@ a thing can be provably correct in source and still never have run.
 
 | component | highest level reached | next level, and what blocks it |
 | --- | --- | --- |
-| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,800 tests; it IS the reference) |
+| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,801 tests; it IS the reference) |
 | **Pine CORE / P4** | **SOURCE-VERIFIED** + COMPILED + token-verified | RUNTIME-VERIFIED — TradingView renderer |
 | **Pine VIEW / PANEL** | **SOURCE-VERIFIED** (generated, anti-drift tested) | RUNTIME-VERIFIED — same |
-| **EA — broker adapter** | **COMPILED** | TESTER-VERIFIED — process launch denied |
-| **EA — Execution Doctrine V1** | **VECTOR-VERIFIED** + SOURCE-VERIFIED | TESTER-VERIFIED — same |
-| **Layer-A → EA transport** | **VECTOR-VERIFIED** on real OHLC | TESTER-VERIFIED — same |
-| **Stage-2 entry proximity** | **VECTOR-VERIFIED** | RUNTIME-VERIFIED — **never observed against a real quote** |
+| **EA — broker adapter** | **TESTER-VERIFIED** | symbol resolved, spec read, orders filled |
+| **EA — Execution Doctrine V1** | **TESTER-VERIFIED** (see the exceptions below) | live deployment — NOT APPROVED |
+| **Layer-A → EA transport** | **TESTER-VERIFIED** | 4 fixtures loaded, 0 unparseable |
+| **Stage-2 entry proximity** | **TESTER-VERIFIED** | PASS ×2 on real ASKs, DENY at 0.475 vs 0.260 |
+| **margin gate** | **TESTER-VERIFIED (PASS only)** | real `OrderCalcMargin` 35.69 / 52.79; DENY never triggered |
+| **spread/R gate** | **VECTOR-VERIFIED** | it never fired at runtime — proximity refused first |
+| **duplicate guard** | **NOT EXERCISED** | 0 duplicates, but nothing tried to duplicate |
+| **one-position-per-symbol** | **NOT EXERCISED** | GOLDEN 1 closed before GOLDEN 2 opened |
+| **terminal-event exits** | **NOT EXERCISED** | both positions closed on SL |
 | **Structure coordinates S1/S2** | IMPLEMENTED (unchanged) | VISUALLY-VERIFIED — TradingView renderer |
 | **Live production** | — | **NOT APPROVED** |
 
-**The row that must not be rounded up.** Stage-2 proximity has never run
-against a real tester quote. Its logic is pinned by vectors and its MQL5 form
-compiles; that is VECTOR-VERIFIED, and it stays there until a tester run
-happens.
+**Stage-2 proximity has now run against real tester quotes**, in both
+directions — it passed on two real ASKs and refused a third at 0.475 against a
+0.260 tolerance. That row is upgraded on evidence.
+
+**The rows that must NOT be rounded up.** The spread/R gate never fired at
+runtime; entry proximity refused the micro-R case first, which is the locked
+gate order working but leaves spread/R VECTOR-VERIFIED. The duplicate guard,
+the one-position-per-symbol guard and the terminal-event exits were never
+exercised: zero duplicates is evidence that nothing tried to duplicate, not
+that the guard works. Full detail: `RC5_TESTER_RESULTS.md`.
 
 
 ---
@@ -55,7 +66,7 @@ happens.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,800 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,801 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
@@ -160,11 +171,18 @@ correctly even while the page reports itself hidden.
 | --- | --- | --- |
 | 8.1 | configs for XAUUSDm / EURUSDm / GBPUSDm | **PASS** |
 | 8.2 | per-symbol report paths | **PASS** |
-| 8.3 | tester execution | **BLOCKED** — generic process launch works; MetaTrader process control refused on three independent routes; MT5 allows one instance per data folder |
+| 8.3 | tester execution | **PASS** — ran 2026-09-24; permission became available, terminal restored afterwards |
+| 8.4a | GOLDEN 1 | **PASS** — executed, entry 4461.849, SL 4450.539, TP 4484.469, margin 35.69 |
+| 8.4b | GOLDEN 2 | **PASS** — executed, entry 4398.837, SL 4391.069, TP 4414.373, margin 52.79 |
+| 8.4c | stale negative | **PASS** — `CONFIRMATION_PROXIMITY_INVALID`, distance 4145.936 |
+| 8.4d | zero-height negative | **PASS** — `ENTRY_PROXIMITY_INVALID`, distance 0.475 vs 0.260 |
+| 8.4e | duplicates | **0** observed; guard NOT exercised |
+| 8.4f | runtime exceptions | **none** |
+| 8.4g | parser integrity | **PASS** — 4 plans, 0 unparsed |
 | 8.3a | acceptance run staged | **PASS** — EA installed byte-identical, fixture file, `.set` and launch config all in place |
-| 8.4 | XAUUSDm run | **BLOCKED** |
-| 8.5 | EURUSDm run | **BLOCKED** |
-| 8.6 | GBPUSDm run | **BLOCKED** |
+| 8.5 | XAUUSDm broader smoke | **PENDING** |
+| 8.6 | EURUSDm smoke | **PENDING** |
+| 8.7 | GBPUSDm smoke | **PENDING** |
 
 ## 9. MTF QA
 

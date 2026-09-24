@@ -1193,13 +1193,28 @@ int LoadFixtures(const string file)
    if(file == "")
       return 0;
 
+   // The Strategy Tester sandboxes file access PER AGENT: a file in the
+   // terminal's own MQL5\Files is invisible to
+   // Tester\Agent-...\MQL5\Files, which is where a tester FileOpen looks.
+   // Measured, not assumed -- a run failed here with error 5004 while the
+   // file sat in the terminal folder. So try the local sandbox first, then
+   // the SHARED Common\Files folder, which both environments can reach.
+   bool common = false;
    int h = FileOpen(file, FILE_READ | FILE_TXT | FILE_ANSI);
    if(h == INVALID_HANDLE)
      {
-      PrintFormat("RC5 EA: fixture file %s not found (err %d) -- pipeline idle",
+      h = FileOpen(file, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON);
+      common = (h != INVALID_HANDLE);
+     }
+   if(h == INVALID_HANDLE)
+     {
+      PrintFormat("RC5 EA: fixture file %s not found in either the local or "
+                  "the common sandbox (err %d) -- pipeline idle",
                   file, GetLastError());
       return 0;
      }
+   PrintFormat("RC5 EA: fixture file %s opened from the %s sandbox",
+               file, (common ? "COMMON" : "local"));
 
    int n = 0, bad = 0;
    while(!FileIsEnding(h))

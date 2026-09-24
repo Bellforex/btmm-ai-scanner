@@ -38,7 +38,7 @@ Three sentences that are FALSE and must never be written: "RC5 always used 2R",
 `28d432e` is the analytical authority. Pine and MQL5 are ports of it; where
 they disagree with it, they are wrong.
 
-Suite: **5,800 passed, 19 skipped.**
+Suite: **5,801 passed, 19 skipped.**
 
 ---
 

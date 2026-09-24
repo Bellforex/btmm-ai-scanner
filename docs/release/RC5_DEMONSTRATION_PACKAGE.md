@@ -32,7 +32,7 @@ Three sentences that are FALSE and appear nowhere: *"RC5 always used 2R"*,
 
 ## 2. Python — the reference
 
-**5,800 tests passing, 19 skipped.** Semantic freeze `28d432e`. Pine and MQL5
+**5,801 tests passing, 19 skipped.** Semantic freeze `28d432e`. Pine and MQL5
 are ports of it; where they disagree with it, they are wrong.
 
 ## 3. Pine — a hard capacity ceiling, measured not estimated
@@ -180,8 +180,8 @@ and both sit behind that gate.
 
 | | status |
 | --- | --- |
-| a real tester trade has executed | **NO** |
-| Stage-2 entry proximity observed against a real quote | **NO** — vector-verified only |
+| a real tester trade has executed | **YES** — 2 on 2026-09-24, see `RC5_TESTER_RESULTS.md` |
+| Stage-2 entry proximity observed against a real quote | **YES** — PASS x2, DENY x1 |
 | Pine runtime parity | `RUNTIME PENDING` — TradingView renderer blocked |
 | structure coordinates S1/S2 visually accepted | `PENDING` — decision pack ready, two timestamps to inspect |
 | profitability | **not measured, not claimed, not pursued** |

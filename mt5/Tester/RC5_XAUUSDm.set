@@ -1,15 +1,18 @@
 ; RC5_EA Strategy Tester inputs — XAUUSDm
 ;
+; STRING INPUTS CARRY NO "||...||N" SUFFIX. Proved by a real tester run: with
+; the optimization suffix attached, MT5 passed the WHOLE line as the string
+; value, so InpSymbolRoots became "XAUUSD||XAUUSD||XAUUSD||XAUUSD||N", no
+; symbol resolved, and OnInit correctly returned INIT_FAILED. Numeric and bool
+; inputs parse the suffixed form fine; strings do not.
+;
 ; Execution is enabled HERE ONLY. These files CANNOT arm a live account:
 ; CanExecuteHere() requires either MQL_TESTER or InpAllowLiveExecution, and
 ; InpAllowLiveExecution is false below and stays false.
 ;
 ; The three EXECUTION DOCTRINE V1 quality gates are carried explicitly so a
-; tester run uses the same thresholds the vectors pin:
-;   InpMaxEntryDistanceSpreads  proximity, in spreads
-;   InpMaxSpreadToRisk          spread <= 25% of R
-;   InpMaxMarginFraction        required margin <= 20% of equity
-InpSymbolRoots=XAUUSD||XAUUSD||XAUUSD||XAUUSD||N
+; tester run uses the same thresholds the vectors pin.
+InpSymbolRoots=XAUUSD
 InpHostTF=15||0||0||0||N
 InpExecutionEnabled=true||false||0||true||N
 InpRiskPercent=0.5||0.5||0.000000||0.500000||N
@@ -17,7 +20,7 @@ InpRewardRisk=2.0||2.0||0.000000||2.000000||N
 InpMagic=5150001||0||1||5150001||N
 InpAllowLiveExecution=false||false||0||true||N
 InpSlippagePoints=20||0||1||20||N
-InpSetupFile=RC5_fixtures_XAUUSD.csv||||||N
+InpSetupFile=RC5_fixtures_XAUUSD.csv
 InpMaxSpreadToRisk=0.25||0.25||0.000000||0.250000||N
 InpMaxMarginFraction=0.20||0.20||0.000000||0.200000||N
 InpMaxEntryDistanceSpreads=1.0||1.0||0.000000||1.000000||N
