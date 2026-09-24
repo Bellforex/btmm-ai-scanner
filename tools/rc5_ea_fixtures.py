@@ -181,6 +181,11 @@ class TradePlan:
     r_over_entry: Decimal | None = None
     tp_distance: Decimal | None = None
     tp_over_entry: Decimal | None = None
+    #: The gates that ACTUALLY RAN, in order, ending at the one that decided.
+    #: A gate absent from this tuple did not execute -- which is how "risk was
+    #: never sized because proximity refused first" becomes machine-checkable
+    #: rather than a claim about the source.
+    trace: tuple[str, ...] = ()
 
 
 LIQUIDITY_VALIDATED = 7
@@ -305,6 +310,7 @@ def plan_for(
     confirmation_close: Decimal | None = None,
     entry_is_executable: bool = False,
     max_entry_distance_spreads: Decimal = MAX_ENTRY_DISTANCE_SPREADS,
+    incoming_trace: tuple[str, ...] | None = None,
 ) -> TradePlan:
     """Everything V1 decides, given an entry price the caller supplies.
 
@@ -316,7 +322,9 @@ def plan_for(
     """
     deny = _eligibility(fixture)
     if deny:
-        return TradePlan(eligible=False, deny_reason=deny)
+        return TradePlan(
+            eligible=False, deny_reason=deny, trace=tuple(incoming_trace or ())
+        )
 
     is_buy = fixture.direction > 0
 
@@ -325,6 +333,7 @@ def plan_for(
     # unnecessary risk calculations. A remote POI is not an execution candidate
     # however small a lot would satisfy the 0.5% budget.
     tolerance = proximity_tolerance(spec, spread, max_entry_distance_spreads)
+    trace: list[str] = list(incoming_trace or ())
 
     confirmation_distance = None
     confirmation_gate = "NOT_SUPPLIED"
@@ -340,8 +349,10 @@ def plan_for(
                 confirmation_distance=confirmation_distance,
                 confirmation_gate="DENY",
                 proximity_tolerance_used=tolerance,
+                trace=tuple([*trace, "CONFIRMATION_PROXIMITY_INVALID"]),
             )
         confirmation_gate = "PASS"
+        trace.append("CONFIRMATION_PROXIMITY_PASS")
 
     entry = _to_tick(spec, entry)
     entry_distance = zone_distance(entry, fixture.zone_top, fixture.zone_bottom)
@@ -349,8 +360,10 @@ def plan_for(
         # A hypothetical entry is NOT evidence that the real fill will be near
         # the zone, so the gate reports pending rather than passed.
         entry_gate = "PENDING_TESTER"
+        trace.append("ENTRY_PRICE_PENDING_TESTER")
     elif entry_distance <= tolerance:
         entry_gate = "PASS"
+        trace.append("ENTRY_PROXIMITY_PASS")
     else:
         return TradePlan(
             eligible=False,
@@ -361,6 +374,7 @@ def plan_for(
             entry_distance=entry_distance,
             entry_gate="DENY",
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "ENTRY_PROXIMITY_INVALID"]),
         )
 
     distal = fixture.zone_bottom if is_buy else fixture.zone_top
@@ -376,6 +390,7 @@ def plan_for(
             confirmation_gate=confirmation_gate,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "STOP_GEOMETRY_INVALID"]),
         )
 
     r = abs(entry - stop)
@@ -393,8 +408,11 @@ def plan_for(
             confirmation_gate=confirmation_gate,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "STOP_GEOMETRY_INVALID"]),
         )
 
+    trace.append("DISTAL_SL_OK")
+    trace.append("R_POSITIVE")
     take = _to_tick(spec, entry + r * reward_risk if is_buy else entry - r * reward_risk)
 
     # The spread gate. `<=` at the boundary, so spread == 25% of R is ACCEPTED.
@@ -414,12 +432,16 @@ def plan_for(
             spread=spread,
             spread_to_risk=spread_to_risk,
             spread_gate="DENY",
+            trace=tuple([*trace, "SPREAD_TO_RISK_INVALID"]),
             confirmation_distance=confirmation_distance,
             confirmation_gate=confirmation_gate,
             entry_distance=entry_distance,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
         )
+
+    if spread is not None:
+        trace.append("SPREAD_TO_RISK_PASS")
 
     level = max(spec.stops_level, spec.freeze_level)
     if level > 0 and r < level * spec.point:
@@ -438,6 +460,7 @@ def plan_for(
             entry_distance=entry_distance,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "BROKER_STOP_INVALID"]),
         )
 
     risk_money = equity * risk_percent / Decimal(100)
@@ -450,6 +473,7 @@ def plan_for(
             confirmation_gate=confirmation_gate,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "STOP_GEOMETRY_INVALID"]),
         )
 
     desired = risk_money / loss_per_lot
@@ -472,6 +496,7 @@ def plan_for(
             confirmation_gate=confirmation_gate,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "RISK_BUDGET_EXCEEDED"]),
         )
 
     volume = min(floored, spec.volume_max)
@@ -491,7 +516,10 @@ def plan_for(
             confirmation_gate=confirmation_gate,
             entry_gate=entry_gate,
             proximity_tolerance_used=tolerance,
+            trace=tuple([*trace, "RISK_SIZED", "VOLUME_INVALID"]),
         )
+    trace.append("RISK_SIZED")
+    trace.append("VOLUME_LEGAL")
     # EXECUTION QUALITY, gate 2 of 2. The risk budget does not bound GROSS
     # EXPOSURE when the stop is tight, so required margin is checked against
     # equity separately. `required_margin` is the BROKER's number (the EA asks
@@ -526,6 +554,7 @@ def plan_for(
             required_margin=required_margin,
             margin_fraction=margin_fraction,
             margin_gate="DENY",
+            trace=tuple([*trace, "MARGIN_EXPOSURE_INVALID"]),
         )
 
     return TradePlan(
@@ -552,6 +581,16 @@ def plan_for(
         r_over_entry=(r / entry if entry > 0 else None),
         tp_distance=abs(take - entry),
         tp_over_entry=(abs(take - entry) / entry if entry > 0 else None),
+        trace=tuple(
+            [
+                *trace,
+                *(["MARGIN_PASS"] if required_margin is not None else []),
+                # Offline the entry is hypothetical, so the pipeline is
+                # PENDING rather than ready -- a plan is only EXECUTION_READY
+                # once a real fill price has passed stage 2.
+                "EXECUTION_READY" if entry_is_executable else "PENDING_TESTER",
+            ]
+        ),
     )
 
 
@@ -562,8 +601,12 @@ def signal_id(fixture: SetupFixture) -> str:
     bar, so the POI's own identity is part of the key. The confirmation
     instance makes a later re-confirmation of the same POI a DIFFERENT signal,
     which is what "at most once per semantic setup" means.
+
+    Separated by `~` and NOT `|`. The id is embedded in pipe-delimited RC5PLAN
+    and RC5DENY journal lines, so a pipe inside it would silently break any
+    parser of that journal -- a defect found by writing the parser.
     """
-    return "|".join(
+    return "~".join(
         (
             fixture.symbol,
             str(fixture.timeframe_minutes),
@@ -617,15 +660,27 @@ def decide(
     """
     deny = _eligibility(fixture)
     if deny:
-        return TradePlan(eligible=False, deny_reason=deny)
-    deny = guard_deny(
-        fixture,
-        consumed_signal_ids,
-        symbols_with_open_position,
-        spec.name,
-    )
-    if deny:
-        return TradePlan(eligible=False, deny_reason=deny)
+        return TradePlan(eligible=False, deny_reason=deny, trace=())
+    trace = ["ANALYTICAL_ELIGIBLE", "LIQUIDITY_VALIDATED"]
+
+    # The two cheap invariant refusals, FIRST. Author-locked V1 order: if
+    # either fails nothing downstream can make the signal executable, so no
+    # quote, risk, volume or OrderCalcMargin work is spent on it.
+    if signal_id(fixture) in consumed_signal_ids:
+        return TradePlan(
+            eligible=False,
+            deny_reason="SIGNAL_ALREADY_EXECUTED",
+            trace=tuple([*trace, "SIGNAL_ALREADY_EXECUTED"]),
+        )
+    trace.append("DUPLICATE_CLEAR")
+    if spec.name in symbols_with_open_position:
+        return TradePlan(
+            eligible=False,
+            deny_reason="SYMBOL_POSITION_ACTIVE",
+            trace=tuple([*trace, "SYMBOL_POSITION_ACTIVE"]),
+        )
+    trace.append("CONCURRENCY_CLEAR")
+
     return plan_for(
         spec,
         fixture,
@@ -637,4 +692,5 @@ def decide(
         required_margin=required_margin,
         confirmation_close=confirmation_close,
         entry_is_executable=entry_is_executable,
+        incoming_trace=tuple(trace),
     )

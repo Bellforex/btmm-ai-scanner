@@ -15,11 +15,47 @@ Checkpoint: branch `rc5-poi-authority`. Python semantic freeze `28d432e`.
 
 ---
 
+## 0. VERIFICATION LEVEL MATRIX
+
+Eight levels, because "verified" on its own hides the distinction that matters:
+a thing can be provably correct in source and still never have run.
+
+| level | means |
+| --- | --- |
+| IMPLEMENTED | the code exists |
+| COMPILED | a compiler accepted it |
+| SOURCE-VERIFIED | a test reads the source and asserts its structure |
+| VECTOR-VERIFIED | deterministic inputs produce asserted outputs |
+| RUNTIME-VERIFIED | it has actually run in its own runtime |
+| TESTER-VERIFIED | it has run in the MT5 Strategy Tester against real quotes |
+| VISUALLY-VERIFIED | a human has looked at what it drew |
+| LIVE-PRODUCTION-VALIDATED | it has run on a funded account |
+
+| component | highest level reached | next level, and what blocks it |
+| --- | --- | --- |
+| **Python analytical engine** | **VECTOR-VERIFIED** | — (5,798 tests; it IS the reference) |
+| **Pine CORE / P4** | **SOURCE-VERIFIED** + COMPILED + token-verified | RUNTIME-VERIFIED — TradingView renderer |
+| **Pine VIEW / PANEL** | **SOURCE-VERIFIED** (generated, anti-drift tested) | RUNTIME-VERIFIED — same |
+| **EA — broker adapter** | **COMPILED** | TESTER-VERIFIED — process launch denied |
+| **EA — Execution Doctrine V1** | **VECTOR-VERIFIED** + SOURCE-VERIFIED | TESTER-VERIFIED — same |
+| **Layer-A → EA transport** | **VECTOR-VERIFIED** on real OHLC | TESTER-VERIFIED — same |
+| **Stage-2 entry proximity** | **VECTOR-VERIFIED** | RUNTIME-VERIFIED — **never observed against a real quote** |
+| **Structure coordinates S1/S2** | IMPLEMENTED (unchanged) | VISUALLY-VERIFIED — TradingView renderer |
+| **Live production** | — | **NOT APPROVED** |
+
+**The row that must not be rounded up.** Stage-2 proximity has never run
+against a real tester quote. Its logic is pinned by vectors and its MQL5 form
+compiles; that is VECTOR-VERIFIED, and it stays there until a tester run
+happens.
+
+
+---
+
 ## 1. PYTHON — ANALYTICAL ENGINE
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 1.1 | full suite green | **PASS** | 5,766 passed, 19 skipped |
+| 1.1 | full suite green | **PASS** | 5,798 passed, 19 skipped |
 | 1.2 | semantic freeze recorded | **PASS** | `28d432e` |
 | 1.3 | working tree clean after the suite | **PASS** | `git status --porcelain` empty |
 | 1.4 | lint clean on every file touched | **PASS** | `ruff check` on the changed set only — repo-wide cleanliness is NOT claimed |
@@ -88,7 +124,7 @@ correctly even while the page reports itself hidden.
 
 | # | item | status | evidence |
 | --- | --- | --- | --- |
-| 6.1 | deterministic vectors | **PASS** | 83 passed, plus 17 golden-fixture tests |
+| 6.1 | deterministic vectors | **PASS** | 83 vectors + 17 golden + 22 release-audit + 10 parser |
 | 6.2 | eligibility gates, each with its own reason | **PASS** | parametrized |
 | 6.3 | BUY / SELL distal and stop | **PASS** | |
 | 6.4 | 2R target both directions | **PASS** | |
@@ -146,7 +182,14 @@ correctly even while the page reports itself hidden.
 | 10.5 | live-money trading | **FALSE — prohibited** |
 | 10.6 | `bellforex` layout | **NOT MODIFIED** |
 | 10.7 | BAH library | **UNCHANGED** |
-| 10.8 | release backup | **PENDING** |
+| 10.8 | tester acceptance runbook | **PASS** |
+| 10.9 | expected-vs-observed templates | **PASS** |
+| 10.10 | journal parser, anti-drift tested | **PASS** |
+| 10.11 | TradingView acceptance runbook | **PASS** |
+| 10.12 | structure visual decision pack | **PASS** |
+| 10.13 | demonstration package | **PASS** |
+| 10.14 | parameter consistency audit, 0 mismatches | **PASS** |
+| 10.15 | release backup | **PENDING** |
 
 ---
 

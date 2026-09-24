@@ -468,7 +468,10 @@ struct RC5Plan
 //+------------------------------------------------------------------+
 string RC5SignalId(const RC5Setup &s)
   {
-   return StringFormat("%s|%d|%s|%d|%d|%I64d",
+   // '~' and NOT '|': the id is embedded in pipe-delimited RC5PLAN and
+   // RC5DENY lines, so a pipe inside it would silently break any parser of
+   // the journal. Found by writing that parser.
+   return StringFormat("%s~%d~%s~%d~%d~%I64d",
                        s.symbol, (int)s.timeframe, s.poiId,
                        s.poiType, s.direction, (long)s.barTime);
   }

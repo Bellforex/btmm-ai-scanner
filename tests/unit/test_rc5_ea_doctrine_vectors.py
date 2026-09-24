@@ -224,6 +224,7 @@ def test_no_prior_result_can_influence_size() -> None:
         "confirmation_close",
         "entry_is_executable",
         "max_entry_distance_spreads",
+        "incoming_trace",
     }
     # the point of the assertion, stated so a future addition cannot pass by
     # simply being appended to the set above
@@ -387,9 +388,12 @@ def test_no_martingale_vocabulary_in_executable_mql5() -> None:
 
 def test_the_signal_id_matches_the_ea_format_field_for_field() -> None:
     fixture = _confirmed()
-    assert signal_id(fixture) == "EURUSD|15|BASE_DROP~1788213600|31|-1|1788214500"
+    assert signal_id(fixture) == "EURUSD~15~BASE_DROP~1788213600~31~-1~1788214500"
     src = _ea_source()
-    assert 'StringFormat("%s|%d|%s|%d|%d|%I64d"' in src
+    assert 'StringFormat("%s~%d~%s~%d~%d~%I64d"' in src
+    # the separator is '~' precisely so the id can sit inside a pipe-delimited
+    # journal line without breaking it
+    assert "|" not in signal_id(fixture)
 
 
 def test_two_pois_confirming_on_the_same_bar_are_different_signals() -> None:
