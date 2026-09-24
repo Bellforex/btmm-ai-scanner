@@ -49,9 +49,15 @@ def _zone_box_new() -> str:
 
 
 def test_THE_ZONE_ORIGIN_IS_THE_SOURCE_FORMATION() -> None:
-    """THE contract. The left edge is the first source candle."""
+    """THE contract. The left edge is the record's own source instant.
+
+    For every family that is `poiSrcFirst`. S/R is the documented exception and
+    is asserted separately below; it reads `poiCandTime`, which is where its
+    origin pivot is carried.
+    """
     call = _zone_box_new()
-    assert "left = array.get(poiSrcFirst, p7zPoiI)" in call, call
+    assert "left = array.get(p7zIsSr ? poiCandTime : poiSrcFirst, p7zPoiI)" in call
+    assert "poiSrcFirst" in call, "non-S/R types must anchor on srcFirst"
 
 
 def test_the_zone_origin_is_never_an_availability_or_clock_time() -> None:
@@ -60,7 +66,6 @@ def test_the_zone_origin_is_never_an_availability_or_clock_time() -> None:
     left = call.split("left =", 1)[1].split(", top =", 1)[0]
     for forbidden in (
         "poiAvailTime",
-        "poiCandTime",
         "time_close",
         "time_open",
         "timenow",
@@ -69,6 +74,13 @@ def test_the_zone_origin_is_never_an_availability_or_clock_time() -> None:
     ):
         assert forbidden not in left, (
             f"zone origin must not be {forbidden}: WHEN is not WHERE"
+        )
+    # poiCandTime is permitted ONLY as the S/R branch of the ternary, never as
+    # the unconditional origin -- for every other family candidateTime is not
+    # the contract and must not creep in.
+    if "poiCandTime" in left:
+        assert "p7zIsSr ? poiCandTime :" in left, (
+            "candidateTime may only be the S/R display-origin exception"
         )
 
 
@@ -105,4 +117,63 @@ def test_srcFirst_is_documented_as_the_first_source_candle() -> None:
     )
     assert re.search(
         r"int\s+availTime\s+// == confirmTime for every production detector", core
+    )
+
+
+# ---------------------------------------------------------------------------
+# S/R -- the one family whose identity is deliberately not its origin
+# ---------------------------------------------------------------------------
+
+
+def test_SR_DRAWS_AT_ITS_ORIGIN_SWING_NOT_ITS_CONFIRMATION() -> None:
+    """Support/Resistance is the documented exception.
+
+    `f_poiDetectReferenceZones` emits with (srcFirst, count, srcLast) all set
+    to `confirmationTime`, because that triple is POI IDENTITY and the
+    collision fix depends on it. The real source instant -- the origin swing's
+    pivot-end candle -- is carried in `candidateTime`.
+
+    So anchoring the renderer to srcFirst, correct for every other family,
+    would still land S/R on its confirmation bar. The display origin, and only
+    the display origin, reads candidateTime for these two types.
+    """
+    call = _zone_box_new()
+    assert "left = array.get(p7zIsSr ? poiCandTime : poiSrcFirst, p7zPoiI)" in call
+
+
+def test_the_sr_predicate_is_exactly_the_two_reference_types() -> None:
+    core = _core()
+    assert (
+        "bool p7zIsSr = ty2 == C_POI_SUPPORT_ZONE or ty2 == C_POI_RESISTANCE_ZONE"
+        in core
+    )
+
+
+def test_the_sr_identity_triple_was_not_touched() -> None:
+    """The fix is presentation. Identity must still be confirmationTime.
+
+    If this ever changes, dedup and `f_poiFind` change with it, and that is a
+    semantic change requiring a parity re-run -- not a renderer edit.
+    """
+    core = _core()
+    emit = [
+        line for line in core.splitlines() if "f_poiEmit(typeCode, direction, z." in line
+    ]
+    assert len(emit) == 1, emit
+    assert (
+        "C_POI_TIER_NA, z.confirmationTime, 1, z.confirmationTime, "
+        "z.originPivotEndTime, z.confirmationTime" in emit[0]
+    ), emit[0]
+
+
+def test_candidate_time_really_is_the_origin_pivot_for_sr() -> None:
+    """The renderer's S/R origin is only correct because of this wiring."""
+    core = _core()
+    # candidateTime receives originPivotEndTime at the S/R emit
+    assert "z.originPivotEndTime, z.confirmationTime)" in core
+    # and originPivotEndTime is a real bar time, not a synthetic id
+    assert "int   pivotEndTime         // event/open time of pivot end candle" in core
+    assert (
+        "int   originPivotEndTime   // RC3: origin swing's pivot-end candle "
+        "== the zone's SOURCE instant" in core
     )

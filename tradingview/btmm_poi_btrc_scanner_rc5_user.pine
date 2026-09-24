@@ -7071,6 +7071,17 @@ if barstate.isconfirmed
                 int slot = array.indexof(p7zBoxPoiIdx, p7zPoiI)
                 int ty2 = array.get(poiType, p7zPoiI)
                 string p7zBoxTxt = p7zShowLabels ? (ty2 == C_POI_DOJI ? "DOJI" : bahui.poiTypeLabel(ty2)) : ""
+                // S/R is the one family whose identity triple is deliberately
+                // NOT its origin: `f_poiDetectReferenceZones` pins
+                // (srcFirst, count, srcLast) to confirmationTime because that
+                // is POI identity and the collision fix depends on it, and it
+                // carries the real source instant -- the origin swing's
+                // pivot-end candle, an "event/open time of pivot end candle"
+                // -- in candidateTime instead. So the display origin, and only
+                // the display origin, reads candidateTime for these two types.
+                // Computed once and reused by the border style below, which
+                // already asked the same question.
+                bool p7zIsSr = ty2 == C_POI_SUPPORT_ZONE or ty2 == C_POI_RESISTANCE_ZONE
                 if slot == -1
                     // MARKET-SPACE ANCHOR -- and it must be the SOURCE, not
                     // the availability. `availTime == confirmTime for every
@@ -7087,9 +7098,9 @@ if barstate.isconfirmed
                     // its origin is pinned. Drawn in xloc.bar_time, so it
                     // survives pan, zoom, timeframe change and reload, and no
                     // bar_index appears anywhere in this renderer.
-                    box p7zNewBox = box.new(left = array.get(poiSrcFirst, p7zPoiI), top = array.get(poiZoneTop, p7zPoiI), right = p7zRightEdge, bottom = array.get(poiZoneBottom, p7zPoiI),
+                    box p7zNewBox = box.new(left = array.get(p7zIsSr ? poiCandTime : poiSrcFirst, p7zPoiI), top = array.get(poiZoneTop, p7zPoiI), right = p7zRightEdge, bottom = array.get(poiZoneBottom, p7zPoiI),
                       xloc = xloc.bar_time, bgcolor = p7zFillColor, border_color = p7zBorderColor, border_width = 1,
-                      extend = extend.right, border_style = (ty2 == C_POI_SUPPORT_ZONE or ty2 == C_POI_RESISTANCE_ZONE) ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
+                      extend = extend.right, border_style = p7zIsSr ? line.style_dashed : line.style_solid, text = p7zBoxTxt, text_halign = text.align_center,
                       text_valign = text.align_center, text_color = p7zTextColor, text_size = 16)
                     array.push(p7zBoxPoiIdx, p7zPoiI)
                     array.push(p7zBoxes, p7zNewBox)
