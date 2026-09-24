@@ -89,3 +89,65 @@ and `LIQUIDITY_VALIDATED` as the *trigger*.
    silently never trade them — that must be measured, not assumed.
 
 These are execution-layer questions. None of them justifies changing `28d432e`.
+
+---
+
+# Unresolved item 1 — RESOLVED: the trigger is family-agnostic
+
+Traced rather than counted, which is the stronger answer.
+
+## The transition path
+
+There is exactly ONE place in the entire engine that assigns any
+`SignalLifecycleState`: `btrc/t5_engine.py::_lifecycle`. Every one of the eight
+analytical states is assigned there and nowhere else — verified by search, one
+occurrence each outside the enum definition.
+
+```python
+def _lifecycle(*, has_structure, btmm_valid, alignment,
+               favorable_regime, momentum_aligned, liquidity_ok)
+        -> SignalLifecycleState
+```
+
+A monotone ladder, six gates, early return at the first failure:
+
+| gate | reaches |
+| --- | --- |
+| `has_structure` | `STRUCTURALLY_VALIDATED` |
+| `btmm_valid` | `BTMM_VALIDATED` -> `POI_VALIDATED` (unconditional step: *"poi is the evaluated candidate"*) |
+| `alignment in (ALIGNED, PARTIAL)` | `TREND_VALIDATED` |
+| `favorable_regime` | `REGIME_VALIDATED` |
+| `momentum_aligned` | `MOMENTUM_VALIDATED` |
+| `liquidity_ok` | **`LIQUIDITY_VALIDATED`** |
+
+## The finding
+
+**The function takes six booleans and no POI type, kind or family.** There is
+no family branch, no family whitelist and no family-specific early return
+anywhere on the path.
+
+So **no POI family is structurally excluded from `LIQUIDITY_VALIDATED`.** Its
+reachability is a function of market conditions — structure, BTMM validity,
+trend alignment, regime, momentum, liquidity — and never of what kind of POI is
+being evaluated.
+
+## Verdict — CASE A
+
+**The V1 confirmation trigger stays `LIQUIDITY_VALIDATED`.** The concern that
+some families might silently never trade does not hold at the semantic level:
+the ladder cannot discriminate by family because it is never told the family.
+
+This is a stronger result than a reachability count would have been. A count
+says "family X did not reach it in this capture", which confuses *absence of
+opportunity* with *structural impossibility*. The source says the second cannot
+happen.
+
+### The smaller question that remains
+
+The ladder is family-blind, but two of its INPUTS are computed upstream:
+`btmm_valid` and `liquidity_ok`. If either is itself family-dependent, a family
+could still be effectively excluded one level up. That is a narrower question
+than the original, and it is the one worth measuring next — not whether the
+trigger discriminates, but whether its inputs do.
+
+Nothing here changes `28d432e`.
