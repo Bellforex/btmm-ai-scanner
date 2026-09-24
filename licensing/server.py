@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from licensing.keys import mask_key
@@ -42,6 +42,21 @@ def build_handler(store: LicenseStore) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            """Liveness only. It answers whether the process is up and can
+            reach its store — and deliberately reveals nothing else: no
+            counts, no licence ids, no version of anything customer-visible.
+            An unauthenticated endpoint is not a status page."""
+            if self.path != "/v1/health":
+                self._json(404, {"status": "not found"})
+                return
+            try:
+                store.all_licenses()
+            except Exception:  # the answer is "not ok", never why
+                self._json(503, {"status": "unavailable"})
+                return
+            self._json(200, {"status": "ok"})
 
         def do_POST(self) -> None:
             if self.path != "/v1/licenses/validate":
@@ -85,7 +100,10 @@ def serve(
     db: Path, *, pepper: bytes, host: str = "127.0.0.1", port: int = 8713
 ) -> None:
     store = LicenseStore(db, pepper=pepper)
-    httpd = HTTPServer((host, port), build_handler(store))
+    # THREADING, not HTTPServer: a single-threaded validator lets one slow
+    # or half-open client block every other customer's check. Behind a
+    # public reverse proxy that is an availability defect, not a nicety.
+    httpd = ThreadingHTTPServer((host, port), build_handler(store))
     print(f"RC5 licensing on http://{host}:{port}/v1/licenses/validate")
     httpd.serve_forever()
 

@@ -342,8 +342,15 @@ licensing moved no trading decision.
 **Row 2 — the EA does not fail open.** The server was genuinely running and
 genuinely reachable from the same machine seconds earlier; the tester call
 still returned `http=-1 err=4014` and the server log shows it never arrived.
-With no lease, the EA blocked new entries. This is the measurement behind the
-statement that **a licence cannot be validated in the Strategy Tester at all**.
+With no lease, the EA blocked new entries.
+
+**A correction to an earlier reading of this row.** It was first written up as
+proof that a licence cannot be validated in the Strategy Tester. It is not.
+The same EA, on a **normal chart** in a normal terminal (`tester=0`), returns
+the *same* `err=4014` — because in both runs the URL was not in Tools →
+Options → Allow WebRequest. `4014` is `ERR_FUNCTION_NOT_ALLOWED` and covers
+both causes, so this row proves **fail-closed behaviour** and nothing about the
+tester specifically. See `RC5_LICENSING_OPERATIONS.md` §2.
 
 **Row 3 — grace works.** A cached, context-bound lease carried the EA through
 an unreachable server and produced exactly the baseline result. A paying

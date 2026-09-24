@@ -1,0 +1,36 @@
+[Unit]
+Description=RC5 licence validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rc5
+Group=rc5
+WorkingDirectory=/opt/rc5
+
+# THE SERVER SECRET. Mode 0600, owned by root, readable by the service user.
+# It is never in the repository, the EX5, the customer package or a log.
+EnvironmentFile=/etc/rc5/license.env
+
+ExecStart=/opt/rc5/venv/bin/python -m licensing.server \
+    --db /var/lib/rc5/licenses.db \
+    --host 127.0.0.1 \
+    --port 8713
+
+Restart=always
+RestartSec=3
+
+# Loopback only is enforced by the ExecStart flags above; these narrow what a
+# compromised process could reach.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/rc5
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -80,9 +80,14 @@ If they had a good check earlier today, they keep trading on the lease until it
 runs out.
 
 **"It doesn't work in the Strategy Tester."**
-It cannot, and that is MetaTrader, not us — **MT5 forbids WebRequest inside the
-Strategy Tester** (measured: `http=-1 err=4014`). For back-testing, set
-`InpLicenseTesterBypass = true`. It has no effect on a live chart.
+Correct — for back-testing, set `InpLicenseTesterBypass = true`. It has no
+effect on a live chart, so it cannot be used to dodge a licence on a real
+account.
+
+MetaTrader's own documentation says `WebRequest` is unavailable in the Strategy
+Tester. **Do not tell a customer we proved that** — we have not. What we
+observed is `err=4014`, which MetaTrader also returns for a URL that is not
+allow-listed. Say "back-testing uses the bypass" and leave the cause alone.
 
 ---
 

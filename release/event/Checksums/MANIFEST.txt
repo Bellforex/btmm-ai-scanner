@@ -1,17 +1,18 @@
 RC5 EVENT RELEASE -- ARTIFACT CHECKSUMS (SHA-256)
 
-Generated 2026-09-24T17:51:28Z
+Generated 2026-09-24T18:26:56Z
 Build: EX5 compiled from mt5/Experts/RC5_EA.mq5, 0 errors 0 warnings.
 This EX5 is the build that passed Strategy Tester acceptance -- the
-repository copy, the installed copy and this release copy are byte-identical.
+repository copy, the installed copy and this release copy are byte-identical,
+and it reproduces tests/fixtures/rc5_tester/golden_journal.txt exactly.
 
 2780fb8ffd70f9a1683702fcadc9e17f9e2998ae8d64541a9bf1ab6b6690cec5 *./Demo/WALKTHROUGH.md
 543e80fe0c295dc6f723b0538e7381b63469dd0909321ed1b42bfe83ce5e0ef5 *./Docs/EVENT_CHECKLIST.md
 115c3278cbbf775d9b16a1f0282cf681e3b87d1759287271262fd2b4652bd1d8 *./Docs/RELEASE_NOTES.md
 a9622bf99ec60ae6cf1d29aa92dd148414f4ac78fbe7d82cced8187a91eda530 *./EA/INSTALL.md
-3d8ccdac5b77b93ca5e42d3c89c26dd4de02b03e57b2fcfe4aa4f7c6462f84db *./EA/RC5_EA.ex5
+0ffdc714d524842d04f3e55dce3cf08794f04908b6450f91557864fa834fef80 *./EA/RC5_EA.ex5
 0781ab2970d0a7f956cb9cdd83a273eaa409e0c41766dfd78c1b114912e917fe *./Licensing/ADMIN_RUNBOOK.md
-a25b645690b6ee9c50ffd7887cce964f821fdaa7fde09b26c40b9cf187260ea1 *./Licensing/OPERATIONS_CHEATSHEET.md
+da233e58be45e3a216487ab1fe5e9691017db211bef9ec64a84ab0dc83295d1a *./Licensing/OPERATIONS_CHEATSHEET.md
 492d3d79a6a50d24f6aa25ca3824fc3e4f25946a4049b1eaff34aa5a44a63128 *./Licensing/access_registry.csv
 af4899a0dbe5d2d41d27dbedf2510136db0404bf30374b8f180cfc5280349862 *./Licensing/rc5-license.cmd
 3d38056e336ca7753b6d46b12c8e4ae2d5e97a7922052ed6e1489a811e01168c *./README.md

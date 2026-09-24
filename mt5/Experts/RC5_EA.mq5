@@ -1700,15 +1700,16 @@ int RC5ValidateLicenseOnline()
    if(code != 200)
      {
       int err = GetLastError();
-      // MEASURED, not assumed: inside the Strategy Tester WebRequest returns
-      // -1 with 4014 (ERR_FUNCTION_NOT_ALLOWED) and the request never leaves
-      // the terminal. No allow-list entry can fix that, so pointing a
-      // back-testing customer at Tools > Options would send them in circles.
+      // 4014 is ERR_FUNCTION_NOT_ALLOWED, which MetaTrader returns both when
+      // the URL is not allow-listed and when WebRequest is unavailable in the
+      // calling context. The two cannot be told apart from the code alone, so
+      // this message does not assert a cause -- it states what happened and
+      // gives the one action that resolves it in the tester either way.
       if(MQLInfoInteger(MQL_TESTER))
-         PrintFormat("RC5LIC %s licence cannot be validated in the Strategy "
-                     "Tester: MetaTrader does not permit WebRequest there "
-                     "(http=%d err=%d). Set InpLicenseTesterBypass=true to "
-                     "back-test; it has no effect on a live chart.",
+         PrintFormat("RC5LIC %s licence validation is unavailable in the "
+                     "Strategy Tester (http=%d err=%d). Set "
+                     "InpLicenseTesterBypass=true to back-test; it has no "
+                     "effect on a live chart.",
                      RC5MaskKey(InpLicenseKey), code, err);
       else
          PrintFormat("RC5LIC %s server unreachable (http=%d err=%d) -- "

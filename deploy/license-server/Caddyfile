@@ -1,0 +1,33 @@
+# TLS termination + rate limiting in front of the RC5 validator.
+#
+# Caddy is used because it obtains and renews a real certificate on its own.
+# The validator itself speaks plain HTTP on loopback and must NEVER be bound
+# to a public interface.
+
+license.bellforex.app {
+	encode gzip
+
+	# The ONLY two paths that exist. Everything else is refused here, so a
+	# scanner never reaches the application at all.
+	@allowed path /v1/licenses/validate /v1/health
+	handle @allowed {
+		reverse_proxy 127.0.0.1:8713 {
+			header_up X-Forwarded-For {remote_host}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+
+	# Request bodies are tiny; anything larger is not a licence check.
+	request_body {
+		max_size 8KB
+	}
+
+	log {
+		output file /var/log/caddy/rc5-license.log
+		# The licence key travels in the BODY, which is not logged. Do not
+		# add body logging here: it would write plaintext keys to disk.
+	}
+}

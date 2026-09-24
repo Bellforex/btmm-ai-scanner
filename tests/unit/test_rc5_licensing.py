@@ -330,13 +330,16 @@ def test_licensing_is_refreshed_on_a_timer_not_on_every_tick() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_tester_is_told_the_truth_about_webrequest() -> None:
-    """MEASURED: MT5 forbids WebRequest in the Strategy Tester (err 4014).
+def test_the_tester_message_does_not_assert_a_cause_it_cannot_know() -> None:
+    """err 4014 is ERR_FUNCTION_NOT_ALLOWED, which MetaTrader returns BOTH for
+    a URL that is not allow-listed and for a context where WebRequest is
+    unavailable. Observed in the tester AND on a normal chart, with the URL
+    unlisted in both.
 
-    The first version of this message told a back-testing customer to
-    allow-list the URL. No allow-list entry can work there, so that advice
-    would have sent them in a circle and generated a support call. The tester
-    branch must name the platform limitation and point at the bypass input.
+    An earlier version of this message told the tester user that MetaTrader
+    forbids WebRequest there, stated as fact. The evidence never separated the
+    two causes. The message must report what happened and give the action that
+    resolves it, without claiming to know why.
     """
     src = _ea()
     online = src.split("int RC5ValidateLicenseOnline(", 1)[1]
@@ -348,7 +351,121 @@ def test_the_tester_is_told_the_truth_about_webrequest() -> None:
     tester_branch = online.split("MQLInfoInteger(MQL_TESTER)", 1)[1][:400]
     assert "InpLicenseTesterBypass" in tester_branch
     assert "Tools > Options" not in tester_branch, (
-        "advice that cannot work in the tester"
+        "in the tester the actionable fix is the bypass, not the allow-list"
     )
+    for asserted_cause in ("does not permit", "cannot be validated", "forbids"):
+        assert asserted_cause not in tester_branch, (
+            f"the message asserts a cause the error code cannot establish: "
+            f"{asserted_cause}"
+        )
     # and a live chart still gets the allow-list advice, because there it works
     assert "Tools > Options" in online
+
+
+# ---------------------------------------------------------------------------
+# the endpoint itself, over a real socket
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def endpoint(store: LicenseStore):  # type: ignore[no-untyped-def]
+    """A real server on an ephemeral port. Worth the socket: the handler is
+    where a public deployment actually fails."""
+    import json as _json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from licensing.server import build_handler
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(store))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def call(path: str, payload: dict[str, object] | None = None):  # type: ignore[no-untyped-def]
+        data = _json.dumps(payload).encode() if payload is not None else None
+        request = urllib.request.Request(
+            base + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST" if data is not None else "GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as handle:
+                return handle.status, _json.loads(handle.read())
+        except urllib.error.HTTPError as exc:
+            return exc.code, _json.loads(exc.read())
+
+    try:
+        yield call
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_health_endpoint_answers_and_reveals_nothing(endpoint) -> None:  # type: ignore[no-untyped-def]
+    status, body = endpoint("/v1/health")
+    assert status == 200
+    assert body == {"status": "ok"}, "a health check is not a status page"
+
+
+def test_unknown_paths_are_not_a_map_of_the_service(endpoint) -> None:  # type: ignore[no-untyped-def]
+    assert endpoint("/")[0] == 404
+    assert endpoint("/v1/licenses")[0] == 404
+    assert endpoint("/admin", {})[0] == 404
+    assert endpoint("/v1/licenses/create", {})[0] == 404
+
+
+def test_a_real_validation_round_trip(endpoint, store: LicenseStore) -> None:  # type: ignore[no-untyped-def]
+    key, record = _license(store)
+    status, body = endpoint(
+        "/v1/licenses/validate",
+        {
+            "license_key": key,
+            "product_id": "RC5-EA",
+            "ea_version": "1.00",
+            "account_login": LOGIN,
+            "account_server": SERVER,
+        },
+    )
+    assert status == 200
+    assert body["valid"] is True
+    assert body["state"] == "LICENSE_VALID"
+    assert body["license_id"] == record.license_id
+    assert key not in _json_text(body), "the key came back over the wire"
+
+
+def _json_text(body: object) -> str:
+    import json as _json
+
+    return _json.dumps(body)
+
+
+def test_a_malformed_body_does_not_crash_the_endpoint(endpoint) -> None:  # type: ignore[no-untyped-def]
+    """A public endpoint meets garbage on day one."""
+    assert endpoint("/v1/licenses/validate", {})[0] == 200
+    status, body = endpoint("/v1/licenses/validate", {"license_key": None})
+    assert status == 200
+    assert body["valid"] is False
+    # and the service is still alive afterwards
+    assert endpoint("/v1/health")[0] == 200
+
+
+def test_the_server_is_threaded() -> None:
+    """Single-threaded, one half-open client blocks every other customer."""
+    src = Path(_REPO / "licensing" / "server.py").read_text(encoding="utf-8")
+    assert "ThreadingHTTPServer" in src
+    # "ThreadingHTTPServer(" CONTAINS "HTTPServer(", so match the word itself
+    assert not re.search(r"(?<![A-Za-z])HTTPServer\(", src), (
+        "a bare HTTPServer is single-threaded"
+    )
+
+
+def test_the_server_refuses_to_start_without_the_pepper() -> None:
+    src = Path(_REPO / "licensing" / "server.py").read_text(encoding="utf-8")
+    assert "RC5_LICENSE_PEPPER" in src
+    assert "raise SystemExit" in src
+    # and it binds localhost unless told otherwise
+    assert 'host: str = "127.0.0.1"' in src
