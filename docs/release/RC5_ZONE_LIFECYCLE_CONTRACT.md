@@ -265,3 +265,70 @@ The renderer evicts before it draws, so the first is unlikely by construction.
 
 So: strong evidence that the lifecycle is not the defect, not a proof that the
 chart is correct.
+
+---
+
+# 9. THE ANNOTATED ZONES -- WHAT THE ENGINE SAYS ABOUT THEM
+
+Full POI table for the captured XAUUSD H4 window, last close **4271.600**.
+
+## The live set is textbook-correct
+
+Every surviving zone sits on the correct side of price:
+
+* **supply (BEARISH) above price** -- SELL FVGs at 4834/4830/4773/4766/4737,
+  and lower ones at 4392/4380/4333. Status `NO_BREACH` or
+  `RECLAIM_WITHOUT_DISPLACEMENT`. Price has never closed above them, so they
+  are alive by the frozen rule.
+* **demand (BULLISH) below price** -- BUY FVGs at 4237/4146/4134/4100/4085/
+  4064/4046, plus a SUPPORT_ZONE at 3987 and a DOJI at 3985. Price has never
+  closed below them.
+* one BUY FVG at 4301/4269 straddles price, `RECLAIM_WITHOUT_DISPLACEMENT`.
+
+**This is exactly the shape a correct scanner should produce**, and it directly
+supports the direction rule in section 2: nothing is invalidated merely for
+being on the far side of price.
+
+## But the two annotated types are BOTH dead
+
+In the whole six-month window the engine finds **exactly one** of each:
+
+| type | direction | top | bottom | status |
+| --- | --- | --- | --- | --- |
+| `BEARISH_PRESSURE_WICK` | BEARISH | 4369.665 | 4349.135 | **GENUINE_INVALIDATION_CONFIRMED** |
+| `BEARISH_ENGULFING` | BEARISH | 4354.950 | 4335.165 | **GENUINE_INVALIDATION_CONFIRMED** |
+
+Neither appears anywhere in the live set. Yet the annotated screenshots show
+boxes labelled `BEARISH PRESSURE WICK` and `BEARISH ENGULFING` drawn on the
+chart.
+
+## Why this is a lead and not yet a verdict
+
+Two things do not line up, and both must be resolved before calling it a defect:
+
+1. **the bounds do not match.** The screenshots put those two boxes at roughly
+   4425--4440 and 4400--4425. The engine's records are at 4349--4369 and
+   4335--4355, about 70 points lower. A zone's bounds do not move, so these may
+   simply be *different records*;
+2. **the history windows differ.** This capture is the 795 bars the chart had
+   loaded; the Pine runtime uses `calc_bars_count = 1800`. Pine may therefore
+   hold bearish pressure-wick and engulfing records this capture never saw,
+   and those could legitimately be alive.
+
+The screenshots also span several different moments -- price reads 4413, ~4384,
+~4350 and ~3990 across them -- so they are not one view of one instant.
+
+## The decisive next measurement
+
+Read the **Pine runtime's own records** for those two boxes: their zone bounds
+and their `poiTerminal`. If Pine's bearish pressure wick is the 4369/4349
+record and it is drawn, that is an invalidated zone on the chart and the defect
+is real. If Pine holds a different, live record at 4425--4440, the chart is
+correct and the capture was simply too short.
+
+Everything needed to tell those apart is one reading of the chart's own POI
+table, which needs the browser foreground.
+
+**Do not change the renderer before that reading.** Section 8 showed the
+lifecycle itself agrees 33/33, so if a dead zone really is drawn, the cause is
+the renderer or a duplicate record -- and which one matters.
