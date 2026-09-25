@@ -332,3 +332,65 @@ table, which needs the browser foreground.
 **Do not change the renderer before that reading.** Section 8 showed the
 lifecycle itself agrees 33/33, so if a dead zone really is drawn, the cause is
 the renderer or a duplicate record -- and which one matters.
+
+---
+
+# 10. RETRACTION -- SECTION 9'S "STRONG LEAD" WAS MY OWN CONFIGURATION ERROR
+
+Section 9 reported that the only `BEARISH_PRESSURE_WICK` and
+`BEARISH_ENGULFING` in the XAUUSD H4 window were both genuinely invalidated,
+and called the chart drawing them a strong lead for a ghost-box defect.
+
+**That was wrong, and the cause was mine.** The scan was run with
+`rc5_structural_origin=True`. The production default is:
+
+```python
+rc5_structural_origin: bool = False
+```
+
+I set a non-default gate and then treated its output as ground truth.
+
+## What the default configuration actually shows
+
+Re-run with the production default, every zone visible on the chart resolves to
+a **live, un-breached** record:
+
+| chart label | engine record (top / bottom) | status |
+| --- | --- | --- |
+| BEARISH PRESSURE WICK | 4435.255 / 4422.495 | **NO_BREACH** |
+| BEARISH ENGULFING | 4421.170 / 4400.185 | **NO_BREACH** |
+| MORNING STAR | 4139.395 / 4116.700 | **NO_BREACH** |
+| BULLISH ENGULFING | 4072.970 / 4054.455 | **NO_BREACH** |
+| BULLISH ENGULFING | 4037.160 / 4017.475 | **NO_BREACH** |
+
+These match the chart's boxes at ~4425--4440, ~4400--4425, ~4120--4140,
+~4050--4070 and ~4010--4030.
+
+**There is no ghost-box defect in this evidence. The chart is showing valid,
+non-invalidated zones.**
+
+## Why the gate mattered so much
+
+Pine implements its own Stage D structural-origin gate, and it is deliberately
+**more permissive** than Python's strict flag: a candidate may qualify through
+a meaningful swing *or* "a range boundary, a liquidity pool or a trendline".
+Python's `rc5_structural_origin=True` is the strict form and rejects patterns
+Pine keeps. Comparing the strict Python path against permissive Pine was never
+apples-to-apples.
+
+## A second observation worth keeping
+
+`barsCount` was **795** at first capture and **580** after a reload, with
+`endOfData: false` both times. **The chart's loaded history varies**, and Pine
+only ever sees what is loaded -- `calc_bars_count = 1800` is a cap, not a
+guarantee. So detections can legitimately differ between two viewings of the
+same chart. That is not a defect either, but it does mean any future
+chart-vs-engine reconciliation must record `barsCount` at the moment of
+comparison.
+
+## What still stands from earlier sections
+
+Sections 1--8 are unaffected: the invalidation rule, the direction trap, the
+`terminal_reason` trap (53 destroyed, 0 reading INVALIDATED) and the 33/33
+Pine lifecycle parity were all measured under their own stated conditions and
+none of them depended on the structural-origin flag.
