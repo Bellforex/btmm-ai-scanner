@@ -198,3 +198,70 @@ are live on the chart and the fix is in the Pine breach walk, not the renderer.
 The author's complaint is therefore **plausible and has an identified
 mechanism**, and it has not been confirmed or refuted yet. It should not be
 "fixed" before that flag is read.
+
+---
+
+# 8. PRIORITY 1 ANSWERED -- PINE LIFECYCLE PARITY ON REAL XAUUSD H4
+
+The question was: does Pine mark `terminal` for the same POIs production
+invalidates? Answered offline using
+`tests/parity_support/p3_lifecycle_model.py`, the test-side transcription of
+the Pine P3 persistent lifecycle whose docstring states its reported state at
+bar T is identical to `run_poi_lifecycle(candles[0..T])` for every prefix.
+
+## Result
+
+| | |
+| --- | --- |
+| Pine-model registry (ungated frontier) | 417 POIs |
+| Pine-model `terminal = True` | **349** |
+| production POIs (RC5 structural-origin gate on) | 86 |
+| production `GENUINE_INVALIDATION_CONFIRMED` | 53 |
+| identity-matched between the two | **33** |
+| **AGREE** | **33** |
+| **DISAGREE** | **0** |
+
+**Outcome A: Pine's lifecycle marks terminal correctly.** On every POI whose
+identity could be established unambiguously, the Pine model's `terminal` flag
+and production's `GENUINE_INVALIDATION_CONFIRMED` agree exactly.
+
+## A false result I caught before reporting it
+
+A first pass keyed identity on `(direction, zone_top, zone_bottom)` and
+reported **4 disagreements**, all of the form *production alive, Pine
+terminal*.
+
+They were not real. The Pine registry contains **43 collisions** on that key --
+FVGs in particular recur with identical bounds at different times -- so
+production POIs were being matched against the wrong Pine record. Adding the
+confirmation/availability timestamp to the key removed every one of them and
+the disagreement count fell to zero.
+
+The lesson is worth keeping: on this data a zone-bounds key is not an identity.
+
+## What this narrows the problem to
+
+Since the lifecycle fires correctly, a dead zone appearing on the chart cannot
+be caused by the breach walk failing. The remaining candidates are:
+
+* the renderer not excluding a terminal record (the gate reads `poiTerminal`,
+  which this result says should be set);
+* a stale box object surviving its POI;
+* a duplicate registry record keeping an older, still-alive copy alive.
+
+The renderer evicts before it draws, so the first is unlikely by construction.
+
+## The honest limits of this proof
+
+* it matched **33 of 86** production POIs. The other 53 could not be keyed
+  unambiguously -- mostly because the RC5 structural-origin gate changes which
+  records exist, so there is no Pine-model counterpart to compare;
+* it exercises the Pine **model**, not the shipped Pine runtime. The model's
+  equivalence to production is asserted by the existing prefix campaign, and
+  the shipped Pine's equivalence to the model is what the P3 parity campaign
+  established at its anchor. Neither was re-run here;
+* it says nothing about *timing* beyond final state -- both agree on whether a
+  POI ends terminal, not on the bar at which it became so.
+
+So: strong evidence that the lifecycle is not the defect, not a proof that the
+chart is correct.
